@@ -11,8 +11,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail-open: a job runs unless every changed path is listed as irrelevant
+      # to it. Unlisted paths default to running the job, so a stale exclusion
+      # list costs an extra run instead of silently skipping a needed check.
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          predicate-quantifier: "some-with-excludes"
+          filters: |
+            frontend:
+              - '**'
+              - '!docs/**'
+              - '!src-tauri/**'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/workflows/build.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
+            rust:
+              - '**'
+              - '!docs/**'
+              - '!src/**'
+              - '!public/**'
+              - '!index.html'
+              - '!package.json'
+              - '!pnpm-lock.yaml'
+              - '!svelte.config.js'
+              - '!tsconfig*.json'
+              - '!vite.config.ts'
+              - '!.oxfmtrc.json'
+              - '!.oxlintrc.json'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/workflows/build.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
+
   frontend:
     name: frontend (check / format / lint / build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +104,8 @@ jobs:
 
   rust:
     name: rust (fmt / clippy / test)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

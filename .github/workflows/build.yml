@@ -11,8 +11,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.filter.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail-open: the job runs unless every changed path is listed as
+      # irrelevant. Unlisted paths default to running the job, so a stale
+      # exclusion list costs an extra run instead of skipping a needed build.
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          predicate-quantifier: "some-with-excludes"
+          filters: |
+            build:
+              - '**'
+              - '!docs/**'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/workflows/ci.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
+
   tauri-build:
     name: tauri build
+    needs: changes
+    # On PRs, skip the bundle build only when every changed file is
+    # known-irrelevant. main pushes and manual runs always build.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
