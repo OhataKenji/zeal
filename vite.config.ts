@@ -1,5 +1,5 @@
-import { svelte } from '@sveltejs/vite-plugin-svelte'
-import { defineConfig } from 'vite'
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -15,10 +15,10 @@ export default defineConfig({
     strictPort: true,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ['**/src-tauri/**'],
+      ignored: ["**/src-tauri/**"],
     },
   },
   // 3. to access the Tauri environment variables set by the CLI with type safety,
   // add the `TAURI_` prefix to any variables starting with `TAURI_`
-  envPrefix: ['VITE_', 'TAURI_ENV_*'],
-})
+  envPrefix: ["VITE_", "TAURI_ENV_*"],
+});
