@@ -1,0 +1,37 @@
+# Devin Cloud environment blueprint (snapshot setup).
+# Tool versions are NOT declared here: `mise install` reads mise.toml and
+# rust-toolchain.toml in this repo, keeping them the single source of truth.
+initialize:
+  - run: |
+      # Tauri system dependencies (Linux)
+      # https://v2.tauri.app/start/prerequisites/#linux
+      sudo apt-get update
+      sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+        libayatana-appindicator3-dev librsvg2-dev
+      # mise: https://mise.jdx.dev/install.html
+      curl https://mise.run | sh
+
+maintenance:
+  - run: |
+      export PATH="$HOME/.local/bin:$PATH"
+      mise trust
+      mise install
+      mise exec -- pnpm install --frozen-lockfile
+      mise exec -- cargo fetch --manifest-path src-tauri/Cargo.toml
+
+knowledge:
+  - name: lint
+    contents: |
+      mise exec -- pnpm check
+      mise exec -- pnpm exec oxfmt --check
+      mise exec -- pnpm lint
+      cd src-tauri && mise exec -- cargo fmt --all -- --check
+      mise exec -- cargo clippy --all-targets -- -D warnings
+  - name: test
+    contents: |
+      cd src-tauri && mise exec -- cargo test
+  - name: startup
+    contents: |
+      # `pnpm tauri dev` needs a display; in a headless session use `pnpm dev`
+      # to iterate on the frontend, or `pnpm tauri build` to verify it compiles.
+      mise exec -- pnpm tauri dev
