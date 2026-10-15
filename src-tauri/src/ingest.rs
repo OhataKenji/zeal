@@ -1,5 +1,11 @@
-//! Snapshot ingestion: run `bazel query`, parse the XML stream, and swap the
-//! in-memory snapshot.
+//! Snapshot ingestion: run `bazel query` once per workspace at a time, parse
+//! the XML stream, and swap the in-memory snapshot.
+//!
+//! Triggers: workspace open (background), manual refresh, and (per M3) after
+//! a run completes. Requests arriving while an ingestion runs are recorded as
+//! pending and collapse into a single follow-up run; the new snapshot only
+//! replaces the old one once it is fully built, so a failed or killed fetch
+//! leaves the previous snapshot in place.
 
 use crate::snapshot::{self, Status};
 use crate::state::{Core, IngestError};
@@ -9,7 +15,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
+
+/// Upper bound for one `bazel query`. First runs may include a bazelisk
+/// download and a cold analysis cache.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 
 enum Outcome {
     Ok(Vec<RawRule>),
@@ -22,42 +33,57 @@ enum Outcome {
 pub fn request(app: AppHandle, core: Arc<Core>) {
     {
         let mut st = core.state.lock().unwrap();
-        if st.workspace.is_none() || st.bazel.is_none() || st.ingest_running {
+        if st.workspace.is_none() || st.bazel.is_none() {
+            return;
+        }
+        if st.ingest_running {
+            st.ingest_pending = true;
+            drop(st);
+            core.emit(&app);
             return;
         }
         st.ingest_running = true;
     }
     core.emit(&app);
     thread::spawn(move || {
-        let (ws, bazel) = {
-            let st = core.state.lock().unwrap();
-            (
-                st.workspace.clone().expect("ingest without workspace"),
-                st.bazel.clone().expect("ingest without bazel"),
-            )
-        };
-        let outcome = fetch(&ws, &bazel);
-        let mut st = core.state.lock().unwrap();
-        match outcome {
-            Outcome::Ok(rules) => {
-                log::info!("ingest: {} rules", rules.len());
-                st.snapshot = Some(Arc::new(snapshot::build(&rules, Status::Ok)));
-                st.last_error = None;
+        loop {
+            let (ws, bazel) = {
+                let st = core.state.lock().unwrap();
+                (
+                    st.workspace.clone().expect("ingest without workspace"),
+                    st.bazel.clone().expect("ingest without bazel"),
+                )
+            };
+            let outcome = fetch(&ws, &bazel);
+            let mut st = core.state.lock().unwrap();
+            match outcome {
+                Outcome::Ok(rules) => {
+                    log::info!("ingest: {} rules", rules.len());
+                    st.snapshot = Some(Arc::new(snapshot::build(&rules, Status::Ok)));
+                    st.last_error = None;
+                }
+                Outcome::Partial(rules, err) => {
+                    log::warn!("ingest partial: {} rules; {}", rules.len(), err.summary);
+                    st.snapshot = Some(Arc::new(snapshot::build(&rules, Status::Partial)));
+                    st.last_error = Some(err);
+                }
+                Outcome::Failed(err) => {
+                    log::warn!("ingest failed: {}", err.summary);
+                    // The previous snapshot stays.
+                    st.last_error = Some(err);
+                }
             }
-            Outcome::Partial(rules, err) => {
-                log::warn!("ingest partial: {} rules; {}", rules.len(), err.summary);
-                st.snapshot = Some(Arc::new(snapshot::build(&rules, Status::Partial)));
-                st.last_error = Some(err);
+            if st.ingest_pending {
+                st.ingest_pending = false;
+                drop(st);
+                core.emit(&app);
+                continue;
             }
-            Outcome::Failed(err) => {
-                log::warn!("ingest failed: {}", err.summary);
-                // The previous snapshot stays.
-                st.last_error = Some(err);
-            }
+            st.ingest_running = false;
+            drop(st);
+            core.emit(&app);
+            break;
         }
-        st.ingest_running = false;
-        drop(st);
-        core.emit(&app);
     });
 }
 
@@ -93,12 +119,39 @@ fn fetch(ws: &Path, bazel: &Path) -> Outcome {
         buf
     });
 
-    let status = child.wait();
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = parse_handle.join();
+                let _ = stderr_handle.join();
+                return Outcome::Failed(IngestError {
+                    exit_code: None,
+                    summary: format!("query timed out after {}s", QUERY_TIMEOUT.as_secs()),
+                });
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = parse_handle.join();
+                let _ = stderr_handle.join();
+                return Outcome::Failed(IngestError {
+                    exit_code: None,
+                    summary: format!("failed to wait on query: {e}"),
+                });
+            }
+        }
+    };
+
     let rules = parse_handle.join().unwrap_or_default();
     let stderr_bytes = stderr_handle.join().unwrap_or_default();
     let stderr_tail =
         String::from_utf8_lossy(&stderr_bytes[stderr_bytes.len().saturating_sub(8192)..]);
-    let code = status.ok().and_then(|s| s.code());
+    let code = status.code();
     match code {
         Some(0) => Outcome::Ok(rules),
         _ if !rules.is_empty() => Outcome::Partial(
