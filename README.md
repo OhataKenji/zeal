@@ -12,6 +12,9 @@ pnpm tauri dev    # run the app in dev mode
 pnpm tauri build  # build a release bundle
 ```
 
+Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
+via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
+
 ## Checks
 
 Frontend:

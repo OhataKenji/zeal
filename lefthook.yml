@@ -1,0 +1,7 @@
+# https://lefthook.dev/configuration/
+pre-commit:
+  jobs:
+    - name: gitleaks
+      # Scans staged changes for secrets; requires gitleaks on PATH
+      # (brew install gitleaks). --redact hides matched values in output.
+      run: gitleaks git --staged --redact
