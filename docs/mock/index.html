@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Zeal — wireframe mock</title>
+    <style>
+      :root {
+        --line: #9a9a9a;
+        --ink: #333;
+        --note: #777;
+        --bg: #f4f4f4;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: Menlo, Consolas, monospace;
+        font-size: 13px;
+        color: var(--ink);
+        background: var(--bg);
+        margin: 0;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 0 0 10px;
+        color: var(--note);
+        font-weight: normal;
+      }
+      h3 {
+        font-size: 12px;
+        margin: 0 0 6px;
+        color: var(--note);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .page {
+        max-width: 1100px;
+        margin: 0 auto 48px;
+      }
+      .sub {
+        color: var(--note);
+        font-size: 12px;
+        margin-bottom: 12px;
+      }
+      .label {
+        font-size: 11px;
+        color: var(--note);
+      }
+      .dim {
+        color: var(--note);
+      }
+
+      .toc {
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 10px 16px;
+        font-size: 12px;
+      }
+      .toc a {
+        color: var(--ink);
+        margin-right: 14px;
+      }
+
+      .basis {
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 16px;
+      }
+      table.basis-t {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      table.basis-t td,
+      table.basis-t th {
+        border: 1px solid var(--line);
+        padding: 6px 8px;
+        text-align: left;
+        vertical-align: top;
+        font-weight: normal;
+      }
+      table.basis-t th {
+        background: #eee;
+      }
+
+      /* window = toolbar + sidebar + content（chrome は script が生成） */
+      .win {
+        border: 2px solid var(--ink);
+        background: #fff;
+      }
+      .toolbar {
+        border-bottom: 1px solid var(--ink);
+        padding: 6px 12px;
+        background: #eee;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .win-body {
+        display: flex;
+      }
+      .sidebar {
+        width: 280px;
+        border-right: 2px solid var(--ink);
+        padding: 8px;
+        flex-shrink: 0;
+      }
+      .content {
+        flex: 1;
+        min-width: 0;
+        padding: 14px;
+      }
+
+      .input {
+        border: 1px solid var(--ink);
+        padding: 5px 8px;
+        background: #fff;
+        font-size: 12px;
+      }
+      .select {
+        border: 1px solid var(--ink);
+        padding: 5px 8px;
+        background: #fff;
+        font-size: 12px;
+      }
+      .btn {
+        display: inline-block;
+        border: 1px solid var(--ink);
+        padding: 4px 14px;
+        background: #fff;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .btn.primary {
+        background: var(--ink);
+        color: #fff;
+      }
+      .badge {
+        display: inline-block;
+        border: 1px solid var(--ink);
+        border-radius: 10px;
+        padding: 0 8px;
+        font-size: 11px;
+        background: #fff;
+        white-space: nowrap;
+      }
+
+      ul.list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      ul.list li {
+        padding: 4px 0;
+        border-bottom: 1px dotted #ccc;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      ul.list li:last-child {
+        border-bottom: none;
+      }
+      ul.list li.sel {
+        font-weight: bold;
+      }
+      .tree {
+        line-height: 1.7;
+        font-size: 12px;
+      }
+
+      .rel {
+        display: grid;
+        grid-template-columns: 5em 1fr;
+        gap: 4px 10px;
+        font-size: 12px;
+      }
+      .rel dt {
+        color: var(--note);
+      }
+
+      .log {
+        background: #222;
+        color: #ddd;
+        padding: 10px;
+        font-size: 11px;
+        line-height: 1.6;
+      }
+      .log .ok {
+        color: #9d9;
+      }
+      .box {
+        border: 1px dashed var(--line);
+      }
+
+      /* find の dropdown */
+      .qo {
+        border: 2px solid var(--ink);
+        background: #fff;
+      }
+      .qo .match {
+        padding: 5px 10px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        border-bottom: 1px dotted #eee;
+      }
+      .qo .match.sel {
+        background: #eee;
+      }
+      .qo .match b {
+        text-decoration: underline;
+      }
+      .qo .foot {
+        padding: 5px 10px;
+      }
+
+      /* analytics */
+      .chart {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 90px;
+        border-left: 1px solid var(--ink);
+        border-bottom: 1px solid var(--ink);
+        padding: 0 4px;
+      }
+      .chart i {
+        width: 11px;
+        background: var(--line);
+        display: block;
+      }
+      .chart i.hl {
+        background: var(--ink);
+      }
+
+      /* timing フレームチャート */
+      .tl {
+        border: 1px solid var(--ink);
+        background: #fff;
+        padding: 8px 8px 10px;
+        position: relative;
+      }
+      .tlaxis {
+        font-size: 10px;
+        color: var(--note);
+        letter-spacing: 2px;
+        margin: 0 0 4px 62px;
+      }
+      .tlrow {
+        display: flex;
+        align-items: center;
+        height: 15px;
+      }
+      .tlrow .n {
+        width: 58px;
+        font-size: 10px;
+        color: var(--note);
+        flex-shrink: 0;
+      }
+      .tlrow .tr {
+        flex: 1;
+        position: relative;
+        height: 13px;
+        border-bottom: 1px dotted #eee;
+      }
+      .tr i {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        background: #c9c9c9;
+      }
+      .tr i.d {
+        background: #999;
+      }
+      .tr i.e {
+        background: var(--ink);
+      }
+      .tip {
+        position: absolute;
+        right: 14px;
+        top: 40px;
+        border: 1px solid var(--ink);
+        background: #fff;
+        padding: 5px 8px;
+        font-size: 11px;
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.12);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Zeal — wireframe mock</h1>
+      <div class="sub">
+        window 1種・content 3状態（target / run / analytics）・実行入口は composer だけ。
+      </div>
+      <div class="toc">
+        <a href="#core">コア</a>
+        <a href="#s1">target</a>
+        <a href="#s2">run（実行中）</a>
+        <a href="#s2b">run（完了）</a>
+        <a href="#s3">analytics</a>
+        <a href="#qo">find</a>
+      </div>
+    </div>
+
+    <div class="page" id="core">
+      <div class="basis">
+        <table class="basis-t">
+          <tr>
+            <th style="width: 10em">残ったもの</th>
+            <th>役割</th>
+          </tr>
+          <tr>
+            <td>tree</td>
+            <td>対象を見つける。label → package → file の一致</td>
+          </tr>
+          <tr>
+            <td>関係4行</td>
+            <td>deps / data / used by / files</td>
+          </tr>
+          <tr>
+            <td>composer</td>
+            <td>実行の唯一の入口。自分のコマンドとして残る</td>
+          </tr>
+          <tr>
+            <td>run</td>
+            <td>timing / log</td>
+          </tr>
+          <tr>
+            <td>runs</td>
+            <td>local に溜まる履歴。集計すると傾向になる</td>
+          </tr>
+          <tr>
+            <td>target 欄</td>
+            <td>fuzzy + pattern。セットはここから</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- data-* で chrome を指定するだけ。中身は content の差分 -->
+    <div class="page" id="s1">
+      <h2>target</h2>
+      <div class="win" data-target="//app/lib:parser" data-side="tree" data-sel="">
+        <div style="font-size: 15px; margin-bottom: 12px">
+          <strong>//app/lib:parser</strong>
+          <span class="badge">java_library</span>
+        </div>
+        <dl class="rel">
+          <dt>deps →</dt>
+          <dd>:parser_proto · @maven//:guava</dd>
+          <dt>data →</dt>
+          <dd>//app:grammars</dd>
+          <dt>used by ←</dt>
+          <dd>
+            //app:server <span class="dim">java_binary</span> · :parser_test
+            <span class="dim">java_test</span>
+          </dd>
+          <dt>files</dt>
+          <dd>Parser.java, Token.java … → libparser.jar</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="page" id="s2">
+      <h2>run（実行中）</h2>
+      <div class="win" data-target="//app:server" data-stop data-side="min" data-sel="r1">
+        <h3>timing</h3>
+        <div class="box" style="text-align: center; padding: 26px; color: var(--note)">
+          not available
+        </div>
+        <h3 style="margin-top: 16px">log</h3>
+        <div class="log">[34 / 120] JavaCompile libserver.jar … <span class="ok">ok</span></div>
+      </div>
+    </div>
+
+    <div class="page" id="s2b">
+      <h2>run（完了）</h2>
+      <div class="win" data-target="//app:server" data-side="min" data-sel="r2">
+        <h3>timing</h3>
+        <div class="tl">
+          <div class="tlaxis">0s　　2s　　4s　　6s　　8s</div>
+          <div class="tlrow">
+            <span class="n">exec-0</span>
+            <div class="tr">
+              <i style="left: 0%; width: 18%"></i><i class="d" style="left: 20%; width: 26%"></i
+              ><i style="left: 48%; width: 10%"></i><i class="d" style="left: 60%; width: 30%"></i>
+            </div>
+          </div>
+          <div class="tlrow">
+            <span class="n">exec-1</span>
+            <div class="tr">
+              <i class="d" style="left: 2%; width: 12%"></i><i style="left: 16%; width: 34%"></i
+              ><i class="e" style="left: 52%; width: 22%"></i><i style="left: 78%; width: 14%"></i>
+            </div>
+          </div>
+          <div class="tlrow">
+            <span class="n">exec-2</span>
+            <div class="tr">
+              <i style="left: 0%; width: 40%"></i><i class="d" style="left: 44%; width: 18%"></i
+              ><i style="left: 66%; width: 8%"></i><i class="d" style="left: 78%; width: 20%"></i>
+            </div>
+          </div>
+          <div class="tlrow">
+            <span class="n">exec-3</span>
+            <div class="tr">
+              <i class="d" style="left: 6%; width: 20%"></i><i style="left: 30%; width: 46%"></i
+              ><i style="left: 80%; width: 10%"></i>
+            </div>
+          </div>
+          <div class="tip">JavaCompile //app:server · 2.3s</div>
+        </div>
+        <h3 style="margin-top: 16px">log</h3>
+        <div class="log">[120 / 120] done. <span class="ok">9.4s</span></div>
+      </div>
+    </div>
+
+    <div class="page" id="s3">
+      <h2>analytics</h2>
+      <div class="win" data-target="//app/..." data-side="min" data-sel="a">
+        <div style="display: flex; gap: 6px">
+          <span class="select">30日 ▾</span>
+          <span class="select">cmd ▾</span>
+          <span class="select">結果 ▾</span>
+        </div>
+        <h3 style="margin-top: 16px">build の数</h3>
+        <div class="chart">
+          <i style="height: 52%"></i><i style="height: 48%"></i><i style="height: 20%"></i
+          ><i style="height: 31%"></i><i style="height: 44%"></i><i style="height: 40%"></i
+          ><i style="height: 12%"></i><i style="height: 10%"></i><i style="height: 55%"></i
+          ><i class="hl" style="height: 58%"></i><i style="height: 50%"></i
+          ><i style="height: 46%"></i><i style="height: 18%"></i><i style="height: 15%"></i
+          ><i style="height: 56%"></i><i style="height: 60%"></i><i style="height: 49%"></i
+          ><i style="height: 26%"></i><i style="height: 22%"></i><i style="height: 38%"></i>
+        </div>
+        <h3 style="margin-top: 16px">時間のかかった target</h3>
+        <ul class="list">
+          <li><span>//app:server</span><span>96s ↑</span></li>
+          <li><span>//app/lib:parser</span><span>12s</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="page" id="qo">
+      <h2>target 欄（入力中）</h2>
+      <div class="toolbar" style="border: 1px solid var(--ink); border-bottom: none">
+        <span class="select">build ▾</span>
+        <span class="input" style="flex: 1">psr▌</span>
+        <span class="btn primary">Send</span>
+      </div>
+      <div class="qo" style="border-top: none">
+        <div class="match sel">
+          <span>//app/lib:<b>p</b>a<b>r</b><b>s</b>er</span><span class="label">java_library</span>
+        </div>
+        <div class="match">
+          <span>//app/lib:<b>p</b>a<b>r</b><b>s</b>er_test</span
+          ><span class="label">java_test</span>
+        </div>
+        <div class="match">
+          <span>//tools:de<b>ps</b>_pa<b>r</b>ser</span><span class="label">py_binary</span>
+        </div>
+        <div class="match">
+          <span>Parser.java</span><span class="label">→ //app/lib:parser</span>
+        </div>
+        <div class="foot label"><code>//app/...</code> <code>:all</code> <code>:*</code></div>
+      </div>
+    </div>
+
+    <script>
+      const TREE = `
+  ▾ app/<br>
+  &nbsp;&nbsp;▸ server.java <span class="dim">//app:server</span><br>
+  &nbsp;&nbsp;▾ lib/ <span class="dim">//app/lib</span><br>
+  &nbsp;&nbsp;&nbsp;&nbsp;<strong>:parser</strong><br>
+  &nbsp;&nbsp;&nbsp;&nbsp;:parser_test<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;:lexer_test<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;:parser_proto<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;:codegen<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;Parser.java <span class="dim">→ :parser</span><br>
+  ▸ proto/<br>
+  ▸ tools/`;
+
+      const RUNS = [
+        ["●", "build //app:server", "r1", "now"],
+        ["✓", "test //app/lib:all", "r2", "3m"],
+        ["✗", "build //app:server", "r3", "1h"],
+        ["■", "build //app:server", "r4", "昨日"],
+        ["○", "build //app:server", "r5", "先週"],
+      ];
+
+      const sidebar = (side, sel) => `
+  <h3>targets</h3>
+  <div class="tree ${side === "min" ? "dim" : ""}" ${side === "min" ? 'style="font-size:11px;"' : ""}>${side === "min" ? "…" : TREE}</div>
+  <h3 style="margin-top:14px;">runs</h3>
+  <ul class="list">
+    <li${"a" === sel ? ' class="sel"' : ""}><span>▤ analytics</span></li>
+    ${RUNS.map(
+      ([icon, t, id, time]) =>
+        `<li${id === sel ? ' class="sel"' : ""}><span>${icon} ${t}</span>${time ? `<span class="label">${time}</span>` : ""}</li>`,
+    ).join("")}
+  </ul>
+  <div class="label" style="margin-top:6px;">● running · ✓ ok · ✗ failed · ■ interrupted · ○ no detail</div>`;
+
+      const toolbar = (target, stop) => `
+  <strong>Zeal</strong><span class="label">~/repo</span>
+  <span class="select">build ▾</span>
+  <span class="input" style="flex:1;">${target}</span>
+  ${stop ? '<span class="btn primary">■</span>' : '<span class="btn primary">Send</span>'}`;
+
+      document.querySelectorAll(".win").forEach((w) => {
+        const d = w.dataset;
+        w.innerHTML = `
+    <div class="toolbar">${toolbar(d.target, "stop" in d)}</div>
+    <div class="win-body">
+      <div class="sidebar">${sidebar(d.side, d.sel)}</div>
+      <div class="content">${w.innerHTML}</div>
+    </div>`;
+      });
+    </script>
+  </body>
+</html>
