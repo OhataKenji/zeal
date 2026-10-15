@@ -1,3 +1,4 @@
+pub mod ingest;
 pub mod label;
 pub mod snapshot;
 pub mod state;
