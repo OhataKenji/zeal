@@ -11,8 +11,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.filter.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            build:
+              - '.github/workflows/build.yml'
+              - 'index.html'
+              - 'mise.toml'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'public/**'
+              - 'rust-toolchain.toml'
+              - 'src/**'
+              - 'src-tauri/**'
+              - 'svelte.config.js'
+              - 'tsconfig*.json'
+              - 'vite.config.ts'
+
   tauri-build:
     name: tauri build
+    needs: changes
+    # On PRs, only build the bundle when app sources changed. main pushes and
+    # manual runs always build.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
