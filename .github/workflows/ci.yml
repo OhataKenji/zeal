@@ -20,27 +20,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fail-open: a job runs unless every changed path is listed as irrelevant
+      # to it. Unlisted paths default to running the job, so a stale exclusion
+      # list costs an extra run instead of silently skipping a needed check.
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          predicate-quantifier: 'some-with-excludes'
           filters: |
             frontend:
-              - '.github/workflows/ci.yml'
-              - '.oxfmtrc.json'
-              - '.oxlintrc.json'
-              - 'index.html'
-              - 'mise.toml'
-              - 'package.json'
-              - 'pnpm-lock.yaml'
-              - 'public/**'
-              - 'src/**'
-              - 'svelte.config.js'
-              - 'tsconfig*.json'
-              - 'vite.config.ts'
+              - '**'
+              - '!docs/**'
+              - '!src-tauri/**'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/workflows/build.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
             rust:
-              - '.github/workflows/ci.yml'
-              - 'rust-toolchain.toml'
-              - 'src-tauri/**'
+              - '**'
+              - '!docs/**'
+              - '!src/**'
+              - '!public/**'
+              - '!index.html'
+              - '!package.json'
+              - '!pnpm-lock.yaml'
+              - '!svelte.config.js'
+              - '!tsconfig*.json'
+              - '!vite.config.ts'
+              - '!.oxfmtrc.json'
+              - '!.oxlintrc.json'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/workflows/build.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
 
   frontend:
     name: frontend (check / format / lint / build)
