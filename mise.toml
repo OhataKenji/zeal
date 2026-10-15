@@ -3,8 +3,7 @@ node = "24"
 pnpm = "11.5.0"
 gitleaks = "8"
 
-# Rust is pinned in rust-toolchain.toml (single source of truth); this makes
-# mise read it, so a rust entry in a member's global mise config cannot
-# override the project toolchain via RUSTUP_TOOLCHAIN.
+# Rust is pinned in rust-toolchain.toml.
+# This makes mise read it.
 [settings]
 idiomatic_version_file_enable_tools = ["rust"]
