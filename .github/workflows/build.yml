@@ -22,7 +22,7 @@ jobs:
       # Fail-open: the job runs unless every changed path is listed as
       # irrelevant. Unlisted paths default to running the job, so a stale
       # exclusion list costs an extra run instead of skipping a needed build.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           predicate-quantifier: 'some-with-excludes'
