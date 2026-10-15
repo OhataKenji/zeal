@@ -1,0 +1,79 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "timezone": "Asia/Tokyo",
+  "schedule": ["before 9am on Monday"],
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "platformAutomerge": true,
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "addLabels": ["security"],
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 9am on Monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Automerge non-major updates once required checks pass",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest", "lockFileMaintenance"],
+      "automerge": true
+    },
+    {
+      "description": "Runtime-sensitive deps — manual merge even for non-major (CI builds but never launches the app; quick-xml is 0.x so every minor can break)",
+      "matchPackageNames": ["/^tauri/", "@tauri-apps/**", "quick-xml"],
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions — manual merge, batched in one PR (digest updates are not covered by minimumReleaseAge and actions run with GITHUB_TOKEN)",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "automerge": false
+    },
+    {
+      "description": "Major updates wait for Dependency Dashboard approval",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Tauri stack — npm packages and crates release in lockstep, ship in one PR",
+      "groupName": "tauri",
+      "matchManagers": ["npm", "cargo"],
+      "matchPackageNames": ["@tauri-apps/**", "/^tauri/"]
+    },
+    {
+      "description": "Update types without release timestamps can't be age-gated",
+      "matchUpdateTypes": ["replacement", "pin", "rollback", "bump", "lockFileMaintenance"],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Svelte/Vite toolchain (svelte-check is coupled to the TypeScript version)",
+      "groupName": "svelte-vite",
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "vite",
+        "svelte",
+        "svelte-check",
+        "typescript",
+        "@sveltejs/**",
+        "@tsconfig/svelte"
+      ]
+    },
+    {
+      "description": "oxc toolchain",
+      "groupName": "oxc",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["oxlint", "oxfmt"]
+    },
+    {
+      "description": "Non-Tauri Rust deps",
+      "groupName": "cargo-deps",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["serde", "serde_json", "log"]
+    }
+  ]
+}
