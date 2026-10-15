@@ -11,8 +11,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - '.github/workflows/ci.yml'
+              - '.oxfmtrc.json'
+              - '.oxlintrc.json'
+              - 'index.html'
+              - 'mise.toml'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'public/**'
+              - 'src/**'
+              - 'svelte.config.js'
+              - 'tsconfig*.json'
+              - 'vite.config.ts'
+            rust:
+              - '.github/workflows/ci.yml'
+              - 'rust-toolchain.toml'
+              - 'src-tauri/**'
+
   frontend:
     name: frontend (check / format / lint / build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +88,8 @@ jobs:
 
   rust:
     name: rust (fmt / clippy / test)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
