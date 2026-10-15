@@ -6,10 +6,7 @@ A local first Bazel GUI client.
 
 Tauri v2 (Rust + system WebView) app. Frontend is Vite + Svelte 5 + TypeScript.
 
-Tool versions (Node.js, pnpm, gitleaks, Rust) are pinned with
-[mise](https://mise.jdx.dev/). `rust-toolchain.toml` is the source of truth for
-Rust and is also honored by plain rustup. [Install
-mise](https://mise.jdx.dev/install.html), then:
+Tool versions are pinned with [mise](https://mise.jdx.dev/).
 
 ```sh
 mise install   # installs the pinned tools (trusts mise.toml on first run)
