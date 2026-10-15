@@ -6,7 +6,10 @@ A local first Bazel GUI client.
 
 Tauri v2 (Rust + system WebView) app. Frontend is Vite + Svelte 5 + TypeScript.
 
+Tool versions are pinned with [mise](https://mise.jdx.dev/).
+
 ```sh
+mise install   # installs the pinned tools (trusts mise.toml on first run)
 pnpm install
 pnpm tauri dev    # run the app in dev mode
 pnpm tauri build  # build a release bundle

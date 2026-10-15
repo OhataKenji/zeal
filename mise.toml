@@ -1,0 +1,9 @@
+[tools]
+node = "24"
+pnpm = "11.5.0"
+gitleaks = "8"
+
+# Rust is pinned in rust-toolchain.toml.
+# This makes mise read it.
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
