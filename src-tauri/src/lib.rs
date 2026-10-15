@@ -1,6 +1,7 @@
 pub mod label;
 pub mod snapshot;
 pub mod state;
+pub mod workspace;
 pub mod xml;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
