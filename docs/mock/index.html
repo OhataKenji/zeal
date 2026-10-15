@@ -502,8 +502,7 @@
       ([icon, t, id, time]) =>
         `<li${id === sel ? ' class="sel"' : ""}><span>${icon} ${t}</span>${time ? `<span class="label">${time}</span>` : ""}</li>`,
     ).join("")}
-  </ul>
-  <div class="label" style="margin-top:6px;">● running · ✓ ok · ✗ failed · ■ interrupted · ○ no detail</div>`;
+  </ul>`;
 
       const toolbar = (target, stop) => `
   <strong>Zeal</strong><span class="label">~/repo</span>
@@ -519,6 +518,10 @@
       <div class="sidebar">${sidebar(d.side, d.sel)}</div>
       <div class="content">${w.innerHTML}</div>
     </div>`;
+        w.insertAdjacentHTML(
+          "afterend",
+          `<div class="label" style="margin-top:6px;">legends: ● running · ✓ ok · ✗ failed · ■ interrupted · ○ no detail</div>`,
+        );
       });
     </script>
   </body>
