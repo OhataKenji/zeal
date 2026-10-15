@@ -1,0 +1,269 @@
+:root {
+  --line: #9a9a9a;
+  --ink: #333;
+  --note: #777;
+  --bg: #f4f4f4;
+  --err: #a33;
+}
+
+body {
+  font-family: Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg);
+  margin: 0;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* window = toolbar + sidebar + content (docs/mock と同じ構成) */
+.win {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+}
+
+.toolbar {
+  border-bottom: 1px solid var(--ink);
+  padding: 6px 12px;
+  background: #eee;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.win-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 280px;
+  border-right: 2px solid var(--ink);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Stacked, independently scrollable panes with a draggable boundary,
+   like VS Code's split views. */
+.pane {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane.collapsed {
+  flex: 0 0 auto;
+}
+
+.pane-head {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 8px 8px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--note);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 8px 8px;
+}
+
+.divider {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  position: relative;
+}
+
+.divider::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 14px;
+  overflow: auto;
+}
+
+ul.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul.list li {
+  padding: 4px 0;
+  border-bottom: 1px dotted #ccc;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+ul.list li:last-child {
+  border-bottom: none;
+}
+
+.input,
+.select {
+  border: 1px solid var(--ink);
+  padding: 5px 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.composer-target {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn {
+  border: 1px solid var(--ink);
+  padding: 4px 14px;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn.primary {
+  background: var(--ink);
+  color: #fff;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.badge {
+  display: inline-block;
+  border: 1px solid var(--ink);
+  border-radius: 10px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: #fff;
+  white-space: nowrap;
+}
+
+.dim {
+  color: var(--note);
+}
+
+.label {
+  font-size: 11px;
+  color: var(--note);
+}
+
+.err {
+  color: var(--err);
+}
+
+.warn {
+  color: var(--note);
+  border-bottom: 1px dotted #ccc;
+  padding-bottom: 6px;
+  margin: 0 0 10px;
+}
+
+.link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.tree {
+  line-height: 1.7;
+  font-size: 12px;
+}
+
+.tree .row {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 1px 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tree .row:hover {
+  background: #eee;
+}
+
+.tree .row.sel {
+  font-weight: bold;
+}
+
+.rel {
+  display: grid;
+  grid-template-columns: 5em 1fr;
+  gap: 4px 10px;
+  font-size: 12px;
+  margin: 12px 0 0;
+}
+
+.rel dt {
+  color: var(--note);
+}
+
+.rel dd {
+  margin: 0;
+}
+
+.target-head {
+  font-size: 15px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ws-prompt {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+
+.ws-prompt label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: 11px;
+  color: var(--note);
+}
