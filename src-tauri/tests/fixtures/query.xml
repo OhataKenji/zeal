@@ -1,0 +1,69 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<query version="2">
+  <rule class="java_library" location="/repo/app/lib/BUILD:3:12" name="//app/lib:parser">
+    <string name="name" value="parser"/>
+    <list name="srcs">
+      <label value="//app/lib:Parser.java"/>
+      <label value="//app/lib:Token.java"/>
+    </list>
+    <list name="deps">
+      <label value="//app/lib:parser_proto"/>
+      <label value="@@maven+//:com_google_guava_guava"/>
+    </list>
+    <list name="data">
+      <label value="//app:grammars"/>
+      <label value="//app/lib:grammars.txt"/>
+    </list>
+    <list name="visibility">
+      <label value="//visibility:public"/>
+    </list>
+    <label name="$cc_toolchain" value="//tools:cc"/>
+    <list name="deps_opt">
+      <label value="//conditions:default"/>
+      <label value="//app/lib:parser_proto"/>
+    </list>
+    <rule-input name="//app/lib:SHOULD_NOT_BECOME_EDGE"/>
+    <rule-output name="//app/lib:libparser.jar"/>
+  </rule>
+  <rule class="proto_library" location="/repo/app/lib/BUILD:10:5" name="//app/lib:parser_proto">
+    <list name="srcs">
+      <label value="//app/lib:parser.proto"/>
+    </list>
+    <rule-input name="//app/lib:parser.proto"/>
+    <rule-output name="//app/lib:libparser_proto_proto-descriptor-set.proto.bin"/>
+  </rule>
+  <rule class="java_test" location="/repo/app/lib/BUILD:15:8" name="//app/lib:parser_test">
+    <list name="srcs">
+      <label value="//app/lib:Parser.java"/>
+    </list>
+    <list name="deps">
+      <label value="//app/lib:parser"/>
+    </list>
+  </rule>
+  <rule class="java_binary" location="/repo/app/BUILD:2:9" name="//app">
+    <list name="deps">
+      <label value="//app/lib:parser"/>
+    </list>
+    <list name="data">
+      <label value="//app:server.cfg"/>
+    </list>
+    <list name="tools">
+      <label value="//tools:launcher"/>
+    </list>
+    <rule-output name="//app:server.jar"/>
+  </rule>
+  <rule class="filegroup" location="/repo/app/BUILD:9:3" name="//app:grammars">
+    <list name="srcs">
+      <label value="//app:g1.txt"/>
+      <label value="//app:g2.txt"/>
+    </list>
+  </rule>
+  <rule class="genrule" location="/repo/tools/build_defs.bzl:22:5" name="//tools:launcher">
+    <list name="outs">
+      <output value="//tools:launcher.sh"/>
+    </list>
+    <rule-input name="//tools:BUILD"/>
+    <rule-output name="//tools:launcher.sh"/>
+  </rule>
+  <rule class="cc_library" location="/repo/tools/BUILD:4:1" name="//tools:cc"/>
+</query>
