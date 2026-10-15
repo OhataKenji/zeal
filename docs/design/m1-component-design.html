@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zeal M1 — コンポーネント設計</title>
+<style>
+  :root {
+    --ink: #1a1d21;
+    --note: #666a71;
+    --line: #d6d9dd;
+    --bg: #fafbfc;
+    --card: #ffffff;
+    --rust: #b7410e;
+    --svelte: #0f6fde;
+    --edge: #8a63d2;
+    --warn: #8a6100;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Hiragino Sans", "Noto Sans JP", -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.8;
+    color: var(--ink);
+    background: var(--bg);
+  }
+  .page { max-width: 980px; margin: 0 auto; padding: 48px 32px 96px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 {
+    font-size: 15px; margin: 48px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid var(--ink);
+  }
+  h2 .no { color: var(--note); font-weight: normal; margin-right: 8px; }
+  .sub { color: var(--note); margin: 0 0 32px; }
+  p { margin: 8px 0; }
+  code, .mono {
+    font-family: "SF Mono", Menlo, monospace; font-size: 12px;
+    background: #eef0f2; padding: 1px 5px; border-radius: 4px;
+  }
+  .file { font-family: "SF Mono", Menlo, monospace; font-size: 12px; color: var(--rust); }
+  .file.fe { color: var(--svelte); }
+
+  /* ---------- pipeline diagram ---------- */
+  .diagram {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 20px; margin: 16px 0; overflow-x: auto;
+  }
+  .caption { font-size: 12px; color: var(--note); margin-top: 10px; }
+
+  /* ---------- component cards ---------- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card.wide { grid-column: 1 / -1; }
+  .card h3 { margin: 0 0 4px; font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
+  .tag {
+    font-size: 10px; padding: 1px 7px; border-radius: 99px; color: #fff;
+    font-weight: normal; white-space: nowrap;
+  }
+  .tag.rs { background: var(--rust); }
+  .tag.fe { background: var(--svelte); }
+  .card ul { margin: 6px 0 0; padding-left: 18px; }
+  .card li { margin: 2px 0; }
+  .io { color: var(--note); font-size: 12px; margin-top: 6px; }
+  .io b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- sequence ---------- */
+  ol.flow { padding-left: 20px; }
+  ol.flow li { margin: 6px 0; }
+  .flow .who {
+    display: inline-block; min-width: 96px; font-family: "SF Mono", Menlo, monospace;
+    font-size: 11px; color: var(--note);
+  }
+
+  /* ---------- decision table ---------- */
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f0f1f3; font-size: 12px; }
+  td.q { white-space: nowrap; font-weight: 600; }
+
+  .note {
+    border-left: 3px solid var(--warn); background: #fff8ec;
+    padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 13px;
+  }
+  svg text { font-family: "SF Mono", Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>Zeal M1 — コンポーネント設計</h1>
+<p class="sub">
+  <code>m1-targets.md</code>(何を作るか)に対する、実装レベルの構成説明。<br>
+  対象読者: 設計書は読んだが「どのファイルが何をするか」がまだ頭に入っていない人。
+</p>
+
+<h2><span class="no">0</span>一語でいうと</h2>
+<p>
+  <b>「bazel query の XML を、構造を替えずに焼き直して、UI へ丸ごと置き換えで渡すパイプライン」</b>。
+  途中に DB も差分同期も賢いキャッシュもない。<code>bazel query</code> の結果を一回だけ parse して
+  <b>Snapshot</b> と呼ぶ不変構造を作り、できたら古いものと差し替える。UI はその差し替えイベントを受けて再描画するだけ。
+  複雑に見える部分(スレッド、pending、partial)はすべて「この一方向パイプラインを壊さないための補強」である。
+</p>
+
+<div class="diagram">
+<svg width="900" height="150" viewBox="0 0 900 150" role="img">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#666a71"/>
+    </marker>
+  </defs>
+  <!-- Rust lane -->
+  <rect x="10" y="10" width="560" height="130" rx="10" fill="#fdf4ef"/>
+  <text x="24" y="32" font-size="11" fill="#b7410e">Rust (src-tauri/src)</text>
+  <!-- Frontend lane -->
+  <rect x="610" y="10" width="280" height="130" rx="10" fill="#eef4fd"/>
+  <text x="624" y="32" font-size="11" fill="#0f6fde">Svelte (src)</text>
+
+  <g font-size="11" fill="#1a1d21">
+    <rect x="24"  y="56" width="86" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="67" y="77" text-anchor="middle">workspace.rs</text>
+
+    <rect x="128" y="56" width="86" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="171" y="77" text-anchor="middle">ingest.rs</text>
+
+    <rect x="232" y="56" width="72" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="268" y="77" text-anchor="middle">xml.rs</text>
+
+    <rect x="322" y="56" width="86" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="365" y="77" text-anchor="middle">snapshot.rs</text>
+
+    <rect x="426" y="56" width="86" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="469" y="77" text-anchor="middle">state.rs</text>
+
+    <rect x="624" y="56" width="116" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="682" y="77" text-anchor="middle">state.svelte.ts</text>
+
+    <rect x="756" y="56" width="120" height="34" rx="6" fill="#fff" stroke="#d6d9dd"/>
+    <text x="816" y="70" text-anchor="middle">model.ts</text>
+    <text x="816" y="84" text-anchor="middle" font-size="10" fill="#666a71">Tree / TargetView</text>
+  </g>
+
+  <g stroke="#666a71" stroke-width="1.4" fill="none" marker-end="url(#arr)">
+    <line x1="110" y1="73" x2="124" y2="73"/>
+    <line x1="214" y1="73" x2="228" y2="73"/>
+    <line x1="304" y1="73" x2="300" y2="73" stroke="none"/>
+    <line x1="304" y1="73" x2="318" y2="73"/>
+    <line x1="408" y1="73" x2="422" y2="73"/>
+    <line x1="512" y1="73" x2="620" y2="73"/>
+    <line x1="740" y1="73" x2="752" y2="73"/>
+  </g>
+  <text x="566" y="65" font-size="9" fill="#666a71">app-state</text>
+  <text x="566" y="90" font-size="9" fill="#666a71">event</text>
+
+  <!-- bazel subprocess -->
+  <rect x="128" y="104" width="176" height="26" rx="6" fill="#fff" stroke="#b7410e" stroke-dasharray="4 3"/>
+  <text x="216" y="121" font-size="10" fill="#b7410e" text-anchor="middle">bazel query --output=xml (子プロセス)</text>
+  <path d="M160 90 L160 102 M260 102 L260 90" stroke="#b7410e" stroke-width="1.2" fill="none" marker-end="url(#arr)"/>
+</svg>
+<p class="caption">
+  図1 — 全データが通る道はこの一本だけ。label.rs は xml→snapshot 間の矢印を支える純粋関数群、
+  lib.rs は外からの操作(commands)を受ける玄関。バックエンドとフロントエンドの間に流れるのは
+  「完成した Snapshot を含む AppState」だけで、途中経過は一度も流れない。
+</p>
+</div>
+
+<h2><span class="no">1</span>境界線 — Rust と Svelte の分業</h2>
+<p>
+  このアプリで最も大事な線引きは <b>言語の境界ではなく責務の境界</b>。
+</p>
+<table>
+  <tr><th>Rust 側だけがやる</th><th>Svelte 側だけがやる</th></tr>
+  <tr>
+    <td>
+      ファイルシステムを触る(workspace 検証・workspace.json)<br>
+      プロセスを spawn する(bazel/bazelisk、open/xdg-open)<br>
+      XML を parse する<br>
+      label の正規化と edge/file 分類<br>
+      「今何が起きているか」の唯一の真実(Core)
+    </td>
+    <td>
+      描画と入力<br>
+      tree の形を決める(階層化は view の都合)<br>
+      どの target を選んでいるか<br>
+      used by の逆引き(edges を見るだけ)
+    </td>
+  </tr>
+</table>
+<p>
+  境界を越える物は4つだけ。<code>app-state</code> イベント(push)と、3つの command:
+  <code>open_workspace</code> / <code>refresh</code> / <code>open_location</code>。
+  初期値だけ特別に <code>get_state</code>(pull)がある。
+  <b>細かい問い合わせ API は意図的に存在しない</b>。Snapshot は数 MB でも stringify→emit で十分速く、
+  「全部渡して UI 側で引く」ほうが API を増やすより単純になる。
+</p>
+
+<h2><span class="no">2</span>Rust 側コンポーネント</h2>
+<div class="grid">
+
+  <div class="card">
+    <h3><span class="file">lib.rs</span><span class="tag rs">玄関</span></h3>
+    <ul>
+      <li>4つの command を登録:<code>get_state</code>, <code>open_workspace</code>, <code>refresh</code>, <code>open_location</code></li>
+      <li>起動時 setup: ログ plugin、<code>Core</code> を manage、保存済み workspace の再 open</li>
+      <li><code>expand_home</code>: <code>~/...</code> を展開(8行)</li>
+    </ul>
+    <p class="io"><b>入</b> UI からの invoke → <b>出</b> Core への書き込み + ingest::request の発火</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="file">state.rs</span><span class="tag rs">唯一の可変セル</span></h3>
+    <ul>
+      <li><code>Core { Mutex&lt;CoreState&gt; }</code>: workspace, bazel, snapshot(<code>Arc</code>), last_error, ingest_running/pending</li>
+      <li><code>dto()</code>: CoreState → シリアライズ可能な AppStateDto</li>
+      <li><code>emit()</code>: <code>app-state</code> イベントとして webview へ push</li>
+    </ul>
+    <p class="io">変更があるたび<b>全体を</b> emit。部分更新という概念はない。</p>
+  </div>
+
+  <div class="card wide">
+    <h3><span class="file">ingest.rs</span><span class="tag rs">指揮者</span></h3>
+    <ul>
+      <li><code>request()</code>: 入口。実行中なら <code>ingest_pending=true</code> を立てて即 return(合体/coalescing)。実行中でなければスレッドを立てる</li>
+      <li>スレッド内ループ: <code>fetch()</code> → snapshot 差替 or last_error 記録 → pending が立っていればもう一周 → 終了</li>
+      <li><code>fetch()</code>: bazel query 子プロセスを spawn。stdout → parse スレッド、stderr → drain スレッド、本体は <code>try_wait</code>+300s タイムアウトを回す</li>
+      <li><code>Outcome</code>: <b>Ok</b> / <b>Partial</b>(exit≠0 だが rule が取れた — <code>--keep_going</code>) / <b>Failed</b>(snapshot は温存)</li>
+    </ul>
+    <p class="io"><b>入</b> workspace + bazel path → <b>出</b> Outcome。「同時に走る query は1つ」をここが保証する</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="file">xml.rs</span><span class="tag rs">XML→RawRule</span></h3>
+    <ul>
+      <li><code>parse_rules → read_body → read_children</code> の3段。XML のネストと同じ形のループ</li>
+      <li><code>&lt;rule-input&gt;</code> は無視(暗黙依存が混ざる)。edge は「属性名つきの <code>&lt;label&gt;</code>」だけから</li>
+      <li><code>&lt;rule-output&gt;</code> → outputs。<code>location</code> は <code>file:line:col</code> を分解</li>
+      <li>途中で切れた XML はエラーにせず、読めた分だけ返す</li>
+    </ul>
+    <p class="io"><b>入</b> bazel の stdout(BufRead)→ <b>出</b> <code>Vec&lt;RawRule&gt;</code></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="file">label.rs</span><span class="tag rs">label の算数</span></h3>
+    <ul>
+      <li><code>canonical</code>: <code>//app</code> → <code>//app:app</code>、<code>@@x</code> → <code>@x</code>、<code>@@//p</code> → <code>//p</code></li>
+      <li><code>is_dep_attr</code>: visibility・<code>$暗黙属性</code>・<code>//...</code> 名前を除外</li>
+      <li><code>is_select_key</code> / <code>is_external</code> / <code>label_to_path</code></li>
+    </ul>
+    <p class="io">状態を持たない純粋関数だけのモジュール。ここにロジックを集約したので parser と builder が薄い</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="file">snapshot.rs</span><span class="tag rs">RawRule→Snapshot</span></h3>
+    <ul>
+      <li>targets: 全 rule を canonical label で正規化+重複除去+ソート</li>
+      <li>edges/files: label_attrs を見て、宛先が既知 target か <code>@...</code> なら <b>edge</b>、それ以外は <b>file</b></li>
+      <li>files の <code>role</code>: 入力側は属性名(srcs/data/...)、出力側は固定で <code>out</code></li>
+      <li>meta: fetchedAt + status(ok/partial)</li>
+    </ul>
+    <p class="io">「edge か file か」の分類はここで完結。UI は分類結果を見るだけ</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="file">workspace.rs</span><span class="tag rs">環境の3役</span></h3>
+    <ul>
+      <li><code>is_workspace</code>: MODULE.bazel / WORKSPACE の存在</li>
+      <li><code>resolve_bazel</code>: PATH を自前で走査し bazelisk 優先で解決</li>
+      <li><code>save / load_saved</code>: app_data_dir の <code>workspace.json</code> への読み書き(設計上、永続化するのは path だけ。snapshot は永続化しない)</li>
+    </ul>
+  </div>
+
+</div>
+
+<h2><span class="no">3</span>Svelte 側コンポーネント</h2>
+<div class="grid">
+
+  <div class="card">
+    <h3><span class="file fe">state.svelte.ts</span><span class="tag fe">受信口 + store</span></h3>
+    <ul>
+      <li><code>app</code>: <code>$state</code> のただ一つの reactive store。中身は AppStateDto そのまま</li>
+      <li><code>init()</code>: <code>app-state</code> を listen しつつ、初期値を <code>get_state</code> で pull</li>
+      <li><code>openWorkspace / refresh / openLocation</code>: invoke の薄いラッパ</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3><span class="file fe">model.ts</span><span class="tag fe">純粋 view-model</span></h3>
+    <ul>
+      <li><code>buildTree(snap)</code>: package のディレクトリ階層に rules と files を配る。file は「自身の dir に最長一致する package」の節へ、無ければ owner の節へ畳む</li>
+      <li><code>flatten(root, expanded)</code>: tree→行配列(表示はこれだけを見る)</li>
+      <li><code>relations(snap, label)</code>: 関係4行(deps/data/used by/files)。used by は edges を逆向きに引くだけ — Rust 側に逆辺は存在しない</li>
+      <li><code>displayLabel / displayPath</code>: 同一 package なら <code>:name</code> に短縮</li>
+    </ul>
+  </div>
+
+  <div class="card wide">
+    <h3><span class="file fe">App.svelte</span><span class="tag fe">骨格</span></h3>
+    <ul>
+      <li>toolbar: workspace 表示(クリックで再選択)、composer(target 入力+コマンド選択+Send ※実行は M3)、refresh ボタン</li>
+      <li>sidebar: targets / runs の<b>独立スクロール pane</b> + ドラッグ可能な境界線、各 pane は畳める</li>
+      <li>content: partial/stale の警告バナー、取り込み中表示、WorkspacePrompt、TargetView</li>
+      <li><code>select()</code>: 選択は composer の target 欄にも同期 — 「現在の target」の single source of truth</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3><span class="file fe">Tree.svelte</span><span class="tag fe">左ペイン</span></h3>
+    <ul>
+      <li><code>flatten</code> の行を描画。dir 行は開閉、rule/file 行は select</li>
+      <li><code>SvelteSet</code> で展開状態を保持。外部選択(関係行クリック等)時は祖先 dir を自動展開</li>
+      <li>file 行は <code>→ :owner</code> 表示、クリックで先頭 owner の target へ遷移</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3><span class="file fe">TargetView.svelte</span><span class="tag fe">右ペイン</span></h3>
+    <ul>
+      <li>ヘッダ: label + rule class badge + <code>BUILD:line</code>(クリックで <code>open_location</code> → OS 既定アプリ)</li>
+      <li><code>deps →</code> / <code>data →</code> / <code>used by ←</code>: 各 entry が target 遷移リンク。既知でない label(external 等)はテキスト表示</li>
+      <li><code>files</code>: 入力 path 列挙 + <code>→</code> 出力 path</li>
+    </ul>
+  </div>
+
+</div>
+
+<h2><span class="no">4</span>時系列 — 4つの流れ</h2>
+
+<p><b>A. 起動(保存済み workspace あり)</b></p>
+<ol class="flow">
+  <li><span class="who">main.ts</span><code>init()</code>: listen 登録 → <code>get_state</code> で初期値取得</li>
+  <li><span class="who">lib.rs</span>setup: <code>workspace.json</code> を読み、まだ workspace なら Core にセットして <code>ingest::request</code></li>
+  <li><span class="who">ingest.rs</span>スレッド: <code>fetch()</code> — bazel spawn、stdout を streaming parse</li>
+  <li><span class="who">snapshot.rs</span>RawRule[] → Snapshot を build、Core の snapshot を <b>Arc ごと差替</b></li>
+  <li><span class="who">state.rs</span><code>emit</code> → <span class="who">state.svelte.ts</span>store 更新 → UI 再描画</li>
+</ol>
+
+<p><b>B. refresh(取り込み中に再度要求)</b></p>
+<ol class="flow">
+  <li><span class="who">ingest.rs</span>実行中なので <code>pending=true</code> で即 return — 2つ目の bazel は走らない</li>
+  <li><span class="who">ingest.rs</span>現行 fetch 完了 → snapshot 差替 → pending を見て <b>もう一周だけ</b> fetch(合体、無限ループしない)</li>
+</ol>
+
+<p><b>C. 失敗</b></p>
+<ol class="flow">
+  <li><span class="who">ingest.rs</span>exit≠0 で rule が1つも取れなければ <b>Failed</b>: snapshot は<b>古いまま</b>、last_error に要約(stderr 末尾)</li>
+  <li><span class="who">ingest.rs</span>exit≠0 でも rule が取れていれば <b>Partial</b>: snapshot 更新 + status=partial(banner が出る)</li>
+  <li><span class="who">App.svelte</span>snapshot 無し &amp; last_error あり → エラー文 + retry ボタン</li>
+</ol>
+
+<p><b>D. 選択(バックエンドを一切越えない)</b></p>
+<ol class="flow">
+  <li><span class="who">Tree/TargetView</span>click → <code>select(label)</code></li>
+  <li><span class="who">model.ts</span><code>relations()</code> が Snapshot の中だけで deps/data/used by/files を引く</li>
+  <li><span class="who">Tree.svelte</span>選択先の祖先 dir を自動展開</li>
+</ol>
+<p class="caption">関係行や BUILD へのジャンプに IPC は要らない。Snapshot が全情報を持つので「選ぶ」は純粋な UI 状態の話。</p>
+
+<h2><span class="no">5</span>なぜそうなっているか</h2>
+<table>
+  <tr><th>問い</th><th>答え</th></tr>
+  <tr><td class="q">snapshot 全置換でいいの?</td>
+      <td>アトミックに「成功したらまるごと新しい世界」。部分更新・差分マージ・世代管理のコードが全部いらない。<code>Arc&lt;Snapshot&gt;</code> なので差替はポインタ書き換え、emit 時の clone も Vec のコピー1回</td></tr>
+  <tr><td class="q">queue じゃなく pending flag?</td>
+      <td>要求を貯めても意味がない — 次に走る query は常に「最新の workspace」1種類しかない。なので flag 1つで「終わったらもう一度」が正確なモデル</td></tr>
+  <tr><td class="q">edge/file 分類が Rust 側?</td>
+      <td>「target への参照か、ただのファイルか」は canonical 化と既知 label 集合がないと判定できない。UI に label 算数を持ち込むと二重実装になるので backend で完結させる</td></tr>
+  <tr><td class="q">tree 構築が frontend 側?</td>
+      <td>逆に tree は「見せ方」の都合。Rust はフラットな targets/edges/files を渡し、階層化・最長 prefix 一致・展開状態は全部 view 側の関心ごと</td></tr>
+  <tr><td class="q"><code>&lt;rule-input&gt;</code> を無視?</td>
+      <td>rule-input はフラット化済みで属性名を失い、<code>--noimplicit_deps</code> を付けても暗黙依存が混ざる。edge は「属性名つきの <code>&lt;label&gt;</code>」だけから取ると決めたので、こちらは読む必要自体がない</td></tr>
+  <tr><td class="q">stderr を別スレッドで drain?</td>
+      <td>pipe は容量を超えると子プロセスが write ブロックで固まる。読むのはエラー要約のためで、本文は末尾 8KB だけ残す</td></tr>
+  <tr><td class="q">workspace.json だけ永続化?</td>
+      <td>再開時に同じ workspace を自動で開くため。snapshot は起動ごとに query し直す(設計の非目標: snapshot の保存)</td></tr>
+  <tr><td class="q">partial をわざわざ区別?</td>
+      <td><code>--keep_going</code> 付きなので「exit≠0 でも XML の大半は健全」が普通に起きる。Failed に潰すと使える snapshot を捨てることになるので、banner 付きの部分 snapshot として扱う</td></tr>
+</table>
+
+<h2><span class="no">6</span>ファイル対応表</h2>
+<table>
+  <tr><th>ファイル</th><th>役割</th><th>依存</th></tr>
+  <tr><td class="file">src-tauri/src/lib.rs</td><td>command 登録・setup・workspace 再 open</td><td>state, workspace, ingest</td></tr>
+  <tr><td class="file">src-tauri/src/state.rs</td><td>Core(Mutex)・AppStateDto・emit</td><td>snapshot</td></tr>
+  <tr><td class="file">src-tauri/src/ingest.rs</td><td>query 実行・coalescing・Outcome</td><td>xml, snapshot, state</td></tr>
+  <tr><td class="file">src-tauri/src/xml.rs</td><td>XML → RawRule streaming parse</td><td>quick-xml</td></tr>
+  <tr><td class="file">src-tauri/src/label.rs</td><td>label 正規化・分類・path 変換</td><td>なし</td></tr>
+  <tr><td class="file">src-tauri/src/snapshot.rs</td><td>RawRule → Snapshot</td><td>label</td></tr>
+  <tr><td class="file">src-tauri/src/workspace.rs</td><td>検出・bazel 解決・workspace.json</td><td>serde_json</td></tr>
+  <tr><td class="file fe">src/main.ts</td><td>mount + init</td><td>state.svelte</td></tr>
+  <tr><td class="file fe">src/lib/types.ts</td><td>wire 型(serde camelCase に対応)</td><td>なし</td></tr>
+  <tr><td class="file fe">src/lib/state.svelte.ts</td><td>store + listen + invoke wrapper</td><td>@tauri-apps/api</td></tr>
+  <tr><td class="file fe">src/lib/model.ts</td><td>tree 構築・flatten・relations・表示 label</td><td>types</td></tr>
+  <tr><td class="file fe">src/App.svelte</td><td>骨格・toolbar・split pane・banner・選択状態</td><td>全部</td></tr>
+  <tr><td class="file fe">src/lib/Tree.svelte</td><td>tree 描画・開閉・選択</td><td>model</td></tr>
+  <tr><td class="file fe">src/lib/TargetView.svelte</td><td>詳細 + 関係4行</td><td>model, state</td></tr>
+  <tr><td class="file fe">src/lib/WorkspacePrompt.svelte</td><td>path 入力フォーム</td><td>state</td></tr>
+  <tr><td class="file fe">src/app.css</td><td>全スタイル(mock 準拠)</td><td>なし</td></tr>
+  <tr><td class="file">src-tauri/tests/query_xml.rs + fixtures/query.xml</td><td>parser/snapshot の golden テスト</td><td>—</td></tr>
+</table>
+
+<div class="note">
+  <b>この理解でカバーできない範囲</b>: M3 以降の run 実行(runs pane は現状プレースホルダ)、
+  bazel server 待ち検知、BUILD 変更の live 検知、生成 target/aspect の網羅。
+  いずれも m1-targets.md の non-goals に対応する。
+</div>
+
+</div>
+</body>
+</html>
