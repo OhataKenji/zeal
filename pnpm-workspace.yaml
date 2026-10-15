@@ -1,0 +1,4 @@
+allowBuilds:
+  lefthook: true
+# Supply-chain guard: don't resolve versions published <7 days ago (minutes).
+minimumReleaseAge: 10080
