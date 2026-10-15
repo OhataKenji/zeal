@@ -18,13 +18,8 @@ pnpm tauri dev    # run the app in dev mode
 pnpm tauri build  # build a release bundle
 ```
 
-If mise is not activated in your shell, prefix commands with `mise exec --`.
-
-On Linux, Tauri also needs system packages:
-
-```sh
-sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
+Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
+via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
 ## Checks
 
