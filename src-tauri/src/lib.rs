@@ -82,7 +82,8 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
 }
 
 /// A run of the open workspace with its artifacts parsed.
-#[tauri::command]
+/// Parse and serialize whole artifacts off the UI thread.
+#[tauri::command(async)]
 fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDetail, String> {
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid run id".to_string())?
