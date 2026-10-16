@@ -83,6 +83,9 @@ jobs:
       - name: Lint (oxlint)
         run: pnpm lint
 
+      - name: Unit test (vitest)
+        run: pnpm test
+
       - name: Build
         run: pnpm build
 
