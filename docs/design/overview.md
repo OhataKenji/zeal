@@ -32,9 +32,8 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 - **run**: composer から起動した一回の bazel 呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
 - **BEP**: Build Event Protocol。bazel の `--build_event_json_file` 等で出力される、呼び出し単位のイベント列
-- **exec log**: `--execution_log_binary_file` で出力される、spawn 単位の実行記録
 - **profile**: `--profile` で出力される、phase 内訳と時系列を持つ chrome trace 形式の計測結果
-- **観測 flag**: run 時に bazel へ付けて成果物を得る flag 群(BEP・exec log・profile の出力指定と profile 用補助 flag。[m2](./m2-run-detail.md)参照)
+- **観測 flag**: run 時に bazel へ付けて成果物を得る flag 群(BEP・profile の出力指定と profile 用補助 flag。[m2](./m2-run-detail.md)参照)
 - **run record**: run ごとに DB に保存される観測事実の行([m4](./m4-run-history.md))
 
 ## Overview
@@ -51,12 +50,12 @@ flowchart TD
     BAZEL["bazel CLI<br/>query ・ build/test/run"]
     UI <-->|"Tauri commands / events"| CORE
     CORE -->|"spawn + 観測 flag"| BAZEL
-    BAZEL -->|"成果物: BEP / exec log / profile(file)・query XML(stdout)"| CORE
+    BAZEL -->|"成果物: BEP / profile(file)・query XML(stdout)"| CORE
 ```
 
 データは二系統に分かれる。
 構造データのうち静的な部分(target・依存・file)は `bazel query` の結果を起動のたびに取り込み、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
-観測データ(実行した spawn・phase・所要時間)は run のたびに bazel に出力させた BEP・exec log・profile を取り込み、run 単位で DB に蓄積する。
+観測データ(実行した action・phase・所要時間)は run のたびに bazel に出力させた BEP・profile を取り込み、run 単位で DB に蓄積する。
 
 設計全体を通じた判断基準は「構造と観測を区別し、観測できないものは不明と示す」である。
 構造上存在する action が今回実行されたとは限らず、実行の事実は観測データがなければ分からない。
@@ -66,13 +65,13 @@ flowchart TD
 
 ### コンポーネントと責務
 
-| コンポーネント  | 責務                                                                                                        |
-| --------------- | ----------------------------------------------------------------------------------------------------------- |
-| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧                                    |
-| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                                            |
-| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理                             |
-| core::ingest    | query XML / BEP / exec log / profile の parse。構造データはメモリへ、観測データは DB への書き込み(取り込み) |
-| core::store     | SQLite(rusqlite)。run record と成果物の永続化                                                               |
+| コンポーネント  | 責務                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧                         |
+| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                                 |
+| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理                  |
+| core::ingest    | query XML / BEP / profile の parse。構造データはメモリへ、観測データは DB への書き込み(取り込み) |
+| core::store     | SQLite(rusqlite)。run record と成果物の永続化                                                    |
 
 UI への実行中の通知は、runner が捕捉した stdout/stderr を Tauri の event で WebView に streaming して届ける。
 stdout/stderr は専用スレッドで常時 drain し(pipe 詰まりで bazel 本体をブロックしない)、UI への送信は時間窓でバッチ化して溢れた分は省略表示にする。
@@ -94,7 +93,7 @@ spawn は独立したプロセスグループで行い、stop・中断・hard ki
 
 ### run の定義
 
-run の起動時に Zeal 側で UUID を発行し、観測用の成果物(BEP・exec log・profile・stdout/stderr)をその UUID で束ねる。
+run の起動時に Zeal 側で UUID を発行し、観測用の成果物(BEP・profile・stdout/stderr)をその UUID で束ねる。
 build・test・run の spawn には `--tool_tag=zeal` を付与する。共有 output base 上の BEP 解析等で Zeal 発の呼び出しを識別できるようにするためである(query 系はこの flag を受理しない version があり得るため付けない)。
 
 run の表示は ● running / ✓ ok / ✗ failed / ■ interrupted / ○ no detail の5記号で、mock の runs 一覧と一致する。
