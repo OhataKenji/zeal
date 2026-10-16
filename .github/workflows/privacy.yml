@@ -1,8 +1,8 @@
 name: Privacy
 
-# This repository is PUBLIC and commits raw Bazel outputs (BEP / exec log /
-# profile.gz) as fixtures. Fail if any tracked file leaks a local home path,
-# a Bazel output_user_root, or BEP events that carry the client environment.
+# This repository is PUBLIC and commits inspected BEP / profile samples as
+# fixtures. Scan all tracked files for personal paths, and fixtures for BEP
+# events that carry the client environment.
 on:
   push:
     branches: [main]
@@ -34,7 +34,12 @@ jobs:
             if [ -s "$tmp" ] && ! grep -Iq '' "$tmp"; then
               strings -n 4 "$tmp" >"$tmp.s" && mv "$tmp.s" "$tmp"
             fi
-            hits=$(grep -nEo -- '/(Users|home)/[A-Za-z0-9._-]+/|\.cache/bazel/_bazel_[A-Za-z0-9._-]+|"(workspaceStatus|structuredCommandLine|optionsParsed)"' "$tmp" \
+            pattern='/(Users|home)/[A-Za-z0-9._-]+/|\.cache/bazel/_bazel_[A-Za-z0-9._-]+'
+            # Source and docs may name BEP fields without containing captured data.
+            case "$f" in
+              src-tauri/tests/fixtures/*) pattern+='|"(workspaceStatus|structuredCommandLine|optionsParsed)"' ;;
+            esac
+            hits=$(grep -nEo -- "$pattern" "$tmp" \
               | grep -vE '^[0-9]+:(/home/(runner|ubuntu)/|\.cache/bazel/_bazel_runner)$' \
               | sed -E \
                 -e 's#^([0-9]+):/(Users|home)/[^/]+/$#\1: absolute home path /\2/***/#' \
