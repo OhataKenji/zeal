@@ -1,54 +1,70 @@
 # Zeal 設計 M2: 一回の run の説明
 
 _OhataKenji_
-_Last update: 2026/10/16_
+_Last update: 2026/10/17_
 _Status: Approved_
 
 ## Goal
 
-一回の run について、phase(loading / analysis / execution)の流れと、実際に実行された action の時系列を提示し、利用者が自分のコマンドと Bazel の内部処理を結びつけられるようにする(PRD シナリオ2・M2)。
+一回の run の profile を可視化し、自分のコマンドと Bazel 内部の処理の時系列を結びつけられるようにする。
+phase の区切りとスレッド上の event を示し、観測できる範囲で処理の流れを説明できるようにする([PRD](../prd.md) シナリオ2と M2)。
 
 ### Non Goals
 
-- remote cache・remote execution の詳細な内訳
-- action の内部ログ(stdout/stderr の中身)の再生
-- 「実行され得たが起きなかった action」の提示(action graph の候補集合との照合)
-- action の一覧、target と action の往復、再利用(action cache hit)の表示
+- action の一覧、target と action の往復、再利用や cache hit の表示
+- exec log の取得と parse、実行されなかった action の推定
+- action の内部ログ(stdout/stderr)の再生
+- remote cache と remote execution の詳細な内訳
+- 二回の run の diff。比較用の追加の条件収集と合わせて次版で扱う
+- stop、中断、`bazel run`。これらは [m3](./m3-find-and-run.md) で扱う
 
 ## Background
 
-Bazel の一回の呼び出しは、定義を読む loading、処理を組み立てる analysis、出力を得る execution の phase で進む(Bazel の評価モデル)。
-この build が内部で何をしたかを示す観測源は役割が異なる。
+run、snapshot、BEP などの共通用語は [overview](./overview.md#background) に従う。
+**BEP** は呼び出し単位のイベント列で、target の結果や test 結果を与える。
+**profile** は Bazel の JSON trace 形式の計測記録で、phase の marker とスレッドごとの event を持つ。
+run 全体の終了結果には、Zeal が起動した子プロセスの exit code を使う。
 
-- **BEP**: 呼び出し単位のイベント列。呼び出しの成否と target ごとの結果を与える
-- **profile**: phase の区切りと時系列の計測結果(action ごとの位置と所要時間を含む)
+Bazel の loading、analysis、execution は、常に独立した時間帯として観測できるとは限らない。
+Bazel 8 の既定の Skymeld では analysis と execution が重なり、profile の marker は `Evaluate target patterns`、`Load, analyze dependencies and build artifacts`、`Complete build` などになる。
+そのため、phase の帯には元の marker 名を使い、重なった処理を独自に分割しない。
 
-見せるのは「実際に実行された action」の時系列だけであり、どの action が実行を免れたか(再利用)は示さない。観測できないものは推測せず「不明」とするのがこの文書の核である。
+再利用は profile から分類しない。
+Bazel 8.7.0 の spike では、hit と miss のどちらにも `check cache hit` event が現れた。
+内部の event 名や後続 event からの推定は、今版の可視化には持ち込まない。
+Bazel server、解析済みの情報、既存出力の維持も速度に関わるが、各層の再利用率は表示しない([BuildBuddy Remote Runners](https://www.buildbuddy.io/docs/remote-runner-introduction/))。
 
 ## Overview
 
-run の起動時に観測用の flag を付けて bazel を spawn し、成果物を run の dir に残す。run の詳細を開くたびに BEP・profile を parse する。
-実行中は timing を出せないため(mock どおり `not available`)、stdout/stderr の log だけを streaming する。
+Send で `build` または `test` を起動し、BEP と profile を run の UUID ディレクトリに残す。
+実行中は stdout/stderr を log 欄へ流し、timing は完了後に表示する。
+
+M2 は SQLite を導入せず、詳細を開くたびに保存した file を parse する。
+計算済みの表示データを永続化しないことで、取り込み結果と生 file の整合を管理する状態を増やさない。
+
+profile は全スレッドの event を原形のまま可視化し、加工をスレッドへの集約と metadata の反映に留める。
+BEP や profile が欠損した場合は、利用できるセクションだけを表示する。
 
 ```mermaid
 flowchart LR
-    SEND["Send(composer)"] --> SPAWN["bazel spawn<br/>+ 観測 flag"]
-    SPAWN -->|"実行中: stdout/stderr"| LOG["log 欄(streaming)"]
-    SPAWN -->|"完了後"| ART["成果物<br/>bep.json / profile.gz"]
-    ART --> INGEST["parse(表示のたび)"]
-    INGEST --> VIEW["run 詳細: timing / log / phase"]
+    SEND["Send: build / test"] --> SPAWN["bazel + 観測 flag"]
+    SPAWN -->|"実行中"| LOG["log.txt + log 欄"]
+    SPAWN -->|"完了"| FILES["run.json / bep.json / profile.gz"]
+    FILES -->|"詳細を開くたびに parse"| VIEW["結果 / timing / phase の帯"]
 ```
 
 ## Detailed Design
 
-### Send の範囲(M2)
+### 起動と保存
 
-M2 の Send は `build` / `test` だけを起動する。stop・中断・`bazel run` は [m3](./m3-find-and-run.md) で扱う。
-bazel が使用中(snapshot の query 中か run 中)の間は Send を disabled にし、待ち行列は持たない。
+M2 では snapshot の query 中か run 中なら Send を disabled にし、実行待ちの queue を持たない。
+成果物は `<app data dir>/ws-<fnv64(正規化した workspace path)>/runs/<uuid>/` に保存する。
 
-### 付与する flag
+- `run.json`：Zeal が書く id、workspace、cmd、target、開始時刻、終了時刻、exit code
+- `log.txt`：Zeal が書く stdout/stderr の記録
+- `bep.json` と `profile.gz`：Bazel が書く生の成果物。Zeal は書き換えない
 
-run 起動時に以下の固定セットを付与する(必須/optional の区別はしない)。成果物は run の UUID ディレクトリ(`<app data dir>/ws-<fnv64>/runs/<uuid>/`)に出力させる。
+起動時には次の flag を付ける。
 
 - `--build_event_json_file=<dir>/bep.json`
 - `--profile=<dir>/profile.gz`
@@ -56,82 +72,87 @@ run 起動時に以下の固定セットを付与する(必須/optional の区�
 - `--noslim_profile`
 - `--tool_tag=zeal`
 
-失敗の扱いは一本に絞る。`unknown option` 等で run が起動しない場合(exit 2)も含め、失敗は失敗の run として記録するだけで、自動リトライも観測 flag を落とした再実行も行わない。flag が受理されない version は v1 の対象外であり、実際に発生したら Zeal 側のバグとして対応する。
-v1 の対象は Bazel 8.7 以上を目安とし、この flag 群が受理されることを前提とする。flag の旧名対応や version ごとの対応表は持たない。parse 側も version 差の読み分けは持たない。
+対象は Bazel 8.7 以上を目安とし、基準環境は spike を行った Bazel 8.7.0 とする。
+flag や出力形式の version 別の対応表、parser の field 名の読み替えは持たない。
+非対応の flag で起動が失敗した場合も失敗した run として残し、flag を落とした再実行は行わない。
 
-### 実行中の表示
+### 実行中の log
 
-log 欄は spawn した子プロセスの stdout/stderr を runner が常時 drain し、1 行ずつ event で流す。
-bazel 自身が進捗行(`[34 / 120] …` 系)を stderr に出すため、mock の実行中画面はこれだけで足り、BEP file の tail のような構造化経路は別途持たない。
-timing 欄は profile が完了後にしか出ないため、実行中は `not available` と表示する。
+runner は stdout/stderr を常時 drain し、M2 では1行ずつ event で UI に流す。
+進捗は Bazel の log を使い、BEP の tail は行わない。
+今版は profile を完了後に parse するため、実行中の timing は `not available` とする。
 
-### 保存と parse
+### 表示時の parse
 
-M2 では SQLite を入れない。run ごとに次の file を置き、run の詳細を開く(`get_run`)たびに 2 成果物を parse する。parse 結果は保存しない。
+`get_run` のたびに BEP と profile を読み、結果を保存せず返す。
+BEP は行単位で parse し、末尾が欠けた場合も受理できた結果を使う。
+profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error とする。
 
-```
-<app data dir>/ws-<fnv64(正規化した workspace path)>/runs/<uuid>/
-  run.json  log.txt              # Zeal が書く
-  bep.json  profile.gz          # bazel が書く。手を加えない
-```
+各成果物の状態(ok / incomplete / missing / parse error)は parse 時に決める。
+上限による解析の中断や部分的な BEP は incomplete とし、理由を詳細画面に出す。
+DB への集計値の保存と retention は M4 で導入し、この表示契約を引き継ぐ。
 
-- `run.json`: id・workspace・cmd・target・開始/終了時刻・exit code。run の成否は exit code で決める
-- BEP: target ごとの結果(test 結果を含む)。行単位で parse し、末尾が欠けていても読める範囲を採用する
-- profile: phase marker と、スレッドごとの event 列
+### timing と phase の帯
 
-成果物ごとの状態(ok / incomplete / missing / parse error)は parse のたびに決め、詳細画面のセクションごとの可用性に反映する。
-DB への run record の保存と lifecycle(retention・導出記号)は [m4](./m4-run-history.md) が持つ。
+lane のキーは `tid` とし、ラベルには `thread_name` metadata を使う。
+同じ名前でも異なる `tid` はまとめず、event を持つ全スレッドを表示する。
+描画 event は file の順序と field を保ち、`ph` や `cat` で execution に限定しない。
 
-### timing 表示
+表示は trace viewer の作法に従う。
+同じ lane の重なる span は段に積み、`ph: "i"` は mark、`ph: "C"` の counter は name ごとの系列として描く。
+色は `cname`、なければ name の hash を使う。
+tooltip は event の field を表示し、action ごとの所要時間を別の一覧へ複製しない。
 
-mock の frame chart は profile の自然な可視化で、profile だけで描く(BuildBuddy の timing / chrome://tracing 相当)。
-スレッド(`thread_name`)ごとに 1 行を作り、そのスレッドの event をそのまま並べる。event 種別(`ph`/`cat`)や対象スレッドでは絞り込まず、加工は tid への集約と `thread_name` のラベル化だけにする。tooltip 等の詳細は event の field をそのまま見せる。
-描画は trace viewer の作法に倣う: 同じ行で重なる span は段に積み、`ph: "i"` は細い mark、`ph: "C"` の counter(`action count`・`CPU usage (Bazel)` 等)は name ごとの系列として行を分けて面グラフにする。色は event の `cname` か name の hash から決める。
-phase の帯は profile の phase marker を Bazel の名前のまま並べる。Bazel 8 の既定(Skymeld)では marker が `Evaluate target patterns` → `Load, analyze dependencies and build artifacts` → `Complete build` となり、analysis と execution は重なって進むため分けられない。帯にはその旨を注記する。
-フィールドが欠けた場合は、該当部分だけを落として timing 表示を degrade する。
+phase の帯は、profile の `build phase marker` を時刻順に並べ、次の marker までを一区間にする。
+最後の区間は `Finishing` event までとする。
+現在の parser は `Finishing` がなければ profile 全体を parse error とし、timing を表示しない。
+Skymeld で analysis と execution が重なることを注記する。
+スレッド上の span を合計して run の経過時間や短縮可能時間とは扱わない。
+
+### 観測の負担と追加検証
+
+現在の profile parser は全体を展開して読む。
+通常 build と広い target pattern の両方で、profile サイズ、展開後のメモリ、parse 時間、UI への転送量を測定する。
+`--noslim_profile` の有無も比較し、現在の可視化に必要な event を残せるか確かめる。
+
+展開後 bytes、受理する event 数、一回の UI 送信 bytes の上限は、この測定で値を決めて導入する追加設計とする。
+これは未実装であり、現在の parser が無制限な展開を防げるとは扱わない。
+上限超過時は incomplete と理由を示し、完全な profile として M5 の集計へ入れない。
+送信を分割する場合も event の field やスレッドの範囲を変えず、データの欠損とは区別する。
+[BuildBuddy の設定一覧](https://www.buildbuddy.io/docs/config-all-options/)にあるイベント数や profile サイズの制限も、この境界を設ける根拠とする。
 
 ## Alternatives Considered
 
-- **exec log で action の一覧を出す**: mock に対応する画面がない。個々の action の cache hit を示せるのも disk/remote cache 使用時だけで、そのために flag と parser が 1 つずつ増える。
-- **BEP や profile から再利用を出す**: BEP の `actionCacheStatistics.hits` は件数だけで内訳が無く、action 実行イベント(`--build_event_publish_all_actions`)にも cache hit の判別情報が無い。profile は hit でも miss でも `check cache hit` が出て、違いは後に `subprocess.run` が続くかだけであり、内部の event 名からの推測になる。
-- **aquery で候補集合を取り「実行されなかった action」を分類する**: 「実行され得た vs 実際起きた」の対比は再利用の理解に資するが、完了後に別呼び出しで action graph を再推定する機構(quote・config 再現・照合・ずれ検出)は設計全体で最も複雑であり、mock にも対応する画面がない。実装の単純さを優先して v1 では削った。
+- **exec log で action 一覧を出す**：action と target の対応を詳しく出せるが、mock に対応する画面がなく、flag と parser が増える。オーナーの判断により採用しない
+- **BEP や profile から再利用を出す**：BEP の cache 統計は件数だけで、profile の event 名からの判別は内部実装の推定になる。再利用の表示を採用しない
+- **aquery で実行されなかった action を分類する**：設定の再現と別呼び出しの結果との照合が必要になる。今版では profile の可視化に絞る
+- **M2 から SQLite に parse 結果を保存する**：再表示を速くできるが、生 file と保存値の整合を管理する必要がある。履歴の lifecycle を扱う M4 まで導入しない
 
 ## Caveats
 
-- profile は呼び出し完了後にしか得られない。中断時の成果物の扱いは [m3](./m3-find-and-run.md) で確かめる。実行中の画面は log のみになる。
-- 観測 flag が受理されない場合 run は失敗として記録される(v1 の対象外。実際に発生したら Zeal 側のバグとして対応する)。
-- 観測 flag には overhead がある(profile の計測)。M2 では常時付与とし、肥大が問題になれば run 単位で off にする選択肢を検討する。
+- profile の可視化は計測された event の範囲を示す。記録が少ないことを、処理がなかったことや cache の不調とは解釈しない
+- M2 の `run.json` の時刻差は壁時計上の差である。monotonic な呼び出しの経過時間の計測は M4 の追加設計で扱う
+- 中断や強制終了では成果物が欠損するか、gzip/JSON の末尾が欠け得る。中断処理は M3 で扱う
+- 観測 flag 自体に負担がある。profile の採用セットと解析上限の確定は Test Plan の実測を残して行う
+- 観測のために clean、shutdown、別の output base を強制せず、既存の Bazel の状態を維持する
+
+## Security Concerns
+
+子プロセスの起動は [overview](./overview.md#security-concerns) の引数配列による実行に従う。
+profile や BEP の文字列は HTML や実行コードとして解釈しない。
+圧縮 profile の展開量と UI への転送量の制限は、追加検証に記した未実装の対策として追跡する。
+
+## Privacy Concerns
+
+生の BEP、profile、log にはパス、引数、環境に由来する情報が含まれ得る。
+保存と表示は local に限り、Zeal から自動送信しない。
+生 file に秘密値がないとは保証せず、公開リポジトリの fixture には検査したサンプルだけを置く。
+共通方針は [overview](./overview.md#privacy-concerns) に従う。
 
 ## Test Plan
 
-- cache hit のフィールド、profile の event、disk cache 使用時の挙動は spike(Bazel 8.7.0)で確かめ、本文に反映した。
-- BEP・profile の各 parser に golden file test を用意する。fixture には末尾が欠けた BEP、execution 未到達の run、成果物の一部が欠けた run を含める。
-- 観測 flag 付きで build を回し、成否と所要時間への影響(overhead)を確認する。
-
-## spike 後の改訂(2026/10/16)
-
-Bazel 8.7.0 での spike の結果とオーナーの決定に合わせて、次を改めた。
-
-- timing は profile だけで描き、exec log と join しない(`args.out` の記述を削除)
-- action の所要時間は timing の tooltip でだけ見せ、action 一覧には出さない
-- exec log の `walltime` / `metrics` の presence による読み分けと、「cache 判別不能」の注記を削除(field 17 は reserved)
-- cache hit の判定を 1 条件にし、local の action cache hit は BEP の件数だけを「内訳は不明」として出す
-- phase の帯は Bazel の marker 名のままにし、分けられない旨を注記する
-- M2 では SQLite を入れず、run dir の file を表示のたびに parse する。DB は m4 で扱う
-- M2 の Send は build / test だけ。stop・中断・`bazel run` は m3 で扱う
-
-## action 一覧の削除(2026/10/16)
-
-mock の run 画面は timing と log だけであり、オーナーの決定で action 一覧と再利用の表示をやめた。
-
-- action の一覧、target と action の往復、再利用の表示を Non Goal にした
-- exec log(`--execution_log_binary_file`)を観測 flag と parse の対象から外した
-- 再利用の件数(BEP の `actionCacheStatistics.hits`)も出さない。D3 の「N 件(内訳は不明)」の表示はやめた
-
-## timing の可視化範囲(2026/10/17)
-
-オーナーの決定で、timing 欄は「profile を可視化するためのエリア」とし、event の加工を最小限にした(BuildBuddy の timing 相当)。
-
-- lane は execution スレッド限定・`exec-N` への採番し直しをやめ、event を持つ全スレッドを `thread_name` のまま並べる
-- event の field 選別と `ph`/`cat` による絞り込みをやめ、event は JSON を原形のまま渡す
-- lane のキーは `tid` とする。同名のスレッドが複数 `tid` に分かれて出ることがあるため
+- Bazel 8.7.0 の spike で確認した phase marker と再利用判別の限界を、既存 fixture と照合する
+- BEP と profile の golden test に、末尾の欠けた BEP、壊れた gzip/JSON、`Finishing` の欠損、成果物欠損を含める
+- 同名で異なる `tid`、重なる span、instant、counter を含む profile で、event を実行スレッドに限定せず可視化できることを確かめる
+- 観測 flag の有無、slim/noslim、snapshot 更新の有無を分けて、生成サイズ、追加時間、parse メモリ、UI 転送量を測定する
+- 追加の解析上限を導入する際は、超過が incomplete として表示され、完全な集計値として扱われないことを fixture で確認する
