@@ -26,11 +26,12 @@ pub struct RunRecord {
 }
 
 /// `<data>/ws-<hex>/runs`, where `<hex>` is the FNV-1a 64-bit hash of the
-/// canonicalized workspace path.
+/// canonicalized workspace path. The hash input is the raw OS byte string, not
+/// the lossy string, so distinct non-UTF-8 paths cannot collide.
 fn runs_dir(data: &Path, ws: &Path) -> PathBuf {
     let ws = canonical(ws);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in ws.to_string_lossy().bytes() {
+    for &b in ws.as_os_str().as_encoded_bytes() {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }

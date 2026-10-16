@@ -73,3 +73,39 @@ fn list_is_newest_first_with_unfinished_runs_and_skips_broken() {
 
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn non_ascii_workspace_round_trip() {
+    let (root, data, _) = temp_dirs("non-ascii");
+    let ws = root.join("開発-ワークスペース");
+    std::fs::create_dir_all(&ws).unwrap();
+
+    let (rec, dir) = store::create(&data, &ws, "build", "//pkg:a").unwrap();
+    assert_eq!(dir, store::run_dir(&data, &ws, &rec.id));
+    assert_eq!(rec.workspace, ws.canonicalize().unwrap().to_string_lossy());
+    assert_eq!(store::list(&data, &ws), vec![rec]);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Unix paths may hold non-UTF-8 bytes. Two distinct workspaces whose lossy
+/// strings are identical must still get distinct run dirs. (macOS rejects such
+/// names at mkdir, so the dirs are never created; `run_dir` falls back to the
+/// given path when canonicalize fails.)
+#[cfg(unix)]
+#[test]
+fn non_utf8_workspaces_do_not_collide() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let (root, data, _) = temp_dirs("non-utf8");
+    // Both lossy-convert to "<root>/\u{FFFD}".
+    let ws_a = root.join(std::ffi::OsStr::from_bytes(b"\xff"));
+    let ws_b = root.join(std::ffi::OsStr::from_bytes(b"\xfe"));
+
+    assert_ne!(
+        store::run_dir(&data, &ws_a, "id"),
+        store::run_dir(&data, &ws_b, "id")
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
