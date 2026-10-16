@@ -1,0 +1,50 @@
+name: Privacy
+
+# This repository is PUBLIC and commits raw Bazel outputs (BEP / exec log /
+# profile.gz) as fixtures. Fail if any tracked file leaks a local home path,
+# a Bazel output_user_root, or BEP events that carry the client environment.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy:
+    name: privacy (tracked files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan tracked files for personal data
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          tmp=$(mktemp)
+          while IFS= read -r -d '' f; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.gz) gzip -dc -- "$f" >"$tmp" ;;
+              *) cp -- "$f" "$tmp" ;;
+            esac
+            # Binary files: scan printable strings; "line" is then the string index.
+            if [ -s "$tmp" ] && ! grep -Iq '' "$tmp"; then
+              strings -n 4 "$tmp" >"$tmp.s" && mv "$tmp.s" "$tmp"
+            fi
+            hits=$(grep -nEo -- '/(Users|home)/[A-Za-z0-9._-]+/|\.cache/bazel/_bazel_[A-Za-z0-9._-]+|"(workspaceStatus|structuredCommandLine|optionsParsed)"' "$tmp" \
+              | grep -vE '^[0-9]+:(/home/(runner|ubuntu)/|\.cache/bazel/_bazel_runner)$' \
+              | sed -E \
+                -e 's#^([0-9]+):/(Users|home)/[^/]+/$#\1: absolute home path /\2/***/#' \
+                -e 's#^([0-9]+):\.cache/bazel/_bazel_[^/]*$#\1: Bazel output_user_root .cache/bazel/_bazel_***#' \
+                -e 's#^([0-9]+):"([A-Za-z]+)"$#\1: BEP event "\2" must be dropped from fixtures#' \
+              || true)
+            if [ -n "$hits" ]; then
+              printf '%s\n' "$hits" | awk -v f="$f" '{ print f ":" $0 }'
+              found=1
+            fi
+          done < <(git ls-files -z)
+          rm -f "$tmp"
+          exit "$found"
