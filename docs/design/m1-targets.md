@@ -1,7 +1,7 @@
 # Zeal 設計 M1: target と周辺の関係
 
 _OhataKenji_
-_Last update: 2026/10/15_
+_Last update: 2026/10/17_
 _Status: Approved_
 
 ## Goal
@@ -17,6 +17,7 @@ mock の tree と関係4行(deps / data / used by / files)を、対象 workspace
 
 ## Background
 
+共通用語は [overview](./overview.md#background) に従う。
 対象となる画面要素は mock の二箇所である。
 sidebar の tree は label → package → file の階層で対象を見つける入口で、content の target 状態は選択した target の label・rule class・関係4行を表示する。
 関係4行の各行は用途が異なる: `deps →` と `data →` はこの target が依存する先、`used by ←` はこの target を使う側、`files` は入力ファイルと出力の対応である。
@@ -28,9 +29,12 @@ BUILD file の自前 parse は行わない。rule の属性・rule class・BUILD
 
 構造データは起動のたびに取り直し、メモリ上の snapshot として持つ。
 `bazel query 'kind("rule", //...)' --output=xml --noimplicit_deps --keep_going` を workspace 単位で実行し、結果の XML を parse してインメモリの構造体に置く(`--keep_going` で構文エラーのある package を飛ばして部分結果を得る)。
-`--noimplicit_deps` は暗黙依存が依存グラフ側に混入するのを防ぐための防御で、実効の確認は spike で行う(schema の `$` 属性除外と併用)。
-永続化はしない。snapshot は起動ごとに新鮮なものに置き換わり、取得に失敗したら空の画面とエラー・retry を出す(cache のような前回値の温存は v1 では行わない)。
-表示が常に最新の取り込み結果のみを指すため、stale を扱う設計は最小で済む。
+
+snapshot は永続化しないため、起動直後には前回値がない。
+最初の取得に失敗した場合は空の画面にエラーと retry を出す。
+
+同じ起動内の refresh は、取得が終わってから snapshot を一括で置き換える。
+失敗や中断では直前のメモリ上の snapshot と取得時刻を残し、新旧の取り込み結果を混ぜない。
 
 ```mermaid
 flowchart LR
@@ -55,6 +59,7 @@ label の行き先は次の規則で分ける: targets に存在する label と
 `@@` 形は repo mapping が取れる範囲で apparent 名へ正規化して比較し、変換できない場合は raw のまま比較・表示する(手段は spike で確かめる)。
 `select()` の分岐 key(`//conditions:default` 等)は除外する(key が XML の属性値に現れるかは spike で確かめる)。
 query の stdout は streaming parser で逐次読み、全量をメモリに載せない。
+`--noimplicit_deps` と implicit 属性の除外を併用し、暗黙依存が関係表示へ混入するのを防ぐ。
 取り込みは workspace 単位で1本に限る。取り込み中に要求が来たら pending として記録し、走行中の取り込み完了後に1回だけ追加で行う。
 run 実行中は bazel server lock で待たされるため、取り込みは run 完了後まで行わない([overview](./overview.md)の直列化)。
 query にはタイムアウト(目安 5 分。初回は bazelisk の download と cold cache を含み得るため緩める)を設け、取り込み中・待機中は UI にその状態を出す。
@@ -122,6 +127,18 @@ targets の location(BUILD file と行)を保持し、画面から定義位置�
 - どの rule の属性にも現れない source file は files に載らず、tree にも出ない。孤立した file を拾うかは M1 の検証後に判断する。
 - `srcs`/`data` が他 rule の生成 file の label を指す場合、その関係は producer の `<rule-output>` と path が一致すれば files 行で見えるが、`deps →`・`used by ←` には現れない(label→producer の辺は作らない)。
 - run 完了ごとの取り込みは BUILD が変わっていなくても全量 query を打つ。計測後に mtime 等の差分検知を検討する余地を残す。
+
+## Security Concerns
+
+query は利用者が選んだ workspace で、[overview](./overview.md#security-concerns) の引数配列による起動に従って実行する。
+query XML の label や定義位置はデータとして扱い、shell の式として実行しない。
+定義位置を開くときは、対象の file path を確認できるようにする。
+
+## Privacy Concerns
+
+label、依存関係、file path はメモリ上の snapshot に置き、外部へ送らない。
+公開 fixture には検査したリポジトリのサンプルだけを使う。
+共通方針は [overview](./overview.md#privacy-concerns) に従う。
 
 ## Test Plan
 
