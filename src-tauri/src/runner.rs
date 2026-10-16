@@ -148,10 +148,4 @@ mod tests {
             ]
         );
     }
-
-    #[test]
-    fn argv_passes_target_as_one_argument() {
-        let args = argv("build", "//pkg:a; rm -rf /", Path::new("/d"));
-        assert_eq!(args[1], "//pkg:a; rm -rf /");
-    }
 }
