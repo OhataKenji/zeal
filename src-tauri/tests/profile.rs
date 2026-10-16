@@ -3,8 +3,9 @@
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use serde_json::{Value, json};
 use std::fs::File;
-use zeal_lib::profile::{self, Lane, Phase, Profile, Span};
+use zeal_lib::profile::{self, Lane, Phase, Profile};
 
 fn fixture_path(case: &str) -> String {
     format!(
@@ -25,44 +26,33 @@ fn phase(name: &str, start_us: i64, end_us: i64) -> Phase {
     }
 }
 
-fn lane(name: &str, tid: u64, spans: Vec<Span>) -> Lane {
+fn lane(name: &str, tid: u64, events: Vec<Value>) -> Lane {
     Lane {
         name: name.to_string(),
         tid,
-        spans,
-    }
-}
-
-fn span(start_us: i64, dur_us: i64, cat: &str, name: &str) -> Span {
-    Span {
-        start_us,
-        dur_us,
-        cat: cat.to_string(),
-        name: name.to_string(),
-        mnemonic: String::new(),
-        out: None,
+        events,
     }
 }
 
 fn lane_counts(p: &Profile) -> Vec<(&str, usize)> {
     p.lanes
         .iter()
-        .map(|l| (l.name.as_str(), l.spans.len()))
+        .map(|l| (l.name.as_str(), l.events.len()))
         .collect()
 }
 
-fn find_span<'a>(p: &'a Profile, cat: &str) -> &'a Span {
+fn find_event<'a>(p: &'a Profile, cat: &str) -> &'a Value {
     p.lanes
         .iter()
-        .flat_map(|l| l.spans.iter())
-        .find(|s| s.cat == cat)
+        .flat_map(|l| l.events.iter())
+        .find(|e| e["cat"] == cat)
         .unwrap()
 }
 
 /// Gzip a `traceEvents` array and parse it, for cases no fixture covers.
-fn parse_events(events: serde_json::Value) -> Result<Profile, String> {
+fn parse_events(events: Value) -> Result<Profile, String> {
     let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
-    serde_json::to_writer(&mut gz, &serde_json::json!({ "traceEvents": events })).unwrap();
+    serde_json::to_writer(&mut gz, &json!({ "traceEvents": events })).unwrap();
     profile::parse(gz.finish().unwrap().as_slice())
 }
 
@@ -84,33 +74,33 @@ fn ok() {
         ]
     );
     assert_eq!(lane_counts(&p), ok_lanes());
+    // Events pass through verbatim.
     assert_eq!(
-        find_span(&p, "action processing"),
-        &Span {
-            mnemonic: "BazelWorkspaceStatusAction".to_string(),
-            out: Some("bazel-out/stable-status.txt".to_string()),
-            ..span(
-                2942575,
-                13522,
-                "action processing",
-                "BazelWorkspaceStatusAction stable-status.txt"
-            )
-        }
+        find_event(&p, "action processing"),
+        &json!({
+            "cat": "action processing",
+            "name": "BazelWorkspaceStatusAction stable-status.txt",
+            "ph": "X", "pid": 1, "tid": 191,
+            "ts": 2942575, "dur": 13522,
+            "out": "bazel-out/stable-status.txt",
+            "args": { "mnemonic": "BazelWorkspaceStatusAction" },
+        })
     );
     assert_eq!(
-        find_span(&p, "critical path component"),
-        &span(
-            3113104,
-            1027091,
-            "critical path component",
-            "action 'Executing genrule //pkg:a'"
-        )
+        find_event(&p, "critical path component"),
+        &json!({
+            "cat": "critical path component",
+            "name": "action 'Executing genrule //pkg:a'",
+            "ph": "X", "pid": 1, "tid": 0,
+            "ts": 3113104, "dur": 1027091,
+            "args": { "tid": 41 },
+        })
     );
 }
 
 fn ok_lanes() -> Vec<(&'static str, usize)> {
     vec![
-        ("Main Thread", 296),
+        ("Main Thread", 397),
         ("skyframe-evaluator-memoizing-0", 21),
         ("skyframe-evaluator-memoizing-1", 24),
         ("Garbage Collector", 4),
@@ -194,7 +184,7 @@ fn loading_failed() {
     );
     assert_eq!(
         lane_counts(&p),
-        [("Main Thread", 118), ("skyframe-evaluator-memoizing-3", 1)]
+        [("Main Thread", 123), ("skyframe-evaluator-memoizing-3", 1)]
     );
 }
 
@@ -208,7 +198,7 @@ fn broken_gz_is_err() {
 #[test]
 fn no_finishing_is_err() {
     assert!(
-        parse_events(serde_json::json!([
+        parse_events(json!([
             { "cat": "build phase marker", "name": "Launch Blaze", "ph": "X", "ts": -26000 },
         ]))
         .is_err()
@@ -216,14 +206,14 @@ fn no_finishing_is_err() {
 }
 
 #[test]
-fn spans_group_by_thread() {
-    let p = parse_events(serde_json::json!([
+fn events_group_by_thread() {
+    let p = parse_events(json!([
         { "cat": "build phase marker", "name": "Initialize command", "ph": "X", "ts": 0 },
         { "name": "Finishing", "ph": "X", "ts": 10 },
         { "ph": "M", "name": "thread_name", "tid": 1, "args": { "name": "Main Thread" } },
         { "ph": "X", "name": "a", "cat": "general", "ts": 1, "dur": 2, "tid": 1 },
-        { "ph": "X", "name": "b", "cat": "action processing", "ts": 3, "dur": 1, "tid": 9 },
         { "ph": "C", "name": "counter", "ts": 2, "tid": 1, "args": { "n": 1 } },
+        { "ph": "X", "name": "b", "cat": "action processing", "ts": 3, "dur": 1, "tid": 9 },
     ]))
     .unwrap();
     assert_eq!(
@@ -233,12 +223,25 @@ fn spans_group_by_thread() {
                 "",
                 0,
                 vec![
-                    span(0, 0, "build phase marker", "Initialize command"),
-                    span(10, 0, "", "Finishing"),
+                    json!({ "cat": "build phase marker", "name": "Initialize command", "ph": "X", "ts": 0 }),
+                    json!({ "name": "Finishing", "ph": "X", "ts": 10 }),
                 ]
             ),
-            lane("Main Thread", 1, vec![span(1, 2, "general", "a")]),
-            lane("", 9, vec![span(3, 1, "action processing", "b")]),
+            lane(
+                "Main Thread",
+                1,
+                vec![
+                    json!({ "ph": "X", "name": "a", "cat": "general", "ts": 1, "dur": 2, "tid": 1 }),
+                    json!({ "ph": "C", "name": "counter", "ts": 2, "tid": 1, "args": { "n": 1 } }),
+                ]
+            ),
+            lane(
+                "",
+                9,
+                vec![
+                    json!({ "ph": "X", "name": "b", "cat": "action processing", "ts": 3, "dur": 1, "tid": 9 }),
+                ]
+            ),
         ]
     );
 }
