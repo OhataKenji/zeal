@@ -28,7 +28,7 @@ pub struct RunRecord {
 /// `<data>/ws-<hex>/runs`, where `<hex>` is the FNV-1a 64-bit hash of the
 /// canonicalized workspace path.
 fn runs_dir(data: &Path, ws: &Path) -> PathBuf {
-    let ws = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+    let ws = canonical(ws);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in ws.to_string_lossy().bytes() {
         h ^= u64::from(b);
@@ -37,12 +37,18 @@ fn runs_dir(data: &Path, ws: &Path) -> PathBuf {
     data.join(format!("ws-{h:016x}")).join("runs")
 }
 
+fn canonical(ws: &Path) -> PathBuf {
+    ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf())
+}
+
 pub fn run_dir(data: &Path, ws: &Path, id: &str) -> PathBuf {
     runs_dir(data, ws).join(id)
 }
 
-/// Create the run dir with a new `run.json` and an empty `log.txt`.
-pub fn create(data: &Path, ws: &Path, cmd: &str, target: &str) -> io::Result<RunRecord> {
+/// Create the run dir with a new `run.json` and an empty `log.txt`. Returns
+/// the record and the run dir, which the other functions take.
+pub fn create(data: &Path, ws: &Path, cmd: &str, target: &str) -> io::Result<(RunRecord, PathBuf)> {
+    let ws = canonical(ws);
     let rec = RunRecord {
         id: uuid::Uuid::new_v4().to_string(),
         workspace: ws.to_string_lossy().into_owned(),
@@ -52,27 +58,26 @@ pub fn create(data: &Path, ws: &Path, cmd: &str, target: &str) -> io::Result<Run
         finished_at: None,
         exit_code: None,
     };
-    let dir = run_dir(data, ws, &rec.id);
+    let dir = run_dir(data, &ws, &rec.id);
     fs::create_dir_all(&dir)?;
     write_record(&dir, &rec)?;
     fs::write(dir.join("log.txt"), "")?;
-    Ok(rec)
+    Ok((rec, dir))
 }
 
-pub fn append_log(data: &Path, ws: &Path, id: &str, line: &str) -> io::Result<()> {
+pub fn append_log(dir: &Path, line: &str) -> io::Result<()> {
     let mut f = fs::OpenOptions::new()
         .append(true)
-        .open(run_dir(data, ws, id).join("log.txt"))?;
+        .open(dir.join("log.txt"))?;
     writeln!(f, "{line}")
 }
 
 /// Record the end of a run in its `run.json`.
-pub fn finish(data: &Path, ws: &Path, id: &str, exit_code: i32) -> io::Result<RunRecord> {
-    let dir = run_dir(data, ws, id);
-    let mut rec = read_record(&dir)?;
+pub fn finish(dir: &Path, exit_code: i32) -> io::Result<RunRecord> {
+    let mut rec = read_record(dir)?;
     rec.finished_at = Some(now_ms());
     rec.exit_code = Some(exit_code);
-    write_record(&dir, &rec)?;
+    write_record(dir, &rec)?;
     Ok(rec)
 }
 
@@ -89,8 +94,8 @@ pub fn list(data: &Path, ws: &Path) -> Vec<RunRecord> {
     runs
 }
 
-pub fn read_log(data: &Path, ws: &Path, id: &str) -> io::Result<String> {
-    fs::read_to_string(run_dir(data, ws, id).join("log.txt"))
+pub fn read_log(dir: &Path) -> io::Result<String> {
+    fs::read_to_string(dir.join("log.txt"))
 }
 
 fn read_record(dir: &Path) -> io::Result<RunRecord> {

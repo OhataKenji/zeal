@@ -21,24 +21,25 @@ fn temp_dirs(name: &str) -> (PathBuf, PathBuf, PathBuf) {
 fn create_log_finish_list_round_trip() {
     let (root, data, ws) = temp_dirs("round-trip");
 
-    let rec = store::create(&data, &ws, "build", "//pkg:a").unwrap();
+    let (rec, dir) = store::create(&data, &ws, "build", "//pkg:a").unwrap();
+    assert_eq!(dir, store::run_dir(&data, &ws, &rec.id));
+    assert_eq!(rec.workspace, ws.canonicalize().unwrap().to_string_lossy());
     assert_eq!((rec.finished_at, rec.exit_code), (None, None));
-    assert_eq!(store::read_log(&data, &ws, &rec.id).unwrap(), "");
+    assert_eq!(store::read_log(&dir).unwrap(), "");
 
-    store::append_log(&data, &ws, &rec.id, "INFO: Analyzed target //pkg:a").unwrap();
-    store::append_log(&data, &ws, &rec.id, "INFO: Build completed").unwrap();
-    let done = store::finish(&data, &ws, &rec.id, 1).unwrap();
+    store::append_log(&dir, "INFO: Analyzed target //pkg:a").unwrap();
+    store::append_log(&dir, "INFO: Build completed").unwrap();
+    let done = store::finish(&dir, 1).unwrap();
     assert_eq!(done.exit_code, Some(1));
     assert!(done.finished_at.unwrap() >= rec.started_at);
 
     assert_eq!(store::list(&data, &ws), vec![done]);
     assert_eq!(
-        store::read_log(&data, &ws, &rec.id).unwrap(),
+        store::read_log(&dir).unwrap(),
         "INFO: Analyzed target //pkg:a\nINFO: Build completed\n"
     );
 
-    let json =
-        std::fs::read_to_string(store::run_dir(&data, &ws, &rec.id).join("run.json")).unwrap();
+    let json = std::fs::read_to_string(dir.join("run.json")).unwrap();
     for key in [
         "\"id\"",
         "\"workspace\"",
@@ -58,13 +59,13 @@ fn create_log_finish_list_round_trip() {
 fn list_is_newest_first_with_unfinished_runs_and_skips_broken() {
     let (root, data, ws) = temp_dirs("list");
 
-    let old = store::create(&data, &ws, "build", "//pkg:a").unwrap();
-    let old = store::finish(&data, &ws, &old.id, 0).unwrap();
+    let (_, old_dir) = store::create(&data, &ws, "build", "//pkg:a").unwrap();
+    let old = store::finish(&old_dir, 0).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(5));
     // Left without finish(), like a run whose app crashed.
-    let unfinished = store::create(&data, &ws, "test", "//pkg:t").unwrap();
-    let broken = store::create(&data, &ws, "build", "//pkg:b").unwrap();
-    std::fs::write(store::run_dir(&data, &ws, &broken.id).join("run.json"), "{").unwrap();
+    let (unfinished, _) = store::create(&data, &ws, "test", "//pkg:t").unwrap();
+    let (_, broken_dir) = store::create(&data, &ws, "build", "//pkg:b").unwrap();
+    std::fs::write(broken_dir.join("run.json"), "{").unwrap();
 
     let runs = store::list(&data, &ws);
     assert_eq!(runs, vec![unfinished.clone(), old]);
