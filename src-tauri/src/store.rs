@@ -157,6 +157,15 @@ mod tests {
             "INFO: Analyzed target //pkg:a\nINFO: Build completed\n"
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn run_json_uses_camel_case_keys() {
+        let (root, data, ws) = temp_dirs("json-keys");
+
+        let (_, dir) = create(&data, &ws, "build", "//pkg:a").unwrap();
+        finish(&dir, 0).unwrap();
         let json = std::fs::read_to_string(dir.join("run.json")).unwrap();
         for key in [
             "\"id\"",
@@ -177,16 +186,22 @@ mod tests {
     fn list_is_newest_first_with_unfinished_runs_and_skips_broken() {
         let (root, data, ws) = temp_dirs("list");
 
-        let (_, old_dir) = create(&data, &ws, "build", "//pkg:a").unwrap();
+        // Pin started_at so ordering does not depend on the wall clock.
+        let (mut old, old_dir) = create(&data, &ws, "build", "//pkg:a").unwrap();
+        old.started_at = 1;
+        write_record(&old_dir, &old).unwrap();
         let old = finish(&old_dir, 0).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(5));
+
         // Left without finish(), like a run whose app crashed.
-        let (unfinished, _) = create(&data, &ws, "test", "//pkg:t").unwrap();
+        let (mut unfinished, unfinished_dir) = create(&data, &ws, "test", "//pkg:t").unwrap();
+        unfinished.started_at = 2;
+        write_record(&unfinished_dir, &unfinished).unwrap();
+
         let (_, broken_dir) = create(&data, &ws, "build", "//pkg:b").unwrap();
         std::fs::write(broken_dir.join("run.json"), "{").unwrap();
 
         let runs = list(&data, &ws);
-        assert_eq!(runs, vec![unfinished.clone(), old]);
+        assert_eq!(runs, vec![unfinished, old]);
         assert_eq!(runs[0].finished_at, None);
 
         std::fs::remove_dir_all(root).unwrap();
