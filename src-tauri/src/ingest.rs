@@ -6,11 +6,19 @@
 //! pending and collapse into a single follow-up run; the new snapshot only
 //! replaces the old one once it is fully built, so a failed or killed fetch
 //! leaves the previous snapshot in place.
+//!
+//! [`run_detail`] reads a run dir into what the run view shows. It parses the
+//! artifacts on every call; nothing is cached.
 
+use crate::bep::{self, Bep};
+use crate::profile::{self, Profile};
 use crate::snapshot::{self, Status};
 use crate::state::{Core, IngestError};
+use crate::store::{self, RunRecord};
 use crate::xml::{self, RawRule};
-use std::io::{BufReader, Read};
+use serde::Serialize;
+use std::fs::File;
+use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -185,4 +193,61 @@ fn summarize(stderr_tail: &str) -> String {
         s
     };
     s.chars().take(300).collect()
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunDetail {
+    pub record: RunRecord,
+    pub log: String,
+    pub bep: Section<Bep>,
+    pub profile: Section<Profile>,
+}
+
+/// One artifact. `data` without `note` is ok, both is incomplete
+/// (`truncated`), and `note` alone is `missing` or `parse error: …`.
+#[derive(Debug, Serialize)]
+pub struct Section<T> {
+    pub data: Option<T>,
+    pub note: Option<String>,
+}
+
+/// Read `run.json`, `log.txt`, `bep.json` and `profile.gz` from a run dir.
+/// Only the first two are required.
+pub fn run_detail(dir: &Path) -> io::Result<RunDetail> {
+    let bep = match File::open(dir.join("bep.json")) {
+        Err(_) => missing(),
+        Ok(f) => {
+            let bep = bep::parse(BufReader::new(f));
+            Section {
+                note: bep.truncated.then(|| "truncated".to_string()),
+                data: Some(bep),
+            }
+        }
+    };
+    let profile = match File::open(dir.join("profile.gz")) {
+        Err(_) => missing(),
+        Ok(f) => match profile::parse(f) {
+            Ok(p) => Section {
+                data: Some(p),
+                note: None,
+            },
+            Err(e) => Section {
+                data: None,
+                note: Some(format!("parse error: {e}")),
+            },
+        },
+    };
+    Ok(RunDetail {
+        record: store::read_record(dir)?,
+        log: store::read_log(dir)?,
+        bep,
+        profile,
+    })
+}
+
+fn missing<T>() -> Section<T> {
+    Section {
+        data: None,
+        note: Some("missing".to_string()),
+    }
 }
