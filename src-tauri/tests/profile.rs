@@ -4,7 +4,7 @@
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::fs::File;
-use zeal_lib::profile::{self, Bar, Phase, Profile};
+use zeal_lib::profile::{self, Lane, Phase, Profile, Span};
 
 fn fixture_path(case: &str) -> String {
     format!(
@@ -25,14 +25,38 @@ fn phase(name: &str, start_us: i64, end_us: i64) -> Phase {
     }
 }
 
-fn bar(lane: usize, start_us: i64, dur_us: i64, name: &str, mnemonic: &str) -> Bar {
-    Bar {
-        lane,
+fn lane(name: &str, tid: u64, spans: Vec<Span>) -> Lane {
+    Lane {
+        name: name.to_string(),
+        tid,
+        spans,
+    }
+}
+
+fn span(start_us: i64, dur_us: i64, cat: &str, name: &str) -> Span {
+    Span {
         start_us,
         dur_us,
+        cat: cat.to_string(),
         name: name.to_string(),
-        mnemonic: mnemonic.to_string(),
+        mnemonic: String::new(),
+        out: None,
     }
+}
+
+fn lane_counts(p: &Profile) -> Vec<(&str, usize)> {
+    p.lanes
+        .iter()
+        .map(|l| (l.name.as_str(), l.spans.len()))
+        .collect()
+}
+
+fn find_span<'a>(p: &'a Profile, cat: &str) -> &'a Span {
+    p.lanes
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .find(|s| s.cat == cat)
+        .unwrap()
 }
 
 /// Gzip a `traceEvents` array and parse it, for cases no fixture covers.
@@ -59,103 +83,101 @@ fn ok() {
             phase("Complete build", 5215357, 5220346),
         ]
     );
-    assert_eq!(p.lane_count, 7);
+    assert_eq!(lane_counts(&p), ok_lanes());
     assert_eq!(
-        p.bars,
-        [
-            bar(
-                0,
+        find_span(&p, "action processing"),
+        &Span {
+            mnemonic: "BazelWorkspaceStatusAction".to_string(),
+            out: Some("bazel-out/stable-status.txt".to_string()),
+            ..span(
                 2942575,
                 13522,
-                "BazelWorkspaceStatusAction stable-status.txt",
-                "BazelWorkspaceStatusAction"
-            ),
-            bar(
-                0,
-                3402227,
-                1447,
-                "Symlinking //pkg:tool",
-                "ExecutableSymlink"
-            ),
-            bar(
-                2,
-                3402487,
-                2805,
-                "Creating source manifest for //pkg:tool",
-                "SourceSymlinkManifest"
-            ),
-            bar(
-                3,
-                3404452,
-                8180,
-                "Writing repo mapping manifest for //pkg:tool",
-                "RepoMappingManifest"
-            ),
-            bar(
-                4,
-                3411946,
-                704,
-                "Writing repo mapping manifest for //pkg:tool [for tool]",
-                "RepoMappingManifest"
-            ),
-            bar(
-                5,
-                3411983,
-                783,
-                "Creating source manifest for //pkg:tool [for tool]",
-                "SourceSymlinkManifest"
-            ),
-            bar(
-                0,
-                3414657,
-                1090,
-                "Creating runfiles tree \
-                 bazel-out/k8-opt-exec-ST-d57f47055a04/bin/pkg/tool.runfiles [for tool]",
-                "SymlinkTree"
-            ),
-            bar(
-                2,
-                3413228,
-                2553,
-                "Creating runfiles tree bazel-out/k8-fastbuild/bin/pkg/tool.runfiles",
-                "SymlinkTree"
-            ),
-            bar(
-                6,
-                3415940,
-                425,
-                "Symlinking //pkg:tool [for tool]",
-                "ExecutableSymlink"
-            ),
-            bar(6, 3430644, 393, "Symlinking //pkg:t", "ExecutableSymlink"),
-            bar(
-                2,
-                3430614,
-                492,
-                "Writing repo mapping manifest for //pkg:t",
-                "RepoMappingManifest"
-            ),
-            bar(
-                4,
-                3430228,
-                1420,
-                "Creating source manifest for //pkg:t",
-                "SourceSymlinkManifest"
-            ),
-            bar(
-                4,
-                3432025,
-                698,
-                "Creating runfiles tree bazel-out/k8-fastbuild/bin/pkg/t.runfiles",
-                "SymlinkTree"
-            ),
-            bar(1, 3113276, 1027315, "Executing genrule //pkg:a", "Genrule"),
-            bar(4, 4143586, 6216, "Executing genrule //pkg:c", "Genrule"),
-            bar(2, 4141298, 1010681, "Executing genrule //pkg:b", "Genrule"),
-            bar(2, 5152527, 7757, "Executing genrule //pkg:d", "Genrule"),
-            bar(2, 5163879, 40676, "Testing //pkg:t", "TestRunner"),
-        ]
+                "action processing",
+                "BazelWorkspaceStatusAction stable-status.txt"
+            )
+        }
     );
+    assert_eq!(
+        find_span(&p, "critical path component"),
+        &span(
+            3113104,
+            1027091,
+            "critical path component",
+            "action 'Executing genrule //pkg:a'"
+        )
+    );
+}
+
+fn ok_lanes() -> Vec<(&'static str, usize)> {
+    vec![
+        ("Main Thread", 296),
+        ("skyframe-evaluator-memoizing-0", 21),
+        ("skyframe-evaluator-memoizing-1", 24),
+        ("Garbage Collector", 4),
+        ("skyframe-evaluator-memoizing-3", 11),
+        ("skyframe-evaluator-memoizing-2", 22),
+        ("skyframe-evaluator-memoizing-6", 9),
+        ("skyframe-evaluator-memoizing-5", 7),
+        ("skyframe-evaluator-memoizing-4", 31),
+        ("skyframe-evaluator-memoizing-8", 17),
+        ("skyframe-evaluator-memoizing-10", 19),
+        ("skyframe-evaluator-memoizing-9", 16),
+        ("skyframe-evaluator-memoizing-11", 16),
+        ("skyframe-evaluator-memoizing-7", 7),
+        ("skyframe-evaluator-memoizing-12", 16),
+        ("skyframe-evaluator-memoizing-13", 13),
+        ("skyframe-evaluator-memoizing-15", 20),
+        ("skyframe-evaluator-memoizing-16", 16),
+        ("skyframe-evaluator-memoizing-18", 29),
+        ("skyframe-evaluator-memoizing-17", 16),
+        ("skyframe-evaluator-memoizing-19", 10),
+        ("skyframe-evaluator-memoizing-14", 16),
+        ("skyframe-evaluator-memoizing-21", 16),
+        ("skyframe-evaluator-memoizing-20", 16),
+        ("skyframe-evaluator-memoizing-23", 12),
+        ("skyframe-evaluator-memoizing-24", 17),
+        ("skyframe-evaluator-memoizing-25", 15),
+        ("skyframe-evaluator-memoizing-22", 6),
+        ("skyframe-evaluator-memoizing-29", 10),
+        ("skyframe-evaluator-memoizing-28", 11),
+        ("skyframe-evaluator-memoizing-26", 6),
+        ("skyframe-evaluator-memoizing-27", 6),
+        ("skyframe-evaluator-memoizing-30", 6),
+        ("skyframe-evaluator-memoizing-31", 7),
+        ("skyframe-evaluator-memoizing-4", 5),
+        ("skyframe-evaluator-memoizing-3", 3),
+        ("skyframe-evaluator-memoizing-0", 5),
+        ("skyframe-evaluator-memoizing-6", 2),
+        ("skyframe-evaluator-memoizing-7", 3),
+        ("skyframe-evaluator-memoizing-1", 5),
+        ("skyframe-evaluator-memoizing-2", 5),
+        ("skyframe-evaluator-memoizing-5", 1),
+        ("tree-deleter", 9),
+        ("skyframe-evaluator-5", 26),
+        ("skyframe-evaluator-execution-0", 23),
+        ("skyframe-evaluator-3", 21),
+        ("skyframe-evaluator-7", 24),
+        ("skyframe-evaluator-4", 35),
+        ("skyframe-evaluator-1", 19),
+        ("skyframe-evaluator-6", 35),
+        ("skyframe-evaluator-2", 12),
+        ("skyframe-evaluator-0", 25),
+        (
+            "module-extension-@@rules_kotlin+//src/main/starlark/core/repositories:bzlmod_setup.bzl%rules_kotlin_extension0 (Virtual)",
+            1,
+        ),
+        ("skyframe-evaluator-execution-1", 23),
+        (
+            "starlark-repository-rules_java++toolchains+local_jd0 (Virtual)",
+            5,
+        ),
+        ("skyframe-evaluator-execution-5", 110),
+        ("skyframe-evaluator-execution-7", 8),
+        ("skyframe-evaluator-execution-2", 47),
+        ("skyframe-evaluator-execution-3", 8),
+        ("skyframe-evaluator-execution-4", 15),
+        ("Critical Path", 5),
+    ]
 }
 
 #[test]
@@ -170,8 +192,10 @@ fn loading_failed() {
             phase("Complete build", 32812, 33155),
         ]
     );
-    assert_eq!(p.lane_count, 0);
-    assert!(p.bars.is_empty());
+    assert_eq!(
+        lane_counts(&p),
+        [("Main Thread", 118), ("skyframe-evaluator-memoizing-3", 1)]
+    );
 }
 
 #[test]
@@ -192,15 +216,29 @@ fn no_finishing_is_err() {
 }
 
 #[test]
-fn actions_off_execution_lanes_are_dropped() {
+fn spans_group_by_thread() {
     let p = parse_events(serde_json::json!([
         { "cat": "build phase marker", "name": "Initialize command", "ph": "X", "ts": 0 },
         { "name": "Finishing", "ph": "X", "ts": 10 },
         { "ph": "M", "name": "thread_name", "tid": 1, "args": { "name": "Main Thread" } },
-        { "cat": "action processing", "name": "Executing genrule //pkg:a", "ph": "X",
-          "ts": 1, "dur": 2, "tid": 1, "args": { "mnemonic": "Genrule" } },
+        { "ph": "X", "name": "a", "cat": "general", "ts": 1, "dur": 2, "tid": 1 },
+        { "ph": "X", "name": "b", "cat": "action processing", "ts": 3, "dur": 1, "tid": 9 },
+        { "ph": "C", "name": "counter", "ts": 2, "tid": 1, "args": { "n": 1 } },
     ]))
     .unwrap();
-    assert_eq!(p.lane_count, 0);
-    assert!(p.bars.is_empty());
+    assert_eq!(
+        p.lanes,
+        [
+            lane(
+                "",
+                0,
+                vec![
+                    span(0, 0, "build phase marker", "Initialize command"),
+                    span(10, 0, "", "Finishing"),
+                ]
+            ),
+            lane("Main Thread", 1, vec![span(1, 2, "general", "a")]),
+            lane("", 9, vec![span(3, 1, "action processing", "b")]),
+        ]
+    );
 }

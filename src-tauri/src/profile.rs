@@ -5,10 +5,11 @@
 //!   until the next marker; the last one runs until the `Finishing` event.
 //!   Names are kept as Bazel writes them (under Skymeld, loading / analysis /
 //!   execution share one marker).
-//! - **lanes**: threads named `skyframe-evaluator-execution-*`, numbered in
-//!   the order their `thread_name` metadata appears (shown as `exec-0`, ...).
-//!   Only their count is kept.
-//! - **bars**: `action processing` events on those lanes.
+//! - **lanes**: one per thread (`tid`), in the order the thread's first
+//!   `ph: "X"` event appears. All such events on the thread are its `spans`
+//!   in file order — the timing view draws every thread, not only execution
+//!   lanes. `thread_name` metadata supplies the label; it may arrive after
+//!   the thread's events.
 
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
@@ -19,8 +20,7 @@ use std::io::Read;
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub phases: Vec<Phase>,
-    pub lane_count: usize,
-    pub bars: Vec<Bar>,
+    pub lanes: Vec<Lane>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -33,13 +33,25 @@ pub struct Phase {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Bar {
-    /// Lane number, `0..Profile::lane_count`.
-    pub lane: usize,
+pub struct Lane {
+    /// `thread_name` metadata; empty when the thread never got one.
+    pub name: String,
+    pub tid: u64,
+    pub spans: Vec<Span>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Span {
     pub start_us: i64,
     pub dur_us: i64,
+    /// `ProfilerTask` category, e.g. `action processing`.
+    pub cat: String,
     pub name: String,
+    /// `args.mnemonic`; empty when the event doesn't carry one.
     pub mnemonic: String,
+    /// Primary output path when Bazel recorded one on the event.
+    pub out: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +74,8 @@ struct Event {
     dur: i64,
     #[serde(default)]
     tid: u64,
+    #[serde(default)]
+    out: Option<String>,
     #[serde(default)]
     args: Args,
 }
@@ -103,32 +117,36 @@ pub fn parse<R: Read>(input: R) -> Result<Profile, String> {
         .collect();
 
     let mut lane_of: HashMap<u64, usize> = HashMap::new();
+    let mut lanes: Vec<Lane> = Vec::new();
+    for e in &events {
+        if e.ph != "X" {
+            continue;
+        }
+        let i = *lane_of.entry(e.tid).or_insert_with(|| {
+            lanes.push(Lane {
+                name: String::new(),
+                tid: e.tid,
+                spans: Vec::new(),
+            });
+            lanes.len() - 1
+        });
+        lanes[i].spans.push(Span {
+            start_us: e.ts,
+            dur_us: e.dur,
+            cat: e.cat.clone(),
+            name: e.name.clone(),
+            mnemonic: e.args.mnemonic.clone(),
+            out: e.out.clone(),
+        });
+    }
     for e in &events {
         if e.ph == "M"
             && e.name == "thread_name"
-            && e.args.name.starts_with("skyframe-evaluator-execution-")
+            && let Some(&i) = lane_of.get(&e.tid)
         {
-            let next = lane_of.len();
-            lane_of.entry(e.tid).or_insert(next);
+            lanes[i].name.clone_from(&e.args.name);
         }
     }
-    let bars = events
-        .iter()
-        .filter(|e| e.cat == "action processing")
-        .filter_map(|e| {
-            Some(Bar {
-                lane: *lane_of.get(&e.tid)?,
-                start_us: e.ts,
-                dur_us: e.dur,
-                name: e.name.clone(),
-                mnemonic: e.args.mnemonic.clone(),
-            })
-        })
-        .collect();
 
-    Ok(Profile {
-        phases,
-        lane_count: lane_of.len(),
-        bars,
-    })
+    Ok(Profile { phases, lanes })
 }
