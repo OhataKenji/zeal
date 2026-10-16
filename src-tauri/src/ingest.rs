@@ -1,8 +1,8 @@
 //! Snapshot ingestion: run `bazel query` once per workspace at a time, parse
 //! the XML stream, and swap the in-memory snapshot.
 //!
-//! Triggers: workspace open (background), manual refresh, and (per M3) after
-//! a run completes. Requests arriving while an ingestion runs are recorded as
+//! Triggers: workspace open (background), manual refresh, and after a run
+//! completes. Requests arriving while an ingestion runs are recorded as
 //! pending and collapse into a single follow-up run; the new snapshot only
 //! replaces the old one once it is fully built, so a failed or killed fetch
 //! leaves the previous snapshot in place.
@@ -36,13 +36,16 @@ pub fn request(app: AppHandle, core: Arc<Core>) {
         if st.workspace.is_none() || st.bazel.is_none() {
             return;
         }
-        if st.ingest_running {
+        // During a run the query waits; the run's exit requests it again.
+        if st.ingest_running || st.run.is_some() {
             st.ingest_pending = true;
             drop(st);
             core.emit(&app);
             return;
         }
         st.ingest_running = true;
+        // This fetch also serves requests deferred by a run.
+        st.ingest_pending = false;
     }
     core.emit(&app);
     thread::spawn(move || {
