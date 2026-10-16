@@ -1,8 +1,10 @@
+pub mod bep;
 mod ingest;
 pub mod label;
 pub mod profile;
 pub mod snapshot;
 mod state;
+pub mod store;
 mod workspace;
 pub mod xml;
 
