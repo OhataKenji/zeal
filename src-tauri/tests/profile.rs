@@ -32,7 +32,7 @@ fn ok() {
     for w in p.phases.windows(2) {
         assert_eq!(w[0].end_us, w[1].start_us);
     }
-    assert_eq!(p.lanes.len(), 7);
+    assert_eq!(p.lane_count, 7);
     assert_eq!(p.bars.len(), 18);
     assert_eq!(p.bars.iter().filter(|b| b.mnemonic == "Genrule").count(), 4);
 }

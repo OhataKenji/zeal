@@ -1,12 +1,13 @@
-//! Read a Bazel JSON trace profile (`--profile=profile.gz`) into the three
-//! things the timing view draws.
+//! Read a Bazel JSON trace profile (`--profile=profile.gz`) into what the
+//! timing view draws.
 //!
 //! - **phases**: `build phase marker` events in `ts` order. Each phase runs
 //!   until the next marker; the last one runs until the `Finishing` event.
 //!   Names are kept as Bazel writes them (under Skymeld, loading / analysis /
 //!   execution share one marker).
-//! - **lanes**: threads named `skyframe-evaluator-execution-*`, in the order
-//!   their `thread_name` metadata appears, as `exec-0`, `exec-1`, ...
+//! - **lanes**: threads named `skyframe-evaluator-execution-*`, numbered in
+//!   the order their `thread_name` metadata appears (shown as `exec-0`, ...).
+//!   Only their count is kept.
 //! - **bars**: `action processing` events on those lanes.
 
 use flate2::read::GzDecoder;
@@ -18,7 +19,7 @@ use std::io::Read;
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub phases: Vec<Phase>,
-    pub lanes: Vec<String>,
+    pub lane_count: usize,
     pub bars: Vec<Bar>,
 }
 
@@ -33,7 +34,7 @@ pub struct Phase {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bar {
-    /// Index into `Profile::lanes`.
+    /// Lane number, `0..Profile::lane_count`.
     pub lane: usize,
     pub start_us: i64,
     pub dur_us: i64,
@@ -111,7 +112,6 @@ pub fn parse<R: Read>(input: R) -> Result<Profile, String> {
             lane_of.entry(e.tid).or_insert(next);
         }
     }
-    let lanes = (0..lane_of.len()).map(|i| format!("exec-{i}")).collect();
     let bars = events
         .iter()
         .filter(|e| e.cat == "action processing")
@@ -128,7 +128,7 @@ pub fn parse<R: Read>(input: R) -> Result<Profile, String> {
 
     Ok(Profile {
         phases,
-        lanes,
+        lane_count: lane_of.len(),
         bars,
     })
 }
