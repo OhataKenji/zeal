@@ -117,6 +117,7 @@ workspace の判定は `MODULE.bazel` / `WORKSPACE`(`WORKSPACE.bazel`)の存在�
 
 ### store の運用
 
+M2 では DB を持たず、run の dir の file を表示のたびに parse する([m2](./m2-run-detail.md))。以下は DB を入れる M4 からの運用である。
 DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理して migration を store 内に置く。
 起動時の全件 check は行わず、SQLite が破損系エラー(SQLITE_CORRUPT 等)を返した時点で退避・再作成する(disk full 等の一時的なエラーとは区別する)。
 run record は再生成できないため、破損時の退避と再作成の扱いは [m4](./m4-run-history.md)で扱う。
