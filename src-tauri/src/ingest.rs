@@ -183,3 +183,162 @@ fn summarize(stderr_tail: &str) -> String {
     };
     s.chars().take(300).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_keeps_last_three_non_empty_lines() {
+        assert_eq!(
+            summarize("Loading\nERROR: a\n\n  ERROR: b  \nERROR: c\n"),
+            "ERROR: a | ERROR: b | ERROR: c"
+        );
+        assert_eq!(summarize("only\n"), "only");
+    }
+
+    #[test]
+    fn summarize_falls_back_when_empty() {
+        assert_eq!(summarize(""), "query failed");
+        assert_eq!(summarize(" \n\n\t\n"), "query failed");
+    }
+
+    #[test]
+    fn summarize_truncates_to_300_chars() {
+        assert_eq!(summarize(&"x".repeat(301)), "x".repeat(300));
+        assert_eq!(summarize(&"x".repeat(300)), "x".repeat(300));
+        // Counted in chars, not bytes.
+        assert_eq!(summarize(&"あ".repeat(400)), "あ".repeat(300));
+    }
+
+    #[cfg(unix)]
+    mod fake_bazel {
+        use super::super::*;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/query.xml");
+
+        /// Writing an executable while another test thread forks can make
+        /// exec fail with ETXTBSY, so script creation and spawn are serialized.
+        static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+        struct TempDir(PathBuf);
+
+        impl TempDir {
+            fn new() -> Self {
+                static N: AtomicUsize = AtomicUsize::new(0);
+                let dir = std::env::temp_dir().join(format!(
+                    "zeal-ingest-test-{}-{}",
+                    std::process::id(),
+                    N.fetch_add(1, Ordering::Relaxed)
+                ));
+                let _ = fs::remove_dir_all(&dir);
+                fs::create_dir_all(&dir).unwrap();
+                TempDir(dir)
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        /// Run `fetch` with a `#!/bin/sh` fake bazel whose body is `body`.
+        fn run(body: &str) -> (TempDir, Outcome) {
+            let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = TempDir::new();
+            let bazel = dir.0.join("bazel");
+            fs::write(&bazel, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&bazel, fs::Permissions::from_mode(0o755)).unwrap();
+            let outcome = fetch(&dir.0, &bazel);
+            (dir, outcome)
+        }
+
+        fn fixture_rule_count() -> usize {
+            fs::read_to_string(FIXTURE)
+                .unwrap()
+                .matches("<rule ")
+                .count()
+        }
+
+        #[test]
+        fn exit_zero_is_ok_with_all_rules() {
+            let (dir, outcome) = run(&format!(
+                "printf '%s\\n' \"$@\" > args.txt\ncat '{FIXTURE}'\nexit 0"
+            ));
+            let Outcome::Ok(rules) = outcome else {
+                panic!("expected Ok");
+            };
+            assert_eq!(rules.len(), fixture_rule_count());
+            assert!(rules.iter().any(|r| r.label == "//app/lib:parser"));
+            // Arguments and working directory reach the child.
+            assert_eq!(
+                fs::read_to_string(dir.0.join("args.txt")).unwrap(),
+                "query\nkind(\"rule\", //...)\n--output=xml\n--noimplicit_deps\n--keep_going\n"
+            );
+        }
+
+        #[test]
+        fn nonzero_exit_with_rules_is_partial() {
+            let (_dir, outcome) = run(&format!(
+                "cat '{FIXTURE}'\n\
+                 printf 'Loading\\nERROR: a\\n\\n  ERROR: b  \\nERROR: c\\n' >&2\n\
+                 exit 3"
+            ));
+            let Outcome::Partial(rules, err) = outcome else {
+                panic!("expected Partial");
+            };
+            assert_eq!(rules.len(), fixture_rule_count());
+            assert_eq!(err.exit_code, Some(3));
+            assert_eq!(err.summary, "ERROR: a | ERROR: b | ERROR: c");
+        }
+
+        #[test]
+        fn nonzero_exit_without_rules_is_failed() {
+            let (_dir, outcome) = run("echo 'ERROR: no such package' >&2\nexit 7");
+            let Outcome::Failed(err) = outcome else {
+                panic!("expected Failed");
+            };
+            assert_eq!(err.exit_code, Some(7));
+            assert_eq!(err.summary, "ERROR: no such package");
+        }
+
+        #[test]
+        fn nonzero_exit_without_stderr_uses_fallback_summary() {
+            let (_dir, outcome) = run("exit 1");
+            let Outcome::Failed(err) = outcome else {
+                panic!("expected Failed");
+            };
+            assert_eq!(err.exit_code, Some(1));
+            assert_eq!(err.summary, "query failed");
+        }
+
+        #[test]
+        fn killed_by_signal_is_failed_without_exit_code() {
+            let (_dir, outcome) = run("kill -9 $$");
+            let Outcome::Failed(err) = outcome else {
+                panic!("expected Failed");
+            };
+            assert_eq!(err.exit_code, None);
+        }
+
+        #[test]
+        fn missing_executable_is_spawn_failure() {
+            let dir = TempDir::new();
+            let Outcome::Failed(err) = fetch(&dir.0, &dir.0.join("no-such-bazel")) else {
+                panic!("expected Failed");
+            };
+            assert_eq!(err.exit_code, None);
+            assert!(
+                err.summary.starts_with("failed to spawn "),
+                "{}",
+                err.summary
+            );
+        }
+    }
+}

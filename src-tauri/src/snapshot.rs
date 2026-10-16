@@ -153,3 +153,113 @@ pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
         files,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(label: &str, class: &str, attrs: &[(&str, &str)], outputs: &[&str]) -> RawRule {
+        RawRule {
+            label: label.to_string(),
+            rule_class: class.to_string(),
+            location: None,
+            label_attrs: attrs
+                .iter()
+                .map(|(a, v)| (a.to_string(), v.to_string()))
+                .collect(),
+            outputs: outputs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn edge(from: &str, attr: &str, to: &str) -> Edge {
+        Edge {
+            from: from.to_string(),
+            to: to.to_string(),
+            attr: attr.to_string(),
+        }
+    }
+
+    fn file(path: &str, owner: &str, role: &str) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            owner: owner.to_string(),
+            role: role.to_string(),
+        }
+    }
+
+    fn sample_rules() -> Vec<RawRule> {
+        let mut bin = rule(
+            "//app:bin",
+            "cc_binary",
+            &[
+                ("srcs", "//app:main.cc"),
+                ("deps", "//app/lib"),
+                ("deps", "//app/lib:lib"),
+                ("deps", "@@zlib+//:z"),
+                ("deps", "//conditions:default"),
+                ("visibility", "//visibility:public"),
+                ("$toolchain", "//tools:cc"),
+            ],
+            &["//app:bin"],
+        );
+        bin.location = Some(("/repo/app/BUILD".to_string(), 3));
+        vec![
+            bin,
+            rule(
+                "//app/lib:lib",
+                "cc_library",
+                &[("srcs", "//app/lib:lib.cc")],
+                &[],
+            ),
+            // Same target as //app:bin after canonicalization.
+            rule("@@//app:bin", "cc_binary", &[], &[]),
+        ]
+    }
+
+    #[test]
+    fn builds_sorted_deduplicated_targets() {
+        let snap = build(&sample_rules(), Status::Ok);
+        let labels: Vec<&str> = snap.targets.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(labels, ["//app/lib:lib", "//app:bin"]);
+
+        let bin = &snap.targets[1];
+        assert_eq!((bin.pkg.as_str(), bin.name.as_str()), ("app", "bin"));
+        assert_eq!(bin.rule_class, "cc_binary");
+        let loc = bin.location.as_ref().unwrap();
+        assert_eq!((loc.file.as_str(), loc.line), ("/repo/app/BUILD", 3));
+        assert!(snap.targets[0].location.is_none());
+    }
+
+    #[test]
+    fn classifies_label_attrs_into_edges_and_files() {
+        let snap = build(&sample_rules(), Status::Ok);
+        assert_eq!(
+            snap.edges,
+            [
+                edge("//app:bin", "deps", "//app/lib:lib"),
+                edge("//app:bin", "deps", "@zlib+//:z"),
+            ]
+        );
+        assert_eq!(
+            snap.files,
+            [
+                file("app/bin", "//app:bin", "out"),
+                file("app/lib/lib.cc", "//app/lib:lib", "srcs"),
+                file("app/main.cc", "//app:bin", "srcs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn records_status_and_fetch_time() {
+        let ok = build(&sample_rules(), Status::Ok);
+        assert!(matches!(ok.meta.status, Status::Ok));
+        assert!(ok.meta.fetched_at > 0);
+
+        let partial = build(&[], Status::Partial);
+        assert!(matches!(partial.meta.status, Status::Partial));
+        assert!(partial.targets.is_empty());
+        assert!(partial.edges.is_empty());
+        assert!(partial.files.is_empty());
+    }
+}
