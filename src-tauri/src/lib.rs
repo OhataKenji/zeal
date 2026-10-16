@@ -1,3 +1,4 @@
+pub mod execlog;
 mod ingest;
 pub mod label;
 pub mod snapshot;
