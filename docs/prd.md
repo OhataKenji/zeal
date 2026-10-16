@@ -28,7 +28,7 @@ GUIで普段使うtargetを開くと、関連targetの存在、用途、定義�
 起案者は日々Bazelを使いながら、中で何が起きているかを知らないまま使っていることに不安を感じています。
 
 GUIでは普段のbuildから、定義を読むLoading、処理を組み立てるAnalysis、必要な出力を得るExecutionの流れを見ます。
-指定したtargetから、入力と出力を結ぶActionのグラフへたどります。
+指定したtargetから、それを生成したactionの実行記録へたどります。
 今回実行した処理と結果を再利用した処理が分かり、自分のコマンドと内部の動きを結びつけられます。
 
 ### 3. targetを見つけて実行する
@@ -72,11 +72,11 @@ cloud runnerなしで、手元のリポジトリのファイル、target、用�
 
 ### M2：自分のbuildを説明できる（シナリオ2）
 
-同じリポジトリの一回のbuildで、target、phase、Action graph、実行記録を結びつけます。
-先に、Actionと実行記録を対応づけ、実行と再利用を区別できる情報が得られるかを確かめます。
-`aquery`で得る構造だけで実行を断定せず、観測できない部分は不明と表示します。[Bazelの評価モデル](https://bazel.build/extending/concepts)、[aquery](https://bazel.build/query/aquery)
+同じリポジトリの一回のbuildで、target、phase、実行記録を結びつけます。
+先に、実行記録から実行と再利用を区別できる情報が得られるかを確かめます。
+観測できない部分は不明と表示します。[Bazelの評価モデル](https://bazel.build/extending/concepts)
 
-利用者がtargetと処理の関係を説明し、今回の実行と再利用を区別できれば到達です。
+利用者がtargetと処理の関係を説明し、実行したactionと、記録上区別できる再利用を説明できれば到達です。再利用は観測可能な範囲に限ります。
 
 ### M3：targetを見つけて実行できる（シナリオ3）
 
