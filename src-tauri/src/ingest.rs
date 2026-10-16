@@ -198,56 +198,74 @@ fn summarize(stderr_tail: &str) -> String {
 #[derive(Debug, Serialize)]
 pub struct RunDetail {
     pub record: RunRecord,
-    pub log: String,
+    pub log: Section<String>,
     pub bep: Section<Bep>,
     pub profile: Section<Profile>,
 }
 
-/// One artifact. `data` without `note` is ok, both is incomplete
-/// (`truncated`), and `note` alone is `missing` or `parse error: …`.
+/// Observation availability is independent of the process exit code.
+/// Only complete and partial observations carry data.
 #[derive(Debug, Serialize)]
-pub struct Section<T> {
-    pub data: Option<T>,
-    pub note: Option<String>,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Section<T> {
+    Ok { data: T },
+    Incomplete { data: T, note: String },
+    Missing,
+    ParseError { note: String },
+    ReadError { note: String },
+    NotAvailable { note: String },
 }
 
-/// Read `run.json`, `log.txt`, `bep.json` and `profile.gz` from a run dir.
-/// Only the first two are required.
+/// Read the record and available observations from a run dir. A missing or
+/// unreadable observation never hides the record or another observation.
+/// Timing is parsed only after the record confirms that the run finished.
 pub fn run_detail(dir: &Path) -> io::Result<RunDetail> {
+    let record = store::read_record(dir)?;
+    let log = match store::read_log(dir) {
+        Ok(data) => Section::Ok { data },
+        Err(e) => read_error(e),
+    };
     let bep = match File::open(dir.join("bep.json")) {
-        Err(_) => missing(),
+        Err(e) => read_error(e),
         Ok(f) => {
-            let bep = bep::parse(BufReader::new(f));
-            Section {
-                note: bep.truncated.then(|| "truncated".to_string()),
-                data: Some(bep),
+            let data = bep::parse(BufReader::new(f));
+            if data.truncated {
+                Section::Incomplete {
+                    data,
+                    note: "BEP ended with an invalid or unreadable event".to_string(),
+                }
+            } else {
+                Section::Ok { data }
             }
         }
     };
-    let profile = match File::open(dir.join("profile.gz")) {
-        Err(_) => missing(),
-        Ok(f) => match profile::parse(f) {
-            Ok(p) => Section {
-                data: Some(p),
-                note: None,
+    let profile = if record.finished_at.is_none() {
+        Section::NotAvailable {
+            note: "timing is available after run completion is recorded".to_string(),
+        }
+    } else {
+        match File::open(dir.join("profile.gz")) {
+            Err(e) => read_error(e),
+            Ok(f) => match profile::parse(f) {
+                Ok(data) => Section::Ok { data },
+                Err(note) => Section::ParseError { note },
             },
-            Err(e) => Section {
-                data: None,
-                note: Some(format!("parse error: {e}")),
-            },
-        },
+        }
     };
     Ok(RunDetail {
-        record: store::read_record(dir)?,
-        log: store::read_log(dir)?,
+        record,
+        log,
         bep,
         profile,
     })
 }
 
-fn missing<T>() -> Section<T> {
-    Section {
-        data: None,
-        note: Some("missing".to_string()),
+fn read_error<T>(error: io::Error) -> Section<T> {
+    if error.kind() == io::ErrorKind::NotFound {
+        Section::Missing
+    } else {
+        Section::ReadError {
+            note: error.to_string(),
+        }
     }
 }

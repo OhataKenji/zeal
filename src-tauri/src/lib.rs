@@ -84,6 +84,9 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
 /// A run of the open workspace with its artifacts parsed.
 #[tauri::command]
 fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDetail, String> {
+    let id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| "invalid run id".to_string())?
+        .to_string();
     let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
         return Err("no workspace".to_string());
     };
