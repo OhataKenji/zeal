@@ -7,3 +7,27 @@ gitleaks = "8"
 # This makes mise read it.
 [settings]
 idiomatic_version_file_enable_tools = ["rust"]
+
+# Checks. CI runs the same commands.
+[tasks.check]
+description = "Run all checks (frontend, then rust)"
+run = [{ task = "check:frontend" }, { task = "check:rust" }]
+
+[tasks."check:frontend"]
+description = "Type check, format check, lint and build the frontend"
+run = ["pnpm check", "pnpm exec oxfmt --check", "pnpm lint", { task = "build:frontend" }]
+
+[tasks."check:rust"]
+description = "cargo fmt check, clippy and test"
+# frontendDist (dist/) must exist for tauri::generate_context!
+depends = ["build:frontend"]
+dir = "src-tauri"
+run = ["cargo fmt --all -- --check", "cargo clippy --all-targets -- -D warnings", "cargo test"]
+
+[tasks."build:frontend"]
+hide = true
+run = "pnpm build"
+
+[tasks.fmt]
+description = "Format frontend and rust code"
+run = ["pnpm exec oxfmt", "cargo fmt --all --manifest-path src-tauri/Cargo.toml"]

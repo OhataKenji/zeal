@@ -20,20 +20,13 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
 ## Checks
 
-Frontend:
+Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.
 
 ```sh
-pnpm check   # type-check (svelte-check + tsc)
-pnpm lint    # oxlint
-pnpm format  # oxfmt
-```
-
-Rust (`src-tauri/`):
-
-```sh
-cargo fmt --check
-cargo clippy
-cargo test
+mise run check           # all checks (frontend, then rust)
+mise run check:frontend  # type check, format check, lint, build
+mise run check:rust      # cargo fmt --check, clippy, test (src-tauri/)
+mise run fmt             # auto-format (oxfmt + cargo fmt)
 ```
 
 All of the above run in CI (`.github/workflows/`).
