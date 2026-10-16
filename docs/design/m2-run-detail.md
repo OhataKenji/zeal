@@ -13,7 +13,7 @@ _Status: Approved_
 - remote cache・remote execution の詳細な内訳
 - action の内部ログ(stdout/stderr の中身)の再生
 - 「実行され得たが起きなかった action」の提示(action graph の候補集合との照合)
-- action の一覧、target と action の往復、action ごとの cache hit
+- action の一覧、target と action の往復、再利用(action cache hit)の表示
 
 ## Background
 
@@ -23,8 +23,7 @@ Bazel の一回の呼び出しは、定義を読む loading、処理を組み立
 - **BEP**: 呼び出し単位のイベント列。呼び出しの成否と target ごとの結果を与える
 - **profile**: phase の区切りと時系列の計測結果(action ごとの位置と所要時間を含む)
 
-重要な前提として、再利用(action cache hit)は BEP に件数だけが出る。
-したがって見せられるのは「実際に実行された action」の時系列と再利用の件数だけであり、どの action が実行を免れたかは示さない。観測できないものは推測せず「不明」とするのがこの文書の核である。
+見せるのは「実際に実行された action」の時系列だけであり、どの action が実行を免れたか(再利用)は示さない。観測できないものは推測せず「不明」とするのがこの文書の核である。
 
 ## Overview
 
@@ -77,15 +76,11 @@ M2 では SQLite を入れない。run ごとに次の file を置き、run の�
 ```
 
 - `run.json`: id・workspace・cmd・target・開始/終了時刻・exit code。run の成否は exit code で決める
-- BEP: target ごとの結果(test 結果を含む)と action cache hit の件数。行単位で parse し、末尾が欠けていても読める範囲を採用する
+- BEP: target ごとの結果(test 結果を含む)。行単位で parse し、末尾が欠けていても読める範囲を採用する
 - profile: phase marker と、action ごとの位置・所要時間
 
 成果物ごとの状態(ok / incomplete / missing / parse error)は parse のたびに決め、詳細画面のセクションごとの可用性に反映する。
 DB への run record の保存と lifecycle(retention・導出記号)は [m4](./m4-run-history.md) が持つ。
-
-### 再利用の件数
-
-BEP の `actionCacheStatistics.hits` を、run 単位で「action cache hit: N 件(内訳は不明)」と出す。
 
 ### timing 表示
 
@@ -97,8 +92,8 @@ phase の帯は profile の phase marker を Bazel の名前のまま並べる�
 ## Alternatives Considered
 
 - **exec log で action の一覧を出す**: mock に対応する画面がない。個々の action の cache hit を示せるのも disk/remote cache 使用時だけで、そのために flag と parser が 1 つずつ増える。
-- **BEP や profile から action ごとの cache hit を出す**: BEP の action 実行イベント(`--build_event_publish_all_actions`)には cache hit の判別情報が無い。profile は hit でも miss でも `check cache hit` が出て、違いは後に `subprocess.run` が続くかだけであり、内部の event 名からの推測になる。
-- **aquery で候補集合を取り「実行されなかった action」を分類する**: 「実行され得た vs 実際起きた」の対比は再利用の理解に資するが、完了後に別呼び出しで action graph を再推定する機構(quote・config 再現・照合・ずれ検出)は設計全体で最も複雑であり、mock にも対応する画面がない。実装の単純さを優先して v1 では削り、「再利用」は BEP の件数だけを示し、内訳は不明と表示する。
+- **BEP や profile から再利用を出す**: BEP の `actionCacheStatistics.hits` は件数だけで内訳が無く、action 実行イベント(`--build_event_publish_all_actions`)にも cache hit の判別情報が無い。profile は hit でも miss でも `check cache hit` が出て、違いは後に `subprocess.run` が続くかだけであり、内部の event 名からの推測になる。
+- **aquery で候補集合を取り「実行されなかった action」を分類する**: 「実行され得た vs 実際起きた」の対比は再利用の理解に資するが、完了後に別呼び出しで action graph を再推定する機構(quote・config 再現・照合・ずれ検出)は設計全体で最も複雑であり、mock にも対応する画面がない。実装の単純さを優先して v1 では削った。
 
 ## Caveats
 
@@ -126,8 +121,8 @@ Bazel 8.7.0 での spike の結果とオーナーの決定に合わせて、次�
 
 ## action 一覧の削除(2026/10/16)
 
-mock の run 画面は timing と log だけであり、オーナーの決定で action 一覧をやめた。
+mock の run 画面は timing と log だけであり、オーナーの決定で action 一覧と再利用の表示をやめた。
 
-- action の一覧、target と action の往復、action ごとの cache hit を Non Goal にした
+- action の一覧、target と action の往復、再利用の表示を Non Goal にした
 - exec log(`--execution_log_binary_file`)を観測 flag と parse の対象から外した
-- 再利用は BEP の件数だけを「内訳は不明」として出す
+- 再利用の件数(BEP の `actionCacheStatistics.hits`)も出さない。D3 の「N 件(内訳は不明)」の表示はやめた
