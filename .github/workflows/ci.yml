@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege for GITHUB_TOKEN; jobs that need more must ask for it.
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,12 +22,12 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       rust: ${{ steps.filter.outputs.rust }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Fail-open: a job runs unless every changed path is listed as irrelevant
       # to it. Unlisted paths default to running the job, so a stale exclusion
       # list costs an extra run instead of silently skipping a needed check.
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           predicate-quantifier: "some-with-excludes"
@@ -64,10 +68,10 @@ jobs:
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Tool versions come from mise.toml.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           install_args: node pnpm
 
@@ -90,11 +94,11 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           install_args: gitleaks
 
@@ -107,7 +111,7 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # https://v2.tauri.app/start/prerequisites/#linux
       - name: Install Tauri system dependencies
@@ -115,18 +119,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Cache cargo artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
       # Installs node, pnpm and rust (via rust-toolchain.toml) from mise.toml.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      # After the toolchain install: the cache key includes the rustc version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
 
       # frontendDist must exist for tauri::generate_context!
       - name: Build frontend
@@ -145,3 +144,15 @@ jobs:
       - name: cargo test
         run: cargo test
         working-directory: src-tauri
+
+  # Single required check for the branch ruleset. Jobs skipped by
+  # paths-filter count as success; failed or cancelled ones do not.
+  ci-ok:
+    name: ci-ok
+    needs: [changes, frontend, rust, gitleaks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check needed jobs
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
