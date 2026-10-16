@@ -22,14 +22,10 @@ maintenance:
 knowledge:
   - name: lint
     contents: |
-      mise exec -- pnpm check
-      mise exec -- pnpm exec oxfmt --check
-      mise exec -- pnpm lint
-      cd src-tauri && mise exec -- cargo fmt --all -- --check
-      mise exec -- cargo clippy --all-targets -- -D warnings
+      mise run check:frontend
   - name: test
     contents: |
-      cd src-tauri && mise exec -- cargo test
+      mise run check:rust
   - name: startup
     contents: |
       # `pnpm tauri dev` needs a display; in a headless session use `pnpm dev`
