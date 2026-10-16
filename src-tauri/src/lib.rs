@@ -2,6 +2,7 @@ mod ingest;
 pub mod label;
 pub mod snapshot;
 mod state;
+pub mod store;
 mod workspace;
 pub mod xml;
 
