@@ -1,6 +1,6 @@
-//! Golden tests for the BEP parser, on the run fixtures from `gen.sh`.
+//! Golden tests for the BEP parser, on the run fixtures.
 
-use std::io::{BufReader, Cursor};
+use std::io::BufReader;
 use zeal_lib::bep::{self, Bep, TargetResult, TestResult};
 
 fn fixture(case: &str) -> Bep {
@@ -47,7 +47,6 @@ fn ok_has_all_targets_and_a_passed_test() {
         Bep {
             targets: ok_targets(),
             tests: ok_tests(),
-            action_cache_hits: 0,
             truncated: false,
         }
     );
@@ -83,10 +82,4 @@ fn truncated_keeps_the_lines_before_the_cut() {
     assert_eq!(bep.targets, ok_targets());
     assert_eq!(bep.tests, ok_tests());
     assert!(bep.truncated);
-}
-
-#[test]
-fn reads_action_cache_hits() {
-    let line = r#"{"id":{"buildMetrics":{}},"buildMetrics":{"actionSummary":{"actionCacheStatistics":{"hits":12}}}}"#;
-    assert_eq!(bep::parse(Cursor::new(line)).action_cache_hits, 12);
 }

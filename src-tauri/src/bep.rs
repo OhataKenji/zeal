@@ -6,7 +6,6 @@
 //! - `targetCompleted`: `completed.success` → target ok, anything else failed
 //! - `targetConfigured` with `aborted`: the target failed in analysis
 //! - `testSummary`: `testSummary.overallStatus`
-//! - `buildMetrics`: `actionSummary.actionCacheStatistics.hits`
 //!
 //! Bazel appends while it runs, so a killed run leaves a cut last line. The
 //! first line that does not parse ends the read with `truncated = true`.
@@ -20,8 +19,6 @@ use std::io::BufRead;
 pub struct Bep {
     pub targets: Vec<TargetResult>,
     pub tests: Vec<TestResult>,
-    /// Local action cache hits. Bazel does not say which actions they were.
-    pub action_cache_hits: u64,
     pub truncated: bool,
 }
 
@@ -61,9 +58,6 @@ pub fn parse<R: BufRead>(input: R) -> Bep {
                 label: string(&t["label"]),
                 status: string(&ev["testSummary"]["overallStatus"]),
             });
-        } else if id.get("buildMetrics").is_some() {
-            let stats = &ev["buildMetrics"]["actionSummary"]["actionCacheStatistics"];
-            bep.action_cache_hits = stats["hits"].as_u64().unwrap_or(0);
         }
     }
     bep
