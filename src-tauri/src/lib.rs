@@ -1,5 +1,6 @@
 mod ingest;
 pub mod label;
+pub mod profile;
 pub mod snapshot;
 mod state;
 mod workspace;
