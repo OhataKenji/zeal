@@ -1,7 +1,7 @@
 # Zeal 設計: 全体構成
 
 _OhataKenji_
-_Last update: 2026/10/15_
+_Last update: 2026/10/17_
 _Status: Approved_
 
 ## Goal
@@ -32,50 +32,56 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 - **run**: composer から起動した一回の bazel 呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
 - **BEP**: Build Event Protocol。bazel の `--build_event_json_file` 等で出力される、呼び出し単位のイベント列
-- **exec log**: `--execution_log_binary_file` で出力される、spawn 単位の実行記録
 - **profile**: `--profile` で出力される、phase 内訳と時系列を持つ chrome trace 形式の計測結果
-- **観測 flag**: run 時に bazel へ付けて成果物を得る flag 群(BEP・exec log・profile の出力指定と profile 用補助 flag。[m2](./m2-run-detail.md)参照)
-- **run record**: run ごとに DB に保存される観測事実の行([m4](./m4-run-history.md))
+- **観測 flag**: run 時に bazel へ付けて成果物を得る flag 群(BEP・profile の出力指定と profile 用補助 flag。[m2](./m2-run-detail.md)参照)
+- **run record**: run ごとの入力、時刻、終了結果などの保存値。M2 は run.json、M4 から DB を正本とする([m4](./m4-run-history.md))
 
 ## Overview
 
 Zeal は Tauri v2 の単一ウィンドウアプリで、Rust core とシステム webview 上の Svelte 5 UI に分かれる。
 対象 OS は POSIX 系(macOS を第一対象)とし、中断処理が SIGINT とプロセスグループを前提とする([m3](./m3-find-and-run.md))。
-Rust core が workspace の管理、bazel の子プロセス起動、観測データの取り込み、SQLite への永続化を担い、UI は表示と入力だけを担う。
+
+Rust core が workspace の管理、bazel の子プロセス起動、観測データの読み取りを担い、UI は表示と入力だけを担う。
 bazel はライブラリとして組み込まず、常に子プロセスとして spawn する。
 
 ```mermaid
 flowchart TD
     UI["Svelte UI (WebView)<br/>表示と入力。content = target / run / analytics"]
-    CORE["Rust core<br/>workspace ・ runner ・ ingest ・ store(SQLite)"]
+    CORE["Rust core<br/>workspace / runner / ingest / store<br/>M2: file、M4: SQLite"]
     BAZEL["bazel CLI<br/>query ・ build/test/run"]
     UI <-->|"Tauri commands / events"| CORE
     CORE -->|"spawn + 観測 flag"| BAZEL
-    BAZEL -->|"成果物: BEP / exec log / profile(file)・query XML(stdout)"| CORE
+    BAZEL -->|"成果物: BEP / profile(file)・query XML(stdout)"| CORE
 ```
 
 データは二系統に分かれる。
 構造データのうち静的な部分(target・依存・file)は `bazel query` の結果を起動のたびに取り込み、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
-観測データ(実行した spawn・phase・所要時間)は run のたびに bazel に出力させた BEP・exec log・profile を取り込み、run 単位で DB に蓄積する。
+観測データは run ごとの BEP と profile に残す。
+M2 は run dir の file を表示のたびに parse し、M4 で run record と phase の集計値を SQLite に保存する。
 
 設計全体を通じた判断基準は「構造と観測を区別し、観測できないものは不明と示す」である。
 構造上存在する action が今回実行されたとは限らず、実行の事実は観測データがなければ分からない。
-観測に欠損があるとき、UI は推測で埋めず「不明」と表示する(mock では `○`・`not available`)。
+観測に欠損があるとき、UI は推測で埋めず「不明」または `not available` と表示する。
+profile の marker 名を保ち、analysis と execution が重なる場合に別々の時間へ分割しない。
+action 一覧、target と action の往復、cache hit の判別は今版に含めない。
+二回の run の diff と、そのための追加の条件収集は次版で扱う([PRD](../prd.md))。
+mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ## Detailed Design
 
 ### コンポーネントと責務
 
-| コンポーネント  | 責務                                                                                                        |
-| --------------- | ----------------------------------------------------------------------------------------------------------- |
-| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧                                    |
-| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                                            |
-| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理                             |
-| core::ingest    | query XML / BEP / exec log / profile の parse。構造データはメモリへ、観測データは DB への書き込み(取り込み) |
-| core::store     | SQLite(rusqlite)。run record と成果物の永続化                                                               |
+| コンポーネント  | 責務                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧                         |
+| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                                 |
+| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理                  |
+| core::ingest    | query XML / BEP / profile の parse。M2 は表示のたびに観測 file を読む。M4 から集計値を DB へ書く |
+| core::store     | run record と成果物の永続化。M2 は file、M4 から SQLite(rusqlite)                                |
 
 UI への実行中の通知は、runner が捕捉した stdout/stderr を Tauri の event で WebView に streaming して届ける。
-stdout/stderr は専用スレッドで常時 drain し(pipe 詰まりで bazel 本体をブロックしない)、UI への送信は時間窓でバッチ化して溢れた分は省略表示にする。
+stdout/stderr は専用スレッドで常時 drain し(pipe 詰まりで bazel 本体をブロックしない)、M2 は1行ずつ UI に送り、負荷と欠損の扱いを検証する。
+送信量の上限や省略表示を導入する場合は、省略した旨を示し、子プロセスの drain は続ける。
 UI が直接プロセスやファイルを触る経路は作らない。
 
 ### bazel 呼び出しの直列化とプロセス管理
@@ -83,9 +89,9 @@ UI が直接プロセスやファイルを触る経路は作らない。
 bazel server は同一 output base 上で同時に一つのコマンドしか処理せず、後続の呼び出しは lock を待ってブロックする。
 このため runner は同一 workspace の bazel 呼び出しを同時に一つに限る(mutex)。
 run の実行中は snapshot 取り込み([m1](./m1-targets.md))を起動せず、取り込み要求は pending として記録して run 完了後に1回だけ行う。
-逆に取り込みの走行中に Send された run はその完了を待ち(取り込みには query の timeout 分の待ちがあり得る)、待機中は「bazel server 待ち」と同じ状態で表示する。
-M2 では待たず、取り込み中は Send を disabled にする([m2](./m2-run-detail.md))。
-Zeal 外のクライアント(terminal 等)が lock を持つ場合の「bazel server 待ち」は、invocation 開始前に stdout/stderr の最初の出力が一定時間来ないことで検出する(lock 待ちの文言は version 間で安定しないため parse しない。検出条件の詳細は [m3](./m3-find-and-run.md)が正本)。
+M2 では取り込み中の Send を disabled にし、待ち行列を持たない([m2](./m2-run-detail.md))。
+M3 で取り込みの完了を待っている間は「target データの取得待ち」と表示する。
+spawn 後に出力が来ない場合は「出力待ち」とし、無出力だけで server lock 待ちや bazelisk の取得中とは断定しない。
 
 spawn は独立したプロセスグループで行い、stop・中断・hard kill はグループ単位で送る(`bazel run` が起こした対象 binary も回収できるようにするため)。
 中断のエスカレーションと判定規則は [m3](./m3-find-and-run.md) で定める。
@@ -94,11 +100,12 @@ spawn は独立したプロセスグループで行い、stop・中断・hard ki
 
 ### run の定義
 
-run の起動時に Zeal 側で UUID を発行し、観測用の成果物(BEP・exec log・profile・stdout/stderr)をその UUID で束ねる。
+run の起動時に Zeal 側で UUID を発行し、観測用の成果物(BEP・profile・stdout/stderr)をその UUID で束ねる。
 build・test・run の spawn には `--tool_tag=zeal` を付与する。共有 output base 上の BEP 解析等で Zeal 発の呼び出しを識別できるようにするためである(query 系はこの flag を受理しない version があり得るため付けない)。
 
-run の表示は ● running / ✓ ok / ✗ failed / ■ interrupted / ○ no detail の5記号で、mock の runs 一覧と一致する。
-記号は保存する status ではなく、「終了結果(outcome)」と「詳細の有無(detail)」という二つの観測事実から導出する表示である。
+M4 からの run 一覧は、終了結果(outcome)の記号と詳細の有無(detail)を別に表示する。
+詳細が欠損した場合や保存期限が過ぎた場合も、既知の成功や失敗の記号を残す。
+M2 の file record から導出できる終了結果は M2 の範囲で表示する。
 規則は [m4](./m4-run-history.md)で定める。
 
 ### データの置き場所
@@ -121,7 +128,8 @@ workspace の判定は `MODULE.bazel` / `WORKSPACE`(`WORKSPACE.bazel`)の存在�
 M2 では DB を持たず、run の dir の file を表示のたびに parse する([m2](./m2-run-detail.md))。以下は DB を入れる M4 からの運用である。
 DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理して migration を store 内に置く。
 起動時の全件 check は行わず、SQLite が破損系エラー(SQLITE_CORRUPT 等)を返した時点で退避・再作成する(disk full 等の一時的なエラーとは区別する)。
-run record は再生成できないため、破損時の退避と再作成の扱いは [m4](./m4-run-history.md)で扱う。
+旧 run.json や残存 file から一部を復元できるが、DB だけに残した事実は復元できない場合がある。
+破損時の退避と再作成、復元できる範囲は [m4](./m4-run-history.md)で扱う。
 
 ### UI の一貫性
 
@@ -141,7 +149,7 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 
 - Bazel の version 差は flag と出力形式の単位で現れる。v1 は 8.7 以上を目安にし、観測 flag が受理されない環境は対象外として、発生したら Zeal 側のバグとして対応する。成果物の欠損は detail なしとして扱う。
 - `bazel query` は大きい repo で遅くなり得る。snapshot 取り込みは grpc で実測 warm 約 56ms / cold 約 19s で、起動ごとの取り直しは実用範囲。
-- bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。「bazel を取得中」と区別して表示する。
+- bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。無出力の間は原因を推定せず「出力待ち」と表示し、届いた log はそのまま示す。
 - workspace を移動・rename するとルートパスが変わり、履歴は新規 workspace として分断される。
 - 同一 workspace で Zeal を二重起動しないよう single instance を強制する(プロセス管理の前提条件)。取り込み中など bazel 呼び出しの待ちの間は Send が最大で query の timeout 分待たされ得る。
 
@@ -152,7 +160,8 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 
 ## Privacy Concerns
 
-- すべて local で完結し、telemetry や外部送信は行わない。
+- Zeal の観測記録は local に保存し、Zeal 自身による telemetry や外部送信は行わない。
+- 子プロセスの bazel は利用者やリポジトリの既存設定に従い、BES、remote cache、RBE などへ通信し得る。Zeal はそれらの設定を変更しない。
 - run の成果物には build log が含まれるため、共有・同期の仕組みは設けない。
 - リポジトリは公開のため、文書・コードともに機微情報を含めない(AGENTS.md の方針に従う)。
 
