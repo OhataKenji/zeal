@@ -84,6 +84,7 @@ bazel server は同一 output base 上で同時に一つのコマンドしか処
 このため runner は同一 workspace の bazel 呼び出しを同時に一つに限る(mutex)。
 run の実行中は snapshot 取り込み([m1](./m1-targets.md))を起動せず、取り込み要求は pending として記録して run 完了後に1回だけ行う。
 逆に取り込みの走行中に Send された run はその完了を待ち(取り込みには query の timeout 分の待ちがあり得る)、待機中は「bazel server 待ち」と同じ状態で表示する。
+M2 では待たず、取り込み中は Send を disabled にする([m2](./m2-run-detail.md))。
 Zeal 外のクライアント(terminal 等)が lock を持つ場合の「bazel server 待ち」は、invocation 開始前に stdout/stderr の最初の出力が一定時間来ないことで検出する(lock 待ちの文言は version 間で安定しないため parse しない。検出条件の詳細は [m3](./m3-find-and-run.md)が正本)。
 
 spawn は独立したプロセスグループで行い、stop・中断・hard kill はグループ単位で送る(`bazel run` が起こした対象 binary も回収できるようにするため)。
@@ -103,7 +104,7 @@ run の表示は ● running / ✓ ok / ✗ failed / ■ interrupted / ○ no de
 ### データの置き場所
 
 DB と run の成果物は Tauri の app data dir 配下に置き、workspace ごとに領域を分ける。
-workspace はルートパスを正規化したもので識別し、ディレクトリ名にはパスの hash を使う(衝突した場合は正規化パスとの対応で弁別する)。
+workspace はルートパスを正規化したもので識別し、ディレクトリ名にはパスの hash を使う(衝突した場合は正規化パスとの対応で弁別する。M2 では弁別しない)。
 core 自身の動作ログ(reconcile の結果・spawn argv・DB 破損時の退避等)も app data dir 配下に出力し、障害時の手がかりとする。
 リポジトリ内には何も書き込まない(bazel 自身が作成する convenience symlink は除く)。
 

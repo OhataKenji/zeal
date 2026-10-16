@@ -120,7 +120,7 @@ phase 内訳と action 一覧を同じ run に紐づけることで、「loading
 
 ## Caveats
 
-- exec log と profile は呼び出し完了後にしか得られない。exec log は完了時に書き出されるため、中断・強制終了では file 自体が出ないことが多い。実行中の画面は log のみになる。
+- exec log と profile は呼び出し完了後にしか得られない。中断時の成果物の扱いは [m3](./m3-find-and-run.md) で確かめる。実行中の画面は log のみになる。
 - build が execution に達しない run では action 一覧は作れない。analysis の失敗では exec log は 0 byte、loading の失敗では file 自体が作られない。どちらも「phase 未到達」として action なしの部分 detail にする。
 - 観測 flag が受理されない場合 run は失敗として記録される(v1 の対象外。実際に発生したら Zeal 側のバグとして対応する)。
 - 観測 flag には overhead がある(profile の計測、exec log の書き出しサイズ)。M2 では常時付与とし、肥大が問題になれば run 単位で off にする選択肢を検討する。
