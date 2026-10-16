@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub phases: Vec<Phase>,
@@ -23,7 +23,7 @@ pub struct Profile {
     pub bars: Vec<Bar>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Phase {
     pub name: String,
@@ -31,7 +31,7 @@ pub struct Phase {
     pub end_us: i64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bar {
     /// Lane number, `0..Profile::lane_count`.
