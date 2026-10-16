@@ -66,11 +66,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # Tool versions come from mise.toml.
+      - uses: jdx/mise-action@v5
         with:
-          node-version: lts/*
-
-      - run: corepack enable
+          install_args: node pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -95,9 +94,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install gitleaks
-        run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | sudo tar xz -C /usr/local/bin gitleaks
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: gitleaks
 
       - name: Scan for secrets
         run: gitleaks git --redact .
@@ -126,13 +125,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # rustup picks up rust-toolchain.toml (stable + rustfmt, clippy)
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - run: corepack enable
+      # Installs node, pnpm and rust (via rust-toolchain.toml) from mise.toml.
+      - uses: jdx/mise-action@v5
 
       # frontendDist must exist for tauri::generate_context!
       - name: Build frontend
