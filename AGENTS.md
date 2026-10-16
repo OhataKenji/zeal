@@ -9,7 +9,7 @@ Subdirectory notes: [src-tauri/AGENTS.md](src-tauri/AGENTS.md) (Rust core), [src
 2. [docs/prd.md](docs/prd.md)
 3. [docs/design/overview.md](docs/design/overview.md)
 4. The `docs/design/mN-*.md` for the milestone you are working on
-5. [docs/mock/](docs/mock/) (UI wireframe)
+5. [docs/mock/](docs/mock/) (UI wireframe; the design docs take precedence where they differ)
 
 ## Design principles
 
