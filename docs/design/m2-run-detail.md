@@ -6,13 +6,14 @@ _Status: Approved_
 
 ## Goal
 
-一回の run について、phase(loading / analysis / execution)の流れと、実際に実行された action の記録を提示し、利用者が自分のコマンドと Bazel の内部処理を結びつけられるようにする(PRD シナリオ2・M2)。
+一回の run について、phase(loading / analysis / execution)の流れと、実際に実行された action の時系列を提示し、利用者が自分のコマンドと Bazel の内部処理を結びつけられるようにする(PRD シナリオ2・M2)。
 
 ### Non Goals
 
 - remote cache・remote execution の詳細な内訳
 - action の内部ログ(stdout/stderr の中身)の再生
 - 「実行され得たが起きなかった action」の提示(action graph の候補集合との照合)
+- action の一覧、target と action の往復、action ごとの cache hit
 
 ## Background
 
@@ -20,26 +21,23 @@ Bazel の一回の呼び出しは、定義を読む loading、処理を組み立
 この build が内部で何をしたかを示す観測源は役割が異なる。
 
 - **BEP**: 呼び出し単位のイベント列。呼び出しの成否と target ごとの結果を与える
-- **exec log**: 実際に起こった spawn の記録。action 単位の owner target・mnemonic・出力・runner・cache 情報を持つ
 - **profile**: phase の区切りと時系列の計測結果(action ごとの位置と所要時間を含む)
 
-重要な前提として、local のみの環境では action cache hit は spawn に至らず、exec log には出ない。BEP には件数だけが出る。
-「再利用」を個々の action の cache hit として観測できるのは remote/disk cache 使用時に限られる。
-したがって local 環境で見せられるのは「実際に実行された action」と再利用の件数だけであり、どの action が実行を免れたかは観測できない。観測できないものは推測せず「不明」とするのがこの文書の核である。
+重要な前提として、再利用(action cache hit)は BEP に件数だけが出る。
+したがって見せられるのは「実際に実行された action」の時系列と再利用の件数だけであり、どの action が実行を免れたかは示さない。観測できないものは推測せず「不明」とするのがこの文書の核である。
 
 ## Overview
 
-run の起動時に観測用の flag を付けて bazel を spawn し、成果物を run の dir に残す。run の詳細を開くたびに BEP・exec log・profile を parse する。
-action の表示は exec log の spawn 記録(実際に実行されたもの)に限定し、cache hit は spawn 記録が示す場合にのみ付記する。
+run の起動時に観測用の flag を付けて bazel を spawn し、成果物を run の dir に残す。run の詳細を開くたびに BEP・profile を parse する。
 実行中は timing を出せないため(mock どおり `not available`)、stdout/stderr の log だけを streaming する。
 
 ```mermaid
 flowchart LR
     SEND["Send(composer)"] --> SPAWN["bazel spawn<br/>+ 観測 flag"]
     SPAWN -->|"実行中: stdout/stderr"| LOG["log 欄(streaming)"]
-    SPAWN -->|"完了後"| ART["成果物<br/>bep.json / execlog / profile.gz"]
+    SPAWN -->|"完了後"| ART["成果物<br/>bep.json / profile.gz"]
     ART --> INGEST["parse(表示のたび)"]
-    INGEST --> VIEW["run 詳細: timing / log / phase / action 一覧"]
+    INGEST --> VIEW["run 詳細: timing / log / phase"]
 ```
 
 ## Detailed Design
@@ -54,7 +52,6 @@ bazel が使用中(snapshot の query 中か run 中)の間は Send を disabled
 run 起動時に以下の固定セットを付与する(必須/optional の区別はしない)。成果物は run の UUID ディレクトリ(`<app data dir>/ws-<fnv64>/runs/<uuid>/`)に出力させる。
 
 - `--build_event_json_file=<dir>/bep.json`
-- `--execution_log_binary_file=<dir>/execlog`
 - `--profile=<dir>/profile.gz`
 - `--experimental_profile_include_primary_output`
 - `--noslim_profile`
@@ -67,68 +64,52 @@ v1 の対象は Bazel 8.7 以上を目安とし、この flag 群が受理され
 
 log 欄は spawn した子プロセスの stdout/stderr を runner が常時 drain し、1 行ずつ event で流す。
 bazel 自身が進捗行(`[34 / 120] …` 系)を stderr に出すため、mock の実行中画面はこれだけで足り、BEP file の tail のような構造化経路は別途持たない。
-timing 欄は exec log/profile が完了後にしか出ないため、実行中は `not available` と表示する。
+timing 欄は profile が完了後にしか出ないため、実行中は `not available` と表示する。
 
 ### 保存と parse
 
-M2 では SQLite を入れない。run ごとに次の file を置き、run の詳細を開く(`get_run`)たびに 3 成果物を parse する。parse 結果は保存しない。
+M2 では SQLite を入れない。run ごとに次の file を置き、run の詳細を開く(`get_run`)たびに 2 成果物を parse する。parse 結果は保存しない。
 
 ```
 <app data dir>/ws-<fnv64(正規化した workspace path)>/runs/<uuid>/
   run.json  log.txt              # Zeal が書く
-  bep.json  execlog  profile.gz  # bazel が書く。手を加えない
+  bep.json  profile.gz          # bazel が書く。手を加えない
 ```
 
 - `run.json`: id・workspace・cmd・target・開始/終了時刻・exit code。run の成否は exit code で決める
 - BEP: target ごとの結果(test 結果を含む)と action cache hit の件数。行単位で parse し、末尾が欠けていても読める範囲を採用する
-- exec log: spawn ごとの action(owner target・mnemonic・primary output・runner・cache hit の有無)
 - profile: phase marker と、action ごとの位置・所要時間
 
 成果物ごとの状態(ok / incomplete / missing / parse error)は parse のたびに決め、詳細画面のセクションごとの可用性に反映する。
 DB への run record の保存と lifecycle(retention・導出記号)は [m4](./m4-run-history.md) が持つ。
 
-### action の記録(exec log)
+### 再利用の件数
 
-action の一覧は exec log の spawn 記録だけで作る。「実行され得たが起きなかった action」は観測源がなく示さない。
-exec log は巨大になり得るため streaming で読み、spawn ごとに action の行(owner target・mnemonic・primary output の exec path・runner・cache hit の有無)を作る。
-action の所要時間は一覧に出さず、timing の tooltip でだけ見せる。
-
-- **cache hit**: `cache_hit` が true、または `runner` が ` cache hit` で終わる場合に付記する。disk/remote の区別まではしない(Non Goal 参照)が、runner の生値はそのまま出す
-- **local の再利用**: local の action cache hit は exec log に出ないが、BEP の `actionCacheStatistics.hits` に件数が出る。run 単位で「action cache hit: N 件(内訳は不明)」と出す
-- 同一 exec path に複数の spawn 記録が来ることがある(flaky test の retry 等)。行はまとめず記録どおりに残し、実行回数として数えられるようにする
-
-action 間を入力/出力の artifact で結ぶグラフ(PRD の「入力と出力を結ぶ Action のグラフ」)は M2 の表示対象に含めない。spawn 記録と owner target の往復までを提供し、action 間の辺を辿る UI は後続の検討とする。
+BEP の `actionCacheStatistics.hits` を、run 単位で「action cache hit: N 件(内訳は不明)」と出す。
 
 ### timing 表示
 
 mock の frame chart(exec-0..3 の行と bar)は profile だけで描く。
 profile の action event が名前・mnemonic・位置・所要時間・スレッドを持つので、スレッドごとに行を作り、bar の tooltip に名前と所要時間を出す。
-exec log とは join しない。test の primary output は exec log に無く、disk cache hit の開始時刻は前回の実行時刻のままで、照合のキーにならないためである。
 phase の帯は profile の phase marker を Bazel の名前のまま並べる。Bazel 8 の既定(Skymeld)では marker が `Evaluate target patterns` → `Load, analyze dependencies and build artifacts` → `Complete build` となり、analysis と execution は重なって進むため分けられない。帯にはその旨を注記する。
 フィールドが欠けた場合は、該当部分だけを落として timing 表示を degrade する。
 
-### target・phase・action の結び方
-
-run の詳細では、target から関連する action 一覧へ、action から owner target へ遡れる。
-phase 内訳と action 一覧を同じ run に紐づけることで、「loading→analysis→execution」の流れと個々の action の記録を行き来できる。
-
 ## Alternatives Considered
 
-- **BEP だけで完結させる**: BEP の action 実行イベントはデフォルトで失敗分しか出ず(全件には `--build_event_publish_all_actions` が要る)、cache hit の判別情報も持たない。exec log のほうが per-action の判別に必要な情報を網羅しており、二本立てとした。
-- **profile から action を推定する**: profile は計測用であり網羅的でない。「観測できないものは不明と示す」原則に反して精度を偽ることになる。
-- **aquery で候補集合を取り「実行されなかった action」を分類する**: 「実行され得た vs 実際起きた」の対比は再利用の理解に資するが、完了後に別呼び出しで action graph を再推定する機構(quote・config 再現・照合・ずれ検出)は設計全体で最も複雑であり、mock にも対応する画面がない。実装の単純さを優先して v1 では削り、「再利用」は exec log で観測できる cache hit(remote/disk cache 使用時)に限定して示す。local のみの環境では再利用の件数だけを示し、内訳は不明と表示する。
+- **exec log で action の一覧を出す**: mock に対応する画面がない。個々の action の cache hit を示せるのも disk/remote cache 使用時だけで、そのために flag と parser が 1 つずつ増える。
+- **BEP や profile から action ごとの cache hit を出す**: BEP の action 実行イベント(`--build_event_publish_all_actions`)には cache hit の判別情報が無い。profile は hit でも miss でも `check cache hit` が出て、違いは後に `subprocess.run` が続くかだけであり、内部の event 名からの推測になる。
+- **aquery で候補集合を取り「実行されなかった action」を分類する**: 「実行され得た vs 実際起きた」の対比は再利用の理解に資するが、完了後に別呼び出しで action graph を再推定する機構(quote・config 再現・照合・ずれ検出)は設計全体で最も複雑であり、mock にも対応する画面がない。実装の単純さを優先して v1 では削り、「再利用」は BEP の件数だけを示し、内訳は不明と表示する。
 
 ## Caveats
 
-- exec log と profile は呼び出し完了後にしか得られない。中断時の成果物の扱いは [m3](./m3-find-and-run.md) で確かめる。実行中の画面は log のみになる。
-- build が execution に達しない run では action 一覧は作れない。analysis の失敗では exec log は 0 byte、loading の失敗では file 自体が作られない。どちらも「phase 未到達」として action なしの部分 detail にする。
+- profile は呼び出し完了後にしか得られない。中断時の成果物の扱いは [m3](./m3-find-and-run.md) で確かめる。実行中の画面は log のみになる。
 - 観測 flag が受理されない場合 run は失敗として記録される(v1 の対象外。実際に発生したら Zeal 側のバグとして対応する)。
-- 観測 flag には overhead がある(profile の計測、exec log の書き出しサイズ)。M2 では常時付与とし、肥大が問題になれば run 単位で off にする選択肢を検討する。
+- 観測 flag には overhead がある(profile の計測)。M2 では常時付与とし、肥大が問題になれば run 単位で off にする選択肢を検討する。
 
 ## Test Plan
 
 - cache hit のフィールド、profile の event、disk cache 使用時の挙動は spike(Bazel 8.7.0)で確かめ、本文に反映した。
-- exec log・BEP・profile の各 parser に golden file test を用意する。fixture には末尾が欠けた BEP、execution 未到達の run、成果物の一部が欠けた run を含める。
+- BEP・profile の各 parser に golden file test を用意する。fixture には末尾が欠けた BEP、execution 未到達の run、成果物の一部が欠けた run を含める。
 - 観測 flag 付きで build を回し、成否と所要時間への影響(overhead)を確認する。
 
 ## spike 後の改訂(2026/10/16)
@@ -142,3 +123,11 @@ Bazel 8.7.0 での spike の結果とオーナーの決定に合わせて、次�
 - phase の帯は Bazel の marker 名のままにし、分けられない旨を注記する
 - M2 では SQLite を入れず、run dir の file を表示のたびに parse する。DB は m4 で扱う
 - M2 の Send は build / test だけ。stop・中断・`bazel run` は m3 で扱う
+
+## action 一覧の削除(2026/10/16)
+
+mock の run 画面は timing と log だけであり、オーナーの決定で action 一覧をやめた。
+
+- action の一覧、target と action の往復、action ごとの cache hit を Non Goal にした
+- exec log(`--execution_log_binary_file`)を観測 flag と parse の対象から外した
+- 再利用は BEP の件数だけを「内訳は不明」として出す
