@@ -77,15 +77,16 @@ M2 では SQLite を入れない。run ごとに次の file を置き、run の�
 
 - `run.json`: id・workspace・cmd・target・開始/終了時刻・exit code。run の成否は exit code で決める
 - BEP: target ごとの結果(test 結果を含む)。行単位で parse し、末尾が欠けていても読める範囲を採用する
-- profile: phase marker と、action ごとの位置・所要時間
+- profile: phase marker と、スレッドごとの event 列
 
 成果物ごとの状態(ok / incomplete / missing / parse error)は parse のたびに決め、詳細画面のセクションごとの可用性に反映する。
 DB への run record の保存と lifecycle(retention・導出記号)は [m4](./m4-run-history.md) が持つ。
 
 ### timing 表示
 
-mock の frame chart(exec-0..3 の行と bar)は profile だけで描く。
-profile の action event が名前・mnemonic・位置・所要時間・スレッドを持つので、スレッドごとに行を作り、bar の tooltip に名前と所要時間を出す。
+mock の frame chart は profile の自然な可視化で、profile だけで描く(BuildBuddy の timing / chrome://tracing 相当)。
+スレッド(`thread_name`)ごとに 1 行を作り、そのスレッドの event をそのまま並べる。event 種別(`ph`/`cat`)や対象スレッドでは絞り込まず、加工は tid への集約と `thread_name` のラベル化だけにする。tooltip 等の詳細は event の field をそのまま見せる。
+描画は trace viewer の作法に倣う: 同じ行で重なる span は段に積み、`ph: "i"` は細い mark、`ph: "C"` の counter(`action count`・`CPU usage (Bazel)` 等)は name ごとの系列として行を分けて面グラフにする。色は event の `cname` か name の hash から決める。
 phase の帯は profile の phase marker を Bazel の名前のまま並べる。Bazel 8 の既定(Skymeld)では marker が `Evaluate target patterns` → `Load, analyze dependencies and build artifacts` → `Complete build` となり、analysis と execution は重なって進むため分けられない。帯にはその旨を注記する。
 フィールドが欠けた場合は、該当部分だけを落として timing 表示を degrade する。
 
@@ -126,3 +127,11 @@ mock の run 画面は timing と log だけであり、オーナーの決定で
 - action の一覧、target と action の往復、再利用の表示を Non Goal にした
 - exec log(`--execution_log_binary_file`)を観測 flag と parse の対象から外した
 - 再利用の件数(BEP の `actionCacheStatistics.hits`)も出さない。D3 の「N 件(内訳は不明)」の表示はやめた
+
+## timing の可視化範囲(2026/10/17)
+
+オーナーの決定で、timing 欄は「profile を可視化するためのエリア」とし、event の加工を最小限にした(BuildBuddy の timing 相当)。
+
+- lane は execution スレッド限定・`exec-N` への採番し直しをやめ、event を持つ全スレッドを `thread_name` のまま並べる
+- event の field 選別と `ph`/`cat` による絞り込みをやめ、event は JSON を原形のまま渡す
+- lane のキーは `tid` とする。同名のスレッドが複数 `tid` に分かれて出ることがあるため
