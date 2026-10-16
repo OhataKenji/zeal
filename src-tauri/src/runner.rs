@@ -33,10 +33,6 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
         cmd.to_string(),
         target.to_string(),
         format!("--build_event_json_file={}", dir.join("bep.json").display()),
-        format!(
-            "--execution_log_binary_file={}",
-            dir.join("execlog").display()
-        ),
         format!("--profile={}", dir.join("profile.gz").display()),
         "--experimental_profile_include_primary_output".to_string(),
         "--noslim_profile".to_string(),
@@ -140,7 +136,6 @@ mod tests {
                 "test",
                 "//pkg:t",
                 "--build_event_json_file=/data/runs/abc/bep.json",
-                "--execution_log_binary_file=/data/runs/abc/execlog",
                 "--profile=/data/runs/abc/profile.gz",
                 "--experimental_profile_include_primary_output",
                 "--noslim_profile",
