@@ -19,10 +19,12 @@
 //! last message (a killed process) yields the messages before it and
 //! `truncated = true`.
 
+use serde::Serialize;
 use std::io::{self, BufRead, ErrorKind, Read};
 
 /// One spawn, in the order Bazel recorded it.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Action {
     /// Owning target, e.g. `//pkg:a`.
     pub label: String,
@@ -37,7 +39,8 @@ pub struct Action {
     pub status: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecLog {
     pub actions: Vec<Action>,
     pub truncated: bool,
