@@ -84,8 +84,9 @@ DB への run record の保存と lifecycle(retention・導出記号)は [m4](./
 
 ### timing 表示
 
-mock の frame chart は profile の自然な可視化で、profile だけで描く(BuildBuddy の timing 相当)。
+mock の frame chart は profile の自然な可視化で、profile だけで描く(BuildBuddy の timing / chrome://tracing 相当)。
 スレッド(`thread_name`)ごとに 1 行を作り、そのスレッドの event をそのまま並べる。event 種別(`ph`/`cat`)や対象スレッドでは絞り込まず、加工は tid への集約と `thread_name` のラベル化だけにする。tooltip 等の詳細は event の field をそのまま見せる。
+描画は trace viewer の作法に倣う: 同じ行で重なる span は段に積み、`ph: "i"` は細い mark、`ph: "C"` の counter(`action count`・`CPU usage (Bazel)` 等)は name ごとの系列として行を分けて面グラフにする。色は event の `cname` か name の hash から決める。
 phase の帯は profile の phase marker を Bazel の名前のまま並べる。Bazel 8 の既定(Skymeld)では marker が `Evaluate target patterns` → `Load, analyze dependencies and build artifacts` → `Complete build` となり、analysis と execution は重なって進むため分けられない。帯にはその旨を注記する。
 フィールドが欠けた場合は、該当部分だけを落として timing 表示を degrade する。
 
