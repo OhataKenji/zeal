@@ -240,20 +240,6 @@
   }
   function cancelDrag() { drag = null; }
 
-  $effect(() => {
-    if (!canvas) return;
-    const element = canvas;
-    const wheel = (event: WheelEvent) => {
-      if (!event.ctrlKey && !event.metaKey && !event.shiftKey) return;
-      event.preventDefault();
-      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : 1);
-      if (event.shiftKey) pan(delta / plotWidth * span);
-      else zoom(Math.exp(Math.max(-1.5, Math.min(1.5, -delta * 0.003))), anchor(pointer(event).x));
-    };
-    element.addEventListener("wheel", wheel, { passive: false });
-    return () => element.removeEventListener("wheel", wheel);
-  });
-
   async function selectEvent(tid: number, index: number) {
     const lane = layout.lanes.find((candidate) => candidate.tid === tid);
     if (!lane) return;
@@ -295,7 +281,7 @@
 
 <div class="trace-view">
   <div class="trace-toolbar">
-    <strong>Timing</strong><span class="trace-count">{layout.lanes.length} threads</span><span class="trace-input-hint">Drag to pan · Ctrl/⌘ wheel to zoom</span>
+    <strong>Timing</strong><span class="trace-count">{layout.lanes.length} threads</span><span class="trace-input-hint">Drag to pan</span>
     <div class="trace-actions">
       <button onclick={fit} title="Fit the complete profile (F)">Fit</button>
       <button onclick={() => zoom(1 / 1.5)} aria-label="Zoom out" title="Zoom out (S)">−</button>
@@ -324,7 +310,7 @@
       onscroll={() => { if (viewport) scrollTop = viewport.scrollTop; hover = null; }}>
       <div class="trace-scroll-content" style:height="{Math.max(height, totalHeight)}px">
         <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0"
-          aria-label="Profile timeline. Drag to pan. Control or Command plus wheel to zoom. W/S zoom, A/D pan, F fit. Left/right selects adjacent events."
+          aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events."
           onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
           onpointercancel={cancelDrag} onlostpointercapture={cancelDrag}
           onpointerleave={() => hover = null} onkeydown={keydown}></canvas>
@@ -379,7 +365,7 @@
       <p>File order. Events without a timestamp remain available here.</p>
     </details>
     <details class="trace-notes"><summary>Controls &amp; phase markers</summary>
-      <p>Scroll: threads. Ctrl/⌘ + wheel: zoom. Drag: pan. W/S: zoom. A/D: pan. F: fit.</p>
+      <p>Scroll: threads. Drag: pan. W/S: zoom. A/D: pan. F: fit.</p>
       <p>Skymeld では analysis と execution が重なります。帯は元の marker 名です。thread の時間の合計は run の経過時間ではありません。</p>
       {#each profile.phases as phase}<p>{phase.name} <span>{formatTime(phase.startUs)} → {formatTime(phase.endUs)}</span></p>{/each}
     </details>
