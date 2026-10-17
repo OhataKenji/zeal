@@ -99,7 +99,7 @@ pub fn read_log(dir: &Path) -> io::Result<String> {
     fs::read_to_string(dir.join("log.txt"))
 }
 
-fn read_record(dir: &Path) -> io::Result<RunRecord> {
+pub fn read_record(dir: &Path) -> io::Result<RunRecord> {
     let s = fs::read_to_string(dir.join("run.json"))?;
     serde_json::from_str(&s).map_err(io::Error::other)
 }

@@ -1,16 +1,24 @@
 //! Snapshot ingestion: run `bazel query` once per workspace at a time, parse
 //! the XML stream, and swap the in-memory snapshot.
 //!
-//! Triggers: workspace open (background), manual refresh, and (per M3) after
-//! a run completes. Requests arriving while an ingestion runs are recorded as
+//! Triggers: workspace open (background), manual refresh, and after a run
+//! completes. Requests arriving while an ingestion runs are recorded as
 //! pending and collapse into a single follow-up run; the new snapshot only
 //! replaces the old one once it is fully built, so a failed or killed fetch
 //! leaves the previous snapshot in place.
+//!
+//! [`run_detail`] reads a run dir into what the run view shows. It parses the
+//! artifacts on every call; nothing is cached.
 
+use crate::bep::{self, Bep};
+use crate::profile::{self, Profile};
 use crate::snapshot::{self, Status};
 use crate::state::{Core, IngestError};
+use crate::store::{self, RunRecord};
 use crate::xml::{self, RawRule};
-use std::io::{BufReader, Read};
+use serde::Serialize;
+use std::fs::File;
+use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -36,13 +44,16 @@ pub fn request(app: AppHandle, core: Arc<Core>) {
         if st.workspace.is_none() || st.bazel.is_none() {
             return;
         }
-        if st.ingest_running {
+        // During a run the query waits; the run's exit requests it again.
+        if st.ingest_running || st.run.is_some() {
             st.ingest_pending = true;
             drop(st);
             core.emit(&app);
             return;
         }
         st.ingest_running = true;
+        // This fetch also serves requests deferred by a run.
+        st.ingest_pending = false;
     }
     core.emit(&app);
     thread::spawn(move || {
@@ -182,4 +193,79 @@ fn summarize(stderr_tail: &str) -> String {
         s
     };
     s.chars().take(300).collect()
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunDetail {
+    pub record: RunRecord,
+    pub log: Section<String>,
+    pub bep: Section<Bep>,
+    pub profile: Section<Profile>,
+}
+
+/// Observation availability is independent of the process exit code.
+/// Only complete and partial observations carry data.
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Section<T> {
+    Ok { data: T },
+    Incomplete { data: T, note: String },
+    Missing,
+    ParseError { note: String },
+    ReadError { note: String },
+    NotAvailable { note: String },
+}
+
+/// Read the record and available observations from a run dir. A missing or
+/// unreadable observation never hides the record or another observation.
+/// Timing is parsed only after the record confirms that the run finished.
+pub fn run_detail(dir: &Path) -> io::Result<RunDetail> {
+    let record = store::read_record(dir)?;
+    let log = match store::read_log(dir) {
+        Ok(data) => Section::Ok { data },
+        Err(e) => read_error(e),
+    };
+    let bep = match File::open(dir.join("bep.json")) {
+        Err(e) => read_error(e),
+        Ok(f) => {
+            let data = bep::parse(BufReader::new(f));
+            if data.truncated {
+                Section::Incomplete {
+                    data,
+                    note: "BEP ended with an invalid or unreadable event".to_string(),
+                }
+            } else {
+                Section::Ok { data }
+            }
+        }
+    };
+    let profile = if record.finished_at.is_none() {
+        Section::NotAvailable {
+            note: "timing is available after run completion is recorded".to_string(),
+        }
+    } else {
+        match File::open(dir.join("profile.gz")) {
+            Err(e) => read_error(e),
+            Ok(f) => match profile::parse(f) {
+                Ok(data) => Section::Ok { data },
+                Err(note) => Section::ParseError { note },
+            },
+        }
+    };
+    Ok(RunDetail {
+        record,
+        log,
+        bep,
+        profile,
+    })
+}
+
+fn read_error<T>(error: io::Error) -> Section<T> {
+    if error.kind() == io::ErrorKind::NotFound {
+        Section::Missing
+    } else {
+        Section::ReadError {
+            note: error.to_string(),
+        }
+    }
 }

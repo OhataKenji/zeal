@@ -2,15 +2,18 @@ pub mod bep;
 mod ingest;
 pub mod label;
 pub mod profile;
+mod runner;
 pub mod snapshot;
 mod state;
 pub mod store;
 mod workspace;
 pub mod xml;
 
+pub use ingest::{RunDetail, Section, run_detail};
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use store::RunRecord;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -54,6 +57,42 @@ fn open_workspace(
 #[tauri::command]
 fn refresh(app: AppHandle, core: State<Arc<Core>>) {
     ingest::request(app, core.inner().clone());
+}
+
+/// Start `bazel build|test <target>`. Fails while bazel is busy.
+#[tauri::command]
+fn start_run(
+    app: AppHandle,
+    core: State<Arc<Core>>,
+    cmd: String,
+    target: String,
+) -> Result<RunRecord, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    runner::start(app, core.inner().clone(), &data, &cmd, &target)
+}
+
+/// Runs of the open workspace, newest first.
+#[tauri::command]
+fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
+    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+        return Ok(Vec::new());
+    };
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(store::list(&data, &ws))
+}
+
+/// A run of the open workspace with its artifacts parsed.
+/// Parse and serialize whole artifacts off the UI thread.
+#[tauri::command(async)]
+fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDetail, String> {
+    let id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| "invalid run id".to_string())?
+        .to_string();
+    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+        return Err("no workspace".to_string());
+    };
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    run_detail(&store::run_dir(&data, &ws, &id)).map_err(|e| e.to_string())
 }
 
 /// Open a BUILD/bzl file at its recorded location with the OS default app.
@@ -111,6 +150,9 @@ pub fn run() {
             get_state,
             open_workspace,
             refresh,
+            start_run,
+            list_runs,
+            get_run,
             open_location
         ])
         .run(tauri::generate_context!())
