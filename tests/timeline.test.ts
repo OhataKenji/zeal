@@ -14,6 +14,9 @@ import {
   LANE_HEADER,
   formatRulerTime,
   formatCounter,
+  counterPointY,
+  eventOffsetY,
+  COUNTER_HEIGHT,
 } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
@@ -152,6 +155,16 @@ test("ruler uses readable ticks across negative time, zoom and narrow viewports"
   assert.equal(formatCounter(0.000125555), "1.256e-4");
 });
 
+test("narrow zoom at large absolute timestamps generates bounded, distinct ruler ticks", () => {
+  const range = { start: 1.8e15, end: 1.8e15 + 1 };
+  const ticks = timeTicks(range, 900);
+  assert.ok(ticks.length > 0 && ticks.length <= 12);
+  assert.ok(
+    ticks.every((time) => Number.isFinite(time) && time >= range.start && time <= range.end),
+  );
+  assert.ok(ticks.every((time, index) => index === 0 || time > ticks[index - 1]));
+});
+
 test("collapsing a thread only changes track geometry, preserving all threads and events", () => {
   const layout = layoutProfile({
     phases: [],
@@ -200,6 +213,33 @@ test("counter names and numeric fields form separate series without losing raw a
     [10, 14],
   );
   assert.deepEqual(result.lanes[0].events[0].event.args, { used: 10, free: 20, unit: "MB" });
+  const lane = result.lanes[0];
+  // Revealing a raw counter event must scroll to the same point that is drawn,
+  // even when its series appears below other counters in a tall thread.
+  assert.equal(eventOffsetY(lane, 2), counterPointY(lane, 2, 2));
+  assert.ok(eventOffsetY(lane, 2) > eventOffsetY(lane, 0));
+});
+
+test("counter tracks start folded and expand independently without changing event geometry", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "main",
+        events: [{ ph: "C", ts: 10, name: "cpu", args: { system: 1, user: 2 } }],
+      },
+      { tid: 2, name: "worker", events: [{ ph: "X", ts: 0, dur: 20 }] },
+    ],
+  });
+  const closed = visibleTracks(layout.lanes, new Set());
+  const expanded = visibleTracks(layout.lanes, new Set(), new Set([1]));
+  assert.equal(closed[0].countersExpanded, false);
+  assert.equal(expanded[0].height - closed[0].height, 2 * COUNTER_HEIGHT);
+  assert.equal(expanded[1].top - closed[1].top, 2 * COUNTER_HEIGHT);
+  assert.equal(closed[0].lane.events, expanded[0].lane.events);
+  assert.ok(eventOffsetY(expanded[0].lane, 0) < expanded[0].height);
+  assert.equal(visibleTracks(layout.lanes, new Set([1]), new Set([1]))[0].height, LANE_HEADER);
 });
 
 test("reserved trace cname uses its palette color before deterministic name fallback", () => {

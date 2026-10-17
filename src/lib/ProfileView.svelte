@@ -2,9 +2,9 @@
   import { tick } from "svelte";
   import type { Profile } from "./types";
   import {
-    COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor, eventTextColor,
+    COUNTER_HEIGHT, COUNTER_HEADER, LANE_HEADER, ROW_HEIGHT, eventColor, eventTextColor,
     eventName, formatTime, layoutProfile, panRange, zoomRange, clampRange,
-    timeTicks, timeToX, xToTime, formatRulerTime, formatCounter, visibleTracks, type TimeRange,
+    timeTicks, timeToX, xToTime, counterPointY, eventOffsetY, formatRulerTime, formatCounter, visibleTracks, type TimeRange,
   } from "./timeline";
 
   let { profile }: { profile: Profile } = $props();
@@ -13,7 +13,8 @@
   const range = $derived(windowRange ?? { start: layout.start, end: layout.end });
   const span = $derived(range.end - range.start);
   let collapsed = $state.raw<ReadonlySet<number>>(new Set());
-  const tracks = $derived(visibleTracks(layout.lanes, collapsed));
+  let expandedCounters = $state.raw<ReadonlySet<number>>(new Set());
+  const tracks = $derived(visibleTracks(layout.lanes, collapsed, expandedCounters));
   const totalHeight = $derived(tracks.reduce((sum, track) => sum + track.height, 0));
   let selection = $state<{ tid: number; index: number } | null>(null);
   const selectedLane = $derived(layout.lanes.find((lane) => lane.tid === selection?.tid));
@@ -32,7 +33,7 @@
   let hover = $state<{ tid: number; index: number; x: number; y: number } | null>(null);
   const hovered = $derived(layout.lanes.find((lane) => lane.tid === hover?.tid)?.events[hover?.index ?? -1]);
   let pointerAnchor = 0.5;
-  let drag: { id: number; x: number; range: TimeRange; moved: boolean } | null = null;
+  let drag: { id: number; x: number; y: number; range: TimeRange; moved: boolean } | null = null;
   let hits: { x: number; y: number; width: number; height: number; tid: number; index: number }[] = [];
 
   function x(time: number) { return timeToX(time, range, width, gutter); }
@@ -50,6 +51,12 @@
     const next = new Set(collapsed);
     if (next.has(tid)) next.delete(tid); else next.add(tid);
     collapsed = next;
+    hover = null;
+  }
+  function toggleCounters(tid: number) {
+    const next = new Set(expandedCounters);
+    if (next.has(tid)) next.delete(tid); else next.add(tid);
+    expandedCounters = next;
     hover = null;
   }
 
@@ -148,9 +155,12 @@
         }
         hits.push({ x: ex - 2, y: ey, width: Math.max(ew, 6), height: ROW_HEIGHT, tid: lane.tid, index: event.index });
       }
-      lane.counters.forEach((counter, ci) => {
-        const cy = y + LANE_HEADER + lane.spanRows * ROW_HEIGHT + ci * COUNTER_HEIGHT;
-        const pointY = (value: number) => cy + COUNTER_HEIGHT - 5 - (value - counter.min) / (counter.max - counter.min || 1) * (COUNTER_HEIGHT - 12);
+      if (lane.counters.length) {
+        context.fillStyle = "#f3f5f6";
+        context.fillRect(gutter, y + LANE_HEADER + lane.spanRows * ROW_HEIGHT, plotWidth, COUNTER_HEADER);
+      }
+      if (track.countersExpanded) lane.counters.forEach((counter, ci) => {
+        const pointY = (value: number) => y + counterPointY(lane, ci, value);
         context.strokeStyle = eventColor(lane.events[counter.points[0].index].event);
         context.lineWidth = 1.5;
         context.beginPath();
@@ -179,8 +189,8 @@
       context.fillStyle = "#f8f9fa";
       context.fillRect(0, y + LANE_HEADER, gutter, track.height - LANE_HEADER);
       context.fillStyle = "#65717a";
-      lane.counters.forEach((counter, ci) => {
-        const cy = y + LANE_HEADER + lane.spanRows * ROW_HEIGHT + ci * COUNTER_HEIGHT;
+      if (track.countersExpanded) lane.counters.forEach((counter, ci) => {
+        const cy = y + LANE_HEADER + lane.spanRows * ROW_HEIGHT + COUNTER_HEADER + ci * COUNTER_HEIGHT;
         label(context, counter.name, 12, cy + 13, gutter - 20);
         label(context, `${counter.field} ${formatCounter(counter.min)}…${formatCounter(counter.max)}`, 12, cy + 27, gutter - 20);
       });
@@ -200,7 +210,7 @@
     if (event.button !== 0 || !canvas) return;
     const point = pointer(event);
     if (point.x < gutter) return;
-    drag = { id: event.pointerId, x: event.clientX, range: { ...range }, moved: false };
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, range: { ...range }, moved: false };
     canvas.setPointerCapture(event.pointerId);
     canvas.focus();
     event.preventDefault();
@@ -210,7 +220,7 @@
     pointerAnchor = anchor(point.x);
     if (drag?.id === event.pointerId) {
       const delta = event.clientX - drag.x;
-      if (Math.abs(delta) > 3) drag.moved = true;
+      if (Math.hypot(delta, event.clientY - drag.y) > 3) drag.moved = true;
       if (drag.moved) windowRange = panRange(drag.range, layout, -delta / plotWidth * (drag.range.end - drag.range.start));
       hover = null;
       return;
@@ -250,14 +260,15 @@
     const selectedIndex = Math.max(0, Math.min(lane.events.length - 1, Math.trunc(index) || 0));
     selection = { tid, index: selectedIndex };
     if (collapsed.has(tid)) toggleThread(tid);
+    if (!expandedCounters.has(tid) && lane.counters.some((counter) => counter.points.some((point) => point.index === selectedIndex))) toggleCounters(tid);
     hover = null;
     await tick();
     if (selection?.tid !== tid || selection.index !== selectedIndex) return;
     const track = tracks.find((candidate) => candidate.lane.tid === tid);
     const event = lane.events[selection.index];
     if (!track || !event || !viewport) return;
-    const selectedY = track.top + LANE_HEADER + event.row * ROW_HEIGHT;
-    if (selectedY < viewport.scrollTop || selectedY + ROW_HEIGHT > viewport.scrollTop + height) viewport.scrollTop = Math.max(track.top, selectedY - LANE_HEADER);
+    const selectedY = track.top + eventOffsetY(lane, selection.index);
+    if (selectedY - ROW_HEIGHT / 2 < viewport.scrollTop || selectedY + ROW_HEIGHT / 2 > viewport.scrollTop + height) viewport.scrollTop = Math.max(track.top, selectedY - LANE_HEADER);
     if (event.start !== null && (event.start < range.start || event.start > range.end)) windowRange = panRange(range, layout, event.start - (range.start + range.end) / 2);
   }
   function moveEvent(delta: number) {
@@ -324,6 +335,11 @@
               onclick={() => toggleThread(track.lane.tid)}>
               <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
             </button>
+            {#if !track.collapsed && track.lane.counters.length}
+              <button class="trace-counter-toggle" style:top="{track.top + LANE_HEADER + track.lane.spanRows * ROW_HEIGHT}px"
+                style:height="{COUNTER_HEADER}px" aria-expanded={track.countersExpanded}
+                onclick={() => toggleCounters(track.lane.tid)}><span>{track.countersExpanded ? "▾" : "▸"}</span> Counters ({track.lane.counters.length})</button>
+            {/if}
           {/each}
         </div>
       </div>

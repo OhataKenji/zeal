@@ -3,6 +3,7 @@ import type { Profile, TraceEvent } from "./types.ts";
 export const ROW_HEIGHT = 18;
 export const LANE_HEADER = 20;
 export const COUNTER_HEIGHT = 42;
+export const COUNTER_HEADER = 20;
 
 export interface EventGeometry {
   index: number;
@@ -36,6 +37,26 @@ export interface Timeline {
   end: number;
   height: number;
   lanes: LaneGeometry[];
+}
+
+export function counterPointY(lane: LaneGeometry, seriesIndex: number, value: number): number {
+  const counter = lane.counters[seriesIndex];
+  const top =
+    LANE_HEADER + lane.spanRows * ROW_HEIGHT + COUNTER_HEADER + seriesIndex * COUNTER_HEIGHT;
+  return (
+    top +
+    COUNTER_HEIGHT -
+    5 -
+    ((value - counter.min) / (counter.max - counter.min || 1)) * (COUNTER_HEIGHT - 12)
+  );
+}
+
+export function eventOffsetY(lane: LaneGeometry, eventIndex: number): number {
+  for (const [seriesIndex, counter] of lane.counters.entries()) {
+    const point = counter.points.find((candidate) => candidate.index === eventIndex);
+    if (point) return counterPointY(lane, seriesIndex, point.value);
+  }
+  return LANE_HEADER + lane.events[eventIndex].row * ROW_HEIGHT + ROW_HEIGHT / 2;
 }
 
 export function numeric(value: unknown): number | null {
@@ -201,7 +222,12 @@ export function layoutProfile(profile: Profile): Timeline {
     });
     const spanRows = stackSpans(events);
     const counters = [...series.values()];
-    const height = LANE_HEADER + spanRows * ROW_HEIGHT + counters.length * COUNTER_HEIGHT + 8;
+    const height =
+      LANE_HEADER +
+      spanRows * ROW_HEIGHT +
+      (counters.length ? COUNTER_HEADER : 0) +
+      counters.length * COUNTER_HEIGHT +
+      8;
     const result = { tid: lane.tid, name: lane.name, top, height, spanRows, events, counters };
     top += height;
     return result;
@@ -271,17 +297,33 @@ export function timeTicks(range: TimeRange, width: number): number[] {
   const base = 10 ** Math.floor(Math.log10(target));
   const step = [1, 2, 5, 10].find((factor) => factor * base >= target)! * base;
   const ticks: number[] = [];
-  for (let index = Math.ceil(range.start / step); index * step <= range.end; index++)
-    ticks.push(index === 0 ? 0 : index * step);
+  const first = Math.ceil(range.start / step) * step;
+  // Absolute timestamps may exceed integer precision at a narrow zoom. An
+  // incrementing absolute tick index could then never advance. Bound work by
+  // viewport width and emit only representable, strictly increasing times.
+  const limit = Math.max(2, Math.ceil(width / 90) + 2);
+  for (let offset = 0; offset < limit; offset++) {
+    const time = first + offset * step;
+    if (time > range.end) break;
+    if (time >= range.start && (!ticks.length || time > ticks[ticks.length - 1]))
+      ticks.push(time || 0);
+  }
   return ticks;
 }
 
-export function visibleTracks(lanes: LaneGeometry[], collapsed: ReadonlySet<number>) {
+export function visibleTracks(
+  lanes: LaneGeometry[],
+  collapsed: ReadonlySet<number>,
+  expandedCounters: ReadonlySet<number> = new Set(),
+) {
   let top = 0;
   return lanes.map((lane, index) => {
     const closed = collapsed.has(lane.tid);
-    const height = closed ? LANE_HEADER : lane.height;
-    const track = { lane, index, top, height, collapsed: closed };
+    const countersExpanded = expandedCounters.has(lane.tid);
+    const height = closed
+      ? LANE_HEADER
+      : lane.height - (countersExpanded ? 0 : lane.counters.length * COUNTER_HEIGHT);
+    const track = { lane, index, top, height, collapsed: closed, countersExpanded };
     top += height;
     return track;
   });

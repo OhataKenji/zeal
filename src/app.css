@@ -672,6 +672,12 @@ ul.list li:last-child {
   color: #8a949c;
   margin-right: 3px;
 }
+.trace-thread-labels .trace-counter-toggle {
+  padding-left: 16px;
+  background: #f3f5f6;
+  font-weight: 400;
+  color: #77828a;
+}
 .trace-thread-labels small {
   font-size: 8px;
   font-weight: 400;
