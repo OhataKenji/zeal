@@ -59,7 +59,7 @@ jobs:
               - '!renovate.json'
 
   frontend:
-    name: frontend (check / format / lint / build)
+    name: frontend (check / test / format / lint / build)
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -76,6 +76,9 @@ jobs:
 
       - name: Type check (svelte-check + tsc)
         run: pnpm check
+
+      - name: Frontend tests
+        run: pnpm test
 
       - name: Format check (oxfmt)
         run: pnpm exec oxfmt --check

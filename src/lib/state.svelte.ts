@@ -1,25 +1,48 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppState } from "./types";
+import { createSession, emptyView } from "./session";
 
-// The core pushes a full AppStateDto as the "app-state" event on every change;
-// get_state provides the initial value. There is no other channel.
-export const app = $state<{ state: AppState | null }>({ state: null });
+// Raw profiles avoid deep proxying. The session replaces the view; timeline
+// geometry is derived separately from the original event fields.
+let view = $state.raw(emptyView());
+export const app = {
+  get view() {
+    return view;
+  },
+  get state() {
+    return view.state;
+  },
+};
 
-export async function init(): Promise<void> {
-  await listen<AppState>("app-state", (e) => {
-    app.state = e.payload;
-  });
-  app.state = await invoke<AppState>("get_state");
+function newSession() {
+  return createSession(
+    {
+      invoke,
+      listen: <T>(event: string, callback: (payload: T) => void) =>
+        listen<T>(event, (e) => callback(e.payload)),
+    },
+    (next) => {
+      view = next;
+    },
+    (callback) => {
+      const frame = requestAnimationFrame(callback);
+      return () => cancelAnimationFrame(frame);
+    },
+  );
 }
 
-export async function openWorkspace(path: string): Promise<void> {
-  app.state = await invoke<AppState>("open_workspace", { path });
+export let session = newSession();
+
+export function connect() {
+  session.dispose();
+  view = emptyView();
+  session = newSession();
+  void session.init();
+  return session.dispose;
 }
 
-export function refresh(): Promise<void> {
-  return invoke("refresh");
-}
+export const openWorkspace = (path: string) => session.openWorkspace(path);
+export const refresh = () => session.refresh();
 
 export function openLocation(path: string): Promise<void> {
   return invoke("open_location", { path });
