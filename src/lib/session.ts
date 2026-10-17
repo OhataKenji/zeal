@@ -65,6 +65,7 @@ export function createSession(
   let workspaceGeneration = 0;
   let listGeneration = 0;
   let detailGeneration = 0;
+  let awaitingRunState: string | null = null;
   const subscriptions: (() => void)[] = [];
   const logs = new Map<string, string[]>();
   const capturedFromStart = new Set<string>();
@@ -89,7 +90,7 @@ export function createSession(
     // survive even if the core has already reported completion.
     if (view.starting) return;
     for (const id of new Set([...logs.keys(), ...capturedFromStart])) {
-      if (id !== view.state?.running && id !== view.selectedRun) {
+      if (id !== view.state?.running && id !== view.selectedRun && id !== awaitingRunState) {
         logs.delete(id);
         capturedFromStart.delete(id);
       }
@@ -118,7 +119,7 @@ export function createSession(
     const workspace = workspaceGeneration;
     // Do not parse observations still being written. Completed reads replace
     // live output, never append to it (run-log has no offset for deduplication).
-    if (!id || id === view.state?.running) return;
+    if (!id || view.starting || awaitingRunState || id === view.state?.running) return;
     update({ detailLoading: true, detailError: null });
     try {
       const detail = await transport.invoke<RunDetail>("get_run", { id });
@@ -145,6 +146,8 @@ export function createSession(
   function acceptState(state: AppState) {
     if (disposed) return;
     const before = view.state;
+    const resumed = awaitingRunState;
+    awaitingRunState = null;
     ++stateRevision;
     if (state.workspace !== before?.workspace) {
       ++workspaceGeneration;
@@ -162,12 +165,14 @@ export function createSession(
         liveLog: "",
       });
     }
-    update({ state });
+    update({ state, ...(resumed ? { ready: true, error: null } : {}) });
     releaseHiddenLogs();
-    if (state.workspace !== before?.workspace || state.running !== before?.running) {
+    if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
-    if (before?.running && before.running !== state.running) {
+    if (resumed) {
+      void loadDetail();
+    } else if (before?.running && before.running !== state.running) {
       if (view.selectedRun === before.running) {
         void loadDetail();
       }
@@ -214,26 +219,53 @@ export function createSession(
   async function start(cmd: "build" | "test", target: string) {
     if (!canSend(view, target)) return;
     const workspace = workspaceGeneration;
+    let didStart = false;
     update({ starting: true, error: null });
     try {
       const record = await transport.invoke<RunRecord>("start_run", { cmd, target: target.trim() });
       if (disposed || workspace !== workspaceGeneration) return;
+      didStart = true;
       capturedFromStart.add(record.id);
-      // The run may already have finished before start_run's reply. Never
-      // write that reply back into the authoritative running state.
       update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
       selectRun(record.id);
+      // Invoke responses and events use different Tauri delivery paths. The
+      // reply may precede its running event, so reconcile before deciding to
+      // read completed files. Events received during this read take priority.
+      const revision = stateRevision;
+      try {
+        const state = await transport.invoke<AppState>("get_state");
+        if (disposed || workspace !== workspaceGeneration) return;
+        if (revision === stateRevision) acceptState(state);
+      } catch (error) {
+        if (workspace === workspaceGeneration && revision === stateRevision) {
+          awaitingRunState = record.id;
+          update({
+            ready: false,
+            error: `実行は開始済みです。状態の取得に失敗しました。次の通知を待っています: ${String(error)}`,
+          });
+        }
+      }
+      // The run may already have finished before start_run's reply. Never
+      // write that reply back into the authoritative running state.
       void loadRuns();
     } catch (error) {
       if (workspace === workspaceGeneration) update({ error: String(error) });
     } finally {
       update({ starting: false });
       releaseHiddenLogs();
+      if (didStart && !disposed && workspace === workspaceGeneration && view.ready)
+        void loadDetail();
     }
   }
 
   async function openWorkspace(path: string) {
-    if (view.opening || view.starting || view.state?.running || view.state?.ingest === "running") {
+    if (
+      !view.ready ||
+      view.opening ||
+      view.starting ||
+      view.state?.running ||
+      view.state?.ingest === "running"
+    ) {
       throw new Error("Bazel の処理が終わってから workspace を変更してください");
     }
     update({ opening: true });

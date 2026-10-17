@@ -20,7 +20,7 @@
   let targetField = $state("");
   let cmd = $state<"build" | "test">("build");
   let switchingWs = $state(false);
-  const busy = $derived(app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
+  const busy = $derived(!app.view.ready || app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
 
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.

@@ -37,6 +37,9 @@ function deferred<T>() {
 
 function harness(initial = Promise.resolve(idle)) {
   let view = emptyView();
+  let coreState = idle;
+  let initialRequested = false;
+  let nextState: Promise<AppState> | undefined;
   const listeners = new Map<string, (payload: unknown) => void>();
   const pending: {
     command: string;
@@ -50,7 +53,13 @@ function harness(initial = Promise.resolve(idle)) {
     invoke: <T>(command: string, args?: Record<string, unknown>) => {
       if (command === "get_state") {
         stateRequested.resolve();
-        return initial as Promise<T>;
+        if (!initialRequested) {
+          initialRequested = true;
+          return initial as Promise<T>;
+        }
+        const response = nextState ?? Promise.resolve(coreState);
+        nextState = undefined;
+        return response as Promise<T>;
       }
       const reply = deferred<unknown>();
       pending.push({ command, args, reply });
@@ -86,7 +95,16 @@ function harness(initial = Promise.resolve(idle)) {
     pending,
     removed,
     stateRequested: stateRequested.promise,
-    emit: (name: string, payload: unknown) => listeners.get(name)?.(payload),
+    emit: (name: string, payload: unknown) => {
+      if (name === "app-state") coreState = payload as AppState;
+      listeners.get(name)?.(payload);
+    },
+    setCore: (state: AppState) => {
+      coreState = state;
+    },
+    nextStateReply: (reply: Promise<AppState>) => {
+      nextState = reply;
+    },
     flush: () => frames.splice(0).forEach((frame) => frame()),
   };
 }
@@ -155,6 +173,73 @@ test("run completing before start response still opens completed detail", async 
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
+});
+
+test("start response before the running event reconciles state without reading or dropping active logs", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.setCore({ ...idle, running: record.id });
+  h.emit("run-log", { id: record.id, line: "early output" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  assert.equal(h.view.state?.running, record.id);
+  assert.equal(h.view.liveLog, "early output");
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
+  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("run-log", { id: record.id, line: "later output" });
+  h.flush();
+  assert.equal(h.view.liveLog, "early output\nlater output");
+});
+
+test("completion event during post-start reconciliation wins over its stale running response", async () => {
+  const h = harness();
+  await h.session.init();
+  const reconciled = deferred<AppState>();
+  h.nextStateReply(reconciled.promise);
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await settle();
+  h.emit("app-state", idle);
+  reconciled.resolve({ ...idle, running: record.id });
+  await started;
+  assert.equal(h.view.state?.running, null);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.equal(h.view.detail?.record.exitCode, 0);
+});
+
+test("failed state reconciliation preserves the started run and logs until a later state event", async () => {
+  const h = harness();
+  await h.session.init();
+  const reconciled = deferred<AppState>();
+  h.nextStateReply(reconciled.promise);
+  const started = h.session.start("build", "//:app");
+  h.emit("run-log", { id: record.id, line: "already running" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await settle();
+  reconciled.reject(new Error("state unavailable"));
+  await started;
+  assert.match(h.view.error!, /実行は開始済み/);
+  assert.equal(canSend(h.view, "//:app"), false);
+  assert.equal(h.view.runs[0].id, record.id);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
+  h.session.selectRun(null);
+  h.session.selectRun(record.id);
+  assert.equal(h.view.liveLog, "already running");
+  h.emit("app-state", idle);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.equal(h.view.error, null);
+  assert.equal(h.view.detail?.record.exitCode, 0);
+  assert.equal(canSend(h.view, "//:app"), true);
 });
 
 test("a run finishing offscreen releases its temporary live output", async () => {
