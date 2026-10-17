@@ -96,12 +96,17 @@ DB への集計値の保存と retention は M4 で導入し、この表示契�
 
 lane のキーは `tid` とし、ラベルには `thread_name` metadata を使う。
 同じ名前でも異なる `tid` はまとめず、event を持つ全スレッドを表示する。
+表示スレッドは `tid` の昇順に並べる。
 描画 event は file の順序と field を保ち、`ph` や `cat` で execution に限定しない。
 
 表示は trace viewer の作法に従う。
-同じ lane の重なる span は段に積み、`ph: "i"` は mark、`ph: "C"` の counter は name ごとの系列として描く。
-色は `cname`、なければ name の hash を使う。
-tooltip は event の field を表示し、action ごとの所要時間を別の一覧へ複製しない。
+同じ lane の重なる span は段に積み、`ph: "i"` は mark、`ph: "C"` の counter は name と数値 field ごとの系列として描く。
+counter は全スレッドの下へまとめ、アクション数、Bazel の CPU・メモリ、システムの CPU・メモリ・負荷、送受信の順に表示する。
+未知の系列はその後へ name と field の順に並べ、同名でも異なる `tid` の系列はまとめない。
+span と mark の色は `cname`、なければ name をキーにした hash で決める。Chrome 固有の色表は再現しない。
+counter の線は読みやすい濃い灰色に統一する。
+event を選ぶと、チャートの下に通常の HTML で元の field を表示する。
+floating panel や外枠で囲む表示は使わず、action ごとの所要時間を別の一覧へ複製しない。
 
 phase の帯は、profile の `build phase marker` を時刻順に並べ、次の marker までを一区間にする。
 最後の区間は `Finishing` event までとする。
