@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   changes:
-    name: Detect changed areas
+    name: Detect CI changes
     runs-on: ubuntu-latest
     # paths-filter reads the changed-file list through the pull request API.
     permissions:
@@ -144,15 +144,3 @@ jobs:
       - name: cargo test
         run: cargo test
         working-directory: src-tauri
-
-  # Single required check for the branch ruleset. Jobs skipped by
-  # paths-filter count as success; failed or cancelled ones do not.
-  ci-ok:
-    name: ci-ok
-    needs: [changes, frontend, rust, gitleaks]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check needed jobs
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
