@@ -126,14 +126,6 @@
           {#if record.finishedAt !== undefined}<dt>Wall time</dt><dd>{((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s</dd>{/if}
         </dl>
       {/if}
-      <h2 class="panel-heading">Observations</h2>
-      {#if view.detail}
-        <dl class="run-details">
-          <dt>Log</dt><dd>{sectionMessage(view.detail.log)}</dd>
-          <dt>BEP</dt><dd>{sectionMessage(view.detail.bep)}</dd>
-          <dt>Profile</dt><dd>{sectionMessage(view.detail.profile)}</dd>
-        </dl>
-      {:else}<p class="dim">{running ? "記録中。完了後に成果物を読み込みます。" : "Record not loaded."}</p>{/if}
     {/if}
   </div>
 </div>
