@@ -24,6 +24,10 @@ function newSession() {
     (next) => {
       view = next;
     },
+    (callback) => {
+      const frame = requestAnimationFrame(callback);
+      return () => cancelAnimationFrame(frame);
+    },
   );
 }
 

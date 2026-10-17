@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { app, connect, refresh, session } from "./lib/state.svelte";
+  import { canSend } from "./lib/session";
   import { outcome } from "./lib/run";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
@@ -20,7 +21,7 @@
   let targetField = $state("");
   let cmd = $state<"build" | "test">("build");
   let switchingWs = $state(false);
-  const busy = $derived(!app.view.ready || app.view.opening || !!st?.running || st?.ingest === "running");
+  const busy = $derived(!app.view.ready || app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
 
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.
@@ -115,7 +116,7 @@
           {/each}
         </ul>
         {#if app.view.runsError}<p class="err">{app.view.runsError}</p><button class="btn" onclick={session.loadRuns}>retry</button>
-        {:else if app.view.runs.length === 0}<p class="dim">保存済みの run はありません</p>{/if}
+        {:else if app.view.runs.length === 0}<p class="dim">Send で build / test を実行</p>{/if}
       </div>
     {/if}
   </section>
@@ -173,8 +174,9 @@
       aria-label="Target label or pattern"
       bind:value={targetField}
       placeholder="//pkg:target"
+      onkeydown={(event) => { if (event.key === "Enter" && !switchingWs) void session.start(cmd, targetField); }}
     />
-    <button class="btn primary" disabled>Send</button>
+    <button class="btn primary" disabled={switchingWs || !canSend(app.view, targetField)} onclick={() => session.start(cmd, targetField)}>Send</button>
     {#if st?.workspace}
       <button class="btn" onclick={refresh} disabled={busy}>
         refresh
