@@ -1,0 +1,259 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  eventColor,
+  layoutProfile,
+  timeTicks,
+  visibleTracks,
+  LANE_HEADER,
+  formatRulerTime,
+} from "../src/lib/timeline.ts";
+import type { Profile } from "../src/lib/types.ts";
+
+test("same-named threads stay separate and raw fields/file order survive layout", () => {
+  const profile: Profile = {
+    phases: [{ name: "Load, analyze dependencies and build artifacts", startUs: -10, endUs: 80 }],
+    lanes: [
+      {
+        tid: 1,
+        name: "worker",
+        events: [
+          { ph: "X", ts: 10, dur: 20, args: { target: "//:app" }, custom: true },
+          { ph: "i", ts: -20 },
+        ],
+      },
+      { tid: 2, name: "worker", events: [{ ph: "X", ts: 1, dur: 4 }] },
+    ],
+  };
+  const before = JSON.stringify(profile);
+  const result = layoutProfile(profile);
+  assert.deepEqual(
+    result.lanes.map((lane) => lane.tid),
+    [1, 2],
+  );
+  assert.equal(result.start, -20);
+  assert.equal(result.end, 80);
+  assert.equal(result.lanes[0].events[0].event, profile.lanes[0].events[0]);
+  assert.equal(result.lanes[0].events[1].event, profile.lanes[0].events[1]);
+  assert.equal(JSON.stringify(profile), before);
+});
+
+test("overlapping spans stack and reuse rows only after the previous span ends", () => {
+  const result = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "",
+        events: [
+          { ph: "X", ts: 4, dur: 4 },
+          { ph: "X", ts: 0, dur: 10 },
+          { ph: "X", ts: 1, dur: 2 },
+          { ph: "X", ts: 8, dur: 1 },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    result.lanes[0].events.map((event) => event.row),
+    [1, 0, 1, 1],
+  );
+  assert.equal(result.lanes[0].spanRows, 2);
+});
+
+test("instant and unknown events are marks and missing timestamps remain inspectable", () => {
+  const result = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "",
+        events: [
+          { ph: "i", ts: 1 },
+          { ph: "s", ts: 2, id: "flow" },
+          { name: "untimed", custom: [1, 2] },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    result.lanes[0].events.map((event) => event.kind),
+    ["mark", "mark", "mark"],
+  );
+  assert.equal(result.lanes[0].events[2].start, null);
+  assert.deepEqual(result.lanes[0].events[2].event.custom, [1, 2]);
+});
+
+test("nested spans reuse the shallowest row and equal starts place the outer span first", () => {
+  const events = [
+    { ph: "X", ts: 0, dur: 100 },
+    { ph: "X", ts: 10, dur: 20 },
+    { ph: "X", ts: 12, dur: 8 },
+    { ph: "X", ts: 35, dur: 5 },
+    { ph: "X", ts: 45, dur: 10 },
+    { ph: "X", ts: 45, dur: 30 },
+    { ph: "X", ts: 60, dur: 30 },
+  ];
+  const lane = layoutProfile({ phases: [], lanes: [{ tid: 1, name: "worker", events }] }).lanes[0];
+  assert.deepEqual(
+    lane.events.map((event) => event.row),
+    [0, 1, 2, 1, 2, 1, 2],
+  );
+  assert.deepEqual(
+    lane.events.map((event) => event.event),
+    events,
+  );
+  assert.equal(lane.spanRows, 3);
+});
+
+test("ruler uses readable ticks across negative time, zoom and narrow viewports", () => {
+  assert.deepEqual(
+    timeTicks({ start: -100, end: 900 }, 900),
+    [-100, 0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
+  );
+  assert.deepEqual(timeTicks({ start: 120, end: 220 }, 450), [120, 140, 160, 180, 200, 220]);
+  assert.deepEqual(timeTicks({ start: -100, end: 900 }, 0), [0]);
+  const seconds = { start: -10, end: 5_000_000 };
+  assert.equal(formatRulerTime(0, seconds), "0s");
+  assert.equal(formatRulerTime(1_000_000, seconds), "1s");
+  assert.equal(formatRulerTime(500, { start: 0, end: 10_000 }), "0.5ms");
+});
+
+test("narrow zoom at large absolute timestamps generates bounded, distinct ruler ticks", () => {
+  const range = { start: 1.8e15, end: 1.8e15 + 1 };
+  const ticks = timeTicks(range, 900);
+  assert.ok(ticks.length > 0 && ticks.length <= 12);
+  assert.ok(
+    ticks.every((time) => Number.isFinite(time) && time >= range.start && time <= range.end),
+  );
+  assert.ok(ticks.every((time, index) => index === 0 || time > ticks[index - 1]));
+});
+
+test("collapsing a thread only changes track geometry, preserving all threads and events", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      { tid: 1, name: "worker", events: [{ ph: "X", ts: 0, dur: 100 }] },
+      { tid: 2, name: "worker", events: [{ ph: "i", ts: 20 }] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set([1]));
+  assert.equal(tracks[0].height, LANE_HEADER);
+  assert.equal(tracks[1].top, LANE_HEADER);
+  assert.equal(tracks[1].height, layout.lanes[1].height);
+  assert.equal(tracks[0].lane.events, layout.lanes[0].events);
+  assert.deepEqual(
+    tracks.map((track) => track.lane.tid),
+    [1, 2],
+  );
+  assert.equal(visibleTracks(layout.lanes, new Set())[1].top, layout.lanes[0].height);
+});
+
+test("displayed threads follow numeric tid order regardless of names", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      { tid: 10, name: "Critical Path", events: [] },
+      { tid: 2, name: "worker-10", events: [] },
+      { tid: 1, name: "Main Thread", events: [] },
+      { tid: 3, name: "Garbage Collector", events: [] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set());
+  assert.deepEqual(
+    tracks.map((track) => track.lane.tid),
+    [1, 2, 3, 10],
+  );
+});
+
+test("same-named displayed threads retain distinct tids and event references", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      { tid: 8, name: "worker", events: [{ ph: "i", ts: 10 }] },
+      { tid: 1, name: "Main Thread", events: [] },
+      { tid: 3, name: "worker", events: [{ ph: "i", ts: 20 }] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set());
+  assert.deepEqual(
+    tracks.map((track) => track.lane.tid),
+    [1, 3, 8],
+  );
+  assert.equal(tracks[1].lane, layout.lanes[2]);
+  assert.equal(tracks[2].lane, layout.lanes[0]);
+});
+
+test("display sorting does not mutate source lanes or raw event order", () => {
+  const profile: Profile = {
+    phases: [],
+    lanes: [
+      {
+        tid: 2,
+        name: "worker-2",
+        events: [
+          { ph: "i", ts: 20 },
+          { ph: "i", ts: 10 },
+        ],
+      },
+      { tid: 1, name: "worker-1", events: [] },
+    ],
+  };
+  const original = JSON.stringify(profile);
+  const layout = layoutProfile(profile);
+  const lanes = [...layout.lanes];
+  const tracks = visibleTracks(layout.lanes, new Set());
+  assert.deepEqual(layout.lanes, lanes);
+  assert.equal(JSON.stringify(profile), original);
+  assert.equal(tracks[1].lane.events[0].event, profile.lanes[0].events[0]);
+  assert.equal(tracks[1].lane.events[1].event, profile.lanes[0].events[1]);
+});
+
+test("displayed track positions follow sorted order and collapsed heights", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      { tid: 30, name: "Main Thread", events: [] },
+      { tid: 10, name: "worker", events: [] },
+      { tid: 20, name: "Critical Path", events: [] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set([10]));
+  assert.deepEqual(
+    tracks.map((track) => [track.lane.tid, track.top]),
+    [
+      [10, 0],
+      [20, 20],
+      [30, 66],
+    ],
+  );
+});
+
+test("event colors use cname before name and stay stable", () => {
+  assert.equal(
+    eventColor({ name: "one", cname: "good" }),
+    eventColor({ name: "two", cname: "good" }),
+  );
+  assert.equal(eventColor({ name: "stable" }), eventColor({ name: "stable" }));
+  assert.notEqual(eventColor({ name: "one" }), eventColor({ name: "two" }));
+  assert.equal(eventColor({ cname: "custom" }), eventColor({ name: "custom" }));
+  assert.equal(eventColor({}), eventColor({ name: "(unnamed event)" }));
+});
+
+test("large trace retains all threads and events without a rendering limit", () => {
+  const profile: Profile = {
+    phases: [],
+    lanes: Array.from({ length: 100 }, (_, tid) => ({
+      tid,
+      name: "worker",
+      events: Array.from({ length: 500 }, (_, ts) => ({ ph: "X", ts, dur: 2 })),
+    })),
+  };
+  const result = layoutProfile(profile);
+  assert.equal(result.lanes.length, 100);
+  assert.equal(
+    result.lanes.reduce((count, lane) => count + lane.events.length, 0),
+    50_000,
+  );
+  assert.equal(result.lanes[99].events[499].event, profile.lanes[99].events[499]);
+});
