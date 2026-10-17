@@ -3,7 +3,7 @@
   import type { Profile } from "./types";
   import {
     COUNTER_HEIGHT, COUNTER_HEADER, LANE_HEADER, ROW_HEIGHT, eventColor, eventTextColor,
-    eventName, formatTime, layoutProfile, panRange, zoomRange, clampRange,
+    eventName, formatTime, layoutProfile, panRange, zoomRange,
     timeTicks, timeToX, xToTime, counterPointY, eventOffsetY, formatRulerTime, formatCounter, visibleTracks, type TimeRange,
   } from "./timeline";
 
@@ -19,7 +19,6 @@
   let selection = $state<{ tid: number; index: number } | null>(null);
   const selectedLane = $derived(layout.lanes.find((lane) => lane.tid === selection?.tid));
   const selected = $derived(selectedLane?.events[selection?.index ?? 0]);
-  const browserLane = $derived(selectedLane ?? layout.lanes[0]);
 
   let canvas = $state<HTMLCanvasElement>();
   let ruler = $state<HTMLCanvasElement>();
@@ -240,10 +239,11 @@
   }
   function cancelDrag() { drag = null; }
 
-  async function selectEvent(tid: number, index: number) {
-    const lane = layout.lanes.find((candidate) => candidate.tid === tid);
-    if (!lane) return;
-    const selectedIndex = Math.max(0, Math.min(lane.events.length - 1, Math.trunc(index) || 0));
+  async function moveEvent(delta: number) {
+    if (!selection || !selectedLane) return;
+    const lane = selectedLane;
+    const tid = lane.tid;
+    const selectedIndex = Math.max(0, Math.min(lane.events.length - 1, selection.index + delta));
     selection = { tid, index: selectedIndex };
     if (collapsed.has(tid)) toggleThread(tid);
     if (!expandedCounters.has(tid) && lane.counters.some((counter) => counter.points.some((point) => point.index === selectedIndex))) toggleCounters(tid);
@@ -257,23 +257,24 @@
     if (selectedY - ROW_HEIGHT / 2 < viewport.scrollTop || selectedY + ROW_HEIGHT / 2 > viewport.scrollTop + height) viewport.scrollTop = Math.max(track.top, selectedY - LANE_HEADER);
     if (event.start !== null && (event.start < range.start || event.start > range.end)) windowRange = panRange(range, layout, event.start - (range.start + range.end) / 2);
   }
-  function moveEvent(delta: number) {
-    if (browserLane) void selectEvent(browserLane.tid, (selection?.index ?? 0) + delta);
-  }
-  function zoomSelection() {
-    if (selected?.start === null || selected?.start === undefined) return;
-    const duration = selected.end! - selected.start;
-    const padding = Math.max(duration * 0.08, duration === 0 ? span / 20 : 1);
-    windowRange = clampRange({ start: selected.start - padding, end: selected.end! + padding }, layout);
+  function closeSelection() {
+    selection = null;
+    hover = null;
+    canvas?.focus();
   }
   function keydown(event: KeyboardEvent) {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "Escape") {
+      closeSelection();
+      event.preventDefault();
+      return;
+    }
+    if (event.currentTarget !== canvas || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === "w" || key === "+" || key === "=") zoom(1.5, pointerAnchor);
     else if (key === "s" || key === "-") zoom(1 / 1.5, pointerAnchor);
     else if (key === "a" || key === "d") pan(span * (key === "a" ? -0.15 : 0.15));
     else if (key === "f") fit();
-    else if (key === "arrowleft" || key === "arrowright") moveEvent(key === "arrowleft" ? -1 : 1);
+    else if (key === "arrowleft" || key === "arrowright") void moveEvent(key === "arrowleft" ? -1 : 1);
     else return;
     event.preventDefault();
   }
@@ -292,7 +293,7 @@
     </div>
   </div>
   <div class="trace-axis"><canvas bind:this={ruler} style:width="{width}px" style:height="26px" aria-label="Timeline time ruler"></canvas></div>
-  <div class="trace-phase-row" style:width="{width}px">
+  <div class="trace-phase-row" style:width="{width}px" title="Original phase markers. Skymeld may overlap analysis and execution.">
     <span style:width="{gutter}px">Build phases</span>
     <div class="trace-phases" style:left="{gutter}px" style:width="{plotWidth}px">
       {#each profile.phases as phase}
@@ -310,7 +311,7 @@
       onscroll={() => { if (viewport) scrollTop = viewport.scrollTop; hover = null; }}>
       <div class="trace-scroll-content" style:height="{Math.max(height, totalHeight)}px">
         <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0"
-          aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events."
+          aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
           onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
           onpointercancel={cancelDrag} onlostpointercapture={cancelDrag}
           onpointerleave={() => hover = null} onkeydown={keydown}></canvas>
@@ -330,18 +331,16 @@
         </div>
       </div>
     </div>
-    {#if hover && hovered}
+    {#if !selection && hover && hovered}
       <div class="trace-tooltip" style:left="{Math.max(gutter, Math.min(width - 250, hover.x + 12))}px" style:top="{Math.max(0, Math.min(height - 74, hover.y + 12))}px">
         <strong>{eventName(hovered.event)}</strong>
         <span>{hovered.start === null ? "No timestamp" : formatTime(hovered.start)}{#if hovered.kind === "span"} · {formatTime(hovered.end! - hovered.start!)}{/if}</span>
         {#if typeof hovered.event.cat === "string"}<span>{hovered.event.cat}</span>{/if}
       </div>
     {/if}
-  </div>
-  <div class="trace-bottom">
-    <div class="trace-selection">
-      {#if selected && selectedLane}
-        <div class="trace-selection-title"><strong>{eventName(selected.event)}</strong><button class="link" disabled={selected.start === null} onclick={zoomSelection}>Zoom to selection</button></div>
+    {#if selected && selectedLane}
+      <dialog open class="trace-selection" aria-labelledby="trace-event-title" onkeydown={keydown}>
+        <div class="trace-selection-title"><strong id="trace-event-title">{eventName(selected.event)}</strong><button class="btn" title="Close (Escape)" onclick={closeSelection}>Close</button></div>
         <dl>
           <dt>Thread</dt><dd>{selectedLane.name || "thread"} · tid {selectedLane.tid}</dd>
           <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
@@ -349,25 +348,7 @@
           {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
         </dl>
         <details class="trace-raw"><summary>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
-      {:else}<p class="trace-select-hint">Select an event to inspect its timing and fields.</p>{/if}
-    </div>
-    <details class="trace-browser">
-      <summary>Browse all events</summary>
-      <div class="trace-browser-controls">
-        <label>Thread <select value={browserLane?.tid} onchange={(event) => void selectEvent(Number(event.currentTarget.value), 0)}>
-          {#each layout.lanes as lane (lane.tid)}<option value={lane.tid}>{lane.name || "thread"} · tid {lane.tid}</option>{/each}
-        </select></label>
-        <button disabled={!browserLane || (selection?.index ?? 0) <= 0} onclick={() => moveEvent(-1)}>←</button>
-        <label>Event <input type="number" min="1" max={browserLane?.events.length ?? 1} value={(selection?.index ?? 0) + 1}
-          onchange={(event) => { if (browserLane) void selectEvent(browserLane.tid, Number(event.currentTarget.value) - 1); }} /> / {browserLane?.events.length ?? 0}</label>
-        <button disabled={!browserLane || (selection?.index ?? 0) >= browserLane.events.length - 1} onclick={() => moveEvent(1)}>→</button>
-      </div>
-      <p>File order. Events without a timestamp remain available here.</p>
-    </details>
-    <details class="trace-notes"><summary>Controls &amp; phase markers</summary>
-      <p>Scroll: threads. Drag: pan. W/S: zoom. A/D: pan. F: fit.</p>
-      <p>Skymeld では analysis と execution が重なります。帯は元の marker 名です。thread の時間の合計は run の経過時間ではありません。</p>
-      {#each profile.phases as phase}<p>{phase.name} <span>{formatTime(phase.startUs)} → {formatTime(phase.endUs)}</span></p>{/each}
-    </details>
+      </dialog>
+    {/if}
   </div>
 </div>
