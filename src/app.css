@@ -312,96 +312,53 @@ ul.list li:last-child {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  color: #263039;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
 }
 .run-page code {
-  font-family: Menlo, Consolas, monospace;
-  font-size: 0.92em;
+  font: inherit;
 }
 .run-summary {
   flex: 0 0 auto;
-  padding: 18px 22px 17px;
-  background: #f8f9fa;
-}
-.run-kicker {
-  color: #7c868e;
-  font-size: 11px;
-  margin: 0 0 7px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  padding: 14px;
 }
 .run-summary h1 {
-  color: #202529;
-  font-size: 23px;
-  letter-spacing: -0.025em;
-  font-weight: 650;
+  font-size: 17px;
+  font-weight: 600;
   line-height: 1.25;
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   overflow-wrap: anywhere;
 }
 .run-facts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  column-gap: 20px;
+  column-gap: 14px;
   row-gap: 6px;
   font-size: 12px;
-  color: #67717a;
-}
-.run-result {
-  color: #46535e;
+  color: var(--note);
 }
 .success {
-  color: #4d8b36;
+  color: var(--ink);
 }
 .failed {
-  color: #b34d4d;
-}
-.run-status-rule {
-  height: 3px;
-  flex: 0 0 3px;
-  background: #b9c1c7;
-}
-.run-status-rule.success {
-  background: #80b851;
-}
-.run-status-rule.failed {
-  background: #d16b64;
-}
-.run-status-rule.running {
-  background: #6897c5;
+  color: var(--err);
 }
 .run-tabs {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 7px;
-  padding: 14px 20px;
-}
-.run-tab {
-  font: inherit;
-  font-size: 11px;
-  text-transform: uppercase;
-  padding: 7px 14px;
-  border: 1px solid #e1e5e8;
-  border-radius: 18px;
-  color: #727b83;
-  background: #fff;
-  cursor: pointer;
-}
-.run-tab:hover {
-  border-color: #9da7af;
-  color: #29343e;
+  gap: 4px;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--line);
 }
 .run-tab.active {
-  background: #232629;
-  color: #fff;
-  border-color: #232629;
+  background: var(--bg);
+  font-weight: bold;
+  box-shadow: inset 0 -2px var(--ink);
 }
 .panel-loading {
   margin-left: auto;
-  color: #8a939b;
+  color: var(--note);
   font-size: 11px;
 }
 .run-panel {
@@ -410,7 +367,7 @@ ul.list li:last-child {
   display: flex;
   flex-direction: column;
   overflow: auto;
-  padding: 0 20px 20px;
+  padding: 14px;
 }
 .run-panel.timing-panel {
   overflow: hidden;
@@ -419,15 +376,16 @@ ul.list li:last-child {
   margin: 0;
   padding: 8px 12px;
   font-size: 12px;
-  background: #faf8ed;
-  color: #786a3c;
+  background: var(--bg);
+  color: var(--ink);
+  border-left: 2px solid var(--line);
   overflow-wrap: anywhere;
 }
 .run-panel > .run-notice {
   margin-bottom: 10px;
 }
 .panel-empty {
-  color: #7d8790;
+  color: var(--note);
   font-size: 13px;
   padding: 25px 0;
   margin: 0;
@@ -437,16 +395,17 @@ ul.list li:last-child {
   min-height: 150px;
   display: flex;
   flex-direction: column;
-  border-radius: 4px;
-  background: #202225;
-  color: #d6dce2;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
   overflow: hidden;
 }
 .log-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 16px 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
   font-size: 12px;
 }
@@ -456,13 +415,13 @@ ul.list li:last-child {
 .log-toolbar label {
   margin-left: auto;
   font-size: 11px;
-  color: #acb5be;
+  color: var(--note);
   display: flex;
   align-items: center;
   gap: 4px;
 }
 .log-live {
-  color: #91bd74;
+  color: var(--ink);
   font-size: 10px;
 }
 .run-log {
@@ -472,10 +431,10 @@ ul.list li:last-child {
   width: 100%;
   border: 0;
   outline: none;
-  padding: 7px 16px 16px;
+  padding: 10px;
   resize: none;
   background: transparent;
-  color: #d6dce2;
+  color: var(--ink);
   font:
     11px/1.65 Menlo,
     Consolas,
@@ -563,7 +522,6 @@ ul.list li:last-child {
 .trace-browser button {
   background: #fff;
   border: 1px solid #dde2e6;
-  border-radius: 2px;
   padding: 3px 8px;
   font: inherit;
   color: #57636c;
@@ -834,21 +792,9 @@ summary:focus-visible {
   cursor: default;
 }
 @media (max-width: 900px) {
-  .run-summary {
-    padding: 14px 16px;
-  }
-  .run-summary h1 {
-    font-size: 19px;
-  }
   .run-facts {
     gap: 6px 12px;
     font-size: 11px;
-  }
-  .run-panel {
-    padding: 0 14px 14px;
-  }
-  .run-tabs {
-    padding: 12px 14px;
   }
   .trace-toolbar {
     gap: 6px;

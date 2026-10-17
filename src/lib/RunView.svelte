@@ -10,7 +10,7 @@
   const profile = $derived(sectionData(view.detail?.profile));
   const bep = $derived(sectionData(view.detail?.bep));
   const log = $derived(running ? view.liveLog : view.detail ? sectionData(view.detail.log) : view.liveLog || null);
-  const status = $derived(running ? "running" : record?.finishedAt !== undefined && record.exitCode !== undefined ? record.exitCode === 0 ? "success" : "failed" : "unknown");
+  const failed = $derived(record?.finishedAt !== undefined && record.exitCode !== undefined && record.exitCode !== 0);
   const tabs = ["Logs", "Timing", "Targets", "Details"] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
   let logElement = $state<HTMLTextAreaElement>();
@@ -38,10 +38,9 @@
 
 <div class="run-page">
   <header class="run-summary">
-    <p class="run-kicker">Run / {record?.cmd ?? "build"}</p>
     <h1>{record?.target ?? view.selectedRun}</h1>
     <div class="run-facts">
-      <span class="run-result" class:success={status === "success"} class:failed={status === "failed"}>
+      <span class:failed>
         {record ? outcome(record, view.state?.running ?? null) : "? outcome unknown"}
       </span>
       {#if record?.finishedAt !== undefined}
@@ -53,11 +52,9 @@
       {/if}
     </div>
   </header>
-  <div class="run-status-rule {status}"></div>
-
   <div class="run-tabs" role="tablist" aria-label="Run views">
     {#each tabs as tab, index}
-      <button id="run-tab-{tab}" class="run-tab" class:active={active === tab}
+      <button id="run-tab-{tab}" class="btn run-tab" class:active={active === tab}
         role="tab" aria-selected={active === tab} aria-controls="run-panel-{tab}"
         tabindex={active === tab ? 0 : -1} onclick={() => active = tab}
         onkeydown={(event) => tabKey(event, index)}>{tab}</button>

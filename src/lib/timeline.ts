@@ -117,7 +117,7 @@ export function eventColor(event: TraceEvent): string {
   const key = eventName(event);
   let hash = 2166136261;
   for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  return `hsl(${(hash >>> 0) % 360} 42% 72%)`;
+  return `hsl(${205 + ((hash >>> 0) % 18)} 14% ${75 + ((hash >>> 0) % 13)}%)`;
 }
 
 export function eventTextColor(event: TraceEvent): string {
