@@ -22,6 +22,8 @@ pub struct AppStateDto {
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
+    /// Id of the run in flight, if any.
+    pub running: Option<RunId>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -33,6 +35,8 @@ pub struct IngestError {
     pub summary: String,
 }
 
+pub type RunId = String;
+
 pub struct CoreState {
     pub workspace: Option<PathBuf>,
     pub bazel: Option<PathBuf>,
@@ -43,6 +47,8 @@ pub struct CoreState {
     /// coalesced into a single follow-up.
     pub ingest_running: bool,
     pub ingest_pending: bool,
+    /// The run in flight. While set, queries are deferred via `ingest_pending`.
+    pub run: Option<RunId>,
 }
 
 pub struct Core {
@@ -59,6 +65,7 @@ impl Core {
                 last_error: None,
                 ingest_running: false,
                 ingest_pending: false,
+                run: None,
             }),
         }
     }
@@ -74,6 +81,7 @@ impl Core {
             ingest: if st.ingest_running { "running" } else { "idle" },
             snapshot: st.snapshot.as_deref().cloned(),
             last_error: st.last_error.clone(),
+            running: st.run.clone(),
         }
     }
 

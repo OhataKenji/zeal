@@ -2,6 +2,7 @@ pub mod bep;
 mod ingest;
 pub mod label;
 pub mod profile;
+mod runner;
 pub mod snapshot;
 mod state;
 pub mod store;
@@ -11,6 +12,7 @@ pub mod xml;
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use store::RunRecord;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -54,6 +56,28 @@ fn open_workspace(
 #[tauri::command]
 fn refresh(app: AppHandle, core: State<Arc<Core>>) {
     ingest::request(app, core.inner().clone());
+}
+
+/// Start `bazel build|test <target>`. Fails while bazel is busy.
+#[tauri::command]
+fn start_run(
+    app: AppHandle,
+    core: State<Arc<Core>>,
+    cmd: String,
+    target: String,
+) -> Result<RunRecord, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    runner::start(app, core.inner().clone(), &data, &cmd, &target)
+}
+
+/// Runs of the open workspace, newest first.
+#[tauri::command]
+fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
+    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+        return Ok(Vec::new());
+    };
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(store::list(&data, &ws))
 }
 
 /// Open a BUILD/bzl file at its recorded location with the OS default app.
@@ -111,6 +135,8 @@ pub fn run() {
             get_state,
             open_workspace,
             refresh,
+            start_run,
+            list_runs,
             open_location
         ])
         .run(tauri::generate_context!())
