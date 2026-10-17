@@ -9,9 +9,14 @@ import type { Profile } from "../src/lib/types.ts";
 function recordingCanvas() {
   const outlines: number[][] = [];
   const fills: { bounds: number[]; clips: number[][] }[] = [];
+  const strokedLines: number[][] = [];
+  const strokes: { lines: number[][]; clips: number[][] }[] = [];
+  let path: number[][] = [];
   let rectangle: number[] | undefined;
   let clips: number[][] = [];
   const savedClips: number[][][] = [];
+  const strokedArcs: { x: number; y: number; radius: number }[] = [];
+  let pathArcs: typeof strokedArcs = [];
   const lines: number[][] = [];
   let position = [0, 0];
   const canvas = {
@@ -25,6 +30,8 @@ function recordingCanvas() {
       clips = savedClips.pop()!;
     },
     beginPath() {
+      path = [];
+      pathArcs = [];
       rectangle = undefined;
     },
     closePath() {},
@@ -40,24 +47,35 @@ function recordingCanvas() {
       fills.push({ bounds: [x, y, width, height], clips });
     },
     fill() {},
-    stroke() {},
+    stroke() {
+      strokes.push({ lines: path, clips });
+      strokedLines.push(...path);
+      strokedArcs.push(...pathArcs);
+    },
     moveTo(x: number, y: number) {
       position = [x, y];
     },
     lineTo(x: number, y: number) {
       const line = [...position, x, y];
       lines.push(line);
+      path.push(line);
       position = [x, y];
     },
     strokeRect(x: number, y: number, width: number, height: number) {
       outlines.push([x, y, width, height]);
     },
+    arc(x: number, y: number, radius: number) {
+      pathArcs.push({ x, y, radius });
+    },
   };
   return {
     context: canvas as unknown as CanvasRenderingContext2D,
     outlines,
+    strokedArcs,
     lines,
     fills,
+    strokedLines,
+    strokes,
   };
 }
 
@@ -183,6 +201,14 @@ test("equal thread names retain distinct event identities", () => {
   );
 });
 
+test("numeric counters are visible initially without duplicate span-row marks", () => {
+  const { hits } = render([
+    { tid: 7, name: "metrics", events: [{ ph: "C", ts: 10, name: "cpu", args: { usage: 1 } }] },
+  ]);
+
+  assert.deepEqual(hits, [{ x: 106, y: 79, width: 8, height: 8, tid: 7, index: 0 }]);
+});
+
 test("a counter without numeric fields remains selectable as a raw mark", () => {
   const { hits } = render([
     {
@@ -193,6 +219,43 @@ test("a counter without numeric fields remains selectable as a raw mark", () => 
   ]);
 
   assert.deepEqual(hits, [{ x: 128, y: 20, width: 6, height: 18, tid: 7, index: 0 }]);
+});
+
+test("counter tracks expose hits only for points within the visible time range", () => {
+  const { hits } = render([
+    {
+      tid: 7,
+      name: "metrics",
+      events: [
+        { ph: "C", ts: -10, name: "cpu", args: { usage: 1 } },
+        { ph: "C", ts: 50, name: "cpu", args: { usage: 2 } },
+        { ph: "C", ts: 110, name: "cpu", args: { usage: 3 } },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(hits, [{ x: 146, y: 64, width: 8, height: 8, tid: 7, index: 1 }]);
+});
+
+test("the selected counter point receives a ring at its hit center", () => {
+  const { hits, strokedArcs } = render(
+    [
+      {
+        tid: 7,
+        name: "metrics",
+        events: [
+          { ph: "C", ts: 10, name: "cpu", args: { usage: 1 } },
+          { ph: "C", ts: 90, name: "cpu", args: { usage: 3 } },
+        ],
+      },
+    ],
+    { selection: { tid: 7, index: 1 } },
+  );
+
+  assert.deepEqual(
+    strokedArcs.filter(({ radius }) => radius === 4),
+    [{ x: hits[1].x + hits[1].width / 2, y: hits[1].y + hits[1].height / 2, radius: 4 }],
+  );
 });
 
 test("ruler ticks and timeline grid lines share the same horizontal positions", () => {
@@ -224,4 +287,128 @@ test("a span is painted inside the track clip after the gutter and lane header",
   const { fills } = render([{ tid: 7, name: "worker", events: [{ ph: "X", ts: 10, dur: 20 }] }]);
 
   assert.deepEqual(fills.find(({ bounds }) => bounds[0] === 110)?.clips, [[100, 20, 100, 26]]);
+});
+
+test("a counter track paints a connecting line between sample positions", () => {
+  const { strokedLines } = render([
+    {
+      tid: 7,
+      name: "metrics",
+      events: [
+        { ph: "C", ts: 10, name: "cpu", args: { usage: 1 } },
+        { ph: "C", ts: 90, name: "cpu", args: { usage: 3 } },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(
+    strokedLines.find(([start, , end]) => start === 110 && end === 190),
+    [110, 83, 190, 53],
+  );
+});
+
+test("mixed events keep their original identities when counters move below the threads", () => {
+  const { hits } = render([
+    {
+      tid: 7,
+      name: "worker",
+      events: [
+        { ph: "X", ts: 10, dur: 20 },
+        { ph: "i", ts: 30 },
+        { ph: "C", ts: 50, name: "cpu", args: { usage: 1 } },
+        { ph: "C", ts: 70, name: "status", args: { text: "busy" } },
+        { ph: "C", name: "untimed", args: { usage: 2 } },
+      ],
+    },
+    { tid: 8, name: "another worker", events: [{ ph: "i", ts: 90 }] },
+  ]);
+
+  assert.deepEqual(
+    hits.map(({ tid, index }) => ({ tid, index })),
+    [
+      { tid: 7, index: 0 },
+      { tid: 7, index: 1 },
+      { tid: 7, index: 3 },
+      { tid: 8, index: 0 },
+      { tid: 7, index: 2 },
+    ],
+  );
+});
+
+test("collapsing a thread keeps its separate counter visible at the new position", () => {
+  const { hits } = render(
+    [
+      {
+        tid: 7,
+        name: "worker",
+        events: [
+          { ph: "X", ts: 10, dur: 20 },
+          { ph: "C", ts: 50, name: "cpu", args: { usage: 1 } },
+        ],
+      },
+    ],
+    { collapsed: [7] },
+  );
+
+  assert.deepEqual(hits, [{ x: 146, y: 53, width: 8, height: 8, tid: 7, index: 1 }]);
+});
+
+test("counter tracks follow global series order rather than their thread order", () => {
+  const { hits } = render([
+    { tid: 7, name: "worker", events: [{ ph: "C", ts: 50, name: "z metric", args: { value: 1 } }] },
+    { tid: 8, name: "worker", events: [{ ph: "C", ts: 50, name: "a metric", args: { value: 1 } }] },
+  ]);
+
+  assert.deepEqual(hits, [
+    { x: 146, y: 125, width: 8, height: 8, tid: 8, index: 0 },
+    { x: 146, y: 167, width: 8, height: 8, tid: 7, index: 0 },
+  ]);
+});
+
+test("equal counter names from different threads remain separate rows", () => {
+  const { hits } = render([
+    { tid: 7, name: "worker", events: [{ ph: "C", ts: 50, name: "cpu", args: { usage: 1 } }] },
+    { tid: 8, name: "worker", events: [{ ph: "C", ts: 50, name: "cpu", args: { usage: 3 } }] },
+  ]);
+
+  assert.deepEqual(hits, [
+    { x: 146, y: 125, width: 8, height: 8, tid: 7, index: 0 },
+    { x: 146, y: 167, width: 8, height: 8, tid: 8, index: 0 },
+  ]);
+});
+
+test("scrolling to the counters excludes rows outside the viewport", () => {
+  const { hits } = render(
+    [
+      {
+        tid: 7,
+        name: "metrics",
+        events: [
+          { ph: "C", ts: 50, name: "a metric", args: { value: 1 } },
+          { ph: "C", ts: 50, name: "b metric", args: { value: 1 } },
+          { ph: "C", ts: 50, name: "c metric", args: { value: 1 } },
+        ],
+      },
+    ],
+    { scrollTop: 96, height: 30 },
+  );
+
+  assert.deepEqual(hits, [{ x: 146, y: 25, width: 8, height: 8, tid: 7, index: 1 }]);
+});
+
+test("a counter line is painted inside its own row clip", () => {
+  const { strokes } = render([
+    {
+      tid: 7,
+      name: "metrics",
+      events: [
+        { ph: "C", ts: 10, name: "cpu", args: { usage: 1 } },
+        { ph: "C", ts: 90, name: "cpu", args: { usage: 3 } },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(strokes.find(({ lines }) => lines.some(([x]) => x === 110))?.clips, [
+    [100, 46, 100, 42],
+  ]);
 });
