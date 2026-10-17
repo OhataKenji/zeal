@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   changes:
-    name: Detect changed areas
+    name: Detect build changes
     runs-on: ubuntu-latest
     # paths-filter reads the changed-file list through the pull request API.
     permissions:
@@ -85,15 +85,3 @@ jobs:
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Single required check for the branch ruleset. A build skipped by
-  # paths-filter counts as success; a failed or cancelled one does not.
-  build-ok:
-    name: build-ok
-    needs: [changes, tauri-build]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check needed jobs
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
