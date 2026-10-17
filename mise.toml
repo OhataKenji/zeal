@@ -14,8 +14,14 @@ description = "Run all checks (frontend, then rust)"
 run = [{ task = "check:frontend" }, { task = "check:rust" }]
 
 [tasks."check:frontend"]
-description = "Type check, format check, lint and build the frontend"
-run = ["pnpm check", "pnpm exec oxfmt --check", "pnpm lint", { task = "build:frontend" }]
+description = "Type check, test, format check, lint and build the frontend"
+run = [
+  "pnpm check",
+  "pnpm test",
+  "pnpm exec oxfmt --check",
+  "pnpm lint",
+  { task = "build:frontend" },
+]
 
 [tasks."check:rust"]
 description = "cargo fmt check, clippy and test"

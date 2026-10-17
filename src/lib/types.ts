@@ -46,4 +46,42 @@ export interface AppState {
   ingest: "idle" | "running";
   snapshot: Snapshot | null;
   lastError: IngestError | null;
+  running: string | null;
+}
+
+export interface RunRecord {
+  id: string;
+  workspace: string;
+  cmd: string;
+  target: string;
+  startedAt: number;
+  finishedAt?: number;
+  exitCode?: number;
+}
+
+export type Section<T> =
+  | { status: "ok"; data: T }
+  | { status: "incomplete"; data: T; note: string }
+  | { status: "missing" }
+  | { status: "parse_error" | "read_error" | "not_available"; note: string };
+
+export interface Bep {
+  targets: { label: string; ok: boolean }[];
+  tests: { label: string; status: string }[];
+  truncated: boolean;
+}
+
+// Raw fields stay intact for inspection; geometry is a separate projection.
+export type TraceEvent = Record<string, unknown>;
+
+export interface Profile {
+  phases: { name: string; startUs: number; endUs: number }[];
+  lanes: { tid: number; name: string; events: TraceEvent[] }[];
+}
+
+export interface RunDetail {
+  record: RunRecord;
+  log: Section<string>;
+  bep: Section<Bep>;
+  profile: Section<Profile>;
 }
