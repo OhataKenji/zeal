@@ -29,34 +29,28 @@
   const gutter = 190;
   const plotWidth = $derived(Math.max(1, width - gutter));
   const ticks = $derived(timeTicks(range, plotWidth));
-  let hover = $state<{ tid: number; index: number; x: number; y: number } | null>(null);
-  const hovered = $derived(layout.lanes.find((lane) => lane.tid === hover?.tid)?.events[hover?.index ?? -1]);
   let pointerAnchor = 0.5;
   let drag: { id: number; x: number; y: number; range: TimeRange; moved: boolean } | null = null;
   let hits: { x: number; y: number; width: number; height: number; tid: number; index: number }[] = [];
 
   function x(time: number) { return timeToX(time, range, width, gutter); }
   function anchor(px: number) { return Math.max(0, Math.min(1, (xToTime(px, range, width, gutter) - range.start) / span)); }
-  function fit() { windowRange = null; hover = null; }
+  function fit() { windowRange = null; }
   function zoom(factor: number, anchor = 0.5) {
     windowRange = zoomRange(range, layout, factor, anchor);
-    hover = null;
   }
   function pan(delta: number) {
     windowRange = panRange(range, layout, delta);
-    hover = null;
   }
   function toggleThread(tid: number) {
     const next = new Set(collapsed);
     if (next.has(tid)) next.delete(tid); else next.add(tid);
     collapsed = next;
-    hover = null;
   }
   function toggleCounters(tid: number) {
     const next = new Set(expandedCounters);
     if (next.has(tid)) next.delete(tid); else next.add(tid);
     expandedCounters = next;
-    hover = null;
   }
 
   function prepare(element: HTMLCanvasElement, canvasHeight: number) {
@@ -221,11 +215,7 @@
       const delta = event.clientX - drag.x;
       if (Math.hypot(delta, event.clientY - drag.y) > 3) drag.moved = true;
       if (drag.moved) windowRange = panRange(drag.range, layout, -delta / plotWidth * (drag.range.end - drag.range.start));
-      hover = null;
-      return;
     }
-    const found = hit(point.x, point.y);
-    hover = found ? { tid: found.tid, index: found.index, x: point.x, y: point.y } : null;
   }
   function pointerUp(event: PointerEvent) {
     if (!drag || drag.id !== event.pointerId) return;
@@ -247,7 +237,6 @@
     selection = { tid, index: selectedIndex };
     if (collapsed.has(tid)) toggleThread(tid);
     if (!expandedCounters.has(tid) && lane.counters.some((counter) => counter.points.some((point) => point.index === selectedIndex))) toggleCounters(tid);
-    hover = null;
     await tick();
     if (selection?.tid !== tid || selection.index !== selectedIndex) return;
     const track = tracks.find((candidate) => candidate.lane.tid === tid);
@@ -259,16 +248,15 @@
   }
   function closeSelection() {
     selection = null;
-    hover = null;
     canvas?.focus();
   }
   function keydown(event: KeyboardEvent) {
-    if (event.key === "Escape") {
+    if (event.key === "Escape" && selection) {
       closeSelection();
       event.preventDefault();
       return;
     }
-    if (event.currentTarget !== canvas || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target !== canvas || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === "w" || key === "+" || key === "=") zoom(1.5, pointerAnchor);
     else if (key === "s" || key === "-") zoom(1 / 1.5, pointerAnchor);
@@ -280,14 +268,16 @@
   }
 </script>
 
-<div class="trace-view">
+<svelte:window onkeydown={keydown} />
+
+<div>
   <div class="trace-toolbar">
     <strong>Timing</strong><span class="trace-count">{layout.lanes.length} threads</span><span class="trace-input-hint">Drag to pan</span>
     <div class="trace-actions">
-      <button onclick={fit} title="Fit the complete profile (F)">Fit</button>
-      <button onclick={() => zoom(1 / 1.5)} aria-label="Zoom out" title="Zoom out (S)">−</button>
-      <button onclick={() => zoom(1.5)} aria-label="Zoom in" title="Zoom in (W)">+</button>
-      <button onclick={() => { collapsed = collapsed.size === layout.lanes.length ? new Set() : new Set(layout.lanes.map((lane) => lane.tid)); }}>
+      <button class="btn" onclick={fit} title="Fit the complete profile (F)">Fit</button>
+      <button class="btn" onclick={() => zoom(1 / 1.5)} aria-label="Zoom out" title="Zoom out (S)">−</button>
+      <button class="btn" onclick={() => zoom(1.5)} aria-label="Zoom in" title="Zoom in (W)">+</button>
+      <button class="btn" onclick={() => { collapsed = collapsed.size === layout.lanes.length ? new Set() : new Set(layout.lanes.map((lane) => lane.tid)); }}>
         {collapsed.size === layout.lanes.length ? "Expand all" : "Collapse all"}
       </button>
     </div>
@@ -306,49 +296,40 @@
       {/each}
     </div>
   </div>
-  <div class="trace-body">
-    <div class="trace-viewport" bind:this={viewport} bind:clientWidth={width} bind:clientHeight={height}
-      onscroll={() => { if (viewport) scrollTop = viewport.scrollTop; hover = null; }}>
-      <div class="trace-scroll-content" style:height="{Math.max(height, totalHeight)}px">
-        <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0"
-          aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
-          onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
-          onpointercancel={cancelDrag} onlostpointercapture={cancelDrag}
-          onpointerleave={() => hover = null} onkeydown={keydown}></canvas>
-        <div class="trace-thread-labels" style:width="{gutter}px">
-          {#each tracks as track (track.lane.tid)}
-            <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
-              title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
-              onclick={() => toggleThread(track.lane.tid)}>
-              <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
-            </button>
-            {#if !track.collapsed && track.lane.counters.length}
-              <button class="trace-counter-toggle" style:top="{track.top + LANE_HEADER + track.lane.spanRows * ROW_HEIGHT}px"
-                style:height="{COUNTER_HEADER}px" aria-expanded={track.countersExpanded}
-                onclick={() => toggleCounters(track.lane.tid)}><span>{track.countersExpanded ? "▾" : "▸"}</span> Counters ({track.lane.counters.length})</button>
-            {/if}
-          {/each}
-        </div>
+  <div class="trace-viewport" bind:this={viewport} bind:clientWidth={width} bind:clientHeight={height}
+    onscroll={() => { if (viewport) scrollTop = viewport.scrollTop; }}>
+    <div class="trace-scroll-content" style:height="{Math.max(height, totalHeight)}px">
+      <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0"
+        aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
+        onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
+        onpointercancel={cancelDrag} onlostpointercapture={cancelDrag}></canvas>
+      <div class="trace-thread-labels" style:width="{gutter}px">
+        {#each tracks as track (track.lane.tid)}
+          <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
+            title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
+            onclick={() => toggleThread(track.lane.tid)}>
+            <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
+          </button>
+          {#if !track.collapsed && track.lane.counters.length}
+            <button class="trace-counter-toggle" style:top="{track.top + LANE_HEADER + track.lane.spanRows * ROW_HEIGHT}px"
+              style:height="{COUNTER_HEADER}px" aria-expanded={track.countersExpanded}
+              onclick={() => toggleCounters(track.lane.tid)}><span>{track.countersExpanded ? "▾" : "▸"}</span> Counters ({track.lane.counters.length})</button>
+          {/if}
+        {/each}
       </div>
     </div>
-    {#if !selection && hover && hovered}
-      <div class="trace-tooltip" style:left="{Math.max(gutter, Math.min(width - 250, hover.x + 12))}px" style:top="{Math.max(0, Math.min(height - 74, hover.y + 12))}px">
-        <strong>{eventName(hovered.event)}</strong>
-        <span>{hovered.start === null ? "No timestamp" : formatTime(hovered.start)}{#if hovered.kind === "span"} · {formatTime(hovered.end! - hovered.start!)}{/if}</span>
-        {#if typeof hovered.event.cat === "string"}<span>{hovered.event.cat}</span>{/if}
-      </div>
-    {/if}
-    {#if selected && selectedLane}
-      <dialog open class="trace-selection" aria-labelledby="trace-event-title" onkeydown={keydown}>
-        <div class="trace-selection-title"><strong id="trace-event-title">{eventName(selected.event)}</strong><button class="btn" title="Close (Escape)" onclick={closeSelection}>Close</button></div>
-        <dl>
-          <dt>Thread</dt><dd>{selectedLane.name || "thread"} · tid {selectedLane.tid}</dd>
-          <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
-          {#if selected.kind === "span"}<dt>Duration</dt><dd>{formatTime(selected.end! - selected.start!)}</dd>{/if}
-          {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
-        </dl>
-        <details class="trace-raw"><summary>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
-      </dialog>
-    {/if}
   </div>
+  {#if selected && selectedLane}
+    <section aria-labelledby="trace-event-title">
+      <h2 class="panel-heading" id="trace-event-title">{eventName(selected.event)}</h2>
+      <button class="btn" title="Close (Escape)" onclick={closeSelection}>Close</button>
+      <dl class="run-details">
+        <dt>Thread</dt><dd>{selectedLane.name || "thread"} · tid {selectedLane.tid}</dd>
+        <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
+        {#if selected.kind === "span"}<dt>Duration</dt><dd>{formatTime(selected.end! - selected.start!)}</dd>{/if}
+        {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
+      </dl>
+      <details class="trace-raw"><summary>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
+    </section>
+  {/if}
 </div>

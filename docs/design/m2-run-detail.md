@@ -101,7 +101,8 @@ lane のキーは `tid` とし、ラベルには `thread_name` metadata を使�
 表示は trace viewer の作法に従う。
 同じ lane の重なる span は段に積み、`ph: "i"` は mark、`ph: "C"` の counter は name ごとの系列として描く。
 色は `cname`、なければ name の hash を使う。
-tooltip は event の field を表示し、action ごとの所要時間を別の一覧へ複製しない。
+event を選ぶと、チャートの下に通常の HTML で元の field を表示する。
+floating panel や外枠で囲む表示は使わず、action ごとの所要時間を別の一覧へ複製しない。
 
 phase の帯は、profile の `build phase marker` を時刻順に並べ、次の marker までを一区間にする。
 最後の区間は `Finishing` event までとする。

@@ -66,7 +66,7 @@
     <div class="run-notice err">詳細を読めません: {view.detailError} <button class="btn" onclick={reload}>Retry</button></div>
   {/if}
 
-  <div class="run-panel" class:timing-panel={active === "Timing"}
+  <div class="run-panel"
     id="run-panel-{active}" role="tabpanel" aria-labelledby="run-tab-{active}">
     {#if active === "Logs"}
       {#if running && !view.liveFromStart}<p class="run-notice">接続後の出力を表示中。完了後に保存済みの全 log を読み込みます。</p>{/if}
