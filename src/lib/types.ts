@@ -85,3 +85,8 @@ export interface RunDetail {
   bep: Section<Bep>;
   profile: Section<Profile>;
 }
+
+export interface RunLog {
+  id: string;
+  line: string;
+}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SessionView } from "./session";
-  import { outcome, sectionData, sectionMessage } from "./run";
+  import { outcome } from "./run";
+  import LogPanel from "./run/LogPanel.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
 
   let { view, reload }: { view: SessionView; reload: () => void } = $props();
@@ -9,7 +10,7 @@
   const failed = $derived(record?.finishedAt !== undefined && record.exitCode !== undefined && record.exitCode !== 0);
   const tabs = ["Logs", "Targets", "Details"] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
-  const log = $derived(sectionData(view.detail?.log));
+  let follow = $state(true);
 
   function tabKey(event: KeyboardEvent, index: number) {
     const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
@@ -57,13 +58,8 @@
   <div class="run-panel"
     id="run-panel-{active}" role="tabpanel" aria-labelledby="run-tab-{active}">
     {#if active === "Logs"}
-      {#if running}<p class="panel-empty">The saved log is available after the run finishes.</p>
-      {:else if view.detail}
-        {#if view.detail.log.status !== "ok"}<p class="run-notice">{sectionMessage(view.detail.log)}</p>{/if}
-        {#if log !== null}
-          <div class="log-panel"><textarea class="run-log" aria-label="Build stdout and stderr" readonly wrap="off" value={log || "(empty log)"}></textarea></div>
-        {/if}
-      {:else if view.detailLoading}<p class="panel-empty">Loading build log…</p>{/if}
+      <LogPanel section={view.detail?.log} liveLog={view.liveLog}
+        {running} loading={view.detailLoading} bind:follow />
     {:else if active === "Targets"}
       <TargetsPanel section={view.detail?.bep} {running} />
     {:else}
