@@ -120,19 +120,45 @@
   async function moveEvent(delta: number) {
     if (!selection || !selectedLane) return;
     const lane = selectedLane;
-    const tid = lane.tid;
-    const selectedIndex = Math.max(0, Math.min(lane.events.length - 1, selection.index + delta));
-    selection = { tid, index: selectedIndex };
-    if (collapsed.has(tid)) toggleThread(tid);
-    if (!expandedCounters.has(tid) && lane.counters.some((counter) => counter.points.some((point) => point.index === selectedIndex))) toggleCounters(tid);
+    const lastIndex = lane.events.length - 1;
+    const nextIndex = Math.max(0, Math.min(lastIndex, selection.index + delta));
+    selection = { tid: lane.tid, index: nextIndex };
+    expandEventTracks(lane, nextIndex);
+
+    // Expansion changes track geometry. A newer selection must win during that render.
     await tick();
-    if (selection?.tid !== tid || selection.index !== selectedIndex) return;
-    const track = tracks.find((candidate) => candidate.lane.tid === tid);
-    const event = lane.events[selection.index];
+    if (selection?.tid !== lane.tid || selection.index !== nextIndex) return;
+    scrollEventIntoView(lane, nextIndex);
+  }
+
+  function expandEventTracks(lane: LaneGeometry, eventIndex: number) {
+    if (collapsed.has(lane.tid)) toggleThread(lane.tid);
+    if (expandedCounters.has(lane.tid)) return;
+    for (const counter of lane.counters) {
+      const containsEvent = counter.points.some((point) => point.index === eventIndex);
+      if (containsEvent) {
+        toggleCounters(lane.tid);
+        return;
+      }
+    }
+  }
+
+  function scrollEventIntoView(lane: LaneGeometry, eventIndex: number) {
+    const track = tracks.find((candidate) => candidate.lane.tid === lane.tid);
+    const event = lane.events[eventIndex];
     if (!track || !event || !viewport) return;
-    const selectedY = track.top + eventOffsetY(lane, selection.index);
-    if (selectedY - ROW_HEIGHT / 2 < viewport.scrollTop || selectedY + ROW_HEIGHT / 2 > viewport.scrollTop + height) viewport.scrollTop = Math.max(track.top, selectedY - LANE_HEADER);
-    if (event.start !== null && (event.start < range.start || event.start > range.end)) windowRange = panRange(range, layout, event.start - (range.start + range.end) / 2);
+    const eventY = track.top + eventOffsetY(lane, eventIndex);
+    const eventTop = eventY - ROW_HEIGHT / 2;
+    const eventBottom = eventY + ROW_HEIGHT / 2;
+    if (eventTop < viewport.scrollTop || eventBottom > viewport.scrollTop + height) {
+      viewport.scrollTop = Math.max(track.top, eventY - LANE_HEADER);
+    }
+
+    if (event.start === null) return;
+    if (event.start < range.start || event.start > range.end) {
+      const visibleCenter = (range.start + range.end) / 2;
+      windowRange = panRange(range, layout, event.start - visibleCenter);
+    }
   }
   function closeSelection() {
     selection = null;
