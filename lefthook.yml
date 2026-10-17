@@ -1,6 +1,15 @@
 # https://lefthook.dev/configuration/
 pre-commit:
   jobs:
+    - name: protect default branch
+      run: |
+        branch="$(git symbolic-ref --short -q HEAD)"
+        default="$(git symbolic-ref --short -q refs/remotes/origin/HEAD | sed 's@^origin/@@')"
+        default="${default:-main}"
+        if [ "$branch" = "$default" ]; then
+          echo "Direct commits to the default branch ($default) are not allowed. Create a feature branch instead." >&2
+          exit 1
+        fi
     - name: gitleaks
       # Scans staged changes for secrets; requires gitleaks on PATH
       # (brew install gitleaks). --redact hides matched values in output.
