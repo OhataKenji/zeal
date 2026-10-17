@@ -2,9 +2,9 @@
   import { tick } from "svelte";
   import type { Profile } from "./types";
   import {
-    COUNTER_HEADER, LANE_HEADER, ROW_HEIGHT, eventColor,
-    eventName, formatTime, layoutProfile, panRange, zoomRange,
-    timeTicks, timeToX, xToTime, eventOffsetY, visibleTracks, type TimeRange, type EventGeometry, type LaneGeometry,
+    COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor,
+    eventName, formatCounter, formatTime, layoutProfile, panRange, zoomRange,
+    timeTicks, timeToX, xToTime, eventPosition, visibleTracks, type TimeRange, type EventGeometry, type LaneGeometry,
   } from "./timeline";
 
   import { drawRuler, drawTimeline, type EventHit } from "./timeline-canvas";
@@ -15,8 +15,7 @@
   const range = $derived(windowRange ?? { start: layout.start, end: layout.end });
   const span = $derived(range.end - range.start);
   let collapsed = $state.raw<ReadonlySet<number>>(new Set());
-  let expandedCounters = $state.raw<ReadonlySet<number>>(new Set());
-  const tracks = $derived(visibleTracks(layout.lanes, collapsed, expandedCounters));
+  const tracks = $derived(visibleTracks(layout.lanes, collapsed));
   const totalHeight = $derived(tracks.reduce((sum, track) => sum + track.height, 0));
   let selection = $state<{ tid: number; index: number } | null>(null);
   const selectedLane = $derived(layout.lanes.find((lane) => lane.tid === selection?.tid));
@@ -48,11 +47,6 @@
     const next = new Set(collapsed);
     if (next.has(tid)) next.delete(tid); else next.add(tid);
     collapsed = next;
-  }
-  function toggleCounters(tid: number) {
-    const next = new Set(expandedCounters);
-    if (next.has(tid)) next.delete(tid); else next.add(tid);
-    expandedCounters = next;
   }
 
   function prepare(element: HTMLCanvasElement, canvasHeight: number) {
@@ -123,7 +117,8 @@
     const lastIndex = lane.events.length - 1;
     const nextIndex = Math.max(0, Math.min(lastIndex, selection.index + delta));
     selection = { tid: lane.tid, index: nextIndex };
-    expandEventTracks(lane, nextIndex);
+    const position = eventPosition(tracks, lane.tid, nextIndex);
+    if (position?.track.kind === "events" && position.track.collapsed) toggleThread(lane.tid);
 
     // Expansion changes track geometry. A newer selection must win during that render.
     await tick();
@@ -131,23 +126,11 @@
     scrollEventIntoView(lane, nextIndex);
   }
 
-  function expandEventTracks(lane: LaneGeometry, eventIndex: number) {
-    if (collapsed.has(lane.tid)) toggleThread(lane.tid);
-    if (expandedCounters.has(lane.tid)) return;
-    for (const counter of lane.counters) {
-      const containsEvent = counter.points.some((point) => point.index === eventIndex);
-      if (containsEvent) {
-        toggleCounters(lane.tid);
-        return;
-      }
-    }
-  }
-
   function scrollEventIntoView(lane: LaneGeometry, eventIndex: number) {
-    const track = tracks.find((candidate) => candidate.lane.tid === lane.tid);
+    const position = eventPosition(tracks, lane.tid, eventIndex);
     const event = lane.events[eventIndex];
-    if (!track || !event || !viewport) return;
-    const eventY = track.top + eventOffsetY(lane, eventIndex);
+    if (!position || !event || !viewport) return;
+    const { track, y: eventY } = position;
     const eventTop = eventY - ROW_HEIGHT / 2;
     const eventBottom = eventY + ROW_HEIGHT / 2;
     if (eventTop < viewport.scrollTop || eventBottom > viewport.scrollTop + height) {
@@ -184,16 +167,20 @@
 
 {#snippet threadLabels()}
   <div class="trace-thread-labels" style:width="{gutter}px">
-    {#each tracks as track (track.lane.tid)}
+    {#each tracks as track (track.kind === "events" ? `events:${track.lane.tid}` : `counter:${track.lane.tid}:${track.counterIndex}`)}
+      {#if track.kind === "events"}
       <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
         title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
         onclick={() => toggleThread(track.lane.tid)}>
         <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
       </button>
-      {#if !track.collapsed && track.lane.counters.length}
-        <button class="trace-counter-toggle" style:top="{track.top + LANE_HEADER + track.lane.spanRows * ROW_HEIGHT}px"
-          style:height="{COUNTER_HEADER}px" aria-expanded={track.countersExpanded}
-          onclick={() => toggleCounters(track.lane.tid)}><span>{track.countersExpanded ? "▾" : "▸"}</span> Counters ({track.lane.counters.length})</button>
+      {:else}
+        {@const counter = track.lane.counters[track.counterIndex]}
+        <div class="trace-counter-label" style:top="{track.top}px" style:height="{COUNTER_HEIGHT}px"
+          title={`${counter.name} · ${counter.field} · tid ${track.lane.tid}`}>
+          <span>{counter.name} · tid {track.lane.tid}</span>
+          <span>{counter.field} {formatCounter(counter.min)}…{formatCounter(counter.max)}</span>
+        </div>
       {/if}
     {/each}
   </div>

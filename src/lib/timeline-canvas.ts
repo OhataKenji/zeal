@@ -1,6 +1,5 @@
 import {
   COUNTER_HEIGHT,
-  COUNTER_HEADER,
   LANE_HEADER,
   ROW_HEIGHT,
   eventColor,
@@ -9,11 +8,9 @@ import {
   timeToX,
   counterPointY,
   formatRulerTime,
-  formatCounter,
   type EventGeometry,
-  type LaneGeometry,
   type TimeRange,
-  type visibleTracks,
+  type TimelineTrack,
 } from "./timeline.ts";
 
 export interface EventHit {
@@ -31,8 +28,6 @@ interface TimelineAxis {
   range: TimeRange;
   ticks: number[];
 }
-
-type TimelineTrack = ReturnType<typeof visibleTracks>[number];
 
 interface TimelineFrame extends TimelineAxis {
   height: number;
@@ -83,7 +78,8 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     const trackTop = track.top - scrollTop;
     const trackBottom = trackTop + track.height;
     if (trackBottom < 0 || trackTop > height) continue;
-    drawTrack(context, track, trackTop, frame, hits);
+    if (track.kind === "events") drawEventTrack(context, track, trackTop, frame, hits);
+    else drawCounterTrack(context, track, trackTop, frame, hits);
   }
 
   context.strokeStyle = "#cbd0d5";
@@ -94,9 +90,9 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
   return hits;
 }
 
-function drawTrack(
+function drawEventTrack(
   context: CanvasRenderingContext2D,
-  track: TimelineTrack,
+  track: Extract<TimelineTrack, { kind: "events" }>,
   trackTop: number,
   frame: TimelineFrame,
   hits: EventHit[],
@@ -107,7 +103,6 @@ function drawTrack(
   const trackBottom = trackTop + track.height;
   const contentTop = trackTop + LANE_HEADER;
   const contentHeight = track.height - LANE_HEADER;
-  const counterHeaderTop = contentTop + lane.spanRows * ROW_HEIGHT;
 
   context.fillStyle = "#e9ecef";
   context.fillRect(gutter, trackTop, plotWidth, LANE_HEADER);
@@ -132,33 +127,29 @@ function drawTrack(
     if (event.kind === "counter" && plottedCounters.has(event.index)) continue;
     hits.push(drawEvent(context, event, lane.tid, trackTop, frame));
   }
-  if (lane.counters.length) {
-    context.fillStyle = "#f3f5f6";
-    context.fillRect(gutter, counterHeaderTop, plotWidth, COUNTER_HEADER);
-  }
-  if (track.countersExpanded) {
-    for (let counterIndex = 0; counterIndex < lane.counters.length; counterIndex++) {
-      drawCounterSeries(context, lane, counterIndex, trackTop, frame, hits);
-    }
-  }
   context.restore();
 
   context.fillStyle = "#f8f9fa";
   context.fillRect(0, contentTop, gutter, contentHeight);
-  context.fillStyle = "#65717a";
-  if (track.countersExpanded) {
-    for (const [counterIndex, counter] of lane.counters.entries()) {
-      const labelTop = counterHeaderTop + COUNTER_HEADER + counterIndex * COUNTER_HEIGHT;
-      drawClippedLabel(context, counter.name, 12, labelTop + 13, gutter - 20);
-      drawClippedLabel(
-        context,
-        `${counter.field} ${formatCounter(counter.min)}…${formatCounter(counter.max)}`,
-        12,
-        labelTop + 27,
-        gutter - 20,
-      );
-    }
-  }
+}
+
+function drawCounterTrack(
+  context: CanvasRenderingContext2D,
+  track: Extract<TimelineTrack, { kind: "counter" }>,
+  trackTop: number,
+  frame: TimelineFrame,
+  hits: EventHit[],
+) {
+  const { width, gutter } = frame;
+  context.save();
+  context.beginPath();
+  context.rect(gutter, trackTop, Math.max(1, width - gutter), COUNTER_HEIGHT);
+  context.clip();
+  drawCounterSeries(context, track, trackTop, frame, hits);
+  context.restore();
+
+  context.fillStyle = "#f8f9fa";
+  context.fillRect(0, trackTop, gutter, COUNTER_HEIGHT);
 }
 
 function drawEvent(
@@ -213,16 +204,16 @@ function drawEvent(
 
 function drawCounterSeries(
   context: CanvasRenderingContext2D,
-  lane: LaneGeometry,
-  counterIndex: number,
+  track: Extract<TimelineTrack, { kind: "counter" }>,
   trackTop: number,
   frame: TimelineFrame,
   hits: EventHit[],
 ) {
   const { width, gutter, range, selection } = frame;
+  const { lane, counterIndex } = track;
   const counter = lane.counters[counterIndex];
   const timeX = (time: number) => timeToX(time, range, width, gutter);
-  const valueY = (value: number) => trackTop + counterPointY(lane, counterIndex, value);
+  const valueY = (value: number) => trackTop + counterPointY(counter, value);
   context.strokeStyle = eventColor(lane.events[counter.points[0].index].event);
   context.lineWidth = 1.5;
   context.beginPath();
