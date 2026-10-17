@@ -1,0 +1,105 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect build changes
+    runs-on: ubuntu-latest
+    # paths-filter reads the changed-file list through the pull request API.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      build: ${{ steps.filter.outputs.build }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Fail-open: the job runs unless every changed path is listed as
+      # irrelevant. Unlisted paths default to running the job, so a stale
+      # exclusion list costs an extra run instead of skipping a needed build.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          predicate-quantifier: "some-with-excludes"
+          filters: |
+            build:
+              - '**'
+              - '!docs/**'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
+              - '!.github/workflows/ci.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
+
+  tauri-build:
+    name: tauri build (${{ matrix.os }})
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # https://v2.tauri.app/start/prerequisites/#linux
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      # After the toolchain install: the cache key includes the rustc version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: cargo test
+        run: cargo test
+        working-directory: src-tauri
+
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Branch protection requires a stable check name, but a matrix job skipped
+  # by `if` reports only the literal, unexpanded `tauri build (${{ matrix.os }})`.
+  # This always-run gate aggregates the matrix legs under a fixed name.
+  build-result:
+    name: tauri build
+    needs: [changes, tauri-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Propagate build result
+        run: |
+          changes="${{ needs.changes.result }}"
+          build="${{ needs.tauri-build.result }}"
+          if [ "$changes" != "success" ]; then
+            echo "::error::change detection $changes"
+            exit 1
+          fi
+          if [ "$build" = "failure" ] || [ "$build" = "cancelled" ]; then
+            echo "::error::tauri build $build"
+            exit 1
+          fi
+          echo "tauri build $build"
