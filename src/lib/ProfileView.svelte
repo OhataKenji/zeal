@@ -268,8 +268,6 @@
   }
 </script>
 
-<svelte:window onkeydown={keydown} />
-
 <div>
   <div class="trace-toolbar">
     <strong>Timing</strong><span class="trace-count">{layout.lanes.length} threads</span><span class="trace-input-hint">Drag to pan</span>
@@ -302,7 +300,7 @@
       <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0"
         aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
         onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
-        onpointercancel={cancelDrag} onlostpointercapture={cancelDrag}></canvas>
+        onpointercancel={cancelDrag} onlostpointercapture={cancelDrag} onkeydown={keydown}></canvas>
       <div class="trace-thread-labels" style:width="{gutter}px">
         {#each tracks as track (track.lane.tid)}
           <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
@@ -322,14 +320,14 @@
   {#if selected && selectedLane}
     <section aria-labelledby="trace-event-title">
       <h2 class="panel-heading" id="trace-event-title">{eventName(selected.event)}</h2>
-      <button class="btn" title="Close (Escape)" onclick={closeSelection}>Close</button>
+      <button class="btn" title="Close (Escape)" onclick={closeSelection} onkeydown={keydown}>Close</button>
       <dl class="run-details">
         <dt>Thread</dt><dd>{selectedLane.name || "thread"} · tid {selectedLane.tid}</dd>
         <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
         {#if selected.kind === "span"}<dt>Duration</dt><dd>{formatTime(selected.end! - selected.start!)}</dd>{/if}
         {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
       </dl>
-      <details class="trace-raw"><summary>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
+      <details class="trace-raw"><summary onkeydown={keydown}>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
     </section>
   {/if}
 </div>
