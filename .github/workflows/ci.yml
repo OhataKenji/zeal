@@ -79,17 +79,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check (svelte-check + tsc)
-        run: pnpm check
-
-      - name: Frontend tests
-        run: pnpm test
-
       - name: Format check (oxfmt)
         run: pnpm exec oxfmt --check
 
       - name: Lint (oxlint)
         run: pnpm lint
+
+      - name: Frontend tests
+        run: pnpm test
+
+      - name: Type check (svelte-check + tsc)
+        run: pnpm check
 
       - name: Build
         run: pnpm build
@@ -130,15 +130,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+
       # frontendDist must exist for tauri::generate_context!
       - name: Build frontend
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-        working-directory: src-tauri
 
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings

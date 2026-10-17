@@ -14,21 +14,25 @@ description = "Run all checks (frontend, then rust)"
 run = [{ task = "check:frontend" }, { task = "check:rust" }]
 
 [tasks."check:frontend"]
-description = "Type check, test, format check, lint and build the frontend"
+description = "Format check, lint, test, type check and build the frontend"
 run = [
-  "pnpm check",
-  "pnpm test",
   "pnpm exec oxfmt --check",
   "pnpm lint",
+  "pnpm test",
+  "pnpm check",
   { task = "build:frontend" },
 ]
 
 [tasks."check:rust"]
 description = "cargo fmt check, clippy and test"
-# frontendDist (dist/) must exist for tauri::generate_context!
-depends = ["build:frontend"]
 dir = "src-tauri"
-run = ["cargo fmt --all -- --check", "cargo clippy --all-targets -- -D warnings", "cargo test"]
+# Formatting needs no build. frontendDist is required only by the compile steps.
+run = [
+  "cargo fmt --all -- --check",
+  { task = "build:frontend" },
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test",
+]
 
 [tasks."build:frontend"]
 hide = true
