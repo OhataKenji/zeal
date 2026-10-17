@@ -8,6 +8,7 @@
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import RunView from "./lib/RunView.svelte";
+  import type { AppState } from "./lib/types";
 
   onMount(connect);
 
@@ -63,6 +64,94 @@
   });
 </script>
 
+{#snippet targetPane(state: AppState)}
+  <section
+    class="pane"
+    class:collapsed={collapsed.targets}
+    style:flex-grow={collapsed.targets ? 0 : targetsShare}
+  >
+    <button
+      class="pane-head"
+      onclick={() => (collapsed.targets = !collapsed.targets)}
+    >
+      {collapsed.targets ? "▸" : "▾"} targets
+    </button>
+    {#if !collapsed.targets}
+      <div class="pane-body">
+        {#if snap && tree}
+          <Tree root={tree} {selected} onselect={select} />
+        {:else if state.ingest === "running"}
+          <p class="dim">取り込み中…</p>
+        {:else if state.lastError}
+          <p class="err">{state.lastError.summary}</p>
+          <button class="btn" onclick={refresh}>retry</button>
+        {:else}
+          <p class="dim">—</p>
+        {/if}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
+{#snippet runPane(state: AppState)}
+  <section
+    class="pane"
+    class:collapsed={collapsed.runs}
+    style:flex-grow={collapsed.runs ? 0 : 1 - targetsShare}
+  >
+    <button
+      class="pane-head"
+      onclick={() => (collapsed.runs = !collapsed.runs)}
+    >
+      {collapsed.runs ? "▸" : "▾"} runs
+    </button>
+    {#if !collapsed.runs}
+      <div class="pane-body">
+        <ul class="list">
+          {#each app.view.runs as run (run.id)}
+            <li><button class="run-row" class:sel={app.view.selectedRun === run.id} aria-current={app.view.selectedRun === run.id ? "true" : undefined} onclick={() => session.selectRun(run.id)}>
+              <span>{run.cmd} {run.target}</span>
+              <small>{outcome(run, state.running)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
+            </button></li>
+          {/each}
+        </ul>
+        {#if app.view.runsError}<p class="err">{app.view.runsError}</p><button class="btn" onclick={session.loadRuns}>retry</button>
+        {:else if app.view.runs.length === 0}<p class="dim">Send で build / test を実行</p>{/if}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
+{#snippet workspaceContent(state: AppState, workspace: string)}
+  <main class="content" class:run-content={!!app.view.selectedRun}>
+    {#if snap?.meta.status === "partial"}
+      <p class="warn">
+        一部の package を読み飛ばしました (exit {state.lastError?.exitCode ?? "?"})
+      </p>
+    {:else if snap && state.lastError}
+      <p class="warn">
+        更新に失敗 — {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の
+        snapshot を表示中 ({state.lastError.summary})
+      </p>
+    {/if}
+    {#if state.ingest === "running"}
+      <p class="dim">取り込み中…</p>
+    {/if}
+    {#if app.view.selectedRun}
+      {#key app.view.selectedRun}
+        <RunView view={app.view} reload={session.loadDetail} />
+      {/key}
+    {:else if snap && selected}
+      <TargetView {snap} label={selected} wsRoot={workspace} onselect={select} />
+    {:else if snap}
+      <p class="dim">tree から target を選択</p>
+    {:else if state.ingest !== "running" && state.lastError}
+      <p class="err">取り込みに失敗しました: {state.lastError.summary}</p>
+      <button class="btn" onclick={refresh}>retry</button>
+    {/if}
+  </main>
+{/snippet}
+
 <div class="win">
   <div class="toolbar">
     <strong>Zeal</strong>
@@ -111,92 +200,16 @@
   {:else}
     <div class="win-body">
       <aside class="sidebar">
-        <section
-          class="pane"
-          class:collapsed={collapsed.targets}
-          style:flex-grow={collapsed.targets ? 0 : targetsShare}
-        >
-          <button
-            class="pane-head"
-            onclick={() => (collapsed.targets = !collapsed.targets)}
-          >
-            {collapsed.targets ? "▸" : "▾"} targets
-          </button>
-          {#if !collapsed.targets}
-            <div class="pane-body">
-              {#if snap && tree}
-                <Tree root={tree} {selected} onselect={select} />
-              {:else if st.ingest === "running"}
-                <p class="dim">取り込み中…</p>
-              {:else if st.lastError}
-                <p class="err">{st.lastError.summary}</p>
-                <button class="btn" onclick={refresh}>retry</button>
-              {:else}
-                <p class="dim">—</p>
-              {/if}
-            </div>
-          {/if}
-        </section>
+        {@render targetPane(st)}
         <div
           class="divider"
           role="separator"
           aria-orientation="horizontal"
           onpointerdown={dividerDown}
         ></div>
-        <section
-          class="pane"
-          class:collapsed={collapsed.runs}
-          style:flex-grow={collapsed.runs ? 0 : 1 - targetsShare}
-        >
-          <button
-            class="pane-head"
-            onclick={() => (collapsed.runs = !collapsed.runs)}
-          >
-            {collapsed.runs ? "▸" : "▾"} runs
-          </button>
-          {#if !collapsed.runs}
-            <div class="pane-body">
-              <ul class="list">
-                {#each app.view.runs as run (run.id)}
-                  <li><button class="run-row" class:sel={app.view.selectedRun === run.id} aria-current={app.view.selectedRun === run.id ? "true" : undefined} onclick={() => session.selectRun(run.id)}>
-                    <span>{run.cmd} {run.target}</span>
-                    <small>{outcome(run, st.running)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
-                  </button></li>
-                {/each}
-              </ul>
-              {#if app.view.runsError}<p class="err">{app.view.runsError}</p><button class="btn" onclick={session.loadRuns}>retry</button>
-              {:else if app.view.runs.length === 0}<p class="dim">Send で build / test を実行</p>{/if}
-            </div>
-          {/if}
-        </section>
+        {@render runPane(st)}
       </aside>
-      <main class="content" class:run-content={!!app.view.selectedRun}>
-        {#if snap?.meta.status === "partial"}
-          <p class="warn">
-            一部の package を読み飛ばしました (exit {st.lastError?.exitCode ?? "?"})
-          </p>
-        {:else if snap && st.lastError}
-          <p class="warn">
-            更新に失敗 — {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の
-            snapshot を表示中 ({st.lastError.summary})
-          </p>
-        {/if}
-        {#if st.ingest === "running"}
-          <p class="dim">取り込み中…</p>
-        {/if}
-        {#if app.view.selectedRun}
-          {#key app.view.selectedRun}
-            <RunView view={app.view} reload={session.loadDetail} />
-          {/key}
-        {:else if snap && selected}
-          <TargetView {snap} label={selected} wsRoot={st.workspace} onselect={select} />
-        {:else if snap}
-          <p class="dim">tree から target を選択</p>
-        {:else if st.ingest !== "running" && st.lastError}
-          <p class="err">取り込みに失敗しました: {st.lastError.summary}</p>
-          <button class="btn" onclick={refresh}>retry</button>
-        {/if}
-      </main>
+      {@render workspaceContent(st, st.workspace)}
     </div>
   {/if}
 </div>

@@ -4,7 +4,7 @@
   import {
     COUNTER_HEADER, LANE_HEADER, ROW_HEIGHT, eventColor,
     eventName, formatTime, layoutProfile, panRange, zoomRange,
-    timeTicks, timeToX, xToTime, eventOffsetY, visibleTracks, type TimeRange,
+    timeTicks, timeToX, xToTime, eventOffsetY, visibleTracks, type TimeRange, type EventGeometry, type LaneGeometry,
   } from "./timeline";
 
   import { drawRuler, drawTimeline, type EventHit } from "./timeline-canvas";
@@ -156,6 +156,36 @@
   }
 </script>
 
+{#snippet threadLabels()}
+  <div class="trace-thread-labels" style:width="{gutter}px">
+    {#each tracks as track (track.lane.tid)}
+      <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
+        title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
+        onclick={() => toggleThread(track.lane.tid)}>
+        <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
+      </button>
+      {#if !track.collapsed && track.lane.counters.length}
+        <button class="trace-counter-toggle" style:top="{track.top + LANE_HEADER + track.lane.spanRows * ROW_HEIGHT}px"
+          style:height="{COUNTER_HEADER}px" aria-expanded={track.countersExpanded}
+          onclick={() => toggleCounters(track.lane.tid)}><span>{track.countersExpanded ? "▾" : "▸"}</span> Counters ({track.lane.counters.length})</button>
+      {/if}
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet eventDetails(selected: EventGeometry, lane: LaneGeometry)}
+  <section aria-labelledby="trace-event-title">
+    <h2 class="panel-heading" id="trace-event-title">{eventName(selected.event)}</h2>
+    <dl class="run-details">
+      <dt>Thread</dt><dd>{lane.name || "thread"} · tid {lane.tid}</dd>
+      <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
+      {#if selected.kind === "span"}<dt>Duration</dt><dd>{formatTime(selected.end! - selected.start!)}</dd>{/if}
+      {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
+    </dl>
+    <details class="trace-raw"><summary onkeydown={keydown}>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
+  </section>
+{/snippet}
+
 <div>
   <div class="trace-toolbar">
     <strong>Timing</strong><span class="trace-count">{layout.lanes.length} threads</span><span class="trace-input-hint">Drag to pan</span>
@@ -189,32 +219,10 @@
         aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
         onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
         onpointercancel={cancelDrag} onlostpointercapture={cancelDrag} onkeydown={keydown}></canvas>
-      <div class="trace-thread-labels" style:width="{gutter}px">
-        {#each tracks as track (track.lane.tid)}
-          <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
-            title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
-            onclick={() => toggleThread(track.lane.tid)}>
-            <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
-          </button>
-          {#if !track.collapsed && track.lane.counters.length}
-            <button class="trace-counter-toggle" style:top="{track.top + LANE_HEADER + track.lane.spanRows * ROW_HEIGHT}px"
-              style:height="{COUNTER_HEADER}px" aria-expanded={track.countersExpanded}
-              onclick={() => toggleCounters(track.lane.tid)}><span>{track.countersExpanded ? "▾" : "▸"}</span> Counters ({track.lane.counters.length})</button>
-          {/if}
-        {/each}
-      </div>
+      {@render threadLabels()}
     </div>
   </div>
   {#if selected && selectedLane}
-    <section aria-labelledby="trace-event-title">
-      <h2 class="panel-heading" id="trace-event-title">{eventName(selected.event)}</h2>
-      <dl class="run-details">
-        <dt>Thread</dt><dd>{selectedLane.name || "thread"} · tid {selectedLane.tid}</dd>
-        <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
-        {#if selected.kind === "span"}<dt>Duration</dt><dd>{formatTime(selected.end! - selected.start!)}</dd>{/if}
-        {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
-      </dl>
-      <details class="trace-raw"><summary onkeydown={keydown}>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
-    </section>
+    {@render eventDetails(selected, selectedLane)}
   {/if}
 </div>
