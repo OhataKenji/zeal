@@ -153,12 +153,15 @@ export function createSession(
     if (state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
-    if (
-      before?.running &&
-      before.running !== state.running &&
-      view.selectedRun === before.running
-    ) {
-      void loadDetail();
+    if (before?.running && before.running !== state.running) {
+      if (view.selectedRun === before.running) {
+        void loadDetail();
+      } else if (!view.starting) {
+        // A hidden completed run will read its saved log when reopened. Keep
+        // only a pending start's early output until its response selects it.
+        logs.delete(before.running);
+        capturedFromStart.delete(before.running);
+      }
     }
   }
 

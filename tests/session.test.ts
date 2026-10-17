@@ -157,6 +157,26 @@ test("run completing before start response still opens completed detail", async 
   assert.equal(h.view.detail?.record.exitCode, 0);
 });
 
+test("a run finishing offscreen releases its temporary live output", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("run-log", { id: record.id, line: "temporary live output" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  assert.equal(h.view.liveLog, "temporary live output");
+  h.session.selectRun(null);
+  h.emit("app-state", idle);
+  h.session.selectRun(record.id);
+  assert.equal(h.view.liveLog, "");
+  assert.equal(h.view.liveFromStart, false);
+  assert.equal(h.view.detailLoading, true);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.deepEqual(h.view.detail, completed);
+});
+
 test("late bootstrap state cannot overwrite a newer workspace event", async () => {
   const bootstrap = deferred<AppState>();
   const h = harness(bootstrap.promise);
