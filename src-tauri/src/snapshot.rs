@@ -153,3 +153,126 @@ pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
         files,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xml;
+    use std::collections::HashMap;
+    use std::io::Cursor;
+
+    fn fixture_rules() -> Vec<xml::RawRule> {
+        let xml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/query.xml"
+        ))
+        .unwrap();
+        xml::parse_rules(Cursor::new(xml))
+    }
+
+    #[test]
+    fn snapshot_targets_canonicalize_bare_labels() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let labels: HashSet<&str> = snap.targets.iter().map(|t| t.label.as_str()).collect();
+        // `//app` canonicalizes to `//app:app`.
+        assert!(labels.contains("//app:app"));
+        assert!(!labels.contains("//app"));
+    }
+
+    #[test]
+    fn snapshot_edges_only_from_dep_attrs() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let edges: HashSet<(&str, &str, &str)> = snap
+            .edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str(), e.attr.as_str()))
+            .collect();
+
+        assert!(edges.contains(&("//app/lib:parser", "//app/lib:parser_proto", "deps")));
+        // External-repo label: edge exists, canonical `@@` collapses to `@`.
+        assert!(edges.contains(&(
+            "//app/lib:parser",
+            "@maven+//:com_google_guava_guava",
+            "deps"
+        )));
+        // `data` pointing at a rule is an edge, not a file.
+        assert!(edges.contains(&("//app/lib:parser", "//app:grammars", "data")));
+        // Non-deps/data attrs still become edges (used by shows the attr name).
+        assert!(edges.contains(&("//app:app", "//tools:launcher", "tools")));
+        assert!(edges.contains(&("//app/lib:parser_test", "//app/lib:parser", "deps")));
+
+        // Excluded: visibility, implicit `$` attrs, select() branch keys.
+        assert!(!edges.iter().any(|e| e.1 == "//visibility:public"));
+        assert!(!edges.iter().any(|e| e.2 == "$cc_toolchain"));
+        assert!(!edges.iter().any(|e| e.1.contains("conditions")));
+        // And rule-input never produces edges.
+        assert!(!edges.iter().any(|e| e.1.contains("SHOULD_NOT")));
+    }
+
+    #[test]
+    fn snapshot_files_inputs_outputs_and_multi_owner() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let mut owners: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+        for f in &snap.files {
+            owners
+                .entry(f.path.as_str())
+                .or_default()
+                .push((f.owner.as_str(), f.role.as_str()));
+        }
+
+        // File referenced by two rules' srcs has both owners.
+        let mut pj = owners["app/lib/Parser.java"].clone();
+        pj.sort();
+        assert_eq!(
+            pj,
+            [
+                ("//app/lib:parser", "srcs"),
+                ("//app/lib:parser_test", "srcs"),
+            ]
+        );
+
+        // `data` label to a file lands in files with role `data`.
+        assert_eq!(
+            owners["app/lib/grammars.txt"],
+            [("//app/lib:parser", "data")]
+        );
+        assert_eq!(owners["app/server.cfg"], [("//app:app", "data")]);
+
+        // Outputs carry role `out`; a genrule's `outs` label merges with its
+        // <rule-output> into a single entry.
+        assert_eq!(
+            owners["app/lib/libparser.jar"],
+            [("//app/lib:parser", "out")]
+        );
+        assert_eq!(owners["tools/launcher.sh"], [("//tools:launcher", "out")]);
+
+        // rule-input alone never creates a file entry.
+        assert!(!owners.contains_key("tools/BUILD"));
+
+        // Files are unique on (path, owner, role).
+        let uniq: HashSet<(&str, &str, &str)> = snap
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.owner.as_str(), f.role.as_str()))
+            .collect();
+        assert_eq!(uniq.len(), snap.files.len());
+    }
+
+    #[test]
+    fn edges_dedup() {
+        let rules = xml::parse_rules(Cursor::new(
+            r#"<query><rule name="//a:x" class="r"><list name="deps">
+            <label value="//a:y"/><label value="//a:y"/></list></rule>
+            <rule name="//a:y" class="r"/></query>"#,
+        ));
+        let snap = build(&rules, Status::Ok);
+        assert_eq!(
+            snap.edges,
+            [Edge {
+                from: "//a:x".into(),
+                to: "//a:y".into(),
+                attr: "deps".into()
+            }]
+        );
+    }
+}
