@@ -33,6 +33,13 @@ export type TimelineTrack = {
   collapsed: boolean;
 };
 
+export function eventPosition(tracks: TimelineTrack[], tid: number, eventIndex: number) {
+  const track = tracks.find((candidate) => candidate.lane.tid === tid);
+  const event = track?.lane.events[eventIndex];
+  if (!track || !event) return undefined;
+  return { track, y: track.top + LANE_HEADER + event.row * ROW_HEIGHT + ROW_HEIGHT / 2 };
+}
+
 export function numeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -119,6 +126,32 @@ export function formatRulerTime(time: number, range: TimeRange): string {
 
 export function timeToX(time: number, range: TimeRange, width: number, gutter: number): number {
   return gutter + ((time - range.start) / (range.end - range.start)) * Math.max(1, width - gutter);
+}
+
+export function xToTime(x: number, range: TimeRange, width: number, gutter: number): number {
+  return range.start + ((x - gutter) / Math.max(1, width - gutter)) * (range.end - range.start);
+}
+
+export function clampRange(range: TimeRange, domain: TimeRange): TimeRange {
+  const total = domain.end - domain.start;
+  const span = Math.max(Math.min(total, 1), Math.min(total, range.end - range.start));
+  const start = Math.max(domain.start, Math.min(domain.end - span, range.start));
+  return { start, end: start + span };
+}
+
+export function zoomRange(
+  range: TimeRange,
+  domain: TimeRange,
+  factor: number,
+  anchor = 0.5,
+): TimeRange {
+  const span = (range.end - range.start) / factor;
+  const point = range.start + (range.end - range.start) * anchor;
+  return clampRange({ start: point - span * anchor, end: point + span * (1 - anchor) }, domain);
+}
+
+export function panRange(range: TimeRange, domain: TimeRange, delta: number): TimeRange {
+  return clampRange({ start: range.start + delta, end: range.end + delta }, domain);
 }
 
 export function timeTicks(range: TimeRange, width: number): number[] {
