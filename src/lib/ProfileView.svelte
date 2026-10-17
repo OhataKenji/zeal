@@ -2,8 +2,8 @@
   import { tick } from "svelte";
   import type { Profile } from "./types";
   import {
-    LANE_HEADER, ROW_HEIGHT, eventColor,
-    eventName, formatTime, layoutProfile, panRange, zoomRange,
+    COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor,
+    eventName, formatCounter, formatTime, layoutProfile, panRange, zoomRange,
     timeTicks, timeToX, xToTime, eventPosition, visibleTracks, type TimeRange, type EventGeometry, type LaneGeometry,
   } from "./timeline";
 
@@ -118,7 +118,7 @@
     const nextIndex = Math.max(0, Math.min(lastIndex, selection.index + delta));
     selection = { tid: lane.tid, index: nextIndex };
     const position = eventPosition(tracks, lane.tid, nextIndex);
-    if (position?.track.collapsed) toggleThread(lane.tid);
+    if (position?.track.kind === "events" && position.track.collapsed) toggleThread(lane.tid);
 
     // Expansion changes track geometry. A newer selection must win during that render.
     await tick();
@@ -160,12 +160,21 @@
 
 {#snippet threadLabels()}
   <div class="trace-thread-labels" style:width="{gutter}px">
-    {#each tracks as track (track.lane)}
+    {#each tracks as track (track.kind === "events" ? track.lane : track.counter)}
+      {#if track.kind === "events"}
       <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
         title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
         onclick={() => toggleThread(track.lane.tid)}>
         <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
       </button>
+      {:else}
+        {@const counter = track.counter}
+        <div class="trace-counter-label" style:top="{track.top}px" style:height="{COUNTER_HEIGHT}px"
+          title={`${counter.name} · ${counter.field} · tid ${track.lane.tid}`}>
+          <span>{counter.name} · tid {track.lane.tid}</span>
+          <span>{counter.field} {formatCounter(counter.min)}…{formatCounter(counter.max)}</span>
+        </div>
+      {/if}
     {/each}
   </div>
 {/snippet}

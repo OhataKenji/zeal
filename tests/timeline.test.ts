@@ -12,7 +12,10 @@ import {
   visibleTracks,
   LANE_HEADER,
   formatRulerTime,
+  formatCounter,
+  counterPointY,
   eventPosition,
+  COUNTER_HEIGHT,
 } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
@@ -147,6 +150,8 @@ test("ruler uses readable ticks across negative time, zoom and narrow viewports"
   assert.equal(formatRulerTime(0, seconds), "0s");
   assert.equal(formatRulerTime(1_000_000, seconds), "1s");
   assert.equal(formatRulerTime(500, { start: 0, end: 10_000 }), "0.5ms");
+  assert.equal(formatCounter(1.05500000000002), "1.055");
+  assert.equal(formatCounter(0.000125555), "1.256e-4");
 });
 
 test("narrow zoom at large absolute timestamps generates bounded, distinct ruler ticks", () => {
@@ -257,6 +262,190 @@ test("displayed track positions follow sorted order and collapsed heights", () =
       [30, 66],
     ],
   );
+});
+
+test("counter names and numeric fields form separate series without losing raw args", () => {
+  const result = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "metrics",
+        events: [
+          { ph: "C", ts: 0, name: "memory", args: { used: 10, free: 20, unit: "MB" } },
+          { ph: "C", ts: 1, name: "memory", args: { used: 14, free: 16 } },
+          { ph: "C", ts: 1, name: "cpu", args: { used: 2 } },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    result.lanes[0].counters.map((series) => [series.name, series.field]),
+    [
+      ["memory", "used"],
+      ["memory", "free"],
+      ["cpu", "used"],
+    ],
+  );
+  assert.deepEqual(
+    result.lanes[0].counters[0].points.map((point) => point.value),
+    [10, 14],
+  );
+  assert.deepEqual(result.lanes[0].events[0].event.args, { used: 10, free: 20, unit: "MB" });
+});
+
+test("all counter series follow every event track without changing raw geometry", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "main",
+        events: [{ ph: "C", ts: 10, name: "cpu", args: { system: 1, user: 2 } }],
+      },
+      { tid: 2, name: "worker", events: [{ ph: "X", ts: 0, dur: 20 }] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set());
+  assert.deepEqual(
+    tracks.map((track) => [track.kind, track.lane.tid, track.top, track.height]),
+    [
+      ["events", 1, 0, 46],
+      ["events", 2, 46, 46],
+      ["counter", 1, 92, COUNTER_HEIGHT],
+      ["counter", 1, 134, COUNTER_HEIGHT],
+    ],
+  );
+  assert.equal(tracks[2].lane.events, layout.lanes[0].events);
+});
+
+test("collapsing threads keeps every counter series visible", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      { tid: 1, name: "main", events: [{ ph: "C", ts: 10, name: "cpu", args: { used: 2 } }] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set([1]));
+  assert.deepEqual(
+    tracks.map((track) => [track.kind, track.top, track.height]),
+    [
+      ["events", 0, LANE_HEADER],
+      ["counter", LANE_HEADER, COUNTER_HEIGHT],
+    ],
+  );
+});
+
+test("known Bazel counters follow resource order across source threads", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 2,
+        name: "main",
+        events: [
+          { ph: "C", ts: 1, name: "Network Down usage (total)", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "Memory usage (total)", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "Memory usage (Bazel)", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "action count (local)", args: { value: 1 } },
+        ],
+      },
+      {
+        tid: 1,
+        name: "metrics",
+        events: [
+          { ph: "C", ts: 1, name: "Network Up usage (total)", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "System load average", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "CPU usage (total)", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "CPU usage (Bazel)", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "action count", args: { "local action cache": 2, action: 1 } },
+        ],
+      },
+    ],
+  });
+  const counters = visibleTracks(layout.lanes, new Set()).filter(
+    (track) => track.kind === "counter",
+  );
+  assert.deepEqual(
+    counters.map((track) => {
+      const counter = track.counter;
+      return [counter.name, counter.field];
+    }),
+    [
+      ["action count", "action"],
+      ["action count", "local action cache"],
+      ["action count (local)", "value"],
+      ["CPU usage (Bazel)", "value"],
+      ["Memory usage (Bazel)", "value"],
+      ["CPU usage (total)", "value"],
+      ["Memory usage (total)", "value"],
+      ["System load average", "value"],
+      ["Network Up usage (total)", "value"],
+      ["Network Down usage (total)", "value"],
+    ],
+  );
+});
+
+test("unknown counter names and fields sort after known metrics without merging tids", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 2,
+        name: "same",
+        events: [
+          { ph: "C", ts: 1, name: "zeta", args: { value: 1 } },
+          { ph: "C", ts: 1, name: "alpha", args: { z: 2, a: 1 } },
+        ],
+      },
+      {
+        tid: 1,
+        name: "same",
+        events: [
+          { ph: "C", ts: 1, name: "alpha", args: { a: 3 } },
+          { ph: "C", ts: 1, name: "CPU usage (Bazel)", args: { value: 2 } },
+        ],
+      },
+    ],
+  });
+  const counters = visibleTracks(layout.lanes, new Set()).filter(
+    (track) => track.kind === "counter",
+  );
+  assert.deepEqual(
+    counters.map((track) => {
+      const counter = track.counter;
+      return [counter.name, counter.field, track.lane.tid];
+    }),
+    [
+      ["CPU usage (Bazel)", "value", 1],
+      ["alpha", "a", 1],
+      ["alpha", "a", 2],
+      ["alpha", "z", 2],
+      ["zeta", "value", 2],
+    ],
+  );
+});
+
+test("revealing a numeric counter resolves its displayed series and original event", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "main",
+        events: [
+          { ph: "X", ts: 0, dur: 10 },
+          { ph: "C", ts: 10, name: "cpu", args: { z: 5, a: 2 } },
+        ],
+      },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set([1]));
+  const position = eventPosition(tracks, 1, 1)!;
+  const counter = layout.lanes[0].counters[1];
+  assert.equal(position.track, tracks[1]);
+  assert.equal(position.y, tracks[1].top + counterPointY(counter, 2));
+  assert.equal(position.track.lane.events[1].index, 1);
 });
 
 test("raw and untimed counters resolve to their original event track", () => {

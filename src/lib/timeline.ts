@@ -2,6 +2,7 @@ import type { Profile, TraceEvent } from "./types.ts";
 
 export const ROW_HEIGHT = 18;
 export const LANE_HEADER = 20;
+export const COUNTER_HEIGHT = 42;
 
 export interface EventGeometry {
   index: number;
@@ -9,7 +10,15 @@ export interface EventGeometry {
   start: number | null;
   end: number | null;
   row: number;
-  kind: "span" | "mark";
+  kind: "span" | "mark" | "counter";
+}
+
+export interface CounterSeries {
+  name: string;
+  field: string;
+  points: { time: number; value: number; index: number }[];
+  min: number;
+  max: number;
 }
 
 export interface LaneGeometry {
@@ -18,6 +27,7 @@ export interface LaneGeometry {
   height: number;
   spanRows: number;
   events: EventGeometry[];
+  counters: CounterSeries[];
 }
 
 export interface Timeline {
@@ -30,11 +40,28 @@ export type TimelineTrack = {
   lane: LaneGeometry;
   top: number;
   height: number;
-  collapsed: boolean;
-};
+} & ({ kind: "events"; collapsed: boolean } | { kind: "counter"; counter: CounterSeries });
 
+export function counterPointY(counter: CounterSeries, value: number): number {
+  return (
+    COUNTER_HEIGHT -
+    5 -
+    ((value - counter.min) / (counter.max - counter.min || 1)) * (COUNTER_HEIGHT - 12)
+  );
+}
+
+// A raw event may contribute to several counter series. Reveal its first plotted
+// series; counters without numeric samples stay on their original event track.
 export function eventPosition(tracks: TimelineTrack[], tid: number, eventIndex: number) {
-  const track = tracks.find((candidate) => candidate.lane.tid === tid);
+  for (const track of tracks) {
+    if (track.lane.tid !== tid || track.kind !== "counter") continue;
+    const counter = track.counter;
+    const point = counter.points.find((candidate) => candidate.index === eventIndex);
+    if (point) return { track, y: track.top + counterPointY(counter, point.value) };
+  }
+  const track = tracks.find(
+    (candidate) => candidate.kind === "events" && candidate.lane.tid === tid,
+  );
   const event = track?.lane.events[eventIndex];
   if (!track || !event) return undefined;
   return { track, y: track.top + LANE_HEADER + event.row * ROW_HEIGHT + ROW_HEIGHT / 2 };
@@ -73,17 +100,43 @@ function stackSpans(events: EventGeometry[]): number {
 function eventGeometry(event: TraceEvent, index: number): EventGeometry {
   const time = numeric(event.ts);
   const duration = numeric(event.dur);
-  const kind = event.ph === "X" && duration !== null && duration >= 0 ? "span" : "mark";
+  const kind =
+    event.ph === "C"
+      ? "counter"
+      : event.ph === "X" && duration !== null && duration >= 0
+        ? "span"
+        : "mark";
   const finish = time === null ? null : time + (kind === "span" ? duration! : 0);
   return { index, event, start: time, end: finish, row: 0, kind };
+}
+
+function counterSeries(events: EventGeometry[]): CounterSeries[] {
+  const series = new Map<string, CounterSeries>();
+  for (const { event, index, start, kind } of events) {
+    if (kind !== "counter" || start === null || !event.args || typeof event.args !== "object")
+      continue;
+    for (const [field, raw] of Object.entries(event.args)) {
+      const value = numeric(raw);
+      if (value === null) continue;
+      const name = eventName(event);
+      const key = JSON.stringify([name, field]);
+      const counter = series.get(key) ?? { name, field, points: [], min: value, max: value };
+      counter.points.push({ time: start, value, index });
+      counter.min = Math.min(counter.min, value);
+      counter.max = Math.max(counter.max, value);
+      series.set(key, counter);
+    }
+  }
+  return [...series.values()];
 }
 
 export function layoutProfile(profile: Profile): Timeline {
   const lanes = profile.lanes.map((lane) => {
     const events = lane.events.map(eventGeometry);
     const spanRows = stackSpans(events);
+    const counters = counterSeries(events);
     const height = LANE_HEADER + spanRows * ROW_HEIGHT + 8;
-    return { tid: lane.tid, name: lane.name, height, spanRows, events };
+    return { tid: lane.tid, name: lane.name, height, spanRows, events, counters };
   });
   let start = Infinity;
   let end = -Infinity;
@@ -122,6 +175,13 @@ export function formatRulerTime(time: number, range: TimeRange): string {
   const span = range.end - range.start;
   const divisor = span >= 1_000_000 ? 1_000_000 : span >= 1_000 ? 1_000 : 1;
   return `${Number((time / divisor).toFixed(3))}${divisor === 1_000_000 ? "s" : divisor === 1_000 ? "ms" : "µs"}`;
+}
+
+export function formatCounter(value: number): string {
+  const magnitude = Math.abs(value);
+  return magnitude >= 1_000_000 || (magnitude > 0 && magnitude < 0.001)
+    ? value.toExponential(3)
+    : String(Number(value.toPrecision(4)));
 }
 
 export function timeToX(time: number, range: TimeRange, width: number, gutter: number): number {
@@ -173,18 +233,66 @@ export function timeTicks(range: TimeRange, width: number): number[] {
   return ticks;
 }
 
+// Bazel counter names in the reference viewer's information order. The labels
+// and original fields remain unchanged; unlisted metrics follow by name/field.
+const counterOrder = [
+  "action count",
+  "action count (local)",
+  "CPU usage (Bazel)",
+  "Memory usage (Bazel)",
+  "CPU usage (total)",
+  "Memory usage (total)",
+  "System load average",
+  "Network Up usage (total)",
+  "Network Down usage (total)",
+];
+
+function compareCounterTracks(
+  a: Extract<TimelineTrack, { kind: "counter" }>,
+  b: Extract<TimelineTrack, { kind: "counter" }>,
+): number {
+  const left = a.counter;
+  const right = b.counter;
+  const leftOrder = counterOrder.indexOf(left.name);
+  const rightOrder = counterOrder.indexOf(right.name);
+  return (
+    (leftOrder < 0 ? counterOrder.length : leftOrder) -
+      (rightOrder < 0 ? counterOrder.length : rightOrder) ||
+    left.name.localeCompare(right.name) ||
+    left.field.localeCompare(right.field) ||
+    a.lane.tid - b.lane.tid
+  );
+}
+
 export function visibleTracks(
   lanes: LaneGeometry[],
   collapsed: ReadonlySet<number>,
 ): TimelineTrack[] {
-  let top = 0;
-  return [...lanes]
+  const events: TimelineTrack[] = [...lanes]
     .sort((a, b) => a.tid - b.tid)
-    .map((lane) => {
-      const closed = collapsed.has(lane.tid);
-      const height = closed ? LANE_HEADER : lane.height;
-      const track = { lane, top, height, collapsed: closed };
-      top += height;
-      return track;
-    });
+    .map((lane) => ({
+      kind: "events",
+      lane,
+      top: 0,
+      height: collapsed.has(lane.tid) ? LANE_HEADER : lane.height,
+      collapsed: collapsed.has(lane.tid),
+    }));
+  const counters = lanes
+    .flatMap((lane) =>
+      lane.counters.map((counter) => ({
+        kind: "counter" as const,
+        lane,
+        counter,
+        top: 0,
+        height: COUNTER_HEIGHT,
+      })),
+    )
+    .sort(compareCounterTracks);
+  let top = 0;
+  // Display order is independent of the profile's original lane and event order.
+  return [...events, ...counters].map((track) => {
+    const positioned = { ...track, top };
+    top += track.height;
+    return positioned;
+  });
 }

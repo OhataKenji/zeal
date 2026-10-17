@@ -4,6 +4,7 @@ import {
   eventColor,
   eventName,
   timeToX,
+  counterPointY,
   formatRulerTime,
   type EventGeometry,
   type TimeRange,
@@ -75,22 +76,25 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     const trackTop = track.top - scrollTop;
     const trackBottom = trackTop + track.height;
     if (trackBottom < 0 || trackTop > height) continue;
-    const contentTop = trackTop + LANE_HEADER;
+    const contentTop = trackTop + (track.kind === "events" ? LANE_HEADER : 0);
     const contentHeight = trackBottom - contentTop;
-    context.fillStyle = "#e9ecef";
-    context.fillRect(gutter, trackTop, Math.max(1, width - gutter), LANE_HEADER);
-    context.strokeStyle = "#d7dce0";
-    context.beginPath();
-    context.moveTo(gutter, trackBottom - 0.5);
-    context.lineTo(width, trackBottom - 0.5);
-    context.stroke();
-    if (track.collapsed) continue;
+    if (track.kind === "events") {
+      context.fillStyle = "#e9ecef";
+      context.fillRect(gutter, trackTop, Math.max(1, width - gutter), LANE_HEADER);
+      context.strokeStyle = "#d7dce0";
+      context.beginPath();
+      context.moveTo(gutter, trackBottom - 0.5);
+      context.lineTo(width, trackBottom - 0.5);
+      context.stroke();
+      if (track.collapsed) continue;
+    }
     // Plots share one clip. DOM labels remain fixed in the gutter.
     context.save();
     context.beginPath();
     context.rect(gutter, contentTop, Math.max(1, width - gutter), contentHeight);
     context.clip();
-    drawEvents(context, track, trackTop, frame, hits);
+    if (track.kind === "events") drawEvents(context, track, trackTop, frame, hits);
+    else drawCounterSeries(context, track, trackTop, frame, hits);
     context.restore();
     context.fillStyle = "#f8f9fa";
     context.fillRect(0, contentTop, gutter, contentHeight);
@@ -106,15 +110,20 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
 
 function drawEvents(
   context: CanvasRenderingContext2D,
-  track: TimelineTrack,
+  track: Extract<TimelineTrack, { kind: "events" }>,
   trackTop: number,
   frame: TimelineFrame,
   hits: EventHit[],
 ) {
   const { lane } = track;
   const { range } = frame;
+  const plottedCounters = new Set(
+    lane.counters.flatMap((counter) => counter.points.map((point) => point.index)),
+  );
   for (const event of lane.events) {
     if (event.start === null || event.end! < range.start || event.start > range.end) continue;
+    // Numeric counter events are drawn on their series; raw counters keep a mark.
+    if (event.kind === "counter" && plottedCounters.has(event.index)) continue;
     hits.push(drawEvent(context, event, lane.tid, trackTop, frame));
   }
 }
@@ -167,6 +176,53 @@ function drawEvent(
     tid,
     index: event.index,
   };
+}
+
+function drawCounterSeries(
+  context: CanvasRenderingContext2D,
+  track: Extract<TimelineTrack, { kind: "counter" }>,
+  trackTop: number,
+  frame: TimelineFrame,
+  hits: EventHit[],
+) {
+  const { width, gutter, range, selection } = frame;
+  const { lane, counter } = track;
+  const timeX = (time: number) => timeToX(time, range, width, gutter);
+  const valueY = (value: number) => trackTop + counterPointY(counter, value);
+  context.strokeStyle = "#65717a";
+  context.lineWidth = 1.5;
+  context.beginPath();
+  for (const [pointIndex, point] of counter.points.entries()) {
+    if (pointIndex === 0) context.moveTo(timeX(point.time), valueY(point.value));
+    else context.lineTo(timeX(point.time), valueY(point.value));
+  }
+  context.stroke();
+  context.fillStyle = context.strokeStyle;
+  for (const point of counter.points) {
+    const pointX = timeX(point.time);
+    if (pointX < gutter || pointX > width) continue;
+    const pointY = valueY(point.value);
+    context.beginPath();
+    context.arc(pointX, pointY, 2, 0, Math.PI * 2);
+    context.fill();
+    if (selection?.tid === lane.tid && selection.index === point.index) {
+      context.save();
+      context.strokeStyle = "#111";
+      context.beginPath();
+      context.arc(pointX, pointY, 4, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
+    }
+    hits.push({
+      x: pointX - 4,
+      y: pointY - 4,
+      width: 8,
+      height: 8,
+      tid: lane.tid,
+      index: point.index,
+    });
+  }
+  context.lineWidth = 1;
 }
 
 function drawClippedLabel(
