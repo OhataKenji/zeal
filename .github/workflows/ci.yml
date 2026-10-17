@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +15,7 @@ concurrency:
 
 jobs:
   changes:
-    name: Detect CI changes
+    name: Detect changes
     runs-on: ubuntu-latest
     # paths-filter reads the changed-file list through the pull request API.
     permissions:
@@ -23,6 +24,7 @@ jobs:
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       rust: ${{ steps.filter.outputs.rust }}
+      build: ${{ steps.filter.outputs.build }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -40,7 +42,6 @@ jobs:
               - '!src-tauri/**'
               - '!.vscode/**'
               - '!.github/pull_request_template.md'
-              - '!.github/workflows/build.yml'
               - '!**/*.md'
               - '!LICENSE'
               - '!renovate.json'
@@ -59,7 +60,14 @@ jobs:
               - '!.oxlintrc.json'
               - '!.vscode/**'
               - '!.github/pull_request_template.md'
-              - '!.github/workflows/build.yml'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!renovate.json'
+            build:
+              - '**'
+              - '!docs/**'
+              - '!.vscode/**'
+              - '!.github/pull_request_template.md'
               - '!**/*.md'
               - '!LICENSE'
               - '!renovate.json'
@@ -67,7 +75,7 @@ jobs:
   frontend:
     name: frontend (check / format / lint / build)
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -112,7 +120,7 @@ jobs:
   rust:
     name: rust (fmt / clippy / test)
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -147,3 +155,59 @@ jobs:
       - name: cargo test
         run: cargo test
         working-directory: src-tauri
+
+  tauri-build:
+    name: tauri build (${{ matrix.os }})
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # https://v2.tauri.app/start/prerequisites/#linux
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      # After the toolchain install: the cache key includes the rustc version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: cargo test
+        run: cargo test
+        working-directory: src-tauri
+
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Branch protection requires a stable check name, but a skipped job can
+  # report a name that does not match (e.g. an unexpanded matrix name).
+  # This always-run gate aggregates every job under one required check.
+  ci:
+    name: ci
+    needs: [changes, frontend, gitleaks, rust, tauri-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"')
+          if [ -n "$failed" ]; then
+            echo "::error::$failed"
+            exit 1
+          fi
