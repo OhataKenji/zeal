@@ -1,179 +1,371 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { Profile } from "./types";
-  import { COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor, eventTextColor, eventName, formatTime, layoutProfile, type EventGeometry } from "./timeline";
+  import {
+    COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor, eventTextColor,
+    eventName, formatTime, layoutProfile, panRange, zoomRange, clampRange,
+    timeTicks, timeToX, xToTime, formatRulerTime, formatCounter, visibleTracks, type TimeRange,
+  } from "./timeline";
 
   let { profile }: { profile: Profile } = $props();
   const layout = $derived(layoutProfile(profile));
-  let canvas: HTMLCanvasElement;
-  let viewport: HTMLDivElement;
+  let windowRange = $state.raw<TimeRange | null>(null);
+  const range = $derived(windowRange ?? { start: layout.start, end: layout.end });
+  const span = $derived(range.end - range.start);
+  let collapsed = $state.raw<ReadonlySet<number>>(new Set());
+  const tracks = $derived(visibleTracks(layout.lanes, collapsed));
+  const totalHeight = $derived(tracks.reduce((sum, track) => sum + track.height, 0));
+  let selection = $state<{ tid: number; index: number } | null>(null);
+  const selectedLane = $derived(layout.lanes.find((lane) => lane.tid === selection?.tid));
+  const selected = $derived(selectedLane?.events[selection?.index ?? 0]);
+  const browserLane = $derived(selectedLane ?? layout.lanes[0]);
+
+  let canvas = $state<HTMLCanvasElement>();
+  let ruler = $state<HTMLCanvasElement>();
+  let viewport = $state<HTMLDivElement>();
   let width = $state(600);
-  let height = $state(360);
+  let height = $state(320);
   let scrollTop = $state(0);
-  let zoom = $state(1);
-  let position = $state(0);
-  let laneIndex = $state(0);
-  let eventIndex = $state(0);
-  let hover = $state<EventGeometry | null>(null);
-  const lane = $derived(layout.lanes[laneIndex]);
-  const selected = $derived(lane?.events[eventIndex]);
-  const range = $derived((layout.end - layout.start) / zoom);
-  const from = $derived(layout.start + (layout.end - layout.start - range) * position / 100);
-  const to = $derived(from + range);
-  const gutter = 180;
-  const plotWidth = $derived(Math.max(1, width - gutter - 12));
-  const shown = $derived(hover ?? selected);
-  const rawText = $derived(shown ? JSON.stringify(shown.event, null, 2) : "");
+  const gutter = 190;
+  const plotWidth = $derived(Math.max(1, width - gutter));
+  const ticks = $derived(timeTicks(range, plotWidth));
+  let hover = $state<{ tid: number; index: number; x: number; y: number } | null>(null);
+  const hovered = $derived(layout.lanes.find((lane) => lane.tid === hover?.tid)?.events[hover?.index ?? -1]);
+  let pointerAnchor = 0.5;
+  let drag: { id: number; x: number; range: TimeRange; moved: boolean } | null = null;
+  let hits: { x: number; y: number; width: number; height: number; tid: number; index: number }[] = [];
 
-  function x(time: number) { return gutter + (time - from) / range * plotWidth; }
-  let hits: { x: number; y: number; w: number; h: number; lane: number; event: number }[] = [];
+  function x(time: number) { return timeToX(time, range, width, gutter); }
+  function anchor(px: number) { return Math.max(0, Math.min(1, (xToTime(px, range, width, gutter) - range.start) / span)); }
+  function fit() { windowRange = null; hover = null; }
+  function zoom(factor: number, anchor = 0.5) {
+    windowRange = zoomRange(range, layout, factor, anchor);
+    hover = null;
+  }
+  function pan(delta: number) {
+    windowRange = panRange(range, layout, delta);
+    hover = null;
+  }
+  function toggleThread(tid: number) {
+    const next = new Set(collapsed);
+    if (next.has(tid)) next.delete(tid); else next.add(tid);
+    collapsed = next;
+    hover = null;
+  }
 
-  $effect(() => {
-    if (!canvas) return;
-    const context = canvas.getContext("2d");
-    if (!context) return;
+  function prepare(element: HTMLCanvasElement, canvasHeight: number) {
+    const context = element.getContext("2d");
+    if (!context) return null;
     const ratio = window.devicePixelRatio || 1;
-    canvas.width = width * ratio;
-    canvas.height = height * ratio;
+    element.width = Math.max(1, width * ratio);
+    element.height = Math.max(1, canvasHeight * ratio);
     context.scale(ratio, ratio);
     context.fillStyle = "#fff";
-    context.fillRect(0, 0, width, height);
-    context.font = "11px Menlo, monospace";
+    context.fillRect(0, 0, width, canvasHeight);
+    context.font = "10px Menlo, monospace";
+    return context;
+  }
+
+  function label(context: CanvasRenderingContext2D, text: string, left: number, baseline: number, available: number) {
+    context.save();
+    context.beginPath();
+    context.rect(left, baseline - 12, Math.max(0, available), 15);
+    context.clip();
+    context.fillText(text, left, baseline);
+    context.restore();
+  }
+
+  $effect(() => {
+    if (!ruler || width <= gutter) return;
+    const context = prepare(ruler, 26);
+    if (!context) return;
+    context.fillStyle = "#f1f3f5";
+    context.fillRect(0, 0, width, 26);
+    context.fillStyle = "#66717c";
+    context.fillText("THREAD / TIME", 12, 17);
+    context.save();
+    context.beginPath(); context.rect(gutter, 0, plotWidth, 26); context.clip();
+    for (const time of ticks) {
+      const px = x(time);
+      context.strokeStyle = "#cbd0d5";
+      context.beginPath(); context.moveTo(px + 0.5, 18); context.lineTo(px + 0.5, 26); context.stroke();
+      context.fillStyle = "#52606b";
+      context.fillText(formatRulerTime(time, range), px + 4, 13);
+    }
+    context.restore();
+  });
+
+  $effect(() => {
+    if (!canvas || width <= gutter || height <= 0) return;
+    const context = prepare(canvas, height);
+    if (!context) return;
     hits = [];
-    layout.lanes.forEach((current, li) => {
-      const y = current.top - scrollTop;
-      if (y + current.height < 0 || y > height) return;
-      context.fillStyle = "#eee";
-      context.fillRect(0, y, width, LANE_HEADER);
-      context.fillStyle = "#333";
-      context.fillText(`${current.name || "thread"} · tid ${current.tid}`, 6, y + 16, width - 12);
+    // The ruler, phase strip, events and hit rectangles all use x(time).
+    for (const time of ticks) {
+      context.strokeStyle = "#e2e6e9";
+      context.beginPath(); context.moveTo(x(time) + 0.5, 0); context.lineTo(x(time) + 0.5, height); context.stroke();
+    }
+    for (const track of tracks) {
+      const { lane } = track;
+      const y = track.top - scrollTop;
+      if (y + track.height < 0 || y > height) continue;
+      context.fillStyle = "#e9ecef";
+      context.fillRect(gutter, y, plotWidth, LANE_HEADER);
+      context.strokeStyle = "#d7dce0";
+      context.beginPath(); context.moveTo(gutter, y + track.height - 0.5); context.lineTo(width, y + track.height - 0.5); context.stroke();
+      if (track.collapsed) continue;
       context.save();
       context.beginPath();
-      context.rect(gutter, y + LANE_HEADER, plotWidth, current.height - LANE_HEADER);
+      context.rect(gutter, y + LANE_HEADER, plotWidth, track.height - LANE_HEADER);
       context.clip();
-      for (const event of current.events) {
-        if (event.start === null || event.end! < from || event.start > to) continue;
+      const plottedCounters = new Set(lane.counters.flatMap((counter) => counter.points.map((point) => point.index)));
+      for (const event of lane.events) {
+        if (event.start === null || event.end! < range.start || event.start > range.end) continue;
+        // Numeric counters are already selectable on their series. Only raw
+        // counters without numeric fields need a fallback mark in the span row.
+        if (event.kind === "counter" && plottedCounters.has(event.index)) continue;
         const ex = Math.max(gutter, x(event.start));
-        const ew = Math.max(3, Math.min(width - 12, x(event.end!)) - ex);
-        const ey = y + LANE_HEADER + event.row * ROW_HEIGHT + 2;
+        const ew = Math.max(1, Math.min(width, x(event.end!)) - ex);
+        const ey = y + LANE_HEADER + event.row * ROW_HEIGHT;
         context.fillStyle = eventColor(event.event);
         if (event.kind === "span") {
-          context.fillRect(ex, ey, ew, ROW_HEIGHT - 4);
-          if (ew > 36) {
+          context.fillRect(ex, ey, ew, ROW_HEIGHT - 1);
+          if (ew > 28) {
             context.fillStyle = eventTextColor(event.event);
-            context.fillText(eventName(event.event), ex + 3, ey + 12, ew - 6);
+            label(context, eventName(event.event), ex + 3, ey + 12, ew - 5);
           }
         } else {
           context.beginPath();
-          context.moveTo(ex, ey);
-          context.lineTo(ex + 4, ey + 8);
-          context.lineTo(ex, ey + 16);
-          context.lineTo(ex - 4, ey + 8);
-          context.closePath();
-          context.fill();
+          context.moveTo(ex, ey + 2); context.lineTo(ex + 3, ey + 8);
+          context.lineTo(ex, ey + 14); context.lineTo(ex - 3, ey + 8);
+          context.closePath(); context.fill();
         }
-        if (li === laneIndex && event.index === eventIndex) {
+        if (selection?.tid === lane.tid && selection.index === event.index) {
           context.strokeStyle = "#111";
           context.lineWidth = 2;
-          context.strokeRect(ex - 1, ey - 1, ew + 2, ROW_HEIGHT - 2);
+          context.strokeRect(ex, ey + 0.5, Math.max(3, ew), ROW_HEIGHT - 2);
+          context.lineWidth = 1;
         }
-        hits.push({ x: ex - 3, y: ey, w: Math.max(ew, 8), h: ROW_HEIGHT, lane: li, event: event.index });
+        hits.push({ x: ex - 2, y: ey, width: Math.max(ew, 6), height: ROW_HEIGHT, tid: lane.tid, index: event.index });
       }
-      current.counters.forEach((counter, ci) => {
-        const cy = y + LANE_HEADER + current.spanRows * ROW_HEIGHT + ci * COUNTER_HEIGHT;
-        context.strokeStyle = eventColor(current.events[counter.points[0].index].event);
-        context.lineWidth = 2;
+      lane.counters.forEach((counter, ci) => {
+        const cy = y + LANE_HEADER + lane.spanRows * ROW_HEIGHT + ci * COUNTER_HEIGHT;
+        const pointY = (value: number) => cy + COUNTER_HEIGHT - 5 - (value - counter.min) / (counter.max - counter.min || 1) * (COUNTER_HEIGHT - 12);
+        context.strokeStyle = eventColor(lane.events[counter.points[0].index].event);
+        context.lineWidth = 1.5;
         context.beginPath();
         counter.points.forEach((point, pi) => {
-          const px = x(point.time);
-          const py = cy + 52 - (point.value - counter.min) / (counter.max - counter.min || 1) * 32;
-          if (pi === 0) context.moveTo(px, py); else context.lineTo(px, py);
-          if (px >= gutter && px <= width - 12) {
-            hits.push({ x: px - 5, y: py - 5, w: 10, h: 10, lane: li, event: point.index });
-          }
+          if (pi === 0) context.moveTo(x(point.time), pointY(point.value));
+          else context.lineTo(x(point.time), pointY(point.value));
         });
         context.stroke();
         context.fillStyle = context.strokeStyle;
         for (const point of counter.points) {
           const px = x(point.time);
-          if (px < gutter || px > width - 12) continue;
-          const py = cy + 52 - (point.value - counter.min) / (counter.max - counter.min || 1) * 32;
-          context.beginPath();
-          context.arc(px, py, 2, 0, Math.PI * 2);
-          context.fill();
+          if (px < gutter || px > width) continue;
+          const py = pointY(point.value);
+          context.beginPath(); context.arc(px, py, 2, 0, Math.PI * 2); context.fill();
+          if (selection?.tid === lane.tid && selection.index === point.index) {
+            context.save();
+            context.strokeStyle = "#111";
+            context.beginPath(); context.arc(px, py, 4, 0, Math.PI * 2); context.stroke();
+            context.restore();
+          }
+          hits.push({ x: px - 4, y: py - 4, width: 8, height: 8, tid: lane.tid, index: point.index });
         }
-        context.fillStyle = "#444";
-        context.fillText(`${counter.name} / ${counter.field} (${counter.min}…${counter.max})`, gutter + 4, cy + 13, plotWidth - 8);
+        context.lineWidth = 1;
       });
       context.restore();
-    });
+      context.fillStyle = "#f8f9fa";
+      context.fillRect(0, y + LANE_HEADER, gutter, track.height - LANE_HEADER);
+      context.fillStyle = "#65717a";
+      lane.counters.forEach((counter, ci) => {
+        const cy = y + LANE_HEADER + lane.spanRows * ROW_HEIGHT + ci * COUNTER_HEIGHT;
+        label(context, counter.name, 12, cy + 13, gutter - 20);
+        label(context, `${counter.field} ${formatCounter(counter.min)}…${formatCounter(counter.max)}`, 12, cy + 27, gutter - 20);
+      });
+    }
+    context.strokeStyle = "#cbd0d5";
+    context.beginPath(); context.moveTo(gutter - 0.5, 0); context.lineTo(gutter - 0.5, height); context.stroke();
   });
 
-  function hit(event: PointerEvent) {
-    const box = canvas.getBoundingClientRect();
-    const px = event.clientX - box.left;
-    const py = event.clientY - box.top;
-    return hits.findLast((item) => px >= item.x && px <= item.x + item.w && py >= item.y && py <= item.y + item.h);
+  function pointer(event: MouseEvent) {
+    const box = canvas!.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
   }
+  function hit(px: number, py: number) {
+    return hits.findLast((item) => px >= item.x && px <= item.x + item.width && py >= item.y && py <= item.y + item.height);
+  }
+  function pointerDown(event: PointerEvent) {
+    if (event.button !== 0 || !canvas) return;
+    const point = pointer(event);
+    if (point.x < gutter) return;
+    drag = { id: event.pointerId, x: event.clientX, range: { ...range }, moved: false };
+    canvas.setPointerCapture(event.pointerId);
+    canvas.focus();
+    event.preventDefault();
+  }
+  function pointerMove(event: PointerEvent) {
+    const point = pointer(event);
+    pointerAnchor = anchor(point.x);
+    if (drag?.id === event.pointerId) {
+      const delta = event.clientX - drag.x;
+      if (Math.abs(delta) > 3) drag.moved = true;
+      if (drag.moved) windowRange = panRange(drag.range, layout, -delta / plotWidth * (drag.range.end - drag.range.start));
+      hover = null;
+      return;
+    }
+    const found = hit(point.x, point.y);
+    hover = found ? { tid: found.tid, index: found.index, x: point.x, y: point.y } : null;
+  }
+  function pointerUp(event: PointerEvent) {
+    if (!drag || drag.id !== event.pointerId) return;
+    if (!drag.moved) {
+      const point = pointer(event);
+      const found = hit(point.x, point.y);
+      if (found) selection = { tid: found.tid, index: found.index };
+    }
+    drag = null;
+    if (canvas?.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  }
+  function cancelDrag() { drag = null; }
 
-  async function reveal() {
+  $effect(() => {
+    if (!canvas) return;
+    const element = canvas;
+    const wheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey && !event.shiftKey) return;
+      event.preventDefault();
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : 1);
+      if (event.shiftKey) pan(delta / plotWidth * span);
+      else zoom(Math.exp(Math.max(-1.5, Math.min(1.5, -delta * 0.003))), anchor(pointer(event).x));
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  });
+
+  async function selectEvent(tid: number, index: number) {
+    const lane = layout.lanes.find((candidate) => candidate.tid === tid);
+    if (!lane) return;
+    const selectedIndex = Math.max(0, Math.min(lane.events.length - 1, Math.trunc(index) || 0));
+    selection = { tid, index: selectedIndex };
+    if (collapsed.has(tid)) toggleThread(tid);
     hover = null;
     await tick();
-    if (!lane || !viewport) return;
-    const selectedY = lane.top + LANE_HEADER + (selected?.row ?? 0) * ROW_HEIGHT;
-    if (selectedY < viewport.scrollTop || selectedY + ROW_HEIGHT > viewport.scrollTop + height) {
-      viewport.scrollTop = Math.max(lane.top, selectedY - LANE_HEADER);
-    }
-    if (selected?.start !== null && selected?.start !== undefined && (selected.start < from || selected.start > to)) {
-      position = Math.max(0, Math.min(100, (selected.start - layout.start - range / 2) / (layout.end - layout.start - range || 1) * 100));
-    }
+    if (selection?.tid !== tid || selection.index !== selectedIndex) return;
+    const track = tracks.find((candidate) => candidate.lane.tid === tid);
+    const event = lane.events[selection.index];
+    if (!track || !event || !viewport) return;
+    const selectedY = track.top + LANE_HEADER + event.row * ROW_HEIGHT;
+    if (selectedY < viewport.scrollTop || selectedY + ROW_HEIGHT > viewport.scrollTop + height) viewport.scrollTop = Math.max(track.top, selectedY - LANE_HEADER);
+    if (event.start !== null && (event.start < range.start || event.start > range.end)) windowRange = panRange(range, layout, event.start - (range.start + range.end) / 2);
   }
-
   function moveEvent(delta: number) {
-    eventIndex = Math.max(0, Math.min((lane?.events.length ?? 1) - 1, eventIndex + delta));
-    void reveal();
+    if (browserLane) void selectEvent(browserLane.tid, (selection?.index ?? 0) + delta);
+  }
+  function zoomSelection() {
+    if (selected?.start === null || selected?.start === undefined) return;
+    const duration = selected.end! - selected.start;
+    const padding = Math.max(duration * 0.08, duration === 0 ? span / 20 : 1);
+    windowRange = clampRange({ start: selected.start - padding, end: selected.end! + padding }, layout);
+  }
+  function keydown(event: KeyboardEvent) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "w" || key === "+" || key === "=") zoom(1.5, pointerAnchor);
+    else if (key === "s" || key === "-") zoom(1 / 1.5, pointerAnchor);
+    else if (key === "a" || key === "d") pan(span * (key === "a" ? -0.15 : 0.15));
+    else if (key === "f") fit();
+    else if (key === "arrowleft" || key === "arrowright") moveEvent(key === "arrowleft" ? -1 : 1);
+    else return;
+    event.preventDefault();
   }
 </script>
 
-<div class="trace-controls">
-  <label>zoom <input aria-label="Timeline zoom" type="range" min="1" max="100" bind:value={zoom} /></label>
-  <label>position <input aria-label="Timeline position" type="range" min="0" max="100" step="0.1" bind:value={position} disabled={zoom === 1} /></label>
-  <button class="btn" onclick={() => { zoom = 1; position = 0; }}>fit</button>
-</div>
-<p class="label">{formatTime(from)} — {formatTime(to)} · {layout.lanes.length} threads</p>
-<div class="phases" aria-label="Build phase markers">
-  {#each profile.phases as phase}
-    {#if phase.endUs >= from && phase.startUs <= to}
-      <div class="phase" style:left="{Math.max(0, (phase.startUs - from) / range * 100)}%" style:width="{Math.max(0.2, (Math.min(to, phase.endUs) - Math.max(from, phase.startUs)) / range * 100)}%" style:background={eventColor({ name: phase.name })} title={`${phase.name}: ${formatTime(phase.startUs)} — ${formatTime(phase.endUs)}`}>
-        {phase.name}
+<div class="trace-view">
+  <div class="trace-toolbar">
+    <strong>Timing</strong><span class="trace-count">{layout.lanes.length} threads</span><span class="trace-input-hint">Drag to pan · Ctrl/⌘ wheel to zoom</span>
+    <div class="trace-actions">
+      <button onclick={fit} title="Fit the complete profile (F)">Fit</button>
+      <button onclick={() => zoom(1 / 1.5)} aria-label="Zoom out" title="Zoom out (S)">−</button>
+      <button onclick={() => zoom(1.5)} aria-label="Zoom in" title="Zoom in (W)">+</button>
+      <button onclick={() => { collapsed = collapsed.size === layout.lanes.length ? new Set() : new Set(layout.lanes.map((lane) => lane.tid)); }}>
+        {collapsed.size === layout.lanes.length ? "Expand all" : "Collapse all"}
+      </button>
+    </div>
+  </div>
+  <div class="trace-axis"><canvas bind:this={ruler} style:width="{width}px" style:height="26px" aria-label="Timeline time ruler"></canvas></div>
+  <div class="trace-phase-row" style:width="{width}px">
+    <span style:width="{gutter}px">Build phases</span>
+    <div class="trace-phases" style:left="{gutter}px" style:width="{plotWidth}px">
+      {#each profile.phases as phase}
+        {#if phase.endUs >= range.start && phase.startUs <= range.end}
+          <div class="trace-phase" style:left="{x(Math.max(range.start, phase.startUs)) - gutter}px"
+            style:width="{Math.max(1, x(Math.min(range.end, phase.endUs)) - x(Math.max(range.start, phase.startUs)))}px"
+            style:background={eventColor({ name: phase.name })}
+            title={`${phase.name}: ${formatTime(phase.startUs)} — ${formatTime(phase.endUs)}`}>{phase.name}</div>
+        {/if}
+      {/each}
+    </div>
+  </div>
+  <div class="trace-body">
+    <div class="trace-viewport" bind:this={viewport} bind:clientWidth={width} bind:clientHeight={height}
+      onscroll={() => { if (viewport) scrollTop = viewport.scrollTop; hover = null; }}>
+      <div class="trace-scroll-content" style:height="{Math.max(height, totalHeight)}px">
+        <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0"
+          aria-label="Profile timeline. Drag to pan. Control or Command plus wheel to zoom. W/S zoom, A/D pan, F fit. Left/right selects adjacent events."
+          onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp}
+          onpointercancel={cancelDrag} onlostpointercapture={cancelDrag}
+          onpointerleave={() => hover = null} onkeydown={keydown}></canvas>
+        <div class="trace-thread-labels" style:width="{gutter}px">
+          {#each tracks as track (track.lane.tid)}
+            <button style:top="{track.top}px" style:height="{LANE_HEADER}px" aria-expanded={!track.collapsed}
+              title={`${track.lane.name || "thread"} · tid ${track.lane.tid}`}
+              onclick={() => toggleThread(track.lane.tid)}>
+              <span>{track.collapsed ? "▸" : "▾"}</span> {track.lane.name || "thread"}<small>{track.lane.tid}</small>
+            </button>
+          {/each}
+        </div>
+      </div>
+    </div>
+    {#if hover && hovered}
+      <div class="trace-tooltip" style:left="{Math.max(gutter, Math.min(width - 250, hover.x + 12))}px" style:top="{Math.max(0, Math.min(height - 74, hover.y + 12))}px">
+        <strong>{eventName(hovered.event)}</strong>
+        <span>{hovered.start === null ? "No timestamp" : formatTime(hovered.start)}{#if hovered.kind === "span"} · {formatTime(hovered.end! - hovered.start!)}{/if}</span>
+        {#if typeof hovered.event.cat === "string"}<span>{hovered.event.cat}</span>{/if}
       </div>
     {/if}
-  {/each}
-</div>
-<details class="phase-key">
-  <summary>phase markers ({profile.phases.length})</summary>
-  {#each profile.phases as phase}
-    <p>{phase.name} <span class="dim">{formatTime(phase.startUs)} → {formatTime(phase.endUs)}</span></p>
-  {/each}
-</details>
-<p class="label">Skymeld では analysis と execution が重なります。帯は元の marker 名を示します。thread の時間の合計は run の経過時間ではありません。</p>
-<div class="trace-viewport" bind:this={viewport} bind:clientWidth={width} bind:clientHeight={height} onscroll={() => { scrollTop = viewport.scrollTop; }}>
-  <div style:height="{Math.max(height, layout.height)}px">
-    <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" tabindex="0" aria-label="Profile timeline. 左右キーで同じthreadの前後のeventを選択。下のthread選択とevent番号でも全eventを確認できます。" title={rawText}
-      onpointermove={(event) => { const found = hit(event); hover = found ? layout.lanes[found.lane].events[found.event] : null; }}
-      onpointerleave={() => { hover = null; }}
-      onpointerdown={(event) => { const found = hit(event); if (found) { laneIndex = found.lane; eventIndex = found.event; } canvas.focus(); }}
-      onkeydown={(event) => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); moveEvent(event.key === "ArrowRight" ? 1 : -1); } }}>
-    </canvas>
+  </div>
+  <div class="trace-bottom">
+    <div class="trace-selection">
+      {#if selected && selectedLane}
+        <div class="trace-selection-title"><strong>{eventName(selected.event)}</strong><button class="link" disabled={selected.start === null} onclick={zoomSelection}>Zoom to selection</button></div>
+        <dl>
+          <dt>Thread</dt><dd>{selectedLane.name || "thread"} · tid {selectedLane.tid}</dd>
+          <dt>Start</dt><dd>{selected.start === null ? "Unknown" : formatTime(selected.start)}</dd>
+          {#if selected.kind === "span"}<dt>Duration</dt><dd>{formatTime(selected.end! - selected.start!)}</dd>{/if}
+          {#if typeof selected.event.cat === "string"}<dt>Category</dt><dd>{selected.event.cat}</dd>{/if}
+        </dl>
+        <details class="trace-raw"><summary>Raw event fields</summary><pre>{JSON.stringify(selected.event, null, 2)}</pre></details>
+      {:else}<p class="trace-select-hint">Select an event to inspect its timing and fields.</p>{/if}
+    </div>
+    <details class="trace-browser">
+      <summary>Browse all events</summary>
+      <div class="trace-browser-controls">
+        <label>Thread <select value={browserLane?.tid} onchange={(event) => void selectEvent(Number(event.currentTarget.value), 0)}>
+          {#each layout.lanes as lane (lane.tid)}<option value={lane.tid}>{lane.name || "thread"} · tid {lane.tid}</option>{/each}
+        </select></label>
+        <button disabled={!browserLane || (selection?.index ?? 0) <= 0} onclick={() => moveEvent(-1)}>←</button>
+        <label>Event <input type="number" min="1" max={browserLane?.events.length ?? 1} value={(selection?.index ?? 0) + 1}
+          onchange={(event) => { if (browserLane) void selectEvent(browserLane.tid, Number(event.currentTarget.value) - 1); }} /> / {browserLane?.events.length ?? 0}</label>
+        <button disabled={!browserLane || (selection?.index ?? 0) >= browserLane.events.length - 1} onclick={() => moveEvent(1)}>→</button>
+      </div>
+      <p>File order. Events without a timestamp remain available here.</p>
+    </details>
+    <details class="trace-notes"><summary>Controls &amp; phase markers</summary>
+      <p>Scroll: threads. Ctrl/⌘ + wheel: zoom. Drag: pan. W/S: zoom. A/D: pan. F: fit.</p>
+      <p>Skymeld では analysis と execution が重なります。帯は元の marker 名です。thread の時間の合計は run の経過時間ではありません。</p>
+      {#each profile.phases as phase}<p>{phase.name} <span>{formatTime(phase.startUs)} → {formatTime(phase.endUs)}</span></p>{/each}
+    </details>
   </div>
 </div>
-<div class="trace-controls">
-  <label>thread <select class="select" bind:value={laneIndex} onchange={() => { eventIndex = 0; void reveal(); }}>
-    {#each layout.lanes as item, index (item.tid)}<option value={index}>{item.name || "thread"} · tid {item.tid}</option>{/each}
-  </select></label>
-  <button class="btn" disabled={eventIndex <= 0} onclick={() => moveEvent(-1)}>←</button>
-  <label>event <input class="input event-number" type="number" min="1" max={lane?.events.length ?? 1} value={eventIndex + 1} onchange={(event) => { eventIndex = Math.max(0, Math.min((lane?.events.length ?? 1) - 1, Number(event.currentTarget.value) - 1)); void reveal(); }} /> / {lane?.events.length ?? 0}</label>
-  <button class="btn" disabled={eventIndex >= (lane?.events.length ?? 1) - 1} onclick={() => moveEvent(1)}>→</button>
-</div>
-<p class="label">event は file の順序です。時間のない event も番号で選択できます。span は段に積み、instant とその他の event は mark、counter は名前と field ごとの系列で表示します。</p>
-{#if shown}<pre class="event-detail" aria-label="Raw event fields">{rawText}</pre>{/if}

@@ -1,6 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventColor, eventTextColor, layoutProfile } from "../src/lib/timeline.ts";
+import {
+  eventColor,
+  eventTextColor,
+  layoutProfile,
+  clampRange,
+  zoomRange,
+  panRange,
+  timeTicks,
+  timeToX,
+  xToTime,
+  visibleTracks,
+  LANE_HEADER,
+  formatRulerTime,
+  formatCounter,
+} from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
 test("same-named threads stay separate and raw fields/file order survive layout", () => {
@@ -75,6 +89,87 @@ test("instant and unknown events are marks and missing timestamps remain inspect
   );
   assert.equal(result.lanes[0].events[2].start, null);
   assert.deepEqual(result.lanes[0].events[2].event.custom, [1, 2]);
+});
+
+test("nested spans reuse the shallowest row and equal starts place the outer span first", () => {
+  const events = [
+    { ph: "X", ts: 0, dur: 100 },
+    { ph: "X", ts: 10, dur: 20 },
+    { ph: "X", ts: 12, dur: 8 },
+    { ph: "X", ts: 35, dur: 5 },
+    { ph: "X", ts: 45, dur: 10 },
+    { ph: "X", ts: 45, dur: 30 },
+    { ph: "X", ts: 60, dur: 30 },
+  ];
+  const lane = layoutProfile({ phases: [], lanes: [{ tid: 1, name: "worker", events }] }).lanes[0];
+  assert.deepEqual(
+    lane.events.map((event) => event.row),
+    [0, 1, 2, 1, 2, 1, 2],
+  );
+  assert.deepEqual(
+    lane.events.map((event) => event.event),
+    events,
+  );
+  assert.equal(lane.spanRows, 3);
+});
+
+test("zoom keeps the pointer time fixed and pan respects the full negative-time domain", () => {
+  const domain = { start: -100, end: 900 };
+  const range = { start: 100, end: 500 };
+  const zoomed = zoomRange(range, domain, 2, 0.25);
+  assert.deepEqual(zoomed, { start: 150, end: 350 });
+  assert.equal(zoomed.start + (zoomed.end - zoomed.start) * 0.25, 200);
+  assert.deepEqual(panRange(zoomed, domain, -1000), { start: -100, end: 100 });
+  assert.deepEqual(panRange(zoomed, domain, 1000), { start: 700, end: 900 });
+  assert.deepEqual(zoomRange(range, domain, 0.01), domain);
+  assert.equal(clampRange({ start: 250, end: 250 }, domain).end, 251);
+});
+
+test("one time transform aligns ruler, tracks and pointer coordinates after resize and pan", () => {
+  for (const width of [900, 600, 0]) {
+    const range = { start: -100, end: 900 };
+    const px = timeToX(250, range, width, 190);
+    assert.ok(Math.abs(xToTime(px, range, width, 190) - 250) < 1e-9);
+    assert.equal(timeToX(range.start, range, width, 190), 190);
+    assert.equal(timeToX(range.end, range, width, 190), 190 + Math.max(1, width - 190));
+  }
+  const shifted = panRange({ start: -100, end: 400 }, { start: -100, end: 900 }, 200);
+  assert.equal(timeToX(350, shifted, 690, 190), 440);
+});
+
+test("ruler uses readable ticks across negative time, zoom and narrow viewports", () => {
+  assert.deepEqual(
+    timeTicks({ start: -100, end: 900 }, 900),
+    [-100, 0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
+  );
+  assert.deepEqual(timeTicks({ start: 120, end: 220 }, 450), [120, 140, 160, 180, 200, 220]);
+  assert.deepEqual(timeTicks({ start: -100, end: 900 }, 0), [0]);
+  const seconds = { start: -10, end: 5_000_000 };
+  assert.equal(formatRulerTime(0, seconds), "0s");
+  assert.equal(formatRulerTime(1_000_000, seconds), "1s");
+  assert.equal(formatRulerTime(500, { start: 0, end: 10_000 }), "0.5ms");
+  assert.equal(formatCounter(1.05500000000002), "1.055");
+  assert.equal(formatCounter(0.000125555), "1.256e-4");
+});
+
+test("collapsing a thread only changes track geometry, preserving all threads and events", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      { tid: 1, name: "worker", events: [{ ph: "X", ts: 0, dur: 100 }] },
+      { tid: 2, name: "worker", events: [{ ph: "i", ts: 20 }] },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set([1]));
+  assert.equal(tracks[0].height, LANE_HEADER);
+  assert.equal(tracks[1].top, LANE_HEADER);
+  assert.equal(tracks[1].height, layout.lanes[1].height);
+  assert.equal(tracks[0].lane.events, layout.lanes[0].events);
+  assert.deepEqual(
+    tracks.map((track) => track.lane.tid),
+    [1, 2],
+  );
+  assert.equal(visibleTracks(layout.lanes, new Set())[1].top, layout.lanes[0].height);
 });
 
 test("counter names and numeric fields form separate series without losing raw args", () => {

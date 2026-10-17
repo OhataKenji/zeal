@@ -170,7 +170,7 @@
           {/if}
         </section>
       </aside>
-      <main class="content">
+      <main class="content" class:run-content={!!app.view.selectedRun}>
         {#if snap?.meta.status === "partial"}
           <p class="warn">
             一部の package を読み飛ばしました (exit {st.lastError?.exitCode ?? "?"})

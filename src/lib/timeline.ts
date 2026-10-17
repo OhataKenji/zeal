@@ -1,8 +1,8 @@
 import type { Profile, TraceEvent } from "./types.ts";
 
-export const ROW_HEIGHT = 22;
-export const LANE_HEADER = 24;
-export const COUNTER_HEIGHT = 64;
+export const ROW_HEIGHT = 18;
+export const LANE_HEADER = 20;
+export const COUNTER_HEIGHT = 42;
 
 export interface EventGeometry {
   index: number;
@@ -111,37 +111,49 @@ export function eventTextColor(event: TraceEvent): string {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.179 ? "#fff" : "#111";
 }
 
-// Heap of the earliest-ending span in each row. Sorting only the geometry
-// assigns overlap rows in O(n log n); lane.events stays in file order.
+function pushHeap<T>(heap: T[], value: T, before: (a: T, b: T) => boolean) {
+  heap.push(value);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (!before(heap[index], heap[parent])) break;
+    [heap[index], heap[parent]] = [heap[parent], heap[index]];
+    index = parent;
+  }
+}
+
+function popHeap<T>(heap: T[], before: (a: T, b: T) => boolean): T {
+  const first = heap[0];
+  const last = heap.pop()!;
+  if (heap.length) heap[0] = last;
+  let index = 0;
+  while (2 * index + 1 < heap.length) {
+    let child = 2 * index + 1;
+    if (child + 1 < heap.length && before(heap[child + 1], heap[child])) child++;
+    if (!before(heap[child], heap[index])) break;
+    [heap[index], heap[child]] = [heap[child], heap[index]];
+    index = child;
+  }
+  return first;
+}
+
+// Release ended spans, then use the shallowest free row. Sorting only the
+// geometry keeps nested spans compact in O(n log n), preserving raw file order.
 function stackSpans(events: EventGeometry[]): number {
-  const heap: { end: number; row: number }[] = [];
+  const active: { end: number; row: number }[] = [];
+  const free: number[] = [];
+  const byEnd = (a: { end: number }, b: { end: number }) => a.end < b.end;
+  const byRow = (a: number, b: number) => a < b;
   let rows = 0;
   for (const span of events
     .filter((e) => e.kind === "span" && e.start !== null)
-    .sort((a, b) => a.start! - b.start! || a.index - b.index)) {
-    let row: number;
-    if (heap.length && heap[0].end <= span.start!) {
-      row = heap[0].row;
-      heap[0] = heap[heap.length - 1];
-      heap.pop();
-      let i = 0;
-      while (2 * i + 1 < heap.length) {
-        let child = 2 * i + 1;
-        if (child + 1 < heap.length && heap[child + 1].end < heap[child].end) ++child;
-        if (heap[i].end <= heap[child].end) break;
-        [heap[i], heap[child]] = [heap[child], heap[i]];
-        i = child;
-      }
-    } else row = rows++;
-    span.row = row;
-    heap.push({ end: span.end!, row });
-    let i = heap.length - 1;
-    while (i > 0) {
-      const parent = Math.floor((i - 1) / 2);
-      if (heap[parent].end <= heap[i].end) break;
-      [heap[parent], heap[i]] = [heap[i], heap[parent]];
-      i = parent;
+    .sort((a, b) => a.start! - b.start! || b.end! - a.end! || a.index - b.index)) {
+    while (active.length && active[0].end <= span.start!) {
+      pushHeap(free, popHeap(active, byEnd).row, byRow);
     }
+    const row = free.length ? popHeap(free, byRow) : rows++;
+    span.row = row;
+    pushHeap(active, { end: span.end!, row }, byEnd);
   }
   return Math.max(rows, 1);
 }
@@ -200,5 +212,77 @@ export function layoutProfile(profile: Profile): Timeline {
 }
 
 export function formatTime(microseconds: number): string {
-  return `${(microseconds / 1_000_000).toFixed(3)}s`;
+  const magnitude = Math.abs(microseconds);
+  if (magnitude >= 1_000_000) return `${Number((microseconds / 1_000_000).toFixed(3))}s`;
+  if (magnitude >= 1_000) return `${Number((microseconds / 1_000).toFixed(3))}ms`;
+  return `${Number(microseconds.toFixed(2))}µs`;
+}
+
+export interface TimeRange {
+  start: number;
+  end: number;
+}
+
+export function formatRulerTime(time: number, range: TimeRange): string {
+  const span = range.end - range.start;
+  const divisor = span >= 1_000_000 ? 1_000_000 : span >= 1_000 ? 1_000 : 1;
+  return `${Number((time / divisor).toFixed(3))}${divisor === 1_000_000 ? "s" : divisor === 1_000 ? "ms" : "µs"}`;
+}
+
+export function formatCounter(value: number): string {
+  const magnitude = Math.abs(value);
+  return magnitude >= 1_000_000 || (magnitude > 0 && magnitude < 0.001)
+    ? value.toExponential(3)
+    : String(Number(value.toPrecision(4)));
+}
+
+export function timeToX(time: number, range: TimeRange, width: number, gutter: number): number {
+  return gutter + ((time - range.start) / (range.end - range.start)) * Math.max(1, width - gutter);
+}
+
+export function xToTime(x: number, range: TimeRange, width: number, gutter: number): number {
+  return range.start + ((x - gutter) / Math.max(1, width - gutter)) * (range.end - range.start);
+}
+
+export function clampRange(range: TimeRange, domain: TimeRange): TimeRange {
+  const total = domain.end - domain.start;
+  const span = Math.max(Math.min(total, 1), Math.min(total, range.end - range.start));
+  const start = Math.max(domain.start, Math.min(domain.end - span, range.start));
+  return { start, end: start + span };
+}
+
+export function zoomRange(
+  range: TimeRange,
+  domain: TimeRange,
+  factor: number,
+  anchor = 0.5,
+): TimeRange {
+  const span = (range.end - range.start) / factor;
+  const point = range.start + (range.end - range.start) * anchor;
+  return clampRange({ start: point - span * anchor, end: point + span * (1 - anchor) }, domain);
+}
+
+export function panRange(range: TimeRange, domain: TimeRange, delta: number): TimeRange {
+  return clampRange({ start: range.start + delta, end: range.end + delta }, domain);
+}
+
+export function timeTicks(range: TimeRange, width: number): number[] {
+  const target = (range.end - range.start) / Math.max(1, width / 90);
+  const base = 10 ** Math.floor(Math.log10(target));
+  const step = [1, 2, 5, 10].find((factor) => factor * base >= target)! * base;
+  const ticks: number[] = [];
+  for (let index = Math.ceil(range.start / step); index * step <= range.end; index++)
+    ticks.push(index === 0 ? 0 : index * step);
+  return ticks;
+}
+
+export function visibleTracks(lanes: LaneGeometry[], collapsed: ReadonlySet<number>) {
+  let top = 0;
+  return lanes.map((lane, index) => {
+    const closed = collapsed.has(lane.tid);
+    const height = closed ? LANE_HEADER : lane.height;
+    const track = { lane, index, top, height, collapsed: closed };
+    top += height;
+    return track;
+  });
 }
