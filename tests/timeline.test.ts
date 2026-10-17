@@ -3,10 +3,16 @@ import assert from "node:assert/strict";
 import {
   eventColor,
   layoutProfile,
+  clampRange,
+  zoomRange,
+  panRange,
   timeTicks,
+  timeToX,
+  xToTime,
   visibleTracks,
   LANE_HEADER,
   formatRulerTime,
+  eventPosition,
 } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
@@ -104,6 +110,30 @@ test("nested spans reuse the shallowest row and equal starts place the outer spa
     events,
   );
   assert.equal(lane.spanRows, 3);
+});
+
+test("zoom keeps the pointer time fixed and pan respects the full negative-time domain", () => {
+  const domain = { start: -100, end: 900 };
+  const range = { start: 100, end: 500 };
+  const zoomed = zoomRange(range, domain, 2, 0.25);
+  assert.deepEqual(zoomed, { start: 150, end: 350 });
+  assert.equal(zoomed.start + (zoomed.end - zoomed.start) * 0.25, 200);
+  assert.deepEqual(panRange(zoomed, domain, -1000), { start: -100, end: 100 });
+  assert.deepEqual(panRange(zoomed, domain, 1000), { start: 700, end: 900 });
+  assert.deepEqual(zoomRange(range, domain, 0.01), domain);
+  assert.equal(clampRange({ start: 250, end: 250 }, domain).end, 251);
+});
+
+test("one time transform aligns ruler, tracks and pointer coordinates after resize and pan", () => {
+  for (const width of [900, 600, 0]) {
+    const range = { start: -100, end: 900 };
+    const px = timeToX(250, range, width, 190);
+    assert.ok(Math.abs(xToTime(px, range, width, 190) - 250) < 1e-9);
+    assert.equal(timeToX(range.start, range, width, 190), 190);
+    assert.equal(timeToX(range.end, range, width, 190), 190 + Math.max(1, width - 190));
+  }
+  const shifted = panRange({ start: -100, end: 400 }, { start: -100, end: 900 }, 200);
+  assert.equal(timeToX(350, shifted, 690, 190), 440);
 });
 
 test("ruler uses readable ticks across negative time, zoom and narrow viewports", () => {
@@ -227,6 +257,25 @@ test("displayed track positions follow sorted order and collapsed heights", () =
       [30, 66],
     ],
   );
+});
+
+test("raw and untimed counters resolve to their original event track", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "main",
+        events: [
+          { ph: "C", ts: 1, name: "raw", args: { state: "busy" } },
+          { ph: "C", name: "untimed", args: { value: 2 } },
+        ],
+      },
+    ],
+  });
+  const tracks = visibleTracks(layout.lanes, new Set());
+  assert.deepEqual(eventPosition(tracks, 1, 0), { track: tracks[0], y: 29 });
+  assert.deepEqual(eventPosition(tracks, 1, 1), { track: tracks[0], y: 29 });
 });
 
 test("event colors use cname before name and stay stable", () => {

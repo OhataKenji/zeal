@@ -498,6 +498,10 @@ ul.list li:last-child {
 .trace-count {
   color: #929ba3;
 }
+.trace-input-hint {
+  color: #929ba3;
+  font-size: 10px;
+}
 .trace-actions {
   display: flex;
   gap: 4px;
@@ -557,7 +561,11 @@ ul.list li:last-child {
   position: sticky;
   top: 0;
   display: block;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
+}
+.trace-viewport canvas:active {
+  cursor: grabbing;
 }
 .trace-thread-labels {
   position: absolute;
