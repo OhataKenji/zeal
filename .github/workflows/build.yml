@@ -6,7 +6,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Least privilege for GITHUB_TOKEN; jobs that need more must ask for it.
 permissions:
   contents: read
 
@@ -48,8 +47,6 @@ jobs:
   tauri-build:
     name: tauri build
     needs: changes
-    # On PRs, skip the bundle build only when every changed file is
-    # known-irrelevant. main pushes and manual runs always build.
     if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +58,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      # Installs node, pnpm and rust (via rust-toolchain.toml) from mise.toml.
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
 
       # After the toolchain install: the cache key includes the rustc version.
@@ -72,8 +68,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # No tagName/releaseId, so it only builds and uploads nothing:
-      # contents: write is not needed.
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
