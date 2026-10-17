@@ -1,14 +1,16 @@
 <script lang="ts">
   import type { SessionView } from "./session";
-  import { outcome } from "./run";
+  import { outcome, sectionData, sectionMessage } from "./run";
   import LogPanel from "./run/LogPanel.svelte";
+  import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
 
   let { view, reload }: { view: SessionView; reload: () => void } = $props();
   const record = $derived(view.detail?.record ?? view.runs.find((run) => run.id === view.selectedRun));
   const running = $derived(view.state?.running === view.selectedRun);
+  const profile = $derived(sectionData(view.detail?.profile));
   const failed = $derived(record?.finishedAt !== undefined && record.exitCode !== undefined && record.exitCode !== 0);
-  const tabs = ["Logs", "Targets", "Details"] as const;
+  const tabs = ["Logs", "Timing", "Targets", "Details"] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
   let follow = $state(true);
 
@@ -60,6 +62,12 @@
     {#if active === "Logs"}
       <LogPanel section={view.detail?.log} liveLog={view.liveLog}
         {running} loading={view.detailLoading} bind:follow />
+    {:else if active === "Timing"}
+      {#if running}<p class="panel-empty">Timing is available after the run finishes.</p>
+      {:else if view.detail}
+        {#if view.detail.profile.status !== "ok"}<p class="run-notice">{sectionMessage(view.detail.profile)}</p>{/if}
+        {#if profile}{#key view.detail}<ProfileView {profile} />{/key}{/if}
+      {:else if view.detailLoading}<p class="panel-empty">Loading profile…</p>{/if}
     {:else if active === "Targets"}
       <TargetsPanel section={view.detail?.bep} {running} />
     {:else}
