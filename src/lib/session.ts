@@ -219,12 +219,10 @@ export function createSession(
   async function start(cmd: "build" | "test", target: string) {
     if (!canSend(view, target)) return;
     const workspace = workspaceGeneration;
-    let didStart = false;
     update({ starting: true, error: null });
     try {
       const record = await transport.invoke<RunRecord>("start_run", { cmd, target: target.trim() });
       if (disposed || workspace !== workspaceGeneration) return;
-      didStart = true;
       capturedFromStart.add(record.id);
       update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
       selectRun(record.id);
@@ -253,8 +251,7 @@ export function createSession(
     } finally {
       update({ starting: false });
       releaseHiddenLogs();
-      if (didStart && !disposed && workspace === workspaceGeneration && view.ready)
-        void loadDetail();
+      if (!disposed && workspace === workspaceGeneration && view.ready) void loadDetail();
     }
   }
 

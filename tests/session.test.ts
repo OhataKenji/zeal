@@ -342,6 +342,27 @@ test("failed spawn is visible and allows another Send", async () => {
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
+test("failed spawn resumes a saved run detail selected while start was pending", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.session.selectRun("saved-run");
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
+  h.pending
+    .find((call) => call.command === "start_run")!
+    .reply.reject(new Error("failed to spawn"));
+  await started;
+  assert.equal(h.view.detailLoading, true);
+  const request = h.pending.find((call) => call.command === "get_run")!;
+  assert.deepEqual(request.args, { id: "saved-run" });
+  request.reply.resolve({ ...completed, record: { ...completed.record, id: "saved-run" } });
+  await settle();
+  assert.equal(h.view.detail?.record.id, "saved-run");
+});
+
 test("dispose removes listeners and ignores late reads", async () => {
   const h = harness();
   await h.session.init();
