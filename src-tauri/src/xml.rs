@@ -153,3 +153,85 @@ fn parse_location(raw: &str) -> Option<(String, u32)> {
     let (file, line) = head.rsplit_once(':')?;
     Some((file.to_string(), line.parse().ok()?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use std::io::Cursor;
+
+    fn fixture_rules() -> Vec<RawRule> {
+        let xml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/query.xml"
+        ))
+        .unwrap();
+        parse_rules(Cursor::new(xml))
+    }
+
+    #[test]
+    fn parses_all_rules() {
+        let rules = fixture_rules();
+        let labels: HashSet<&str> = rules.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "//app/lib:parser",
+                "//app/lib:parser_proto",
+                "//app/lib:parser_test",
+                "//app",
+                "//app:grammars",
+                "//tools:launcher",
+                "//tools:cc",
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn parses_class_location_and_outputs() {
+        let rules = fixture_rules();
+        let by_label: HashMap<&str, &RawRule> =
+            rules.iter().map(|r| (r.label.as_str(), r)).collect();
+
+        let parser = by_label["//app/lib:parser"];
+        assert_eq!(parser.rule_class, "java_library");
+        assert_eq!(
+            parser.location,
+            Some(("/repo/app/lib/BUILD".to_string(), 3))
+        );
+        assert_eq!(parser.outputs, ["//app/lib:libparser.jar"]);
+
+        // Macro-generated rule: location lands inside a .bzl file.
+        let launcher = by_label["//tools:launcher"];
+        assert_eq!(
+            launcher.location,
+            Some(("/repo/tools/build_defs.bzl".to_string(), 22))
+        );
+
+        // A rule that declares no outputs has none.
+        assert!(by_label["//app/lib:parser_test"].outputs.is_empty());
+    }
+
+    #[test]
+    fn truncated_xml_yields_completed_rules() {
+        let xml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/query.xml"
+        ))
+        .unwrap();
+        // Cut mid-rule: everything after the first </rule> is lost.
+        let cut = xml.find("</rule>").unwrap() + "</rule>".len();
+        let rules = parse_rules(Cursor::new(&xml[..cut]));
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].label, "//app/lib:parser");
+
+        // Cut mid-body: the rule survives with the attributes that arrived.
+        let mid = xml.find("<list name=\"deps\">").unwrap();
+        let rules = parse_rules(Cursor::new(&xml[..mid]));
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].label, "//app/lib:parser");
+        assert!(!rules[0].label_attrs.iter().any(|(a, _)| a == "deps"));
+    }
+}

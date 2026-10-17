@@ -1,15 +1,15 @@
-pub mod bep;
+mod bep;
 mod ingest;
-pub mod label;
-pub mod profile;
+mod label;
+mod profile;
 mod runner;
-pub mod snapshot;
+mod snapshot;
 mod state;
-pub mod store;
+mod store;
 mod workspace;
-pub mod xml;
+mod xml;
 
-pub use ingest::{RunDetail, Section, run_detail};
+use ingest::{RunDetail, run_detail};
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
