@@ -46,11 +46,69 @@ export function eventName(event: TraceEvent): string {
   return typeof event.name === "string" ? event.name : "(unnamed event)";
 }
 
+// Chrome trace reserved cname values are protocol colors, not CSS names.
+// Source: catapult tracing/tracing/base/color_scheme.html (reservedColorsByName).
+// https://github.com/catapult-project/catapult/blob/main/tracing/tracing/base/color_scheme.html
+const traceColors: Record<string, readonly [number, number, number]> = {
+  thread_state_uninterruptible: [182, 125, 143],
+  thread_state_iowait: [255, 140, 0],
+  thread_state_running: [126, 200, 148],
+  thread_state_runnable: [133, 160, 210],
+  thread_state_sleeping: [240, 240, 240],
+  thread_state_unknown: [199, 155, 125],
+  background_memory_dump: [0, 180, 180],
+  light_memory_dump: [0, 0, 180],
+  detailed_memory_dump: [180, 0, 180],
+  vsync_highlight_color: [0, 0, 255],
+  generic_work: [125, 125, 125],
+  good: [0, 125, 0],
+  bad: [180, 125, 0],
+  terrible: [180, 0, 0],
+  black: [0, 0, 0],
+  grey: [221, 221, 221],
+  white: [255, 255, 255],
+  yellow: [255, 255, 0],
+  olive: [100, 100, 0],
+  rail_response: [67, 135, 253],
+  rail_animation: [244, 74, 63],
+  rail_idle: [238, 142, 0],
+  rail_load: [13, 168, 97],
+  startup: [230, 230, 0],
+  heap_dump_stack_frame: [128, 128, 128],
+  heap_dump_object_type: [0, 0, 255],
+  heap_dump_child_node_arrow: [204, 102, 0],
+  cq_build_running: [255, 255, 119],
+  cq_build_passed: [153, 238, 102],
+  cq_build_failed: [238, 136, 136],
+  cq_build_abandoned: [187, 187, 187],
+  cq_build_attempt_runnig: [222, 222, 75],
+  cq_build_attempt_passed: [103, 218, 35],
+  cq_build_attempt_failed: [197, 81, 81],
+};
+
+function namedColor(event: TraceEvent): readonly [number, number, number] | undefined {
+  return typeof event.cname === "string" && Object.hasOwn(traceColors, event.cname)
+    ? traceColors[event.cname]
+    : undefined;
+}
+
 export function eventColor(event: TraceEvent): string {
-  const key = typeof event.cname === "string" ? event.cname : eventName(event);
+  const color = namedColor(event);
+  if (color) return `rgb(${color.join(",")})`;
+  const key = eventName(event);
   let hash = 2166136261;
   for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
   return `hsl(${(hash >>> 0) % 360} 42% 72%)`;
+}
+
+export function eventTextColor(event: TraceEvent): string {
+  const color = namedColor(event);
+  if (!color) return "#111";
+  const [r, g, b] = color.map((value) => {
+    const channel = value / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.179 ? "#fff" : "#111";
 }
 
 // Heap of the earliest-ending span in each row. Sorting only the geometry

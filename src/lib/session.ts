@@ -84,6 +84,18 @@ export function createSession(
     });
   }
 
+  function releaseHiddenLogs() {
+    // The pending start's id is unknown until its response; early output must
+    // survive even if the core has already reported completion.
+    if (view.starting) return;
+    for (const id of new Set([...logs.keys(), ...capturedFromStart])) {
+      if (id !== view.state?.running && id !== view.selectedRun) {
+        logs.delete(id);
+        capturedFromStart.delete(id);
+      }
+    }
+  }
+
   async function loadRuns() {
     const generation = ++listGeneration;
     const workspace = workspaceGeneration;
@@ -111,7 +123,7 @@ export function createSession(
     try {
       const detail = await transport.invoke<RunDetail>("get_run", { id });
       if (workspace === workspaceGeneration && generation === detailGeneration) {
-        update({ detail, detailLoading: false });
+        update({ detail, detailLoading: false, liveLog: "", liveFromStart: false });
         logs.delete(id);
         capturedFromStart.delete(id);
       }
@@ -125,6 +137,7 @@ export function createSession(
   function selectRun(id: string | null) {
     ++detailGeneration;
     update({ selectedRun: id, detail: null, detailError: null, detailLoading: false });
+    releaseHiddenLogs();
     showLog();
     void loadDetail();
   }
@@ -150,17 +163,13 @@ export function createSession(
       });
     }
     update({ state });
+    releaseHiddenLogs();
     if (state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
     if (before?.running && before.running !== state.running) {
       if (view.selectedRun === before.running) {
         void loadDetail();
-      } else if (!view.starting) {
-        // A hidden completed run will read its saved log when reopened. Keep
-        // only a pending start's early output until its response selects it.
-        logs.delete(before.running);
-        capturedFromStart.delete(before.running);
       }
     }
   }
@@ -176,6 +185,7 @@ export function createSession(
     cancelLogFrame?.();
     subscriptions.splice(0).forEach((unlisten) => unlisten());
     logs.clear();
+    capturedFromStart.clear();
   }
 
   async function init() {
@@ -218,6 +228,7 @@ export function createSession(
       if (workspace === workspaceGeneration) update({ error: String(error) });
     } finally {
       update({ starting: false });
+      releaseHiddenLogs();
     }
   }
 

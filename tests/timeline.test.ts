@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventColor, layoutProfile } from "../src/lib/timeline.ts";
+import { eventColor, eventTextColor, layoutProfile } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
 test("same-named threads stay separate and raw fields/file order survive layout", () => {
@@ -107,13 +107,30 @@ test("counter names and numeric fields form separate series without losing raw a
   assert.deepEqual(result.lanes[0].events[0].event.args, { used: 10, free: 20, unit: "MB" });
 });
 
-test("cname takes precedence over deterministic name color", () => {
+test("reserved trace cname uses its palette color before deterministic name fallback", () => {
   assert.equal(
     eventColor({ name: "one", cname: "good" }),
     eventColor({ name: "two", cname: "good" }),
   );
   assert.equal(eventColor({ name: "stable" }), eventColor({ name: "stable" }));
   assert.notEqual(eventColor({ name: "one" }), eventColor({ name: "two" }));
+  assert.equal(eventColor({ cname: "good" }), "rgb(0,125,0)");
+  assert.equal(eventColor({ cname: "bad" }), "rgb(180,125,0)");
+  assert.equal(eventColor({ cname: "olive" }), "rgb(100,100,0)");
+  assert.equal(eventColor({ cname: "rail_response" }), "rgb(67,135,253)");
+  assert.equal(eventColor({ cname: "rail_load" }), "rgb(13,168,97)");
+  assert.equal(eventColor({ cname: "generic_work" }), "rgb(125,125,125)");
+  assert.equal(eventColor({ cname: "detailed_memory_dump" }), "rgb(180,0,180)");
+  assert.equal(
+    eventColor({ name: "fallback", cname: "unknown" }),
+    eventColor({ name: "fallback" }),
+  );
+  assert.equal(
+    eventColor({ name: "fallback", cname: "constructor" }),
+    eventColor({ name: "fallback" }),
+  );
+  assert.equal(eventTextColor({ cname: "good" }), "#fff");
+  assert.equal(eventTextColor({ cname: "yellow" }), "#111");
 });
 
 test("large trace retains all threads and events without a rendering limit", () => {

@@ -128,6 +128,7 @@ test("early repeated log lines survive start response and completion replaces th
   await started;
   assert.equal(h.view.selectedRun, record.id);
   assert.equal(h.view.liveLog, "same\nsame");
+  h.flush();
   assert.equal(
     h.pending.some((call) => call.command === "get_run"),
     false,
@@ -137,7 +138,6 @@ test("early repeated log lines survive start response and completion replaces th
   await settle();
   assert.deepEqual(h.view.detail, completed);
   assert.equal(h.view.detail?.log.status, "ok");
-  h.flush();
   assert.equal(h.view.liveLog, "");
 });
 
@@ -175,6 +175,25 @@ test("a run finishing offscreen releases its temporary live output", async () =>
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
   await settle();
   assert.deepEqual(h.view.detail, completed);
+});
+
+test("leaving a completed run while its detail is loading releases live output", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("run-log", { id: record.id, line: "temporary live output" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  h.flush();
+  h.emit("app-state", idle);
+  assert.equal(h.view.detailLoading, true);
+  h.session.selectRun(null);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  h.session.selectRun(record.id);
+  assert.equal(h.view.liveLog, "");
+  assert.equal(h.view.liveFromStart, false);
 });
 
 test("late bootstrap state cannot overwrite a newer workspace event", async () => {

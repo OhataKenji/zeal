@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { Profile } from "./types";
-  import { COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor, eventName, formatTime, layoutProfile, type EventGeometry } from "./timeline";
+  import { COUNTER_HEIGHT, LANE_HEADER, ROW_HEIGHT, eventColor, eventTextColor, eventName, formatTime, layoutProfile, type EventGeometry } from "./timeline";
 
   let { profile }: { profile: Profile } = $props();
   const layout = $derived(layoutProfile(profile));
@@ -60,7 +60,7 @@
         if (event.kind === "span") {
           context.fillRect(ex, ey, ew, ROW_HEIGHT - 4);
           if (ew > 36) {
-            context.fillStyle = "#222";
+            context.fillStyle = eventTextColor(event.event);
             context.fillText(eventName(event.event), ex + 3, ey + 12, ew - 6);
           }
         } else {
