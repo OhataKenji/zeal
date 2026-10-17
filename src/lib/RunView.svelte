@@ -13,19 +13,9 @@
   const status = $derived(running ? "running" : record?.finishedAt !== undefined && record.exitCode !== undefined ? record.exitCode === 0 ? "success" : "failed" : "unknown");
   const tabs = ["Logs", "Timing", "Targets", "Details"] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
-  let openedRun = $state<string | null>(null);
   let logElement = $state<HTMLTextAreaElement>();
   let follow = $state(true);
 
-  // A new run starts at its log. Subsequent output and completion leave the
-  // user's selected panel alone.
-  $effect(() => {
-    if (openedRun !== view.selectedRun) {
-      openedRun = view.selectedRun;
-      active = "Logs";
-      follow = true;
-    }
-  });
   $effect(() => {
     void log;
     if (active === "Logs" && follow) void tick().then(() => {

@@ -185,7 +185,9 @@
           <p class="dim">取り込み中…</p>
         {/if}
         {#if app.view.selectedRun}
-          <RunView view={app.view} reload={session.loadDetail} />
+          {#key app.view.selectedRun}
+            <RunView view={app.view} reload={session.loadDetail} />
+          {/key}
         {:else if snap && selected}
           <TargetView {snap} label={selected} wsRoot={st.workspace} onselect={select} />
         {:else if snap}

@@ -59,7 +59,7 @@ jobs:
               - '!renovate.json'
 
   frontend:
-    name: frontend (check / test / format / lint / build)
+    name: frontend (check / format / lint / build)
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest

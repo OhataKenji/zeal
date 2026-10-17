@@ -25,7 +25,6 @@ export interface CounterSeries {
 export interface LaneGeometry {
   tid: number;
   name: string;
-  top: number;
   height: number;
   spanRows: number;
   events: EventGeometry[];
@@ -35,7 +34,6 @@ export interface LaneGeometry {
 export interface Timeline {
   start: number;
   end: number;
-  height: number;
   lanes: LaneGeometry[];
 }
 
@@ -132,57 +130,23 @@ export function eventTextColor(event: TraceEvent): string {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.179 ? "#fff" : "#111";
 }
 
-function pushHeap<T>(heap: T[], value: T, before: (a: T, b: T) => boolean) {
-  heap.push(value);
-  let index = heap.length - 1;
-  while (index > 0) {
-    const parent = Math.floor((index - 1) / 2);
-    if (!before(heap[index], heap[parent])) break;
-    [heap[index], heap[parent]] = [heap[parent], heap[index]];
-    index = parent;
-  }
-}
-
-function popHeap<T>(heap: T[], before: (a: T, b: T) => boolean): T {
-  const first = heap[0];
-  const last = heap.pop()!;
-  if (heap.length) heap[0] = last;
-  let index = 0;
-  while (2 * index + 1 < heap.length) {
-    let child = 2 * index + 1;
-    if (child + 1 < heap.length && before(heap[child + 1], heap[child])) child++;
-    if (!before(heap[child], heap[index])) break;
-    [heap[index], heap[child]] = [heap[child], heap[index]];
-    index = child;
-  }
-  return first;
-}
-
-// Release ended spans, then use the shallowest free row. Sorting only the
-// geometry keeps nested spans compact in O(n log n), preserving raw file order.
+// Use the shallowest free row. Sorting only the geometry keeps raw file order.
 function stackSpans(events: EventGeometry[]): number {
-  const active: { end: number; row: number }[] = [];
-  const free: number[] = [];
-  const byEnd = (a: { end: number }, b: { end: number }) => a.end < b.end;
-  const byRow = (a: number, b: number) => a < b;
-  let rows = 0;
+  const rowEnds: number[] = [];
   for (const span of events
     .filter((e) => e.kind === "span" && e.start !== null)
     .sort((a, b) => a.start! - b.start! || b.end! - a.end! || a.index - b.index)) {
-    while (active.length && active[0].end <= span.start!) {
-      pushHeap(free, popHeap(active, byEnd).row, byRow);
-    }
-    const row = free.length ? popHeap(free, byRow) : rows++;
+    const free = rowEnds.findIndex((end) => end <= span.start!);
+    const row = free < 0 ? rowEnds.length : free;
     span.row = row;
-    pushHeap(active, { end: span.end!, row }, byEnd);
+    rowEnds[row] = span.end!;
   }
-  return Math.max(rows, 1);
+  return Math.max(rowEnds.length, 1);
 }
 
 export function layoutProfile(profile: Profile): Timeline {
   let start = Infinity;
   let end = -Infinity;
-  let top = 0;
   const extend = (value: number) => {
     start = Math.min(start, value);
     end = Math.max(end, value);
@@ -228,13 +192,11 @@ export function layoutProfile(profile: Profile): Timeline {
       (counters.length ? COUNTER_HEADER : 0) +
       counters.length * COUNTER_HEIGHT +
       8;
-    const result = { tid: lane.tid, name: lane.name, top, height, spanRows, events, counters };
-    top += height;
-    return result;
+    return { tid: lane.tid, name: lane.name, height, spanRows, events, counters };
   });
   if (!Number.isFinite(start)) start = 0;
   if (!Number.isFinite(end) || end <= start) end = start + 1;
-  return { start, end, height: top, lanes };
+  return { start, end, lanes };
 }
 
 export function formatTime(microseconds: number): string {
@@ -317,13 +279,13 @@ export function visibleTracks(
   expandedCounters: ReadonlySet<number> = new Set(),
 ) {
   let top = 0;
-  return lanes.map((lane, index) => {
+  return lanes.map((lane) => {
     const closed = collapsed.has(lane.tid);
     const countersExpanded = expandedCounters.has(lane.tid);
     const height = closed
       ? LANE_HEADER
       : lane.height - (countersExpanded ? 0 : lane.counters.length * COUNTER_HEIGHT);
-    const track = { lane, index, top, height, collapsed: closed, countersExpanded };
+    const track = { lane, top, height, collapsed: closed, countersExpanded };
     top += height;
     return track;
   });
