@@ -80,3 +80,26 @@ jobs:
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Branch protection requires a stable check name, but a matrix job skipped
+  # by `if` reports only the literal, unexpanded `tauri build (${{ matrix.os }})`.
+  # This always-run gate aggregates the matrix legs under a fixed name.
+  build-result:
+    name: tauri build
+    needs: [changes, tauri-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Propagate build result
+        run: |
+          changes="${{ needs.changes.result }}"
+          build="${{ needs.tauri-build.result }}"
+          if [ "$changes" != "success" ]; then
+            echo "::error::change detection $changes"
+            exit 1
+          fi
+          if [ "$build" = "failure" ] || [ "$build" = "cancelled" ]; then
+            echo "::error::tauri build $build"
+            exit 1
+          fi
+          echo "tauri build $build"
