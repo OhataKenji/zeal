@@ -1,10 +1,15 @@
 <script lang="ts">
-  import { app, refresh } from "./lib/state.svelte";
+  import { onMount } from "svelte";
+  import { app, connect, refresh, session } from "./lib/state.svelte";
+  import { outcome } from "./lib/run";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
+  import RunView from "./lib/RunView.svelte";
   import type { AppState } from "./lib/types";
+
+  onMount(connect);
 
   const st = $derived(app.state);
   const snap = $derived(st?.snapshot ?? null);
@@ -13,8 +18,9 @@
 
   let selected = $state<string | null>(null);
   let targetField = $state("");
-  let cmd = $state("build");
+  let cmd = $state<"build" | "test">("build");
   let switchingWs = $state(false);
+  const busy = $derived(!app.view.ready || app.view.opening || !!st?.running || st?.ingest === "running");
 
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.
@@ -39,6 +45,7 @@
   // Every selection — tree, relation line — also lands in the composer target
   // field, which is the single source of truth for "the current target".
   function select(label: string | null) {
+    session.selectRun(null);
     selected = label;
     if (label) targetField = label;
   }
@@ -50,7 +57,8 @@
       return;
     }
     if (!selected || !known.has(selected)) {
-      select(snap.targets[0]?.label ?? null);
+      selected = snap.targets[0]?.label ?? null;
+      if (selected) targetField = selected;
     }
   });
 </script>
@@ -84,7 +92,7 @@
   </section>
 {/snippet}
 
-{#snippet runPane()}
+{#snippet runPane(state: AppState)}
   <section
     class="pane"
     class:collapsed={collapsed.runs}
@@ -99,15 +107,22 @@
     {#if !collapsed.runs}
       <div class="pane-body">
         <ul class="list">
-          <li><span class="dim">▤ analytics</span></li>
+          {#each app.view.runs as run (run.id)}
+            <li><button class="run-row" class:sel={app.view.selectedRun === run.id} aria-current={app.view.selectedRun === run.id ? "true" : undefined} onclick={() => session.selectRun(run.id)}>
+              <span>{run.cmd} {run.target}</span>
+              <small>{outcome(run, state.running)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
+            </button></li>
+          {/each}
         </ul>
+        {#if app.view.runsError}<p class="err">{app.view.runsError}</p><button class="btn" onclick={session.loadRuns}>retry</button>
+        {:else if app.view.runs.length === 0}<p class="dim">保存済みの run はありません</p>{/if}
       </div>
     {/if}
   </section>
 {/snippet}
 
 {#snippet workspaceContent(state: AppState, workspace: string)}
-  <main class="content">
+  <main class="content" class:run-content={!!app.view.selectedRun}>
     {#if snap?.meta.status === "partial"}
       <p class="warn">
         一部の package を読み飛ばしました (exit {state.lastError?.exitCode ?? "?"})
@@ -121,7 +136,11 @@
     {#if state.ingest === "running"}
       <p class="dim">取り込み中…</p>
     {/if}
-    {#if snap && selected}
+    {#if app.view.selectedRun}
+      {#key app.view.selectedRun}
+        <RunView view={app.view} reload={session.loadDetail} />
+      {/key}
+    {:else if snap && selected}
       <TargetView {snap} label={selected} wsRoot={workspace} onselect={select} />
     {:else if snap}
       <p class="dim">tree から target を選択</p>
@@ -139,28 +158,30 @@
       <button
         class="link label"
         title={st.workspace}
+        disabled={busy}
         onclick={() => (switchingWs = !switchingWs)}>{st.workspace}</button
       >
     {:else}
       <span class="label">no workspace</span>
     {/if}
-    <select class="select" bind:value={cmd}>
+    <select class="select" aria-label="Bazel command" bind:value={cmd}>
       <option>build</option>
       <option>test</option>
-      <option>run</option>
     </select>
     <input
       class="input composer-target"
+      aria-label="Target label or pattern"
       bind:value={targetField}
       placeholder="//pkg:target"
     />
-    <button class="btn primary" disabled title="実行は M3 で有効">Send</button>
+    <button class="btn primary" disabled>Send</button>
     {#if st?.workspace}
-      <button class="btn" onclick={refresh} disabled={st.ingest === "running"}>
+      <button class="btn" onclick={refresh} disabled={busy}>
         refresh
       </button>
     {/if}
   </div>
+  {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
 
   {#if st === null}
     <div class="content dim">loading…</div>
@@ -184,7 +205,7 @@
           aria-orientation="horizontal"
           onpointerdown={dividerDown}
         ></div>
-        {@render runPane()}
+        {@render runPane(st)}
       </aside>
       {@render workspaceContent(st, st.workspace)}
     </div>

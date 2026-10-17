@@ -82,6 +82,9 @@ jobs:
       - name: Type check (svelte-check + tsc)
         run: pnpm check
 
+      - name: Frontend tests
+        run: pnpm test
+
       - name: Format check (oxfmt)
         run: pnpm exec oxfmt --check
 
