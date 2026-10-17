@@ -144,7 +144,52 @@ function stackSpans(events: EventGeometry[]): number {
   return Math.max(rowEnds.length, 1);
 }
 
+function eventGeometry(event: TraceEvent, index: number): EventGeometry {
+  const time = numeric(event.ts);
+  const duration = numeric(event.dur);
+  const kind =
+    event.ph === "C"
+      ? "counter"
+      : event.ph === "X" && duration !== null && duration >= 0
+        ? "span"
+        : "mark";
+  const finish = time === null ? null : time + (kind === "span" ? duration! : 0);
+  return { index, event, start: time, end: finish, row: 0, kind };
+}
+
+function counterSeries(events: EventGeometry[]): CounterSeries[] {
+  const series = new Map<string, CounterSeries>();
+  for (const { event, index, start, kind } of events) {
+    if (kind !== "counter" || start === null || !event.args || typeof event.args !== "object")
+      continue;
+    for (const [field, raw] of Object.entries(event.args)) {
+      const value = numeric(raw);
+      if (value === null) continue;
+      const name = eventName(event);
+      const key = JSON.stringify([name, field]);
+      const counter = series.get(key) ?? { name, field, points: [], min: value, max: value };
+      counter.points.push({ time: start, value, index });
+      counter.min = Math.min(counter.min, value);
+      counter.max = Math.max(counter.max, value);
+      series.set(key, counter);
+    }
+  }
+  return [...series.values()];
+}
+
 export function layoutProfile(profile: Profile): Timeline {
+  const lanes = profile.lanes.map((lane) => {
+    const events = lane.events.map(eventGeometry);
+    const spanRows = stackSpans(events);
+    const counters = counterSeries(events);
+    const height =
+      LANE_HEADER +
+      spanRows * ROW_HEIGHT +
+      (counters.length ? COUNTER_HEADER : 0) +
+      counters.length * COUNTER_HEIGHT +
+      8;
+    return { tid: lane.tid, name: lane.name, height, spanRows, events, counters };
+  });
   let start = Infinity;
   let end = -Infinity;
   const extend = (value: number) => {
@@ -155,45 +200,12 @@ export function layoutProfile(profile: Profile): Timeline {
     extend(phase.startUs);
     extend(phase.endUs);
   });
-  const lanes = profile.lanes.map((lane) => {
-    const series = new Map<string, CounterSeries>();
-    const events: EventGeometry[] = lane.events.map((event, index) => {
-      const time = numeric(event.ts);
-      const duration = numeric(event.dur);
-      const kind =
-        event.ph === "C"
-          ? "counter"
-          : event.ph === "X" && duration !== null && duration >= 0
-            ? "span"
-            : "mark";
-      const finish = time === null ? null : time + (kind === "span" ? duration! : 0);
-      if (time !== null) extend(time);
-      if (finish !== null) extend(finish);
-      if (kind === "counter" && time !== null && event.args && typeof event.args === "object") {
-        for (const [field, raw] of Object.entries(event.args)) {
-          const value = numeric(raw);
-          if (value === null) continue;
-          const name = eventName(event);
-          const key = JSON.stringify([name, field]);
-          const counter = series.get(key) ?? { name, field, points: [], min: value, max: value };
-          counter.points.push({ time, value, index });
-          counter.min = Math.min(counter.min, value);
-          counter.max = Math.max(counter.max, value);
-          series.set(key, counter);
-        }
-      }
-      return { index, event, start: time, end: finish, row: 0, kind };
-    });
-    const spanRows = stackSpans(events);
-    const counters = [...series.values()];
-    const height =
-      LANE_HEADER +
-      spanRows * ROW_HEIGHT +
-      (counters.length ? COUNTER_HEADER : 0) +
-      counters.length * COUNTER_HEIGHT +
-      8;
-    return { tid: lane.tid, name: lane.name, height, spanRows, events, counters };
-  });
+  for (const lane of lanes) {
+    for (const event of lane.events) {
+      if (event.start !== null) extend(event.start);
+      if (event.end !== null) extend(event.end);
+    }
+  }
   if (!Number.isFinite(start)) start = 0;
   if (!Number.isFinite(end) || end <= start) end = start + 1;
   return { start, end, lanes };
