@@ -70,15 +70,10 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # frontendDist must exist for tauri::generate_context!
-      - name: Build frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      # ci.yml already runs the Rust tests on Linux.
       - name: cargo test
-        if: runner.os != 'Linux'
         run: cargo test
         working-directory: src-tauri
 
