@@ -1,4 +1,4 @@
-# Zeal 設計: M4 実行履歴と profile
+# Zeal 設計: M4 実行履歴の保存と再表示
 
 _OhataKenji_
 _Last update: 2026/10/18_
@@ -6,194 +6,134 @@ _Status: Approved_
 
 ## Goal
 
-GUIの `build` / `test` の履歴から、過去の入力、実行結果、経過時間、log、profileを振り返れるようにする([PRD](../prd.md)シナリオ4とM4)。
-詳細fileを削除した後も、既知の成功や失敗を確認できるようにする。
-画面の構成は[mock](../mock/)に従う。
+GUIから実行した履歴をSQLiteに保存し、過去の入力、終了結果、log、BEP、profileを再表示できるようにする([PRD](../prd.md)シナリオ4とM4)。
+詳細fileが欠けても、保存済みの入力と終了結果を残す。
+画面は[mock](../mock/)に従い、既存の詳細表示を使う。
 
 ### Non Goals
 
-- BES受信、BEP収集、CLIからの履歴収集
-- `bazel run`、並列実行、実行中のログ表示
-- target/test別結果、action/cache/phaseの集計
-- 旧履歴の移行、未完了の復旧、DBの自動修復
+- BES受信、CLIからの収集、観測項目と画面の追加
+- profile parserの変更、読込上限、解析workerの制御
+- runnerの終了確認、停止処理、計時方法の改善
+- 旧履歴の移行、未完了recordの復旧、DBの自動修復
 - 容量監視、自動整理、共有、同期、export、run同士のdiff
 
 ## Background
 
-履歴の単位は、composerから起動する一回のBazel呼び出しとする。
-共通用語は[overview](./overview.md#background)に従い、この文書では次の意味で使う。
+M2とM3は、一回のGUI操作にUUIDを発行し、入力と終了情報を `run.json` に保存している。
+logとBEPとprofileは同じrunのdirに置き、詳細を開くときに読む。
+M4はこの要約の保存先をSQLiteへ置き換える。
 
-- **run**：GUIがUUIDを発行して起動する一回のprocessと、その記録。
-- **run record**：runの入力、時刻、経過時間、終了結果をSQLiteに保存した要約。
-- **log**：processのstdoutとstderrを一つのfileにまとめたtext。
-- **profile**：Bazelが出力するgzip圧縮されたJSON trace。詳細画面で処理の時系列を示す。
+- **run record**：GUIが発行したUUID、workspace、入力、開始時刻、終了時刻、exit codeからなる要約。
+- **成果物**：既存の `log.txt`、`bep.json`、`profile.gz`。要約とは別に保存する詳細情報。
+- **workspace**：Bazelを実行するcanonical path。別のworkspaceの履歴を混ぜないための識別に使う。
 
-processの結果と経過時間には、bazeliskの起動やBazel serverのlock待ちも含み得る。
-Bazel内部の実行単位やphaseの所要時間とは区別する。
-profileの可視化規則は[M2](./m2-run-detail.md)、期限付きの停止は[M3](./m3-find-and-run.md)を引き継ぐ。
-BESは受信処理とprotocol管理を伴うため、M4から分離する。
+実行と中断は[M3](./m3-find-and-run.md)、BEPとprofileの解析および表示は[M2](./m2-run-detail.md)を引き継ぐ。
+profile解析とrunnerの独立した改善は、それぞれ別PRで扱う。
 
 ## Overview
 
-runnerはworkspaceと入力を固定し、GUIのUUIDを発行してBazelを起動する。
-M3と同じくstdoutとstderrを作業logへ直接接続し、profileも一時dirへ出力する。
-BES受信口とBEP収集は追加しない。
+storeはworkspaceとrunの要約をSQLiteへ保存する。
+既存のcreate、実行、finishという順序を保ち、開始recordを保存できた場合だけBazelを起動する。
+終了を確認した場合は、同じrecordの終了時刻とexit codeを一つのtransactionで保存する。
 
-processの終了を確認した後、上限付きのlogを複製し、要約をSQLiteへcommitする。
-profileは同じGUIのrunへ添付する。
-履歴の要約を詳細fileから独立させ、欠損や解析失敗で既知の結果が変わらないようにする。
+一覧はDBからworkspaceごとに取得する。
+詳細はDBのrecordと所属を確認してから、そのrunの成果物を既存のparserへ渡す。
+成果物の欠損や解析失敗で、DBの終了結果を書き換えない。
 
-実行画面と履歴は同じ保存済みlogとprofileを参照する。
-詳細の読込と解析は表示時に行い、入力と返却する結果に上限を設ける。
-M5は将来、この保存済み要約を集計に使う。
+UIのrecord形式と実行状態は変えない。
+開始recordが未完了のまま残った場合も、既存の「結果不明」表示を使う。
+再起動後の復旧と、以前のprocessへのsignal送信は行わない。
 
 ```mermaid
 flowchart LR
-    GUI["GUI: UUIDと入力"] --> RUNNER["runner"] --> BAZEL["Bazel process"]
-    BAZEL --> TMP["作業log / profile"]
-    RUNNER -->|"終了確認後"| SAVE["要約と成果物の保存"]
-    TMP --> SAVE
-    SAVE --> DB[("SQLite: 要約")]
-    SAVE --> FILES["log.txt / profile.gz"]
-    DB --> VIEW["履歴"] --> DETAIL["詳細"]
+    SEND["Send"] -->|"開始record"| DB[("SQLite")]
+    SEND --> RUNNER["既存runner"] --> BAZEL["Bazel"]
+    RUNNER -->|"終了確認時に更新"| DB
+    BAZEL --> FILES["log / BEP / profile"]
+    DB --> LIST["履歴一覧"] --> DETAIL["既存の詳細表示"]
     FILES --> DETAIL
 ```
 
 ## Detailed Design
 
-### 保存する値
+### 要約と成果物の保存先
 
 DBはアプリ全体で一つの `<app data dir>/zeal.db` とする。
-WAL、`synchronous=FULL`、`PRAGMA user_version` を使い、新規DBから始める。
+WAL、`synchronous=FULL`、foreign keyを有効にし、schemaは `PRAGMA user_version` で管理する。
 
 ```text
 workspace(id PRIMARY KEY, canonical_path UNIQUE)
 run(
-  id PRIMARY KEY, workspace_id NOT NULL REFERENCES workspace(id),
-  cmd, target_raw, started_at_ms, finished_at_ms, elapsed_ms,
-  outcome, exit_code, log_truncated
+  id PRIMARY KEY, workspace_id REFERENCES workspace(id),
+  cmd, target_raw, started_at_ms, finished_at_ms, exit_code
 )
 ```
 
-workspaceはcanonical pathの完全一致で識別し、UUIDを割り当てる。
-正規化失敗は拒否し、全接続で `foreign_keys=ON`、全取得と成果物参照で要求workspaceの条件を使う。
-runのIDはGUIが発行したUUID、cmdとtarget_rawは起動時の入力とする。
+workspaceのcanonical pathを完全一致で照合し、保存用のUUIDを割り当てる。
 成果物は `workspaces/<workspace_id>/runs/<run_id>/` に置く。
-保存後の要約は変更せず、一覧とM5で使う結果を詳細fileから再導出しない。
+runのUUID、入力、Unix msの時刻、終了情報は既存のrecord形式を保つ。
+経過時間と結果の表示規則は今回変更しない。
 
-開始と終了の時刻はprocessの起動前と終了確認時のUnix msとする。
-有効範囲は `0..253402300799999`、開始不正は起動拒否、終了不正はNULLとする。
-`elapsed_ms` は起動前から終了確認までをmonotonic clockで測り、壁時計の差で補完しない。
-保存準備と終了後の保存、添付、解析は含めない。
-画面には「実行時間」と表示し、profileのphaseの合計とは扱わない。
+### 保存と読込
 
-結果は次の優先順で決める。
-signal終了は、通常のexit codeと区別するため `-1` として保存する。
+`create` は新しいrunのdirと空logを排他的に作り、開始recordをcommitして返す。
+これに失敗した場合はspawnしない。
+spawn失敗時は今回の未完了recordと既知のfileだけを削除し、未知の内容を再帰削除しない。
+削除や保存に失敗した場合は、不完全なrecordや孤児dirが残り得る。
 
-| 観測結果                                    | outcome     |
-| ------------------------------------------- | ----------- |
-| exit 0。stop要求があっても優先する          | ok          |
-| exit 8                                      | interrupted |
-| その他の非0またはsignal終了で、stop要求あり | interrupted |
-| その他の非0またはsignal終了で、stop要求なし | failed      |
+`finish` は要求workspaceに所属する未完了recordだけを更新する。
+終了時刻とexit codeを一つのtransactionで保存し、完了済みrecordは上書きしない。
+waitエラーや停止打切りでは、既存runnerと同じく終了情報を補完しない。
 
-### 起動と終了後の保存
+`list` は要求workspaceのrecordを開始時刻の新しい順に返す。
+`read_record` と成果物の読込も同じworkspaceの所属を確認する。
+成果物を削除しても、要約の読込と履歴一覧は維持する。
+BEPとprofileの読込および解析は既存の動作を保ち、解析結果はDBへ保存しない。
 
-runnerは一つの実行枠を持ち、実行またはquery中の次の起動、workspace切替、queryを拒否する。
-起動前にDBを確認し、保護した一時dirと0600の出力fileを排他的に用意する。
-stdoutとstderrは同じfile offsetを共有する作業logへ接続する。
-観測flagは次に限り、Bazelの既存のBES、proxy、remote cache、RBE設定は変えない。
+### DB障害と互換性
 
-```text
---profile=<一時dir>/profile.gz
---experimental_profile_include_primary_output
---noslim_profile
---tool_tag=zeal
-```
-
-spawn失敗時は今回作った一時fileを片付け、履歴は作らない。
-停止はSIGINT後3秒でSIGKILL、さらに2秒で打ち切り、waitエラーも同じ期限付きの停止へ進む。
-終了未確認なら履歴を作らず、作業fileを残して実行枠を解放する。
-利用者へ終了不明を示し、解放後の残存processにはsignalを送らない。
-
-終了確認後は、非0終了を含めて次の順で保存する。
-
-1. 作業logの先頭を上限付きで読み、別fileに複製する。不正UTF-8は置換し、出力も16 MiBに収める。
-2. 複製logをflush/syncし、runのdirへ排他的に配置して親dirもsyncする。
-3. workspaceとrunの要約を一つのtransactionでINSERT/commitする。
-4. 同じrunへ32 MiB以下のprofileを排他的に添付する。BazelのIDとの照合や全traceの解析は行わない。
-5. 一時fileを片付けて実行枠を解放する。
-
-複製先を分けるため、子孫processが作業logへ追記しても保存済みlogは変わらない。
-上限で省略した場合は `log_truncated` を保存する。
-要約の保存失敗とprofileの添付失敗は画面で示し、processの終了結果と区別する。
-添付失敗やfile欠損で保存済み要約を変更しない。
-DB commitの成否が不明なら、存在を再確認できた記録を残し、未保存と確認できたfileだけを削除する。
-一時fileの削除失敗も表示し、自動再試行しない。
-
-### 詳細表示と資源上限
-
-| 対象                         | 上限                        |
-| ---------------------------- | --------------------------- |
-| 保存済みlogとその読込        | 16 MiB                      |
-| profile圧縮 / 展開 / event数 | 32 MiB / 64 MiB / 250,000件 |
-| 詳細結果のIPC JSON           | 32 MiB                      |
-
-読込、展開、eventの受理、結果の構築中に制限し、全量確保後の判定にしない。
-profileの上限超過はincomplete、破損はparse errorとして示す。
-logの欠損、読込失敗、保存時と読込時の省略も区別する。
-profile workerは一つ、同時要求はbusy、待ち行列と途中取消なしとする。
-UIは選択と要求の世代で古い結果を捨てる。
-profileの表示は[M2](./m2-run-detail.md)の契約を保つ。
-
-### DB障害
-
-DB障害では新規起動を抑止するが、現在のprocessのstopは維持する。
-破損、permission、disk full、新しすぎるschemaは区別し、自動修復や代替記録はしない。
-permission、disk full、新しすぎるschemaでは初期化を勧めない。
-DBなしでsidecarだけ残る場合も自動初期化しない。
+新規DBから始め、旧 `run.json` と開発中の旧schemaは取り込まない。
+破損、permission、disk full、新しすぎるschema、busyを区別してエラーを返す。
+自動修復、DBの削除、fileへの代替保存は行わない。
+DBがなくsidecarだけ残る場合も初期化しない。
+DBを利用できなければ新規runを起動せず、生存するprocessのstopはDBから独立させる。
 
 ## Alternatives Considered
 
-- **BESでBazelのイベントを受信する**：BazelのID、入力、時刻を直接記録できるが、受信口、再送、保存と応答の管理が増える。M4は既存のprocess実行を使う履歴保存に絞る。
-- **BEP fileから同じ値を解析する**：受信口を省けるが、収集と解析の変更が必要になる。BEPも別の変更で扱う。
-- **要約もfileだけに保存する**：DB依存を省けるが、一覧とM5の検索、詳細削除後の要約保持をfile管理で担う必要がある。SQLiteを要約の正本にする。
+- **fileのまま保存する**：依存を増やさずに済むが、一覧の取得をfile走査に依存させ、M5の検索もfile管理で担う必要がある。要約の正本をSQLiteへ移す。
+- **parserとrunnerも同時に変更する**：資源上限と終了確認をまとめて改善できるが、履歴保存のレビュー範囲が広がる。独立したPRへ分ける。
+- **成果物から一覧を再構築する**：DBを省けるが、詳細削除後に既知の入力と終了結果を保持できない。
 
 ## Caveats
 
-終了未確認、spawn失敗、保存前のcrashは履歴に残らない。
-残った一時dirを再起動後に採用したり、過去のprocessを照合したりしない。
+未完了recordは終了不明のまま残り、crash後のprocess照合や復旧は行わない。
+既存のfile履歴は新しい一覧へ移行しない。
+workspaceの移動は別workspaceとして扱う。
 
-16 MiBは保存後のlogの上限であり、実行中の作業logには容量制限を設けない。
-profileの作業fileと全履歴の合計容量も制限しない。
-M3と同じfile出力を使い、容量監視と自動整理は別の変更で扱う。
-子孫processの完全回収は保証せず、手動整理は全Zealと残存processを停止した後に行う。
-DBとsidecarを退避して手動初期化すると、全workspaceの履歴を失う。
+既存の詳細解析と作業fileには、今回新しい容量上限を加えない。
+履歴の自動整理も行わず、手動整理は全Zealと残存processを停止した後に行う。
+DBとsidecarの手動初期化では全workspaceの要約を失い、成果物からは復元しない。
 
 ## Security Concerns
 
-app data以下は所有者を確認してdirを0700、新規DB/fileを0600にする。
-dirfdとnofollowで辿り、非ブロッキングopen後に同じFDで通常fileか確認する。
-symlink/FIFO/deviceを拒否し、DB/sidecarも保護dir内の通常fileに限定する。
-成果物を開く前にUUIDとDB上のworkspace所属を確認する。
-リポジトリrootとBazelのumaskは変えず、安全な出力先を用意できなければspawnしない。
-
-SQLはbound parameter、入力とlog/profileのeventはtext表示とする。
-同じOSユーザーで動くリポジトリコードを信頼し、その隔離と完全な改竄防止は保証しない。
+保存領域は所有者を確認してdirを0700、新規DBとlogを0600にする。
+UUIDとworkspace所属を確認し、dirfdとnofollowによるアクセスでsymlinkと特殊fileを拒否する。
+Bazelのumaskは変えず、BEPとprofileは保護dir内の既存の出力方法を使う。
+SQLはbound parameterを使い、UIは入力と成果物をtextとして表示する。
+同じOSユーザーで実行するリポジトリコードの隔離は行わない。
 
 ## Privacy Concerns
 
-入力、log、profileには秘密値やlocal pathが含まれ得る。
-Zealの記録はlocalに限り、転送とtelemetryは設けない。
-Bazel自身は既存設定に従って外部へ通信し得る。
-coreログはUUID、処理種別、エラー分類だけとし、argvや成果物の生値を出さない。
-公開fixtureは秘密値のないものに限る。
+入力と成果物には秘密値やlocal pathが含まれ得る。
+Zealはlocalに保存し、転送とtelemetryを追加しない。
+Bazel自身の通信は既存設定に従う。
+公開fixtureへ秘密値を含めない。
 
 ## Test Plan
 
-- 実Bazelのbuild/testで、BESなしの実行、stdout/stderrの保存、SQLiteの一覧、profile表示を通す。
-- 成功、非0、exit 8、stop要求の有無とsignal、spawn/wait失敗、停止打切りを確認する。
-- workspaceとIDの衝突、時計の変化、DB障害、保存失敗、詳細削除後の要約保持を確認する。
-- logのUTF-8境界、不正bytes、省略、保存後の作業logへの追記を確認する。
-- profileの欠損、破損、添付失敗、各資源上限、workerのbusyと古い表示要求を確認する。
-- 保存先の権限、特殊file、pathと所属の検証、入力をtextで表示することを確認する。
+- create、finish、list、詳細の再表示を通し、再接続後も入力と終了結果が一致することを確認する。
+- workspaceの分離とcanonical pathの別名、完了済みrecordの上書き拒否を確認する。
+- 詳細fileの削除後も要約が残り、欠損と解析エラーを既存の表示で区別する。
+- spawn失敗時の削除、保存先の権限、symlinkと特殊file、DB障害とschema不一致を確認する。
+- 既存のrunner、BEP、profile、UIのテストを維持し、SQLite接続以外の動作を変えない。

@@ -65,41 +65,6 @@ fn parent_directory(path: &Path) -> io::Result<(File, PathBuf)> {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    static DIRECTORY_SYNCS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
-    static DIRECTORY_SYNC_FAILURE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-pub(super) fn fail_directory_sync_under(parent: PathBuf) {
-    DIRECTORY_SYNC_FAILURE.with(|failure| *failure.borrow_mut() = Some(parent));
-}
-#[cfg(test)]
-fn directory_syncs() -> Vec<PathBuf> {
-    DIRECTORY_SYNCS.with(|events| std::mem::take(&mut *events.borrow_mut()))
-}
-fn sync_created_parent(parent: &File, path: &Path) -> io::Result<()> {
-    #[cfg(test)]
-    {
-        DIRECTORY_SYNCS.with(|events| events.borrow_mut().push(path.to_owned()));
-        let fail = DIRECTORY_SYNC_FAILURE.with(|failure| {
-            let mut failure = failure.borrow_mut();
-            if failure.as_deref() == Some(path) {
-                failure.take();
-                true
-            } else {
-                false
-            }
-        });
-        if fail {
-            return Err(io::Error::from_raw_os_error(libc::EIO));
-        }
-    }
-    #[cfg(not(test))]
-    let _ = path;
-    parent.sync_all()
-}
-
 impl Dir {
     pub(super) fn root(path: &Path) -> io::Result<Self> {
         let parent = path
@@ -156,7 +121,7 @@ impl Dir {
             // Sync every link in the path before exposing a usable child. This
             // also covers an existing entry left by an earlier failed sync.
             fd.sync_all()?;
-            sync_created_parent(parent, path)?;
+            parent.sync_all()?;
         }
         Ok(Self {
             fd,
@@ -178,6 +143,12 @@ impl Dir {
     }
 
     pub(super) fn file(&self, child: &str, create: bool) -> io::Result<File> {
+        self.open_file(child, create, true)
+    }
+    pub(super) fn artifact(&self, child: &str) -> io::Result<File> {
+        self.open_file(child, false, false)
+    }
+    fn open_file(&self, child: &str, create: bool, private: bool) -> io::Result<File> {
         let child = name(OsStr::new(child))?;
         let flags = libc::O_NOFOLLOW
             | libc::O_CLOEXEC
@@ -194,7 +165,7 @@ impl Dir {
         let file = unsafe { File::from_raw_fd(raw) };
         owned(&file, false)?;
         // Do not change permissions on existing artifacts. Refuse unsafe files.
-        if file.metadata()?.mode() & 0o077 != 0 {
+        if private && file.metadata()?.mode() & 0o077 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "unsafe file permissions",
@@ -225,49 +196,6 @@ impl Dir {
             }
         }
     }
-    pub(super) fn rename_to(
-        &self,
-        child: &str,
-        target: &Self,
-        target_name: &str,
-    ) -> io::Result<()> {
-        let from = name(OsStr::new(child))?;
-        let to = name(OsStr::new(target_name))?;
-        // linkat is atomic and refuses an existing destination, unlike renameat.
-        if unsafe {
-            libc::linkat(
-                self.fd.as_raw_fd(),
-                from.as_ptr(),
-                target.fd.as_raw_fd(),
-                to.as_ptr(),
-                0,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        target.sync()?;
-        self.remove_file(child)
-    }
-    pub(super) fn replace_setting(&self, child: &str, target: &str) -> io::Result<()> {
-        if self.exists(target)? {
-            self.file(target, false)?;
-        }
-        let from = name(OsStr::new(child))?;
-        let to = name(OsStr::new(target))?;
-        if unsafe {
-            libc::renameat(
-                self.fd.as_raw_fd(),
-                from.as_ptr(),
-                self.fd.as_raw_fd(),
-                to.as_ptr(),
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        self.sync()
-    }
     pub(super) fn remove_file(&self, child: &str) -> io::Result<()> {
         self.remove(child, 0)
     }
@@ -280,58 +208,5 @@ impl Dir {
             return Err(io::Error::last_os_error());
         }
         self.sync()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_artifact_ancestor_is_synced_in_creation_order() {
-        let path = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("zeal-fsync-{}", uuid::Uuid::new_v4()));
-        directory_syncs();
-        let root = Dir::root(&path).unwrap();
-        root.child("workspaces", true)
-            .unwrap()
-            .child("workspace", true)
-            .unwrap()
-            .child("runs", true)
-            .unwrap()
-            .create_child("invocation")
-            .unwrap();
-        assert_eq!(
-            directory_syncs(),
-            vec![
-                path.parent().unwrap().to_owned(),
-                path.clone(),
-                path.join("workspaces"),
-                path.join("workspaces/workspace"),
-                path.join("workspaces/workspace/runs")
-            ]
-        );
-        fs::remove_dir_all(path).unwrap();
-    }
-    #[test]
-    fn missing_application_ancestors_are_created_and_synced_from_the_top() {
-        let root = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("zeal-ancestors-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&root).unwrap();
-        directory_syncs();
-        Dir::root(&root.join("nested/deeper/data")).unwrap();
-        assert_eq!(
-            directory_syncs(),
-            vec![
-                root.clone(),
-                root.join("nested"),
-                root.join("nested/deeper")
-            ]
-        );
-        fs::remove_dir_all(root).unwrap();
     }
 }

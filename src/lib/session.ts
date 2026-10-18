@@ -64,8 +64,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let stateRevision = 0;
   let listGeneration = 0;
   let detailGeneration = 0;
-  let detailInFlight = false;
-  let followSession = false;
   let unlisten: (() => void) | undefined;
 
   function update(patch: Partial<SessionView>) {
@@ -93,15 +91,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const id = view.selectedRun;
     const generation = ++detailGeneration;
     // Logs and observations are read after the run leaves the active slot.
-    if (!id || !view.ready || view.starting) return;
-    if (detailInFlight) {
-      update({
-        detailLoading: false,
-        detailError: "別の詳細を読み込み中です。完了後に Retry を押してください",
-      });
-      return;
-    }
-    detailInFlight = true;
+    if (!id || !view.ready || view.starting || id === view.state?.running) return;
     update({ detailLoading: true, detailError: null });
     try {
       const detail = await transport.invoke<RunDetail>("get_run", { id });
@@ -112,13 +102,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (generation === detailGeneration) {
         update({ detailError: String(error), detailLoading: false });
       }
-    } finally {
-      detailInFlight = false;
     }
   }
 
-  function selectRun(id: string | null, follow = false) {
-    if (!follow) followSession = false;
+  function selectRun(id: string | null) {
     update({ selectedRun: id, detail: null, detailError: null, detailLoading: false });
     void loadDetail();
   }
@@ -140,14 +127,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         detailError: null,
       });
     }
-    if (resumed && state.running) followSession = true;
     update({ state, ready: true, ...(resumed ? { error: null } : {}) });
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
-    if (!state.running && (before?.running || view.starting) && followSession) {
-      if (state.completedRuns.length > 0) selectRun(state.completedRuns[0], true);
-    } else if (resumed) void loadDetail();
+    if (resumed || (before?.running && before.running !== state.running)) void loadDetail();
   }
 
   function dispose() {
@@ -176,13 +160,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   async function start(cmd: RunCmd, target: string) {
     if (!canSend(view, target)) return;
     const workspace = view.state?.workspace;
-    selectRun(null);
-    followSession = true;
     update({ starting: true, error: null });
     try {
       // The target goes through verbatim: one argument, no shell interpretation.
-      await transport.invoke<string>("start_run", { cmd, target });
+      const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
+      update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
+      selectRun(record.id);
       // Invoke responses and events use different Tauri delivery paths. The
       // reply may precede its running event, so reconcile before deciding to
       // read completed files. Events received during this read take priority.

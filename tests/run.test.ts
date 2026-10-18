@@ -6,29 +6,26 @@ import type { RunRecord } from "../src/lib/types.ts";
 const record: RunRecord = {
   id: "one",
   workspace: "/workspace",
-  workspaceId: "workspace-a",
-  outcome: "ok",
-  elapsedMs: 1,
-  finishedAt: 2,
-  exitCode: 0,
-  logTruncated: false,
   cmd: "build",
   target: "//:app",
   startedAt: 1,
 };
 
-test("process outcome distinguishes success, interruption and failure", () => {
-  assert.equal(outcome(record), "✓ succeeded");
+test("outcome distinguishes active, stopping, unfinished, succeeded and failed records", () => {
+  assert.equal(outcome(record, "one"), "● running");
+  assert.equal(outcome(record, "one", true), "■ stopping");
+  assert.equal(outcome(record, null), "? outcome unknown");
+  assert.equal(outcome(record, "other", true), "? outcome unknown");
+  assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 0 }, null), "✓ succeeded");
+  assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 3 }, null), "✗ failed (exit 3)");
+});
+
+test("stopping never replaces a result the observation already confirmed", () => {
+  assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 0 }, record.id, true), "✓ succeeded");
   assert.equal(
-    outcome({ ...record, outcome: "interrupted", exitCode: 8 }),
-    "■ interrupted (exit 8)",
+    outcome({ ...record, finishedAt: 2, exitCode: 3 }, record.id, true),
+    "✗ failed (exit 3)",
   );
-  assert.equal(outcome({ ...record, outcome: "failed", exitCode: 3 }), "✗ failed (exit 3)");
-  assert.equal(
-    outcome({ ...record, outcome: "interrupted", exitCode: -1 }),
-    "■ interrupted (signal)",
-  );
-  assert.equal(outcome({ ...record, outcome: "failed", exitCode: -1 }), "✗ failed (signal)");
 });
 
 test("partial observations retain data and explain the missing tail", () => {
@@ -52,5 +49,5 @@ test("missing and unreadable observations remain distinct without changing a kno
     sectionMessage({ status: "not_available", note: "still running" }),
     "not available — still running",
   );
-  assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 0 }), "✓ succeeded");
+  assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 0 }, null), "✓ succeeded");
 });

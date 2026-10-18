@@ -1,13 +1,11 @@
 import type { RunRecord, Section } from "./types.ts";
 
-export function exitStatus(code: number): string {
-  return code === -1 ? "signal" : `exit ${code}`;
-}
-
-export function outcome(record: RunRecord): string {
-  if (record.outcome === "ok") return "✓ succeeded";
-  const result = record.outcome === "interrupted" ? "■ interrupted" : "✗ failed";
-  return `${result} (${exitStatus(record.exitCode)})`;
+export function outcome(record: RunRecord, running: string | null, stopping = false): string {
+  if (record.finishedAt !== undefined && record.exitCode !== undefined) {
+    return record.exitCode === 0 ? "✓ succeeded" : `✗ failed (exit ${record.exitCode})`;
+  }
+  if (record.id === running) return stopping ? "■ stopping" : "● running";
+  return "? outcome unknown";
 }
 
 export function sectionData<T>(section: Section<T> | undefined): T | null {

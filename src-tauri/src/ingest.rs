@@ -7,13 +7,14 @@
 //! [`run_detail`] reads a run dir into what the run view shows. It parses the
 //! artifacts on every call; nothing is cached.
 
+use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
 use crate::snapshot::{self, Status};
 use crate::state::{Core, IngestError};
 use crate::store::{self, RunRecord};
 use crate::xml::{self, RawRule};
 use serde::Serialize;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -169,10 +170,12 @@ fn summarize(stderr_tail: &str) -> String {
 pub struct RunDetail {
     pub record: RunRecord,
     pub log: Section<String>,
+    pub bep: Section<Bep>,
     pub profile: Section<Profile>,
 }
 
-/// Artifact availability never changes an immutable run summary.
+/// Observation availability is independent of the process exit code.
+/// Only complete and partial observations carry data.
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Section<T> {
@@ -181,125 +184,59 @@ pub enum Section<T> {
     Missing,
     ParseError { note: String },
     ReadError { note: String },
+    NotAvailable { note: String },
 }
 
-struct JsonCount {
-    bytes: usize,
-    limit: usize,
-}
-impl Write for JsonCount {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.bytes = self
-            .bytes
-            .checked_add(bytes.len())
-            .filter(|n| *n <= self.limit)
-            .ok_or_else(|| io::Error::other("detail IPC limit exceeded"))?;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-// JSON escapes can expand a log sixfold. Stop on a character boundary while
-// constructing the IPC result, before allocating an escaped copy.
-fn fit_log(text: &mut String, budget: usize) -> bool {
-    let mut bytes = 2;
-    let mut end = text.len();
-    for (index, ch) in text.char_indices() {
-        bytes += match ch {
-            '"' | '\\' | '\n' | '\r' | '\t' | '\u{08}' | '\u{0c}' => 2,
-            '\u{00}'..='\u{1f}' => 6,
-            _ => ch.len_utf8(),
-        };
-        if bytes > budget {
-            end = index;
-            break;
-        }
-    }
-    let truncated = end < text.len();
-    text.truncate(end);
-    truncated
-}
-
-/// Open only workspace-scoped artifacts through protected storage. One worker
-/// owns this call; every call rereads the current files and caches nothing.
-pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> Result<RunDetail, String> {
-    let record = store::record(data, workspace, id).map_err(|error| error.to_string())?;
-    let mut count = JsonCount {
-        bytes: 0,
-        limit: profile::IPC_LIMIT.saturating_sub(2048),
+/// Read the record and available observations from a run dir. A missing or
+/// unreadable observation never hides the record or another observation.
+/// Timing is parsed only after the record confirms that the run finished.
+pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
+    let record = store::read_record(data, workspace, id)?;
+    let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }) {
+        Ok(data) => Section::Ok { data },
+        Err(e) => read_error(e),
     };
-    serde_json::to_writer(&mut count, &record)
-        .map_err(|_| "detail record exceeds IPC limit".to_string())?;
-    let mut remaining = profile::IPC_LIMIT - count.bytes - 2048;
-    let log = match store::read_log(data, workspace, id) {
-        Ok(mut log) => {
-            let ipc_truncated = fit_log(&mut log.text, remaining);
-            let mut count = JsonCount {
-                bytes: 0,
-                limit: remaining,
-            };
-            serde_json::to_writer(&mut count, &log.text)
-                .map_err(|_| "detail log exceeds IPC limit".to_string())?;
-            remaining -= count.bytes;
-            let mut notes = Vec::new();
-            if record.log_truncated {
-                notes.push("log truncated during save");
-            }
-            if log.truncated {
-                notes.push("log truncated during read");
-            }
-            if ipc_truncated {
-                notes.push("log truncated for IPC limit");
-            }
-            if notes.is_empty() {
-                Section::Ok { data: log.text }
-            } else {
+    let bep = match store::artifact(data, workspace, id, "bep.json") {
+        Err(e) => read_error(e),
+        Ok(f) => {
+            let data = bep::parse(BufReader::new(f));
+            if data.truncated {
                 Section::Incomplete {
-                    data: log.text,
-                    note: notes.join("; "),
+                    data,
+                    note: "BEP ended with an invalid or unreadable event".to_string(),
                 }
+            } else {
+                Section::Ok { data }
             }
         }
-        Err(error) => read_error(error),
     };
-    let profile = match store::open_profile(data, workspace, id) {
-        Err(error) => read_error(error),
-        Ok(file)
-            if file
-                .metadata()
-                .is_ok_and(|metadata| metadata.len() > profile::COMPRESSED_LIMIT as u64) =>
-        {
-            Section::Incomplete {
-                data: Profile {
-                    phases: vec![],
-                    lanes: vec![],
-                },
-                note: "compressed profile exceeds 32 MiB".to_string(),
-            }
+    let profile = if record.finished_at.is_none() {
+        Section::NotAvailable {
+            note: "timing is available after run completion is recorded".to_string(),
         }
-        Ok(file) => match profile::parse_bounded(file, remaining) {
-            Ok(data) => Section::Ok { data },
-            Err(profile::ProfileError::Incomplete(note)) => Section::Incomplete {
-                data: Profile {
-                    phases: vec![],
-                    lanes: vec![],
-                },
-                note,
+    } else {
+        match store::artifact(data, workspace, id, "profile.gz") {
+            Err(e) => read_error(e),
+            Ok(f) => match profile::parse(f) {
+                Ok(data) => Section::Ok { data },
+                Err(note) => Section::ParseError { note },
             },
-            Err(profile::ProfileError::Parse(note)) => Section::ParseError { note },
-        },
+        }
     };
     Ok(RunDetail {
         record,
         log,
+        bep,
         profile,
     })
 }
 
-fn read_error<T>(error: store::StoreError) -> Section<T> {
-    if error.kind == store::ErrorKind::Missing {
+fn read_error<T>(error: io::Error) -> Section<T> {
+    if error.kind() == io::ErrorKind::NotFound {
         Section::Missing
     } else {
         Section::ReadError {
@@ -311,105 +248,186 @@ fn read_error<T>(error: store::StoreError) -> Section<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn escaped_log_is_limited_at_a_utf8_boundary() {
-        let mut text = "\u{0000}é\nhello".to_string();
-        assert!(fit_log(&mut text, 10));
-        assert_eq!(text, "\u{0000}é");
-        assert_eq!(serde_json::to_vec(&text).unwrap().len(), 10);
-    }
-    #[test]
-    fn exact_log_budget_keeps_all_text() {
-        let mut text = "é\n".to_string();
-        assert!(!fit_log(&mut text, 6));
-        assert_eq!(text, "é\n");
-    }
-    struct Saved {
-        root: std::path::PathBuf,
-        data: std::path::PathBuf,
-        workspace: std::path::PathBuf,
-        record: RunRecord,
-    }
-    impl Drop for Saved {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// Removes the temp root when the test ends.
+    struct TempRoot(PathBuf);
+
+    impl Drop for TempRoot {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
+            let _ = fs::remove_dir_all(&self.0);
         }
     }
-    fn saved(log: &str) -> Saved {
-        let root = std::env::temp_dir().join(format!("zeal-detail-{}", uuid::Uuid::new_v4()));
-        let workspace = root.join("workspace");
-        let data = root.join("data");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let mut prepared = store::PreparedLog::new(&data).unwrap();
-        prepared.append(log).unwrap();
-        let record = store::commit(
-            &data,
-            &workspace,
-            RunRecord {
-                id: uuid::Uuid::new_v4().to_string(),
-                workspace: String::new(),
-                workspace_id: String::new(),
-                cmd: "build".to_string(),
-                target: "//:app".to_string(),
-                started_at: 1,
-                finished_at: Some(2),
-                exit_code: Some(0),
-                elapsed_ms: Some(1),
-                outcome: "ok".to_string(),
-                log_truncated: false,
-            },
-            prepared,
+
+    /// A new unfinished run with a fixture's observations, if present.
+    fn run_dir(case: &str) -> (TempRoot, PathBuf) {
+        let root = std::env::temp_dir().join(format!("zeal-run-detail-{}", uuid::Uuid::new_v4()));
+        let ws = root.join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        let (_, dir) = store::create(&root.join("data"), &ws, "build", "//...").unwrap();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run");
+        for name in ["bep.json", "profile.gz"] {
+            let src = fixtures.join(case).join(name);
+            if src.exists() {
+                fs::write(dir.join(name), fs::read(src).unwrap()).unwrap();
+            }
+        }
+        (TempRoot(root), dir)
+    }
+
+    fn detail(root: &TempRoot, dir: &Path) -> io::Result<RunDetail> {
+        run_detail(
+            &root.0.join("data"),
+            &root.0.join("ws"),
+            dir.file_name().unwrap().to_str().unwrap(),
         )
-        .unwrap();
-        Saved {
-            root,
-            data,
-            workspace,
-            record,
+    }
+
+    fn finish(root: &TempRoot, dir: &Path, code: i32) -> Result<RunRecord, store::StoreError> {
+        store::finish(
+            &root.0.join("data"),
+            &root.0.join("ws"),
+            dir.file_name().unwrap().to_str().unwrap(),
+            code,
+        )
+    }
+
+    #[test]
+    fn record_and_log() {
+        let (_root, dir) = run_dir("ok");
+        store::append_log(&dir, "INFO: Build completed").unwrap();
+        let rec = finish(&_root, &dir, 0).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert_eq!(d.record, rec);
+        let json = serde_json::to_value(&d).unwrap();
+        assert_eq!(json["record"]["exitCode"], 0);
+        assert_eq!(json["log"]["status"], "ok");
+        assert_eq!(json["log"]["data"], "INFO: Build completed\n");
+        assert_eq!(json["profile"]["status"], "ok");
+        assert!(matches!(d.log, Section::Ok { data } if data == "INFO: Build completed\n"));
+    }
+
+    #[test]
+    fn complete_cases_have_both_sections() {
+        for case in [
+            "ok",
+            "disk_cache_hit",
+            "action_failed",
+            "analysis_failed",
+            "loading_failed",
+        ] {
+            let (_root, dir) = run_dir(case);
+            finish(&_root, &dir, 0).unwrap();
+            let d = detail(&_root, &dir).unwrap();
+            assert!(matches!(d.bep, Section::Ok { .. }), "{case}");
+            assert!(matches!(d.profile, Section::Ok { .. }), "{case}");
         }
     }
-    fn artifacts(saved: &Saved) -> std::path::PathBuf {
-        saved
-            .data
-            .join("workspaces")
-            .join(&saved.record.workspace_id)
-            .join("runs")
-            .join(&saved.record.id)
-    }
+
     #[test]
-    fn missing_files_preserve_completed_process_result() {
-        let saved = saved("");
-        std::fs::remove_file(artifacts(&saved).join("log.txt")).unwrap();
-        let detail = run_detail(&saved.data, &saved.workspace, &saved.record.id).unwrap();
-        assert_eq!(detail.record, saved.record);
-        assert_eq!(detail.record.outcome, "ok");
-        assert!(matches!(detail.log, Section::Missing));
-        assert!(matches!(detail.profile, Section::Missing));
-        assert_eq!(store::list(&saved.data, &saved.workspace).unwrap().len(), 1);
+    fn incomplete_bep_and_missing_profile_preserve_the_exit_result() {
+        let (_root, dir) = run_dir("bep_truncated");
+        finish(&_root, &dir, 1).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert_eq!(d.record.exit_code, Some(1));
+        assert!(matches!(d.bep, Section::Incomplete { data, note }
+            if !data.targets.is_empty() && !note.is_empty()));
+        assert!(matches!(d.profile, Section::Missing));
     }
+
     #[test]
-    fn unsafe_log_and_corrupt_profile_are_independent() {
-        let saved = saved("text");
-        let dir = artifacts(&saved);
-        std::fs::remove_file(dir.join("log.txt")).unwrap();
-        std::fs::create_dir(dir.join("log.txt")).unwrap();
-        std::fs::write(dir.join("profile.gz"), b"not gzip").unwrap();
-        std::fs::set_permissions(
-            dir.join("profile.gz"),
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        )
-        .unwrap();
-        let detail = run_detail(&saved.data, &saved.workspace, &saved.record.id).unwrap();
-        assert_eq!(detail.record, saved.record);
-        assert!(matches!(detail.log, Section::ReadError { .. }));
-        assert!(matches!(detail.profile, Section::ParseError { .. }));
+    fn complete_observations_do_not_imply_process_success() {
+        let (_root, dir) = run_dir("ok");
+        finish(&_root, &dir, 42).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert_eq!(d.record.exit_code, Some(42));
+        assert!(matches!(d.bep, Section::Ok { .. }));
+        assert!(matches!(d.profile, Section::Ok { .. }));
     }
+
     #[test]
-    fn ipc_limit_applies_to_escaped_log_during_construction() {
-        let saved = saved(&"\u{0000}".repeat(store::MAX_LOG_BYTES));
-        let detail = run_detail(&saved.data, &saved.workspace, &saved.record.id).unwrap();
-        assert!(matches!(&detail.log, Section::Incomplete { note, .. } if note.contains("IPC")));
-        assert!(serde_json::to_vec(&detail).unwrap().len() <= profile::IPC_LIMIT);
-        assert_eq!(detail.record, saved.record);
+    fn unfinished_profile_is_not_parsed_even_when_it_is_valid() {
+        let (_root, dir) = run_dir("ok");
+        let d = detail(&_root, &dir).unwrap();
+        assert!(matches!(d.profile, Section::NotAvailable { .. }));
+        assert_eq!(d.record.finished_at, None);
+        assert_eq!(d.record.exit_code, None);
+
+        finish(&_root, &dir, 0).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert!(matches!(d.profile, Section::Ok { .. }));
+    }
+
+    #[test]
+    fn broken_profile_is_reported_only_after_completion_and_preserves_success() {
+        let (_root, dir) = run_dir("ok");
+        fs::write(dir.join("profile.gz"), b"not gzip").unwrap();
+        assert!(matches!(
+            detail(&_root, &dir).unwrap().profile,
+            Section::NotAvailable { .. }
+        ));
+
+        finish(&_root, &dir, 0).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert_eq!(d.record.exit_code, Some(0));
+        assert!(matches!(d.profile, Section::ParseError { note } if !note.is_empty()));
+        assert!(matches!(d.bep, Section::Ok { .. }));
+    }
+
+    #[test]
+    fn missing_observations_do_not_hide_the_record() {
+        let (_root, dir) = run_dir("ok");
+        let rec = finish(&_root, &dir, 0).unwrap();
+        fs::remove_file(dir.join("log.txt")).unwrap();
+        fs::remove_file(dir.join("bep.json")).unwrap();
+        fs::remove_file(dir.join("profile.gz")).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert_eq!(d.record, rec);
+        assert!(matches!(d.log, Section::Missing));
+        assert!(matches!(d.bep, Section::Missing));
+        assert!(matches!(d.profile, Section::Missing));
+    }
+
+    #[test]
+    fn unreadable_log_is_reported_without_hiding_other_observations() {
+        let (_root, dir) = run_dir("ok");
+        finish(&_root, &dir, 0).unwrap();
+        fs::remove_file(dir.join("log.txt")).unwrap();
+        fs::create_dir(dir.join("log.txt")).unwrap();
+        let d = detail(&_root, &dir).unwrap();
+        assert!(matches!(d.log, Section::ReadError { note } if !note.is_empty()));
+        assert!(matches!(d.bep, Section::Ok { .. }));
+        assert!(matches!(d.profile, Section::Ok { .. }));
+    }
+
+    #[test]
+    fn each_request_reads_the_current_artifacts() {
+        let (_root, dir) = run_dir("ok");
+        finish(&_root, &dir, 0).unwrap();
+        assert!(matches!(
+            detail(&_root, &dir).unwrap().profile,
+            Section::Ok { .. }
+        ));
+        fs::remove_file(dir.join("profile.gz")).unwrap();
+        assert!(matches!(
+            detail(&_root, &dir).unwrap().profile,
+            Section::Missing
+        ));
+    }
+
+    #[test]
+    fn a_different_workspace_cannot_read_the_record_or_artifacts() {
+        let (root, dir) = run_dir("ok");
+        let other = root.0.join("other");
+        fs::create_dir(&other).unwrap();
+        assert!(
+            run_detail(
+                &root.0.join("data"),
+                &other,
+                dir.file_name().unwrap().to_str().unwrap()
+            )
+            .is_err()
+        );
     }
 }

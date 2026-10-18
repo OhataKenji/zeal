@@ -3,7 +3,7 @@
 use crate::snapshot::Snapshot;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
 /// Serializable copy of everything the UI needs, pushed as the `app-state`
@@ -31,8 +31,6 @@ pub struct AppStateDto {
     /// Why the last run's exit is unknown: its `wait` failed, or its group was
     /// killed and no exit was confirmed.
     pub run_note: Option<String>,
-    pub completed_runs: Vec<String>,
-    pub process_exit: Option<i32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,14 +62,10 @@ pub struct CoreState {
     pub run_stopping: bool,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
-    pub completed_runs: Vec<String>,
-    pub process_exit: Option<i32>,
-    pub stop_started: Option<std::time::Instant>,
 }
 
 pub struct Core {
     pub state: Mutex<CoreState>,
-    pub run_finished: Condvar,
 }
 
 impl Core {
@@ -87,11 +81,7 @@ impl Core {
                 run_pgid: None,
                 run_stopping: false,
                 run_note: None,
-                completed_runs: Vec::new(),
-                process_exit: None,
-                stop_started: None,
             }),
-            run_finished: Condvar::new(),
         }
     }
 
@@ -109,8 +99,6 @@ impl Core {
             running: st.run.clone(),
             stopping: st.run_stopping,
             run_note: st.run_note.clone(),
-            completed_runs: st.completed_runs.clone(),
-            process_exit: st.process_exit,
         }
     }
 

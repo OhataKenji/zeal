@@ -50,8 +50,6 @@ export interface AppState {
   // Stop is best-effort. An unconfirmed exit releases the slot with runNote.
   stopping: boolean;
   runNote: string | null;
-  completedRuns: string[];
-  processExit: number | null;
 }
 
 // The commands the core accepts from the composer.
@@ -60,15 +58,11 @@ export type RunCmd = "build" | "test";
 export interface RunRecord {
   id: string;
   workspace: string;
-  workspaceId: string;
   cmd: string;
   target: string;
   startedAt: number;
   finishedAt?: number;
-  exitCode: number;
-  elapsedMs: number | null;
-  outcome: "ok" | "interrupted" | "failed";
-  logTruncated: boolean;
+  exitCode?: number;
 }
 
 export type Section<T> =
@@ -76,6 +70,12 @@ export type Section<T> =
   | { status: "incomplete"; data: T; note: string }
   | { status: "missing" }
   | { status: "parse_error" | "read_error" | "not_available"; note: string };
+
+export interface Bep {
+  targets: { label: string; ok: boolean }[];
+  tests: { label: string; status: string }[];
+  truncated: boolean;
+}
 
 // Raw fields stay intact for inspection; geometry is a separate projection.
 export type TraceEvent = Record<string, unknown>;
@@ -88,5 +88,6 @@ export interface Profile {
 export interface RunDetail {
   record: RunRecord;
   log: Section<string>;
+  bep: Section<Bep>;
   profile: Section<Profile>;
 }
