@@ -39,7 +39,6 @@ export interface TreeFile {
 export interface DirNode {
   path: string;
   name: string;
-  isPackage: boolean;
   dirs: DirNode[];
   rules: Target[];
   files: TreeFile[];
@@ -50,7 +49,6 @@ export function buildTree(snap: Snapshot): DirNode {
   const mk = (path: string): DirNode => ({
     path,
     name: path === "" ? "" : basename(path),
-    isPackage: false,
     dirs: [],
     rules: [],
     files: [],
@@ -68,7 +66,6 @@ export function buildTree(snap: Snapshot): DirNode {
   };
 
   const packages = new Set(snap.targets.map((t) => t.pkg));
-  for (const p of packages) ensure(p).isPackage = true;
   for (const t of snap.targets) ensure(t.pkg).rules.push(t);
 
   // Input-side files, deduplicated by path.
@@ -109,6 +106,7 @@ export interface Row {
   expanded?: boolean;
   /** For rule/file rows: the label selecting this row navigates to. */
   label?: string;
+  ruleClass?: string;
 }
 
 export function flatten(root: DirNode, expanded: Set<string>): Row[] {
@@ -121,7 +119,6 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
         depth,
         kind: "dir",
         text: `${d.name}/`,
-        sub: d.isPackage ? `//${d.path}` : undefined,
         dirPath: d.path,
         expanded: ex,
       });
@@ -133,6 +130,7 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
         depth,
         kind: "rule",
         text: `:${t.name}`,
+        ruleClass: t.ruleClass,
         label: t.label,
       });
     }
@@ -163,7 +161,6 @@ export function ancestorsOf(pkg: string): string[] {
 
 export interface UsedBy {
   label: string;
-  ruleClass: string;
   attr: string;
 }
 
@@ -179,7 +176,6 @@ export interface Relations {
 export function relations(snap: Snapshot, label: string): Relations | null {
   const target = snap.targets.find((t) => t.label === label);
   if (!target) return null;
-  const byLabel = new Map(snap.targets.map((t) => [t.label, t]));
 
   const deps = new Set<string>();
   const data = new Set<string>();
@@ -192,7 +188,6 @@ export function relations(snap: Snapshot, label: string): Relations | null {
     if (e.to === label) {
       usedBy.push({
         label: e.from,
-        ruleClass: byLabel.get(e.from)?.ruleClass ?? "",
         attr: e.attr,
       });
     }

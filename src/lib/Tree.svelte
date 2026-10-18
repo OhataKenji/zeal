@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { CaretDown, CaretRight, Circle, File } from "phosphor-svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { ancestorsOf, flatten, splitLabel, type DirNode } from "./model";
 
@@ -33,21 +34,33 @@
     {#if r.kind === "dir"}
       <button
         class="row dir"
-        style:padding-left="{r.depth * 14}px"
+        style:padding-left="{r.depth * 12}px"
+        aria-expanded={r.expanded}
         onclick={() => r.dirPath && toggle(r.dirPath)}
       >
-        {r.expanded ? "▾" : "▸"} {r.text}
-        {#if r.sub}<span class="dim">{r.sub}</span>{/if}
+        {#if r.expanded}<CaretDown size={10} />{:else}<CaretRight
+            size={10}
+          />{/if}<span>{r.text}</span>
       </button>
     {:else}
       <button
+        title={r.kind === "file"
+          ? `${r.text}\n${r.sub ?? ""}`
+          : (r.label ?? r.text)}
         class="row"
-        class:sel={r.label === selected}
-        style:padding-left="{r.depth * 14 + 14}px"
+        class:sel={r.kind === "rule" && r.label === selected}
+        class:test={r.ruleClass?.endsWith("_test")}
+        aria-current={r.kind === "rule" && r.label === selected
+          ? "true"
+          : undefined}
+        style:padding-left="{r.depth * 12 + 2}px"
         onclick={() => r.label && onselect(r.label)}
       >
-        {#if r.kind === "file"}<span class="dim">▸</span> {/if}{r.text}
-        {#if r.sub}<span class="dim">{r.sub}</span>{/if}
+        {#if r.kind === "file"}<File size={10} />{:else}<Circle
+            size={7}
+            weight="fill"
+          />{/if}<span>{r.text}</span>
+        {#if r.kind === "rule"}<small>{r.ruleClass}</small>{/if}
       </button>
     {/if}
   {/each}

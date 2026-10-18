@@ -18,6 +18,16 @@ pnpm tauri build  # build a release bundle
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
+## UI preview
+
+`pnpm dev` opens the frontend server. Visit `http://localhost:1420/?preview`
+for an interactive browser preview with synthetic workspace, run and profile data.
+`?preview=empty` shows workspace setup. Preview actions never invoke Bazel or
+read local workspace data. The preview module is excluded from production builds and cannot replace the
+IPC connection inside Tauri.
+
+The UI uses the existing Svelte + Vite stack. It does not require SvelteKit.
+
 ## Checks
 
 Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.

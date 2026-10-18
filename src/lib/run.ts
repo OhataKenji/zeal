@@ -1,11 +1,26 @@
 import type { RunRecord, Section } from "./types.ts";
 
-export function outcome(record: RunRecord, running: string | null, stopping = false): string {
-  if (record.finishedAt !== undefined && record.exitCode !== undefined) {
-    return record.exitCode === 0 ? "✓ succeeded" : `✗ failed (exit ${record.exitCode})`;
+export type RunStatus = {
+  kind: "succeeded" | "failed" | "running" | "stopping" | "unknown";
+  label: string;
+};
+
+export function runStatus(
+  record: RunRecord | undefined,
+  running: string | null,
+  stopping = false,
+): RunStatus {
+  if (record?.finishedAt !== undefined && record.exitCode !== undefined) {
+    return record.exitCode === 0
+      ? { kind: "succeeded", label: "✓ succeeded" }
+      : { kind: "failed", label: `✗ failed (exit ${record.exitCode})` };
   }
-  if (record.id === running) return stopping ? "■ stopping" : "● running";
-  return "? outcome unknown";
+  if (record && record.id === running) {
+    return stopping
+      ? { kind: "stopping", label: "■ stopping" }
+      : { kind: "running", label: "● running" };
+  }
+  return { kind: "unknown", label: "? outcome unknown" };
 }
 
 export function sectionData<T>(section: Section<T> | undefined): T | null {

@@ -76,11 +76,22 @@ export function eventName(event: TraceEvent): string {
 }
 
 // Keep trace-provided color groups without reproducing another viewer's palette.
+const eventColors = [
+  "#a7d6a9",
+  "#b2dfdb",
+  "#80c784",
+  "#a5d5b0",
+  "#ffdda6",
+  "#c5afd4",
+  "#99d4c6",
+  "#b5dca8",
+];
+
 export function eventColor(event: TraceEvent): string {
   const key = typeof event.cname === "string" ? event.cname : eventName(event);
   let hash = 2166136261;
   for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  return `hsl(${205 + ((hash >>> 0) % 18)} 14% ${75 + ((hash >>> 0) % 13)}%)`;
+  return eventColors[(hash >>> 0) % eventColors.length];
 }
 
 // Use the shallowest free row. Sorting only the geometry keeps raw file order.

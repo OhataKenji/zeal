@@ -1,14 +1,32 @@
 <script lang="ts">
+  import {
+    Cube,
+    CaretDown,
+    CaretRight,
+    ChartBar,
+    ArrowClockwise,
+    Play,
+    Stop,
+  } from "phosphor-svelte";
   import { onMount } from "svelte";
   import { app, connect, refresh, session } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
-  import { outcome } from "./lib/run";
-  import { candidates, createIndex, keyAction, LIST_ID, moveIndex, optionId, search } from "./lib/search";
+  import { runStatus } from "./lib/run";
+  import {
+    candidates,
+    createIndex,
+    keyAction,
+    LIST_ID,
+    moveIndex,
+    optionId,
+    search,
+  } from "./lib/search";
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
+  import RunStatus from "./lib/RunStatus.svelte";
   import RunView from "./lib/RunView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import SearchDropdown from "./lib/SearchDropdown.svelte";
@@ -26,9 +44,17 @@
   let targetField = $state("");
   let cmd = $state<RunCmd>("build");
   let switchingWs = $state(false);
-  const busy = $derived(!app.view.ready || app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
+  const busy = $derived(
+    !app.view.ready ||
+      app.view.starting ||
+      app.view.opening ||
+      !!st?.running ||
+      st?.ingest === "running",
+  );
   const running = $derived(!!st?.running);
-  const inputError = $derived(targetField === "" ? null : targetError(targetField));
+  const inputError = $derived(
+    targetField === "" ? null : targetError(targetField),
+  );
 
   // The composer is the only search entry point. `dropdownOpen` is set by
   // typing only: programmatic insertion (tree, relations, run rows) replaces
@@ -83,7 +109,7 @@
 
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.
-  let targetsShare = $state(0.65);
+  let targetsShare = $state(0.55);
   let collapsed = $state({ targets: false, runs: false });
 
   function dividerDown(e: PointerEvent) {
@@ -91,7 +117,10 @@
     const sidebar = (e.currentTarget as HTMLElement).parentElement!;
     const move = (ev: PointerEvent) => {
       const r = sidebar.getBoundingClientRect();
-      targetsShare = Math.min(0.85, Math.max(0.15, (ev.clientY - r.top) / r.height));
+      targetsShare = Math.min(
+        0.85,
+        Math.max(0.15, (ev.clientY - r.top) / r.height),
+      );
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -131,9 +160,15 @@
   >
     <button
       class="pane-head"
+      aria-expanded={!collapsed.targets}
       onclick={() => (collapsed.targets = !collapsed.targets)}
     >
-      {collapsed.targets ? "▸" : "▾"} targets
+      {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
+          size={10}
+        />{/if} Targets
+      <span class="pane-count"
+        >{snap?.targets.length.toLocaleString() ?? "—"}</span
+      >
     </button>
     {#if !collapsed.targets}
       <div class="pane-body">
@@ -158,40 +193,74 @@
     class:collapsed={collapsed.runs}
     style:flex-grow={collapsed.runs ? 0 : 1 - targetsShare}
   >
-    <button
-      class="pane-head"
-      onclick={() => (collapsed.runs = !collapsed.runs)}
-    >
-      {collapsed.runs ? "▸" : "▾"} runs
-    </button>
+    <div class="pane-heading">
+      <button
+        class="pane-head"
+        aria-expanded={!collapsed.runs}
+        onclick={() => (collapsed.runs = !collapsed.runs)}
+      >
+        {#if collapsed.runs}<CaretRight size={10} />{:else}<CaretDown
+            size={10}
+          />{/if} Runs
+      </button>
+      <button
+        class="analytics-link"
+        class:active={analyticsOpen && !app.view.selectedRun}
+        onclick={() => {
+          analyticsOpen = true;
+          session.selectRun(null);
+        }}><ChartBar size={12} /> Analytics</button
+      >
+    </div>
     {#if !collapsed.runs}
       <div class="pane-body">
         <ul class="list">
           {#each app.view.runs as run (run.id)}
-            <li><button class="run-row" class:sel={app.view.selectedRun === run.id} aria-current={app.view.selectedRun === run.id ? "true" : undefined} onclick={() => session.selectRun(run.id)}>
-              <span>{run.cmd} {run.target}</span>
-              <small>{outcome(run, state.running, state.stopping)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
-            </button></li>
+            {@const status = runStatus(run, state.running, state.stopping)}
+            <li>
+              <button
+                class="run-row"
+                title={status.label}
+                aria-label={`${run.cmd} ${run.target}: ${status.label}`}
+                class:sel={app.view.selectedRun === run.id}
+                aria-current={app.view.selectedRun === run.id
+                  ? "true"
+                  : undefined}
+                onclick={() => session.selectRun(run.id)}
+              >
+                <span class="run-label"
+                  ><RunStatus {...status} compact />{run.cmd} {run.target}</span
+                >
+                <small>{new Date(run.startedAt).toLocaleTimeString()}</small>
+              </button>
+            </li>
           {/each}
         </ul>
-        {#if app.view.runsError}<p class="err">{app.view.runsError}</p><button class="btn" onclick={session.loadRuns}>retry</button>
-        {:else if app.view.runs.length === 0}<p class="dim">Send で build / test を実行</p>{/if}
+        {#if app.view.runsError}<p class="err">{app.view.runsError}</p>
+          <button class="btn" onclick={session.loadRuns}>retry</button>
+        {:else if app.view.runs.length === 0}<p class="dim">
+            Send で build / test を実行
+          </p>{/if}
       </div>
     {/if}
   </section>
 {/snippet}
 
 {#snippet workspaceContent(state: AppState, workspace: string)}
-  <main class="content" class:run-content={!!app.view.selectedRun}>
+  <main
+    class="content"
+    class:run-content={!!app.view.selectedRun || analyticsOpen}
+  >
     {#if snap?.meta.status === "partial"}
       <p class="warn">
-        一部の package を読み飛ばしました (exit {state.lastError?.exitCode ?? "?"}) —
+        一部の package を読み飛ばしました (exit {state.lastError?.exitCode ??
+          "?"}) —
         {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の部分結果
       </p>
     {:else if snap && state.lastError}
       <p class="warn">
-        更新に失敗 — {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の
-        snapshot を表示中 ({state.lastError.summary})
+        更新に失敗 — {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の snapshot
+        を表示中 ({state.lastError.summary})
       </p>
     {/if}
     {#if state.ingest === "running"}
@@ -204,7 +273,12 @@
         <RunView view={app.view} reload={session.loadDetail} />
       {/key}
     {:else if snap && selected}
-      <TargetView {snap} label={selected} wsRoot={workspace} onselect={select} />
+      <TargetView
+        {snap}
+        label={selected}
+        wsRoot={workspace}
+        onselect={select}
+      />
     {:else if snap}
       <p class="dim">tree から target を選択</p>
     {:else if state.ingest !== "running" && state.lastError}
@@ -216,63 +290,83 @@
 
 <div class="win">
   <div class="toolbar">
-    <strong>Zeal</strong>
-    {#if st?.workspace}
-      <button
-        class="link label"
-        title={st.workspace}
-        disabled={busy}
-        onclick={() => (switchingWs = !switchingWs)}>{st.workspace}</button
-      >
-    {:else}
-      <span class="label">no workspace</span>
-    {/if}
-    <select class="select" aria-label="Bazel command" bind:value={cmd}>
-      <option>build</option>
-      <option>test</option>
-    </select>
-    <div class="composer-search">
-      <input
-        class="input composer-target"
-        aria-label="Target label or pattern"
-        role="combobox"
-        aria-expanded={dropdownOpen && !!snap}
-        aria-controls={dropdownOpen && snap ? LIST_ID : undefined}
-        aria-autocomplete="list"
-        aria-activedescendant={activeOption}
-        placeholder="//pkg:target"
-        autocomplete="off"
-        value={targetField}
-        oninput={(event) => {
-          targetField = event.currentTarget.value;
-          matchIndex = 0;
-          dropdownOpen = targetField !== "";
-        }}
-        onkeydown={composerKey}
-        onblur={() => (dropdownOpen = false)}
-      />
-      {#if dropdownOpen && snap}
-        <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
+    <div class="workspace-picker">
+      <Cube size={22} weight="fill" class="brand-icon" />
+      {#if st?.workspace}
+        <button
+          class="link label"
+          title={st.workspace}
+          disabled={busy}
+          onclick={() => (switchingWs = !switchingWs)}
+          >{st.workspace.split(/[\\/]/).filter(Boolean).at(-1) ??
+            st.workspace}</button
+        >
+      {:else}
+        <strong>Zeal</strong>
+      {/if}
+      <CaretDown size={10} />
+      {#if st?.workspace}
+        <button
+          class="btn icon-button"
+          aria-label="Reload targets"
+          title="Reload targets"
+          onclick={refresh}
+          disabled={busy}
+        >
+          <ArrowClockwise size={14} />
+        </button>
       {/if}
     </div>
-    <button
-      class="btn primary"
-      disabled={switchingWs || (running ? !canStop(app.view) : !canSend(app.view, targetField))}
-      onclick={submit}
-    >
-      {running ? "stop" : "Send"}
-    </button>
+    <div class="composer">
+      <select class="select" aria-label="Bazel command" bind:value={cmd}>
+        <option>build</option>
+        <option>test</option>
+      </select>
+      <div class="composer-search">
+        <input
+          class="input composer-target"
+          aria-label="Target label or pattern"
+          role="combobox"
+          aria-expanded={dropdownOpen && !!snap}
+          aria-controls={dropdownOpen && snap ? LIST_ID : undefined}
+          aria-autocomplete="list"
+          aria-activedescendant={activeOption}
+          placeholder="Fuzzy :all / //pkg:target"
+          autocomplete="off"
+          value={targetField}
+          oninput={(event) => {
+            targetField = event.currentTarget.value;
+            matchIndex = 0;
+            dropdownOpen = targetField !== "";
+          }}
+          onkeydown={composerKey}
+          onblur={() => (dropdownOpen = false)}
+        />
+        {#if dropdownOpen && snap}
+          <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
+        {/if}
+      </div>
+      <button
+        class="btn primary icon-button"
+        aria-label={running ? "Stop" : "Send"}
+        title={running ? "Stop" : "Send"}
+        disabled={switchingWs ||
+          (running ? !canStop(app.view) : !canSend(app.view, targetField))}
+        onclick={submit}
+      >
+        {#if running}<Stop size={12} weight="fill" />{:else}<Play
+            size={12}
+            weight="fill"
+          />{/if}
+      </button>
+    </div>
     {#if st?.ingest === "running"}
       <span class="label" role="status">target データの取得待ち</span>
     {/if}
-    {#if st?.workspace}
-      <button class="btn" onclick={() => { analyticsOpen = true; session.selectRun(null); }}>analytics</button>
-      <button class="btn" onclick={refresh} disabled={busy}>
-        refresh
-      </button>
-    {/if}
   </div>
-  {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
+  {#if app.view.error}<p class="app-error err" role="alert">
+      {app.view.error}
+    </p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
   {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
 
@@ -295,6 +389,7 @@
         <div
           class="divider"
           role="separator"
+          aria-label="Resize target and run panes"
           aria-orientation="horizontal"
           onpointerdown={dividerDown}
         ></div>
