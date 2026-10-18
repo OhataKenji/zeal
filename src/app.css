@@ -141,6 +141,76 @@ ul.list li:last-child {
   min-width: 0;
 }
 
+/* Anchors the search dropdown to the target input while the wrapper keeps the
+   input's flex width in the toolbar. */
+.composer-search {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+  display: flex;
+}
+
+/* 検索 dropdown (docs/mock の .qo)。target 欄の下に重ねて出す。 */
+.composer-search .qo {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin-top: 2px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.qo {
+  border: 2px solid var(--ink);
+  background: #fff;
+}
+
+.qo .match {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px dotted #eee;
+  padding: 5px 10px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.qo .match.sel {
+  background: #eee;
+}
+
+.qo .match .hit {
+  text-decoration: underline;
+  font-weight: 700;
+}
+
+/* The empty state reuses .dim on a .match row. */
+.qo .match.dim {
+  color: var(--note);
+}
+
+.qo .foot {
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--note);
+}
+
+.qo .foot code {
+  margin-right: 8px;
+  font: inherit;
+}
+
 .btn {
   border: 1px solid var(--ink);
   padding: 4px 14px;

@@ -3,12 +3,14 @@
   import { app, connect, refresh, session } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
   import { outcome } from "./lib/run";
+  import { candidates, createIndex, keyAction, LIST_ID, moveIndex, optionId, search } from "./lib/search";
+  import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import RunView from "./lib/RunView.svelte";
-  import { targetError } from "./lib/target";
+  import SearchDropdown from "./lib/SearchDropdown.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
   onMount(connect);
@@ -23,10 +25,54 @@
   let cmd = $state<RunCmd>("build");
   let switchingWs = $state(false);
   const busy = $derived(!app.view.ready || app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
-
+  const running = $derived(!!st?.running);
   const inputError = $derived(targetField === "" ? null : targetError(targetField));
 
-  const running = $derived(!!st?.running);
+  // The composer is the only search entry point. `dropdownOpen` is set by
+  // typing only: programmatic insertion (tree, relations, run rows) replaces
+  // the field without dropping the list over it. The matches are computed even
+  // while closed, because ↑/↓ reopen the list from the current text.
+  let dropdownOpen = $state(false);
+  let matchIndex = $state(0);
+  const index = $derived(snap ? createIndex(candidates(snap)) : null);
+  const matches = $derived(index ? search(index, targetField) : []);
+  // A snapshot swap can shorten the list under the selection, so clamp here:
+  // the highlight, `aria-activedescendant` and Enter all name the same row.
+  const activeIndex = $derived(moveIndex(matchIndex, 0, matches.length));
+  const activeOption = $derived(
+    dropdownOpen && matches.length > 0 ? optionId(activeIndex) : undefined,
+  );
+
+  function pickTarget(value: string) {
+    targetField = value;
+    dropdownOpen = false;
+    matchIndex = 0;
+  }
+
+  function composerKey(event: KeyboardEvent) {
+    if (event.isComposing) return;
+    const action = keyAction(
+      { open: dropdownOpen, index: activeIndex },
+      event.key,
+      matches,
+    );
+    switch (action.kind) {
+      case "move":
+        event.preventDefault();
+        dropdownOpen = true;
+        matchIndex = action.index;
+        break;
+      case "pick":
+        event.preventDefault();
+        pickTarget(action.value);
+        break;
+      case "close":
+        dropdownOpen = false;
+        break;
+      case "none":
+        break;
+    }
+  }
 
   function submit() {
     if (running) void session.stop();
@@ -136,7 +182,8 @@
   <main class="content" class:run-content={!!app.view.selectedRun}>
     {#if snap?.meta.status === "partial"}
       <p class="warn">
-        一部の package を読み飛ばしました (exit {state.lastError?.exitCode ?? "?"})
+        一部の package を読み飛ばしました (exit {state.lastError?.exitCode ?? "?"}) —
+        {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の部分結果
       </p>
     {:else if snap && state.lastError}
       <p class="warn">
@@ -179,14 +226,37 @@
       <option>build</option>
       <option>test</option>
     </select>
-    <input
-      class="input composer-target"
-      aria-label="Target label or pattern"
-      bind:value={targetField}
-      placeholder="//pkg:target"
-      onkeydown={(event) => { if (event.key === "Enter" && !switchingWs) void session.start(cmd, targetField); }}
-    />
-    <button class="btn primary" disabled={switchingWs || (running ? !canStop(app.view) : !canSend(app.view, targetField))} onclick={submit}>{running ? "stop" : "Send"}</button>
+    <div class="composer-search">
+      <input
+        class="input composer-target"
+        aria-label="Target label or pattern"
+        role="combobox"
+        aria-expanded={dropdownOpen && !!snap}
+        aria-controls={dropdownOpen && snap ? LIST_ID : undefined}
+        aria-autocomplete="list"
+        aria-activedescendant={activeOption}
+        placeholder="//pkg:target"
+        autocomplete="off"
+        value={targetField}
+        oninput={(event) => {
+          targetField = event.currentTarget.value;
+          matchIndex = 0;
+          dropdownOpen = targetField !== "";
+        }}
+        onkeydown={composerKey}
+        onblur={() => (dropdownOpen = false)}
+      />
+      {#if dropdownOpen && snap}
+        <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
+      {/if}
+    </div>
+    <button
+      class="btn primary"
+      disabled={switchingWs || (running ? !canStop(app.view) : !canSend(app.view, targetField))}
+      onclick={submit}
+    >
+      {running ? "stop" : "Send"}
+    </button>
     {#if st?.ingest === "running"}
       <span class="label" role="status">target データの取得待ち</span>
     {/if}
@@ -196,9 +266,9 @@
       </button>
     {/if}
   </div>
-  {#if inputError}<p class="app-error err" role="alert">{inputError}</p>{/if}
   {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
+  {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
 
   {#if st === null}
     <div class="content dim">loading…</div>

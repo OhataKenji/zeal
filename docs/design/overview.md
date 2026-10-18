@@ -80,25 +80,27 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 | core::ingest    | query XML / BEP / profile の parse。観測 file は詳細表示のたびに読む            |
 | core::store     | run record と成果物の永続化。M2 は file、M4 から SQLite(rusqlite)               |
 
-UI への実行中の通知は、runner が捕捉した stdout/stderr を Tauri の event で WebView に streaming して届ける。
-stdout/stderr は専用スレッドで常時 drain し(pipe 詰まりで bazel 本体をブロックしない)、M2 は1行ずつ UI に送り、負荷と欠損の扱いを検証する。
-送信量の上限や省略表示を導入する場合は、省略した旨を示し、子プロセスの drain は続ける。
+M3 の試作では stdout と stderr を同じ追記用ファイルへ直接接続する。
+UI は client 終了後に保存したログを読み、実行中のログ配信は行わない。
 UI が直接プロセスやファイルを触る経路は作らない。
 
 ### bazel 呼び出しの直列化とプロセス管理
 
 bazel server は同一 output base 上で同時に一つのコマンドしか処理せず、後続の呼び出しは lock を待ってブロックする。
 このため runner は同一 workspace の bazel 呼び出しを同時に一つに限る(mutex)。
-run の実行中は snapshot 取り込み([m1](./m1-targets.md))を起動せず、取り込み要求は pending として記録して run 完了後に1回だけ行う。
+run または query の実行中は snapshot 取り込み要求を予約せず拒否する。
+取り込みは workspace を開いたときと手動 refresh のみ行う([m1](./m1-targets.md))。
 M2 では取り込み中の Send を disabled にし、待ち行列を持たない([m2](./m2-run-detail.md))。
 M3 で取り込みの完了を待っている間は「target データの取得待ち」と表示する。
-spawn 後に出力が来ない場合は「出力待ち」とし、無出力だけで server lock 待ちや bazelisk の取得中とは断定しない。
+実行中は「ログは完了後に表示」と示し、出力の有無と待機原因は判定しない。
 
-spawn は独立したプロセスグループで行い、stop・中断・hard kill はグループ単位で送る(`bazel run` が起こした対象 binary も回収できるようにするため)。
+M3 は `build` / `test` に絞り、`bazel run` は今後の拡張とする。
+spawn は独立したプロセスグループで行い、stop と hard kill をグループへ送る。
+子孫の完全回収は保証しない。
 中断のエスカレーションと判定規則は [m3](./m3-find-and-run.md) で定める。
 アプリ終了時に実行中の run があれば SIGINT を送り、猶予のあとでグループを kill してから終了する。
 M4 の起動時には前回の未完了 record を lost にするだけで、以前の process を照合したり signal を送ったりしない。
-現在の handle を持つ run の wait エラーでも実行枠は解放しない(規則は [m4](./m4-run-history.md))。
+wait エラーになった run は実行枠を解放して record を未完了のまま残し、M4 はこれを `lost` として扱う([m3](./m3-find-and-run.md)・[m4](./m4-run-history.md))。
 
 ### run の定義
 
@@ -135,7 +137,7 @@ DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理
 DB と sidecar の自動削除や再作成、復元用 manifest、backup は設けない。
 利用者が停止と対象 workspace を確認して DB を手動初期化した場合、M2 run.json だけを再移行し、M4 以降の履歴は失われる。
 permission、disk full、新しすぎる schema は別のエラーとして扱い、DB 初期化を勧めない。
-生存する子の stop と drain は DB 障害時も維持する([m4](./m4-run-history.md))。
+生存する子の stop は DB 障害時も維持する([m4](./m4-run-history.md))。
 
 ### UI の一貫性
 
@@ -155,9 +157,9 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 
 - Bazel の version 差は flag と出力形式の単位で現れる。v1 は 8.7 以上を目安にし、観測 flag が受理されない環境は対象外として、発生したら Zeal 側のバグとして対応する。成果物の欠損は detail なしとして扱う。
 - `bazel query` は大きい repo で遅くなり得る。snapshot 取り込みは grpc で実測 warm 約 56ms / cold 約 19s で、起動ごとの取り直しは実用範囲。
-- bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。無出力の間は原因を推定せず「出力待ち」と表示し、届いた log はそのまま示す。
+- bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。M3 では実行中と表示し、ログは client 終了後に読む。
 - workspace を移動・rename するとルートパスが変わり、履歴は新規 workspace として分断される。
-- 同一 workspace で Zeal を二重起動しないよう single instance を強制する(プロセス管理の前提条件)。取り込み中など bazel 呼び出しの待ちの間は Send が最大で query の timeout 分待たされ得る。
+- 初版は同一 workspace で Zeal を二重起動しない前提で試す。取り込み中など bazel 呼び出しの待ちの間は Send が最大で query の timeout 分待たされ得る。
 
 ## Security Concerns
 
