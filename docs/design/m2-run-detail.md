@@ -20,11 +20,6 @@ phase の区切りとスレッド上の event を示し、観測できる範囲�
 
 ## Background
 
-以下の起動、file 保存、process の終了結果は M2 段階の契約である。
-M4 以降の履歴 ID、BEP 取得、結果と時間の保存は [M4](./m4-run-history.md) の BES 記録へ置き換え、profile の可視化規則は維持する。
-M4 では BEP file と target / test ごとの結果一覧を廃止し、DB の要約、text の log、profile だけを残す。
-log は BEP Progress 由来の一経路に統一し、以下の stdout/stderr の file 収集は M4 では行わない。
-
 run、snapshot、BEP などの共通用語は [overview](./overview.md#background) に従う。
 **BEP** は呼び出し単位のイベント列で、target の結果や test 結果を与える。
 **profile** は Bazel の JSON trace 形式の計測記録で、phase の marker とスレッドごとの event を持つ。
