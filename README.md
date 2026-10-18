@@ -18,6 +18,11 @@ pnpm tauri build  # build a release bundle
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
+## UI preview
+
+Run `pnpm dev`, then open `http://localhost:1420/?preview` for sample data
+or `?preview=empty` for workspace setup.
+
 ## Checks
 
 Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.
