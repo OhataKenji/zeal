@@ -31,6 +31,10 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
+Run history records completed GUI `build` / `test` invocations through local BES.
+SQLite summaries stay unchanged when logs or profiles are missing. Legacy history is not migrated.
+See [M4 validation](docs/validation/m4-run-history.md) for acceptance evidence and manual cleanup rules.
+
 See [docs/prd.md](docs/prd.md) and [docs/design/](docs/design/) for more details.
 
 ## License

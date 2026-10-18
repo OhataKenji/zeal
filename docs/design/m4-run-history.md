@@ -205,3 +205,5 @@ bytesと実メモリを同一視せず、BESの実測とM2表示を確認して�
 固定SLOと常設の計測基盤は作らない。
 
 仕様参照: [BES RPC](https://github.com/googleapis/googleapis/blob/master/google/devtools/build/v1/publish_build_event.proto)、[Bazel 8.7のflag](https://github.com/bazelbuild/bazel/blob/8.7.0/src/main/java/com/google/devtools/build/lib/buildeventservice/BuildEventServiceOptions.java)、[profile ID](https://github.com/bazelbuild/bazel/blob/8.7.0/src/main/java/com/google/devtools/build/lib/profiler/JsonTraceFileWriter.java#L244-L247)。
+
+実装の検証と実測: [M4 run history validation](../validation/m4-run-history.md)。
