@@ -99,24 +99,25 @@ spawn は独立したプロセスグループで行い、stop と hard kill を�
 子孫の完全回収は保証しない。
 中断のエスカレーションと判定規則は [m3](./m3-find-and-run.md) で定める。
 アプリ終了時に実行中の run があれば SIGINT を送り、猶予のあとでグループを kill してから終了する。
-M4 の起動時には前回の未完了 record を lost にするだけで、以前の process を照合したり signal を送ったりしない。
-wait エラーになった run は実行枠を解放して record を未完了のまま残し、M4 はこれを `lost` として扱う([m3](./m3-find-and-run.md)・[m4](./m4-run-history.md))。
+M4 は未完了 record を終了不明のまま残し、以前の process の照合や signal 送信は行わない。
+wait エラーになった run は実行枠を解放して record を未完了のまま残し、M4 でも終了不明のまま扱う([m3](./m3-find-and-run.md)・[m4](./m4-run-history.md))。
 
 ### run の定義
 
 run の起動時に Zeal 側で UUID を発行し、観測用の成果物(BEP・profile・stdout/stderr)をその UUID で束ねる。
 build・test・run の spawn には `--tool_tag=zeal` を付与する。共有 output base 上の BEP 解析等で Zeal 発の呼び出しを識別できるようにするためである(query 系はこの flag を受理しない version があり得るため付けない)。
 
-M4 からの run 一覧は、終了結果(outcome)の記号と詳細の有無(detail)を別に表示する。
-詳細が欠損した場合や保持容量の整理で削除した場合も、既知の成功や失敗の記号を残す。
+M4 は run record をSQLiteに保存し、既存の一覧と詳細画面から再表示する。
+詳細fileが欠損した場合も、保存済みの入力と終了結果を残す。
 M2 の file record から導出できる終了結果は M2 の範囲で表示する。
 規則は [m4](./m4-run-history.md)で定める。
 
 ### データの置き場所
 
-DB と run の成果物は Tauri の app data dir 配下に置き、workspace ごとに領域を分ける。
-workspace はルートパスを正規化したもので識別し、ディレクトリ名にはパスの hash を使う。
-M4 では DB 内の canonical path と照合し、不一致や照合不能ならその保存領域の利用を拒否する(M2 では照合しない)。
+M4 の DB はアプリ全体で一つの `<app data dir>/zeal.db` とする。
+workspace はcanonical pathの完全一致で識別してUUIDを割り当て、成果物を `workspaces/<workspace_id>/runs/<run_id>/` に置く。
+一覧と詳細はDB上のworkspace所属を確認してから読む。
+旧file履歴の移行は行わない。
 core 自身の動作ログは app data dir 配下に置き、UUID、処理種別、エラー分類だけを記録する。
 raw 入力、spawn argv、観測成果物の生の値は出さない。
 リポジトリ内には何も書き込まない(bazel 自身が作成する convenience symlink は除く)。
@@ -132,10 +133,11 @@ workspace の判定は `MODULE.bazel` / `WORKSPACE`(`WORKSPACE.bazel`)の存在�
 ### store の運用
 
 M2 では DB を持たず、run の dir の file を表示のたびに parse する([m2](./m2-run-detail.md))。以下は DB を入れる M4 からの運用である。
-DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理して migration を store 内に置く。
+DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理する。
 起動時の全件 check は行わず、破損系エラーは履歴利用不能として表示し、新規 run を抑止する。
 DB と sidecar の自動削除や再作成、復元用 manifest、backup は設けない。
-利用者が停止と対象 workspace を確認して DB を手動初期化した場合、M2 run.json だけを再移行し、M4 以降の履歴は失われる。
+全Zealと残存processを停止した後にDBを手動初期化すると、全workspaceの要約を失う。
+旧履歴と成果物からの復元は行わない。
 permission、disk full、新しすぎる schema は別のエラーとして扱い、DB 初期化を勧めない。
 生存する子の stop は DB 障害時も維持する([m4](./m4-run-history.md))。
 

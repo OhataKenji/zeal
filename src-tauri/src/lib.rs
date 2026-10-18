@@ -94,7 +94,7 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(store::list(&data, &ws))
+    store::list(&data, &ws).map_err(|error| error.to_string())
 }
 
 /// No queued profile parses. The guard stays with the blocking operation even
@@ -133,7 +133,7 @@ async fn get_run(
     let worker = DetailWorker::acquire()?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        run_detail(&store::run_dir(&data, &ws, &id)).map_err(|e| e.to_string())
+        run_detail(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "profile worker failed".to_string())?
