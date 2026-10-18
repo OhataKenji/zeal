@@ -30,12 +30,11 @@ M3 までの試作、M4 の実装、未実装の M5 の設計を分けて記述�
 - **target / label / package / rule class**: Bazel の通常の意味。`//app/lib:parser` の `java_library` が rule class
 - **composer**: toolbar にある実行の唯一の入口。cmd 選択・target 欄・Send の三点
 - **content**: ウィンドウ本体の3状態(target / run / analytics)
-- **run**: M4 以降は一回の Bazel invocation とその観測記録。M2/M3 段階の起動と file 保存は、M4 の BES 記録で置き換える
+- **run**: composer から起動した一回の bazel 呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
-- **BEP**: Build Event Protocol。Bazel が出力する invocation 単位のイベント列。M4 からアプリ内 BES で受信する
-- **BES**: Build Event Service。BEP を受け取り、保存済みのイベントへ ACK を返す gRPC の受信口
+- **BEP**: Build Event Protocol。Bazel が出力するイベント列。M2 の試作では file を収集したが、M4 の収集対象からは外す
 - **profile**: `--profile` で出力される、phase 内訳と時系列を持つ chrome trace 形式の計測結果
-- **観測 flag**: run 時に bazel へ付けて成果物を得る flag 群(BEP・profile の出力指定と profile 用補助 flag。[m2](./m2-run-detail.md)参照)
+- **観測 flag**: run 時に bazel へ付ける profile 出力指定と補助 flag。M4 の範囲は [m4](./m4-run-history.md) に従う
 - **run record**: run ごとの入力、時刻、終了結果などの保存値。M2 は run.json、M4 から DB を正本とする([m4](./m4-run-history.md))
 
 ## Overview
@@ -43,27 +42,26 @@ M3 までの試作、M4 の実装、未実装の M5 の設計を分けて記述�
 Zeal は Tauri v2 の単一ウィンドウアプリで、Rust core とシステム webview 上の Svelte 5 UI に分かれる。
 対象 OS は POSIX 系(macOS を第一対象)とし、中断処理が SIGINT とプロセスグループを前提とする([m3](./m3-find-and-run.md))。
 
-Rust core が workspace の管理、bazel の子プロセス起動、M4 の BES 受信と観測データの読み取りを担い、UI は表示と入力だけを担う。
+Rust core が workspace の管理、bazel の子プロセス起動、観測データの保存と読み取りを担い、UI は表示と入力だけを担う。
 bazel はライブラリとして組み込まず、常に子プロセスとして spawn する。
 
 ```mermaid
 flowchart TD
     UI["Svelte UI (WebView)<br/>表示と入力。content = target / run / analytics"]
-    CORE["Rust core<br/>workspace / runner / bes / ingest / store<br/>M4: BES + SQLite"]
+    CORE["Rust core<br/>workspace / runner / ingest / store<br/>M4: SQLite + file"]
     BAZEL["bazel CLI<br/>query ・ build/test"]
     UI <-->|"Tauri commands / events"| CORE
     CORE -->|"spawn + 観測 flag"| BAZEL
-    BAZEL -->|"M4: BEP(gRPC) / profile(file)<br/>query XML(stdout)"| CORE
+    BAZEL -->|"profile(file) / log(stdout・stderr)<br/>query XML(stdout)"| CORE
 ```
 
 データは二系統に分かれる。
 構造データのうち静的な部分(target・依存・file)は `bazel query` の結果を起動のたびに取り込み、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
-M4 から観測データは BES で受信し、invocation id をキーに BEP から作った要約を SQLite に保存する。
-Progress から log を text file に書き、profile は id を照合して後から添付する。
-BEP event は保存せず、target / test ごとの結果一覧は作らない。
+M4 は GUI が発行した UUID ごとに、終了を確認した process の入力、時刻、経過時間、結果を SQLite に保存する。
+stdout と stderr を log に残し、同じ run の profile を添付する。
+BEP の収集と target / test ごとの結果一覧は今版に含めない。
 詳細表示では log を text として読み、profile だけを parse する。
 phase の集計値や profile の parse 結果は DB に保存しない。
-将来の CLI 記録も同じ BES を入口とし、送信設定の導線は今版に含めない。
 
 設計全体を通じた判断基準は「構造と観測を区別し、観測できないものは不明と示す」である。
 構造上存在する action が今回実行されたとは限らず、実行の事実は観測データがなければ分からない。
@@ -77,20 +75,17 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ### コンポーネントと責務
 
-| コンポーネント  | 責務                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------- |
-| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧                |
-| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                        |
-| core::runner    | bazel 呼び出しの直列化、spawn、中断、M4 の実行sessionと context の生成・終了・slot 解放 |
-| core::bes       | runner の実行sessionに対する stream 受信、純粋 reducer、log 書込、commit と ACK         |
-| core::ingest    | query XML と profile の有界 parse、log の有界 text 読込                                 |
-| core::store     | run record と成果物の永続化。M2 は file、M4 から SQLite(rusqlite)                       |
+| コンポーネント  | 責務                                                                     |
+| --------------- | ------------------------------------------------------------------------ |
+| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧 |
+| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                         |
+| core::runner    | bazel 呼び出しの直列化、spawn、中断、終了確認後の履歴保存                |
+| core::ingest    | query XML と profile の有界 parse、log の有界 text 読込                  |
+| core::store     | run record と成果物の永続化。M2 は file、M4 から SQLite(rusqlite)        |
 
-M3 の実装では stdout と stderr を同じ追記用ファイルへ直接接続する([m3](./m3-find-and-run.md))。
-M4 以降は stdout と stderr を null へ接続し、作業用 log file を持たない。
-実行画面と履歴は BES が Progress から保存した同じ log を使い、終了処理後に表示する。
-BEP が出ない失敗と受信未完了の実行は log を表示できず、raw stderr を別に収集しない。
-出力の pipe、読取スレッド、実行中のログ配信を追加しない。
+M3 と同じく stdout と stderr を一つの作業 file へ直接接続する([m3](./m3-find-and-run.md))。
+M4 は終了確認後に上限付きの log を保存し、実行画面と履歴で共用する。
+実行中のログ配信は行わない。
 M4 の詳細は [m4](./m4-run-history.md) に従う。
 UI が直接プロセスやファイルを触る経路は作らない。
 
@@ -110,22 +105,19 @@ M3 は wait エラーや停止未確認時に実行枠を解放し、自動再�
 中断の猶予時間とアプリ終了時の停止は [m3](./m3-find-and-run.md) に従う。
 
 M4 でも期限付きの停止と終了不明時の実行枠解放を維持する。
-BES 受信完了を process の終了確認には使わない。
-M4 では runner が実行sessionと context の寿命を管理し、BES 側に別の実行終了状態を持たせない。
-終了確認、停止打切り、wait エラー時の受付終了と成果物の後始末、slot 解放は [m4](./m4-run-history.md) に従う。
-M4 は受信完了した invocation だけを履歴に残し、再起動時の未完了更新と以前の process の照合は行わない。
+終了確認、停止打切り、wait エラー時の成果物の後始末と slot 解放は [m4](./m4-run-history.md) に従う。
+M4 は終了を確認した run だけを履歴に残し、再起動時の復旧や以前の process の照合は行わない。
 
 ### run の定義
 
-M4 の履歴 ID は Bazel が発行した invocation id とする。
-起動前の一時 profile dir と実行 context は履歴 ID と分け、runner のメモリ上の実行sessionに置く。
-BEP の Started/Finished による時間と結果を保存し、process の wait 結果と混ぜない。
-
-M4 から GUI の `build` / `test` はアプリ内 BES へ送り、BEP の file 収集を併設しない。
+M4 の履歴 ID は GUI が発行した UUID とする。
+runner は入力を起動前に固定し、process の終了結果と monotonic clock による経過時間を保存する。
+bazelisk の起動や lock 待ちも含むため、Bazel 内部の build 時間とは区別する。
+GUI の `build` / `test` には profile の観測 flag と `--tool_tag=zeal` を付ける。
 query の観測収集は行わない。
 詳細の欠損や手動削除でも、保存した結果と M5 の集計は変えない。
 M4 は空の DB から始め、旧 run.json と旧 DB の取り込みや互換処理は設けない。
-local process の信頼、保存と ACK の順序、再送、profile の添付は [m4](./m4-run-history.md)で定める。
+保存順序と profile の添付は [m4](./m4-run-history.md)で定める。
 
 ### データの置き場所
 
@@ -145,7 +137,8 @@ v1 の対象 version は Bazel 8.7 以上を目安とし、検証は grpc/grpc �
 workspace の判定は `MODULE.bazel` / `WORKSPACE`(`WORKSPACE.bazel`)の存在で行う。
 初回起動では workspace の選択を求め、bazel が見つからない場合と選択先が workspace でない場合は、その旨を表示して対象機能を停止する。
 観測 flag が受理されない場合は実行画面に失敗を示し、自動再実行と version 別の対応表を持たない。
-M4 では BEP が出なかった起動失敗を履歴に残さない。
+M4 では spawn 失敗と終了未確認の run を履歴に残さない。
+spawn 後に非0終了した run は、profile の有無にかかわらず結果と log を保存する。
 
 ### store の運用
 
@@ -172,7 +165,7 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 - **Electron**: 機能は同等に実現できるが、配布物とメモリ使用量が大きい。手元に常駐する local ツールとしては Tauri のほうが適する。
 - **ネイティブ UI(Swift 等)**: mock の表現(一覧・簡易チャート・ログ)は web 技術で十分に実現でき、開発速度と移植性を優先した。
 - **bazel のライブラリ利用**: bazel には安定した組み込み用 API がなく、subprocess が事実上の公式手段である。
-- **GUI と CLI の BEP 取得を分ける**: file 収集を併設せず、M4 から BES を一つの入口にする。CLI 向けの送信設定の導線は将来の範囲とする。
+- **BES の導入**: Bazel の invocation 単位で収集できるが、受信処理と protocol 管理が増える。M4 は GUI の実行履歴に絞り、BES は別の変更で扱う。
 
 ## Caveats
 
@@ -190,12 +183,10 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 ## Privacy Concerns
 
 - Zeal の観測記録は local に保存し、Zeal 自身による telemetry や外部送信は行わない。
-- M4 の GUI 実行では BES 宛先をアプリ内の loopback 受信口へ固定し、外部 BES へ転送しない。
-- 個人端末の local process を信頼し、token 認証は設けない。受信データの検証と保存領域の保護は行う。
-- remote cache と RBE は利用者やリポジトリの既存設定に従い、Zeal はそれらの設定を変更しない。
+- 子プロセスの bazel は利用者やリポジトリの既存設定に従い、BES、remote cache、RBE などへ通信し得る。Zeal はそれらの設定を変更しない。
 - run の成果物には build log が含まれるため、共有・同期の仕組みは設けない。
 - リポジトリは公開のため、文書・コードともに機微情報を含めない(AGENTS.md の方針に従う)。
 
 ## Test Plan
 
-- workspace の検出、bazelisk/bazel の解決、spawn から streaming までを一つの実リポジトリで通す end-to-end の spike を行い、構成が成立することを確かめる。
+- workspace の検出、bazelisk/bazel の解決、spawn から履歴保存と詳細表示までを一つの実リポジトリで通す end-to-end の spike を行い、構成が成立することを確かめる。

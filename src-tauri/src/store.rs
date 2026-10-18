@@ -1,4 +1,4 @@
-//! Immutable, workspace-scoped invocation summaries and private artifacts.
+//! Immutable, workspace-scoped completed process summaries and private artifacts.
 //! Log placement is durable before the single summary INSERT transaction.
 #[path = "securefs.rs"]
 mod securefs;
@@ -50,7 +50,7 @@ impl fmt::Display for StoreError {
             ErrorKind::DiskFull => "history storage is full",
             ErrorKind::NewerSchema => "history database requires a newer Zeal version",
             ErrorKind::Missing => "history record or artifact is missing",
-            ErrorKind::Conflict => "history invocation already exists",
+            ErrorKind::Conflict => "history run already exists",
             ErrorKind::Invalid => "invalid history input",
             ErrorKind::TooLarge => "history data exceeds the read limit",
             ErrorKind::Busy => "history database is busy",
@@ -113,7 +113,7 @@ pub struct RunRecord {
     pub finished_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    pub bazel_elapsed_ms: Option<u64>,
+    pub elapsed_ms: Option<u64>,
     pub outcome: String,
     pub log_truncated: bool,
 }
@@ -173,7 +173,7 @@ impl Store {
             tx.execute_batch("CREATE TABLE workspace(id TEXT PRIMARY KEY, canonical_path BLOB NOT NULL UNIQUE);
                 CREATE TABLE run(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspace(id),
                     cmd TEXT NOT NULL, target_raw TEXT NOT NULL, started_at_ms INTEGER NOT NULL,
-                    finished_at_ms INTEGER, bazel_elapsed_ms INTEGER, outcome TEXT NOT NULL,
+                    finished_at_ms INTEGER, elapsed_ms INTEGER, outcome TEXT NOT NULL,
                     exit_code INTEGER NOT NULL, log_truncated INTEGER NOT NULL);
                 CREATE INDEX run_workspace_started ON run(workspace_id, started_at_ms DESC);
                 PRAGMA user_version=1;")?;
@@ -181,7 +181,7 @@ impl Store {
         }
         validate_sidecars(&root)?;
         // Validate schema at startup even when there are no records.
-        conn.prepare("SELECT r.id,w.canonical_path,r.target_raw FROM run r JOIN workspace w ON w.id=r.workspace_id LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
+        conn.prepare("SELECT r.id,w.canonical_path,r.target_raw,r.elapsed_ms FROM run r JOIN workspace w ON w.id=r.workspace_id LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
         Ok(Self { conn, root })
     }
     fn workspace(&self, ws: &Path) -> Result<Option<String>, StoreError> {
@@ -221,7 +221,7 @@ pub fn ensure_ready(data: &Path) -> Result<(), StoreError> {
     Store::open(data).map(|_| ())
 }
 
-const SELECT: &str = "SELECT r.id,r.workspace_id,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.bazel_elapsed_ms,r.outcome,r.exit_code,r.log_truncated FROM run r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
+const SELECT: &str = "SELECT r.id,r.workspace_id,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.elapsed_ms,r.outcome,r.exit_code,r.log_truncated FROM run r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
 fn unsigned(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(index)?;
     value
@@ -246,7 +246,7 @@ fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord>
         target: row.get(3)?,
         started_at: unsigned(row, 4)?,
         finished_at: optional_unsigned(row, 5)?,
-        bazel_elapsed_ms: optional_unsigned(row, 6)?,
+        elapsed_ms: optional_unsigned(row, 6)?,
         outcome: row.get(7)?,
         exit_code: Some(row.get(8)?),
         log_truncated: row.get(9)?,
@@ -283,7 +283,7 @@ pub fn record(data: &Path, ws: &Path, id: &str) -> Result<RunRecord, StoreError>
     )?)
 }
 
-/// Receiver-owned temporary file; a dropped, incomplete stream leaves no record.
+/// Finalized bounded log copy. Only this private copy may become an artifact.
 pub struct PreparedLog {
     parent: Dir,
     dir: Dir,
@@ -373,19 +373,24 @@ pub fn commit(
     if rec.started_at > MAX_TIME
         || !matches!(rec.cmd.as_str(), "build" | "test")
         || rec.exit_code.is_none()
+        || rec
+            .elapsed_ms
+            .is_some_and(|elapsed| elapsed > i64::MAX as u64)
     {
         return Err(fail(ErrorKind::Invalid));
     }
     rec.finished_at = rec.finished_at.filter(|time| *time <= MAX_TIME);
-    rec.bazel_elapsed_ms = rec
-        .finished_at
-        .and_then(|end| end.checked_sub(rec.started_at));
-    rec.outcome = match rec.exit_code {
-        Some(0) => "ok",
-        Some(8) => "interrupted",
-        _ => "failed",
+    // Duration uses the runner's monotonic clock. A nonzero process may also
+    // be interrupted by an explicit stop; the caller owns that process state.
+    let consistent_outcome = match rec.exit_code {
+        Some(0) => rec.outcome == "ok",
+        Some(8) => rec.outcome == "interrupted",
+        Some(_) => matches!(rec.outcome.as_str(), "failed" | "interrupted"),
+        None => false,
+    };
+    if !consistent_outcome {
+        return Err(fail(ErrorKind::Invalid));
     }
-    .into();
     rec.log_truncated = log.truncated();
     rec.workspace = ws.to_string_lossy().into_owned();
     let mut store = Store::open(data)?;
@@ -411,7 +416,7 @@ pub fn commit(
     let insert = (|| -> Result<(), StoreError> {
         let tx = store.conn.transaction()?;
         tx.execute("INSERT INTO workspace(id,canonical_path) VALUES(?1,?2) ON CONFLICT(canonical_path) DO NOTHING", params![rec.workspace_id,ws.as_os_str().as_bytes()])?;
-        tx.execute("INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,bazel_elapsed_ms,outcome,exit_code,log_truncated) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![rec.id,rec.workspace_id,rec.cmd,rec.target,rec.started_at as i64,rec.finished_at.map(|n| n as i64),rec.bazel_elapsed_ms.map(|n| n as i64),rec.outcome,rec.exit_code,rec.log_truncated])?;
+        tx.execute("INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,elapsed_ms,outcome,exit_code,log_truncated) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![rec.id,rec.workspace_id,rec.cmd,rec.target,rec.started_at as i64,rec.finished_at.map(|n| n as i64),rec.elapsed_ms.map(|n| n as i64),rec.outcome,rec.exit_code,rec.log_truncated])?;
         tx.commit()?;
         Ok(())
     })();
@@ -443,7 +448,7 @@ pub fn commit(
         return Err(error);
     }
     // The summary is committed. A cleanup failure is reported through the
-    // session flag, but cannot undo this successful invocation.
+    // runner flag, but cannot undo this successful run.
     if log.discard().is_err() {
         log::warn!("history temporary cleanup failed");
     }
@@ -517,6 +522,8 @@ pub struct ProfileDir {
     parent: Dir,
     dir: Dir,
     name: String,
+    data: PathBuf,
+    output: File,
 }
 impl ProfileDir {
     pub fn new(data: &Path) -> Result<Self, StoreError> {
@@ -526,7 +533,14 @@ impl ProfileDir {
         let dir = parent.create_child(&name)?;
         // Bazel truncates this existing file. Preserve 0600 without changing its umask.
         dir.file("profile.gz", true)?;
-        Ok(Self { parent, dir, name })
+        let output = dir.file("log.txt", true)?;
+        Ok(Self {
+            parent,
+            dir,
+            name,
+            data: root.path().to_owned(),
+            output,
+        })
     }
     pub fn path(&self) -> &Path {
         self.dir.path()
@@ -534,9 +548,33 @@ impl ProfileDir {
     pub fn open(&self) -> Result<File, StoreError> {
         Ok(self.dir.file("profile.gz", false)?)
     }
+    /// Clones share one file offset, so stdout and stderr cannot overwrite each
+    /// other's writes. The running process's temporary file has no size cap.
+    pub fn log_output(&self) -> Result<File, StoreError> {
+        Ok(self.output.try_clone()?)
+    }
+    /// Copy after the main child is reaped. Descendants retain only the source
+    /// FD; subsequent writes cannot change this completed run's saved log.
+    pub fn capture_log(&self) -> Result<PreparedLog, StoreError> {
+        let input = self.dir.file("log.txt", false)?;
+        let mut bytes = Vec::new();
+        input
+            .take((MAX_LOG_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        let input_truncated = bytes.len() > MAX_LOG_BYTES;
+        bytes.truncate(MAX_LOG_BYTES);
+        let read = bounded_lossy(&bytes, MAX_LOG_BYTES);
+        let mut prepared = PreparedLog::new(&self.data)?;
+        prepared.append(&read.text)?;
+        prepared.truncated |= input_truncated || read.truncated;
+        Ok(prepared)
+    }
     pub fn cleanup(self) -> Result<(), StoreError> {
         if self.dir.exists("profile.gz")? {
             self.dir.remove_file("profile.gz")?;
+        }
+        if self.dir.exists("log.txt")? {
+            self.dir.remove_file("log.txt")?;
         }
         Ok(self.parent.remove_dir(&self.name)?)
     }
@@ -625,8 +663,8 @@ mod tests {
                 started_at: 100,
                 finished_at: Some(125),
                 exit_code: Some(0),
-                bazel_elapsed_ms: None,
-                outcome: String::new(),
+                elapsed_ms: Some(25),
+                outcome: "ok".into(),
                 log_truncated: false,
             }
         }
@@ -653,7 +691,7 @@ mod tests {
     fn completed_summary_and_log_round_trip_with_private_modes() {
         let fixture = Fixture::new();
         let rec = fixture.save();
-        assert_eq!(rec.bazel_elapsed_ms, Some(25));
+        assert_eq!(rec.elapsed_ms, Some(25));
         assert_eq!(rec.outcome, "ok");
         assert_eq!(list(&fixture.data, &fixture.ws).unwrap(), vec![rec.clone()]);
         assert_eq!(
@@ -715,7 +753,7 @@ mod tests {
         );
     }
     #[test]
-    fn dropped_incomplete_stream_has_no_summary_or_log() {
+    fn dropped_uncommitted_copy_has_no_summary_or_log() {
         let fixture = Fixture::new();
         let mut log = PreparedLog::new(&fixture.data).unwrap();
         let temporary = log.dir.path().to_owned();
@@ -827,11 +865,12 @@ mod tests {
         );
     }
     #[test]
-    fn time_and_outcome_come_only_from_summary_values() {
+    fn monotonic_elapsed_and_process_outcome_survive_wall_clock_changes() {
         let fixture = Fixture::new();
         let mut input = fixture.record();
         input.finished_at = Some(99);
         input.exit_code = Some(8);
+        input.outcome = "interrupted".into();
         let rec = commit(
             &fixture.data,
             &fixture.ws,
@@ -839,12 +878,13 @@ mod tests {
             PreparedLog::new(&fixture.data).unwrap(),
         )
         .unwrap();
-        assert_eq!(rec.bazel_elapsed_ms, None);
+        assert_eq!(rec.elapsed_ms, Some(25));
         assert_eq!(rec.finished_at, Some(99));
         assert_eq!(rec.outcome, "interrupted");
         let mut input = fixture.record();
         input.finished_at = Some(MAX_TIME + 1);
         input.exit_code = Some(7);
+        input.outcome = "failed".into();
         let rec = commit(
             &fixture.data,
             &fixture.ws,
@@ -1074,5 +1114,113 @@ mod tests {
         let zero = bounded_lossy(b"a", 0);
         assert!(zero.text.is_empty());
         assert!(zero.truncated);
+    }
+    #[test]
+    fn captured_log_is_an_immutable_copy_of_shared_stdout_and_stderr() {
+        let fixture = Fixture::new();
+        let temp = ProfileDir::new(&fixture.data).unwrap();
+        let mut stdout = temp.log_output().unwrap();
+        let mut stderr = stdout.try_clone().unwrap();
+        stdout.write_all(b"out\n").unwrap();
+        stderr.write_all(b"err\n").unwrap();
+        let copied = temp.capture_log().unwrap();
+        stdout.write_all(b"descendant\n").unwrap();
+        let rec = commit(&fixture.data, &fixture.ws, fixture.record(), copied).unwrap();
+        assert_eq!(
+            read_log(&fixture.data, &fixture.ws, &rec.id).unwrap().text,
+            "out\nerr\n"
+        );
+        temp.cleanup().unwrap();
+    }
+    #[test]
+    fn captured_output_is_bounded_and_reports_save_time_truncation() {
+        let fixture = Fixture::new();
+        let temp = ProfileDir::new(&fixture.data).unwrap();
+        temp.log_output()
+            .unwrap()
+            .write_all(&vec![0xff; MAX_LOG_BYTES + 1])
+            .unwrap();
+        let copied = temp.capture_log().unwrap();
+        assert!(copied.truncated());
+        assert!(copied.bytes <= MAX_LOG_BYTES);
+        let rec = commit(&fixture.data, &fixture.ws, fixture.record(), copied).unwrap();
+        assert!(rec.log_truncated);
+        let read = read_log(&fixture.data, &fixture.ws, &rec.id).unwrap();
+        assert_eq!(read.text.len(), MAX_LOG_BYTES / 3 * 3);
+        assert!(!read.truncated);
+        temp.cleanup().unwrap();
+    }
+    #[test]
+    fn explicit_stop_can_interrupt_a_nonzero_exit_but_never_a_zero_exit() {
+        let fixture = Fixture::new();
+        let mut input = fixture.record();
+        input.exit_code = Some(-1);
+        input.outcome = "interrupted".into();
+        let rec = commit(
+            &fixture.data,
+            &fixture.ws,
+            input,
+            PreparedLog::new(&fixture.data).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rec.exit_code, Some(-1));
+        assert_eq!(rec.outcome, "interrupted");
+        let mut input = fixture.record();
+        input.outcome = "interrupted".into();
+        assert_eq!(
+            commit(
+                &fixture.data,
+                &fixture.ws,
+                input,
+                PreparedLog::new(&fixture.data).unwrap()
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Invalid
+        );
+    }
+    #[test]
+    fn unknown_exit_and_unrecognized_or_contradictory_outcomes_are_rejected() {
+        let fixture = Fixture::new();
+        let mut unknown = fixture.record();
+        unknown.exit_code = None;
+        assert_eq!(
+            commit(
+                &fixture.data,
+                &fixture.ws,
+                unknown,
+                PreparedLog::new(&fixture.data).unwrap()
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Invalid
+        );
+        let mut invalid = fixture.record();
+        invalid.outcome = "running".into();
+        assert_eq!(
+            commit(
+                &fixture.data,
+                &fixture.ws,
+                invalid,
+                PreparedLog::new(&fixture.data).unwrap()
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Invalid
+        );
+        let mut interrupted = fixture.record();
+        interrupted.exit_code = Some(8);
+        interrupted.outcome = "failed".into();
+        assert_eq!(
+            commit(
+                &fixture.data,
+                &fixture.ws,
+                interrupted,
+                PreparedLog::new(&fixture.data).unwrap()
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Invalid
+        );
     }
 }

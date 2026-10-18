@@ -8,20 +8,27 @@ const record: RunRecord = {
   workspace: "/workspace",
   workspaceId: "workspace-a",
   outcome: "ok",
-  bazelElapsedMs: null,
+  elapsedMs: 1,
+  finishedAt: 2,
+  exitCode: 0,
   logTruncated: false,
   cmd: "build",
   target: "//:app",
   startedAt: 1,
 };
 
-test("immutable outcome remains known without a valid finish timestamp", () => {
+test("process outcome distinguishes success, interruption and failure", () => {
   assert.equal(outcome(record), "✓ succeeded");
   assert.equal(
     outcome({ ...record, outcome: "interrupted", exitCode: 8 }),
     "■ interrupted (exit 8)",
   );
   assert.equal(outcome({ ...record, outcome: "failed", exitCode: 3 }), "✗ failed (exit 3)");
+  assert.equal(
+    outcome({ ...record, outcome: "interrupted", exitCode: -1 }),
+    "■ interrupted (signal)",
+  );
+  assert.equal(outcome({ ...record, outcome: "failed", exitCode: -1 }), "✗ failed (signal)");
 });
 
 test("partial observations retain data and explain the missing tail", () => {

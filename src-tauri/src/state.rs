@@ -3,7 +3,7 @@
 use crate::snapshot::Snapshot;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Emitter};
 
 /// Serializable copy of everything the UI needs, pushed as the `app-state`
@@ -66,13 +66,12 @@ pub struct CoreState {
     pub run_note: Option<String>,
     pub completed_runs: Vec<String>,
     pub process_exit: Option<i32>,
-    pub bes_port: Option<u16>,
-    pub session: Option<Arc<crate::bes::Session>>,
     pub stop_started: Option<std::time::Instant>,
 }
 
 pub struct Core {
     pub state: Mutex<CoreState>,
+    pub run_finished: Condvar,
 }
 
 impl Core {
@@ -90,10 +89,9 @@ impl Core {
                 run_note: None,
                 completed_runs: Vec::new(),
                 process_exit: None,
-                bes_port: None,
-                session: None,
                 stop_started: None,
             }),
+            run_finished: Condvar::new(),
         }
     }
 

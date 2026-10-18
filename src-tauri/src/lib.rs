@@ -1,10 +1,6 @@
-#[cfg(test)]
-mod acceptance;
-mod bes;
 mod ingest;
 mod label;
 mod profile;
-mod protocol;
 mod runner;
 mod snapshot;
 mod state;
@@ -185,9 +181,6 @@ pub fn run() {
             if let Err(error) = store::ensure_ready(&data) {
                 core.state.lock().unwrap().run_note = Some(error.to_string());
             }
-            let server = bes::Server::start(core.clone(), data)?;
-            core.state.lock().unwrap().bes_port = Some(server.port);
-            app.manage(server);
             app.manage(core.clone());
             // Reopen the last workspace, if it is still a workspace.
             if let Ok(dir) = app.path().app_data_dir()
@@ -217,8 +210,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|handle, event| {
-            // Bound process stopping, then join any already-started BES commit
-            // before the application exits. An unknown process keeps its profile.
+            // Bound process stopping and finish saving a process already reaped.
+            // An unknown process keeps its temporary artifacts.
             if let RunEvent::Exit = event {
                 let core = handle.state::<Arc<Core>>().inner().clone();
                 runner::exit_stop(&core);

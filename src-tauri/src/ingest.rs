@@ -172,7 +172,7 @@ pub struct RunDetail {
     pub profile: Section<Profile>,
 }
 
-/// Artifact availability never changes an immutable invocation summary.
+/// Artifact availability never changes an immutable run summary.
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Section<T> {
@@ -352,10 +352,10 @@ mod tests {
                 cmd: "build".to_string(),
                 target: "//:app".to_string(),
                 started_at: 1,
-                finished_at: None,
+                finished_at: Some(2),
                 exit_code: Some(0),
-                bazel_elapsed_ms: None,
-                outcome: String::new(),
+                elapsed_ms: Some(1),
+                outcome: "ok".to_string(),
                 log_truncated: false,
             },
             prepared,
@@ -377,7 +377,7 @@ mod tests {
             .join(&saved.record.id)
     }
     #[test]
-    fn missing_files_preserve_finished_result_without_finish_timestamp() {
+    fn missing_files_preserve_completed_process_result() {
         let saved = saved("");
         std::fs::remove_file(artifacts(&saved).join("log.txt")).unwrap();
         let detail = run_detail(&saved.data, &saved.workspace, &saved.record.id).unwrap();

@@ -1,5 +1,5 @@
 //! Bounded Bazel gzip trace parsing. Raw event fields and lane ordering remain intact.
-use flate2::read::{GzDecoder, MultiGzDecoder};
+use flate2::read::MultiGzDecoder;
 use serde::Serialize;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
@@ -15,7 +15,6 @@ pub const COMPRESSED_LIMIT: usize = 32 * 1024 * 1024;
 pub const EXPANDED_LIMIT: usize = 64 * 1024 * 1024;
 pub const EVENT_LIMIT: usize = 250_000;
 pub const IPC_LIMIT: usize = 32 * 1024 * 1024;
-const HEADER_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -299,53 +298,6 @@ pub fn parse<R: Read>(input: R) -> Result<Profile, String> {
     parse_bounded(input, IPC_LIMIT).map_err(|error| match error {
         ProfileError::Incomplete(note) | ProfileError::Parse(note) => note,
     })
-}
-
-/// Read only the bounded gzip header. Stop immediately at otherData.build_id;
-/// a large trace or corrupt trailer is left for the detail parser to diagnose.
-pub fn build_id<R: Read>(input: R) -> Result<String, String> {
-    struct Header<'a>(&'a mut Option<String>);
-    impl<'de> Visitor<'de> for Header<'_> {
-        type Value = ();
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("profile header")
-        }
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-            while let Some(key) = map.next_key::<String>()? {
-                if key == "otherData" {
-                    let data = map.next_value::<Value>()?;
-                    *self.0 = data
-                        .get("build_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    return Err(de::Error::custom("header complete"));
-                }
-                if key == "traceEvents" {
-                    return Err(de::Error::custom("no build_id in profile header"));
-                }
-                map.next_value::<IgnoredAny>()?;
-            }
-            Ok(())
-        }
-    }
-    let exceeded = Arc::new(AtomicBool::new(false));
-    let compressed = Limited {
-        input,
-        remaining: COMPRESSED_LIMIT,
-        exceeded: exceeded.clone(),
-    };
-    let input = Limited {
-        input: GzDecoder::new(compressed),
-        remaining: HEADER_LIMIT,
-        exceeded,
-    };
-    let mut decoder = serde_json::Deserializer::from_reader(input);
-    let mut id = None;
-    let _ = serde::de::Deserializer::deserialize_map(&mut decoder, Header(&mut id));
-    let id = id.ok_or("profile header has no build_id within 64 KiB")?;
-    uuid::Uuid::parse_str(&id)
-        .map(|id| id.to_string())
-        .map_err(|_| "profile build_id is not a UUID".to_string())
 }
 
 #[cfg(test)]
@@ -687,26 +639,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn header_identity_does_not_parse_trace_or_require_trailer() {
-        let input = gzip(br#"{"otherData":{"build_id":"4C7C10AA-3C3E-4BBB-AB5C-123456789ABC"},"traceEvents":[invalid"#);
-        assert_eq!(
-            build_id(input.as_slice()).unwrap(),
-            "4c7c10aa-3c3e-4bbb-ab5c-123456789abc"
-        );
-        assert!(parse_bounded(input.as_slice(), IPC_LIMIT).is_err());
-    }
-
-    #[test]
-    fn header_requires_uuid_before_trace_and_within_limit() {
-        assert!(build_id(gzip(br#"{"otherData":{"build_id":"not-a-uuid"}}"#).as_slice()).is_err());
-        assert!(build_id(gzip(br#"{"traceEvents":[],"otherData":{"build_id":"4c7c10aa-3c3e-4bbb-ab5c-123456789abc"}}"#).as_slice()).is_err());
-        let input = format!(
-            "{{\"padding\":\"{}\",\"otherData\":{{\"build_id\":\"4c7c10aa-3c3e-4bbb-ab5c-123456789abc\"}}}}",
-            "x".repeat(HEADER_LIMIT)
-        );
-        assert!(build_id(gzip(input.as_bytes()).as_slice()).is_err());
-    }
     /// Generated inputs keep fixtures small. Run directly under `/usr/bin/time -l`
     /// to record actual process RSS separately from compressed/expanded bytes.
     #[test]

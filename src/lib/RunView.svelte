@@ -6,7 +6,6 @@
 
   let { view, reload }: { view: SessionView; reload: () => void } = $props();
   const record = $derived(view.detail?.record ?? view.runs.find((run) => run.id === view.selectedRun));
-  const running = false;
   const profile = $derived(sectionData(view.detail?.profile));
   const failed = $derived(record?.outcome === "failed");
   const tabs = ["Logs", "Timing", "Details"] as const;
@@ -32,8 +31,8 @@
       <span class:failed>
         {record ? outcome(record) : "? outcome unknown"}
       </span>
-      {#if record?.bazelElapsedMs != null}
-        <span title="Bazel execution time">◷ {(record.bazelElapsedMs / 1000).toFixed(3)}s</span>
+      {#if record?.elapsedMs != null}
+        <span title="実行時間（コマンドの起動から終了まで）">◷ {(record.elapsedMs / 1000).toFixed(3)}s</span>
       {/if}
       {#if record}
         <span>{new Date(record.startedAt).toLocaleString()}</span>
@@ -58,10 +57,9 @@
   <div class="run-panel"
     id="run-panel-{active}" role="tabpanel" aria-labelledby="run-tab-{active}">
     {#if active === "Logs"}
-      <LogPanel section={view.detail?.log} {running} loading={view.detailLoading} />
+      <LogPanel section={view.detail?.log} loading={view.detailLoading} />
     {:else if active === "Timing"}
-      {#if running}<p class="panel-empty">Timing is available after the run finishes.</p>
-      {:else if view.detail}
+      {#if view.detail}
         {#if view.detail.profile.status !== "ok"}<p class="run-notice">{sectionMessage(view.detail.profile)}</p>{/if}
         {#if profile}{#key view.detail}<ProfileView {profile} />{/key}{/if}
       {:else if view.detailLoading}<p class="panel-empty">Loading profile…</p>{/if}
@@ -75,7 +73,7 @@
           <dt>Started</dt><dd>{new Date(record.startedAt).toLocaleString()}</dd>
           <dt>Finished</dt><dd>{record.finishedAt === undefined ? "Not recorded" : new Date(record.finishedAt).toLocaleString()}</dd>
           <dt>Exit code</dt><dd>{record.exitCode ?? "Unknown"}</dd>
-          {#if record.bazelElapsedMs != null}<dt>Bazel execution time</dt><dd>{(record.bazelElapsedMs / 1000).toFixed(3)}s</dd>{/if}
+          {#if record.elapsedMs != null}<dt>実行時間</dt><dd>{(record.elapsedMs / 1000).toFixed(3)}s</dd>{/if}
         </dl>
       {/if}
     {/if}

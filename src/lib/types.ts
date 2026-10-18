@@ -65,8 +65,8 @@ export interface RunRecord {
   target: string;
   startedAt: number;
   finishedAt?: number;
-  exitCode?: number;
-  bazelElapsedMs: number | null;
+  exitCode: number;
+  elapsedMs: number | null;
   outcome: "ok" | "interrupted" | "failed";
   logTruncated: boolean;
 }

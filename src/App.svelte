@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { app, connect, refresh, session } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
-  import { outcome } from "./lib/run";
+  import { exitStatus, outcome } from "./lib/run";
   import { candidates, createIndex, keyAction, LIST_ID, moveIndex, optionId, search } from "./lib/search";
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
@@ -268,7 +268,7 @@
   </div>
   {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
   {#if st?.running}<p class="app-error" role="status">{st.stopping ? "停止処理中" : "Bazel 実行中"}。ログは終了処理後に表示します。</p>
-  {:else if st?.processExit !== null && st?.processExit !== undefined}<p class="app-error" role="status">Process exit: {st.processExit} · 保存済み記録: {st.completedRuns.length}{#if st.completedRuns.length === 0} · log 利用不能{/if}</p>{/if}
+  {:else if st?.processExit !== null && st?.processExit !== undefined && st.processExit !== 0}<p class="app-error" role="status">実行終了 ({exitStatus(st.processExit)})</p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
   {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
 
