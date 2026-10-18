@@ -13,6 +13,8 @@ use std::thread;
 use std::time::Duration;
 use tauri::AppHandle;
 
+const COMMANDS: [&str; 2] = ["build", "test"];
+
 /// Arguments after the bazel executable. Bazel writes its artifacts into the
 /// run dir.
 fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
@@ -27,6 +29,39 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
     ]
 }
 
+/// Only the composer's own commands: the observation flags belong to Zeal, so
+/// anything else would be a command line this core does not model.
+fn validate_cmd(cmd: &str) -> Result<(), String> {
+    if COMMANDS.contains(&cmd) {
+        Ok(())
+    } else {
+        Err(format!("unsupported command: {cmd}"))
+    }
+}
+
+/// The target is passed to bazel as one `Command::arg`: nothing is split,
+/// quoted or escaped, so whitespace, control characters and a leading `-` are
+/// rejected instead of interpreted. Patterns such as `//...` or `:all` are
+/// bazel's business. The message names both rules, without echoing the input,
+/// which may hold control characters; it must stay in step with the UI's
+/// `targetError`. That rule — Unicode White_Space plus Cc — is what
+/// `char::is_whitespace` and `char::is_control` test here, and the TS regexp
+/// `/[\p{White_Space}\p{Cc}]/u` is its exact counterpart.
+fn validate_target(target: &str) -> Result<(), String> {
+    let ok = !target.is_empty()
+        && !target.starts_with('-')
+        && !target.chars().any(|c| c.is_whitespace() || c.is_control());
+    if ok {
+        Ok(())
+    } else {
+        Err(
+            "target must be one label or pattern, without whitespace or control \
+             characters, and must not start with '-'"
+                .to_string(),
+        )
+    }
+}
+
 /// Start a run in the open workspace and return its record. The run finishes
 /// in the background; target data is refreshed only on request.
 pub fn start(
@@ -36,9 +71,8 @@ pub fn start(
     cmd: &str,
     target: &str,
 ) -> Result<RunRecord, String> {
-    if cmd != "build" && cmd != "test" {
-        return Err(format!("unsupported command: {cmd}"));
-    }
+    validate_cmd(cmd)?;
+    validate_target(target)?;
     let mut st = core.state.lock().unwrap();
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
@@ -218,6 +252,74 @@ mod tests {
                 ],
                 "{cmd}"
             );
+        }
+    }
+
+    #[test]
+    fn target_validation_accepts_labels_and_patterns() {
+        for target in [
+            "//app/lib:parser",
+            "//...",
+            ":all",
+            ":*",
+            "@maven//:guava",
+            "//app/...",
+            // Shell metacharacters are ordinary label characters here: nothing
+            // splits or evaluates the target, so it reaches bazel verbatim as
+            // one argument.
+            "//app:tar;get",
+            "//a:b$(id)",
+            "//a:b`id`",
+            "//a:b&&c",
+            "//a:b|c",
+            "//a:b>c",
+            // U+FEFF and U+00AD are neither White_Space nor Cc, so the core
+            // takes them and the UI's `/[\p{White_Space}\p{Cc}]/u` must too.
+            "//a:\u{feff}b",
+            "//a:\u{ad}b",
+        ] {
+            assert!(validate_target(target).is_ok(), "{target:?}");
+            assert_eq!(
+                argv("build", target, Path::new("/data/runs/abc"))[1],
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn target_validation_rejects_empty_whitespace_control_and_leading_dash() {
+        for target in [
+            "",
+            " ",
+            "//a:b ",
+            "a\tb",
+            "a\nb",
+            "a\0b",
+            "-//a:b",
+            "\u{3000}",
+            "//a:b; id",
+            // The boundary characters the UI test pins: U+0085 and U+2028 are
+            // White_Space, U+009F is Cc. `/[\p{White_Space}\p{Cc}]/u` in
+            // `src/lib/target.ts` is the same rule and must stay identical.
+            "\u{85}",
+            "\u{9f}",
+            "\u{2028}",
+        ] {
+            assert!(validate_target(target).is_err(), "{target:?}");
+        }
+        // One message for both rules, and it does not echo the input.
+        let msg = validate_target("a b").unwrap_err();
+        assert!(msg.contains("whitespace"), "{msg}");
+        assert!(msg.contains("'-'"), "{msg}");
+    }
+
+    #[test]
+    fn command_validation_accepts_only_build_and_test() {
+        for cmd in ["build", "test"] {
+            assert!(validate_cmd(cmd).is_ok(), "{cmd:?}");
+        }
+        for cmd in ["run", "clean", "query", ""] {
+            assert!(validate_cmd(cmd).is_err(), "{cmd:?}");
         }
     }
 

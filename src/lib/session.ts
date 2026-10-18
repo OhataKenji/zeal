@@ -1,4 +1,5 @@
-import type { AppState, RunDetail, RunRecord } from "./types.ts";
+import { targetError } from "./target.ts";
+import type { AppState, RunCmd, RunDetail, RunRecord } from "./types.ts";
 
 export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -46,7 +47,7 @@ export function canSend(view: SessionView, target: string): boolean {
     view.state.bazel &&
     view.state.ingest === "idle" &&
     !view.state.running &&
-    target.trim()
+    targetError(target) === null
   );
 }
 
@@ -151,12 +152,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  async function start(cmd: "build" | "test", target: string) {
+  async function start(cmd: RunCmd, target: string) {
     if (!canSend(view, target)) return;
     const workspace = view.state?.workspace;
     update({ starting: true, error: null });
     try {
-      const record = await transport.invoke<RunRecord>("start_run", { cmd, target: target.trim() });
+      // The target goes through verbatim: one argument, no shell interpretation.
+      const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
       update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
       selectRun(record.id);

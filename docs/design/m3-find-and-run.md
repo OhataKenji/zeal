@@ -115,3 +115,8 @@ wait がエラーになっても、handle と stop、drain、実行と query の
 - label と pattern を展開せず1引数で渡し、build/test/run の成功とエラーをそのまま表示できることを実際の Bazel で確かめる。
 - UI と core で空白、改行、NUL、先頭 `-`、許可外 cmd を拒否し、対象が変更なく1引数になることを検証する。shell 記号は解釈せず、取り込み中の抑止、取得失敗後、cmd 選択保持、初回出力前後の無出力も確認する。
 - SIGINT と SIGKILL のグループ回収、wait エラーと終了未確認時の送信抑止、再起動時に以前の process へ signal を送らないことを検証する。
+
+## 入力検証の実装
+
+実行は build/test に限る。target は label または pattern の1文字列とし、空文字、空白、制御文字、先頭の `-` を拒否する。
+shell を介さず1引数で渡し、trim、分割、quote の解釈はしない。

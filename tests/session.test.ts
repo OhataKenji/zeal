@@ -118,6 +118,17 @@ test("Send waits for listeners, then rejects busy ingestion, a live run", async 
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
+test("Send rejects invalid targets and accepts patterns", async () => {
+  const h = harness();
+  await h.session.init();
+  assert.equal(canSend(h.view, ""), false);
+  assert.equal(canSend(h.view, " "), false);
+  assert.equal(canSend(h.view, "a\0b"), false);
+  assert.equal(canSend(h.view, "-//a:b"), false);
+  assert.equal(canSend(h.view, "//..."), true);
+  assert.equal(canSend(h.view, ":all"), true);
+});
+
 test("Send does not depend on a snapshot and stays usable after a failed ingestion", async () => {
   const h = harness();
   await h.session.init();
@@ -145,6 +156,31 @@ test("ingestion completing never starts a run", async () => {
     false,
   );
   assert.equal(canSend(h.view, "//:app"), true);
+});
+
+test("Send passes the target through unchanged and ignores whitespace and duplicate starts", async () => {
+  const h = harness();
+  await h.session.init();
+  void h.session.start("build", " //:app ");
+  assert.equal(
+    h.pending.some((call) => call.command === "start_run"),
+    false,
+  );
+  void h.session.start("build", "//:app");
+  void h.session.start("build", "//:app");
+  const starts = h.pending.filter((call) => call.command === "start_run");
+  assert.equal(starts.length, 1);
+  assert.deepEqual(starts[0].args, { cmd: "build", target: "//:app" });
+});
+
+test("start records the selected cmd and the target string unchanged", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("test", "//app:tar;get");
+  const call = h.pending.find((item) => item.command === "start_run")!;
+  assert.deepEqual(call.args, { cmd: "test", target: "//app:tar;get" });
+  call.reply.resolve({ ...record, cmd: "test", target: "//app:tar;get" });
+  await started;
 });
 
 test("logs are read from the saved file only after the run finishes", async () => {
