@@ -14,7 +14,6 @@ use crate::state::{Core, IngestError};
 use crate::store::{self, RunRecord};
 use crate::xml::{self, RawRule};
 use serde::Serialize;
-use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -191,13 +190,17 @@ pub enum Section<T> {
 /// Read the record and available observations from a run dir. A missing or
 /// unreadable observation never hides the record or another observation.
 /// Timing is parsed only after the record confirms that the run finished.
-pub fn run_detail(dir: &Path) -> io::Result<RunDetail> {
-    let record = store::read_record(dir)?;
-    let log = match store::read_log(dir) {
+pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
+    let record = store::read_record(data, workspace, id)?;
+    let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }) {
         Ok(data) => Section::Ok { data },
         Err(e) => read_error(e),
     };
-    let bep = match File::open(dir.join("bep.json")) {
+    let bep = match store::artifact(data, workspace, id, "bep.json") {
         Err(e) => read_error(e),
         Ok(f) => {
             let data = bep::parse(BufReader::new(f));
@@ -216,7 +219,7 @@ pub fn run_detail(dir: &Path) -> io::Result<RunDetail> {
             note: "timing is available after run completion is recorded".to_string(),
         }
     } else {
-        match File::open(dir.join("profile.gz")) {
+        match store::artifact(data, workspace, id, "profile.gz") {
             Err(e) => read_error(e),
             Ok(f) => match profile::parse(f) {
                 Ok(data) => Section::Ok { data },
@@ -267,18 +270,35 @@ mod tests {
         for name in ["bep.json", "profile.gz"] {
             let src = fixtures.join(case).join(name);
             if src.exists() {
-                fs::copy(src, dir.join(name)).unwrap();
+                fs::write(dir.join(name), fs::read(src).unwrap()).unwrap();
             }
         }
         (TempRoot(root), dir)
+    }
+
+    fn detail(root: &TempRoot, dir: &Path) -> io::Result<RunDetail> {
+        run_detail(
+            &root.0.join("data"),
+            &root.0.join("ws"),
+            dir.file_name().unwrap().to_str().unwrap(),
+        )
+    }
+
+    fn finish(root: &TempRoot, dir: &Path, code: i32) -> Result<RunRecord, store::StoreError> {
+        store::finish(
+            &root.0.join("data"),
+            &root.0.join("ws"),
+            dir.file_name().unwrap().to_str().unwrap(),
+            code,
+        )
     }
 
     #[test]
     fn record_and_log() {
         let (_root, dir) = run_dir("ok");
         store::append_log(&dir, "INFO: Build completed").unwrap();
-        let rec = store::finish(&dir, 0).unwrap();
-        let d = run_detail(&dir).unwrap();
+        let rec = finish(&_root, &dir, 0).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record, rec);
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["record"]["exitCode"], 0);
@@ -298,8 +318,8 @@ mod tests {
             "loading_failed",
         ] {
             let (_root, dir) = run_dir(case);
-            store::finish(&dir, 0).unwrap();
-            let d = run_detail(&dir).unwrap();
+            finish(&_root, &dir, 0).unwrap();
+            let d = detail(&_root, &dir).unwrap();
             assert!(matches!(d.bep, Section::Ok { .. }), "{case}");
             assert!(matches!(d.profile, Section::Ok { .. }), "{case}");
         }
@@ -308,8 +328,8 @@ mod tests {
     #[test]
     fn incomplete_bep_and_missing_profile_preserve_the_exit_result() {
         let (_root, dir) = run_dir("bep_truncated");
-        store::finish(&dir, 1).unwrap();
-        let d = run_detail(&dir).unwrap();
+        finish(&_root, &dir, 1).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record.exit_code, Some(1));
         assert!(matches!(d.bep, Section::Incomplete { data, note }
             if !data.targets.is_empty() && !note.is_empty()));
@@ -319,8 +339,8 @@ mod tests {
     #[test]
     fn complete_observations_do_not_imply_process_success() {
         let (_root, dir) = run_dir("ok");
-        store::finish(&dir, 42).unwrap();
-        let d = run_detail(&dir).unwrap();
+        finish(&_root, &dir, 42).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record.exit_code, Some(42));
         assert!(matches!(d.bep, Section::Ok { .. }));
         assert!(matches!(d.profile, Section::Ok { .. }));
@@ -329,13 +349,13 @@ mod tests {
     #[test]
     fn unfinished_profile_is_not_parsed_even_when_it_is_valid() {
         let (_root, dir) = run_dir("ok");
-        let d = run_detail(&dir).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert!(matches!(d.profile, Section::NotAvailable { .. }));
         assert_eq!(d.record.finished_at, None);
         assert_eq!(d.record.exit_code, None);
 
-        store::finish(&dir, 0).unwrap();
-        let d = run_detail(&dir).unwrap();
+        finish(&_root, &dir, 0).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert!(matches!(d.profile, Section::Ok { .. }));
     }
 
@@ -344,12 +364,12 @@ mod tests {
         let (_root, dir) = run_dir("ok");
         fs::write(dir.join("profile.gz"), b"not gzip").unwrap();
         assert!(matches!(
-            run_detail(&dir).unwrap().profile,
+            detail(&_root, &dir).unwrap().profile,
             Section::NotAvailable { .. }
         ));
 
-        store::finish(&dir, 0).unwrap();
-        let d = run_detail(&dir).unwrap();
+        finish(&_root, &dir, 0).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record.exit_code, Some(0));
         assert!(matches!(d.profile, Section::ParseError { note } if !note.is_empty()));
         assert!(matches!(d.bep, Section::Ok { .. }));
@@ -358,11 +378,11 @@ mod tests {
     #[test]
     fn missing_observations_do_not_hide_the_record() {
         let (_root, dir) = run_dir("ok");
-        let rec = store::finish(&dir, 0).unwrap();
+        let rec = finish(&_root, &dir, 0).unwrap();
         fs::remove_file(dir.join("log.txt")).unwrap();
         fs::remove_file(dir.join("bep.json")).unwrap();
         fs::remove_file(dir.join("profile.gz")).unwrap();
-        let d = run_detail(&dir).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record, rec);
         assert!(matches!(d.log, Section::Missing));
         assert!(matches!(d.bep, Section::Missing));
@@ -372,10 +392,10 @@ mod tests {
     #[test]
     fn unreadable_log_is_reported_without_hiding_other_observations() {
         let (_root, dir) = run_dir("ok");
-        store::finish(&dir, 0).unwrap();
+        finish(&_root, &dir, 0).unwrap();
         fs::remove_file(dir.join("log.txt")).unwrap();
         fs::create_dir(dir.join("log.txt")).unwrap();
-        let d = run_detail(&dir).unwrap();
+        let d = detail(&_root, &dir).unwrap();
         assert!(matches!(d.log, Section::ReadError { note } if !note.is_empty()));
         assert!(matches!(d.bep, Section::Ok { .. }));
         assert!(matches!(d.profile, Section::Ok { .. }));
@@ -384,22 +404,30 @@ mod tests {
     #[test]
     fn each_request_reads_the_current_artifacts() {
         let (_root, dir) = run_dir("ok");
-        store::finish(&dir, 0).unwrap();
+        finish(&_root, &dir, 0).unwrap();
         assert!(matches!(
-            run_detail(&dir).unwrap().profile,
+            detail(&_root, &dir).unwrap().profile,
             Section::Ok { .. }
         ));
         fs::remove_file(dir.join("profile.gz")).unwrap();
         assert!(matches!(
-            run_detail(&dir).unwrap().profile,
+            detail(&_root, &dir).unwrap().profile,
             Section::Missing
         ));
     }
 
     #[test]
-    fn no_run_json_is_an_error() {
-        let (_root, dir) = run_dir("ok");
-        fs::remove_file(dir.join("run.json")).unwrap();
-        assert!(run_detail(&dir).is_err());
+    fn a_different_workspace_cannot_read_the_record_or_artifacts() {
+        let (root, dir) = run_dir("ok");
+        let other = root.0.join("other");
+        fs::create_dir(&other).unwrap();
+        assert!(
+            run_detail(
+                &root.0.join("data"),
+                &other,
+                dir.file_name().unwrap().to_str().unwrap()
+            )
+            .is_err()
+        );
     }
 }

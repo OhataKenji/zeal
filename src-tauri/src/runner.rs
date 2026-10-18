@@ -113,7 +113,7 @@ pub fn start(
     ) {
         Ok(c) => c,
         Err(e) => {
-            let _ = fs::remove_dir_all(&dir);
+            let _ = store::abort_create(data, &ws, &rec.id);
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
@@ -126,6 +126,7 @@ pub fn start(
     core.emit(&app);
 
     let id = rec.id.clone();
+    let data = data.to_path_buf();
     thread::spawn(move || {
         let _slot = RunSlot {
             core: &core,
@@ -146,7 +147,7 @@ pub fn start(
         // Reap already revoked signal ownership. Keep the run slot through the
         // save, without holding the lock across filesystem work.
         let saved = match &exit {
-            Ok(code) => store::finish(&dir, *code).map(|_| ()),
+            Ok(code) => store::finish(&data, &ws, &id, *code).map(|_| ()),
             Err(_) => Ok(()),
         };
         let mut st = core.state.lock().unwrap();
