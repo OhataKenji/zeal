@@ -4,14 +4,14 @@ M4 records completed GUI build/test invocations through local BES and preserves 
 
 ## Revision and checks
 
-- Source revision: `83c4de88dfa3a3be6dbee3c1e9c51a1482f28870` (base `f6dd9ccdfe3e2228aed61039ed1abef3fe635971`).
+- Measurement source revision: `83c4de88dfa3a3be6dbee3c1e9c51a1482f28870` (base `f6dd9ccdfe3e2228aed61039ed1abef3fe635971`).
 - Date: 2026-10-18. Bazel 8.7.0; macOS 27.0.1; Apple M4; 32 GiB RAM. Rust 1.99.0; debug test build.
-- `mise run check`: frontend 94 tests, type check, format, lint and build; Rust format, clippy and 73 tests pass. After buffering profile reads, the Rust checks and 12 focused profile tests pass again.
+- `mise run check` passed with frontend 94 tests, type check, format, lint and build. Final Rust format, clippy and 77 tests pass at `48223c08a6ef256e5c3ea1562b43bce6d98496e0`, including four additional malformed-UTF-8 log regressions. The 12 focused profile tests also pass.
 - Three manual tests pass: actual Bazel commit/ACK round trip, real-build measurements and generated near-limit profiles.
 - Browser check: a saved invocation opens text log and the existing 61-thread M2 profile, phase bands and resource counters. HTML-like log text remains literal text.
 - Secret scanning passed at each implementation commit.
 
-The transport tests cover EOF before ACK, incomplete disconnect, simultaneous streams, lost/all and partial ACK replay, suffix replay, deleted-log non-repair, cross-session ID reuse, message/stream/event limits, unknown fields and nonminimal varints. SQLite-blocked tests cover close and app exit racing a started commit, including an already-reaped process. Storage tests cover parent-directory sync ordering and failure before commit, private file modes, special files, workspace membership, schema errors, orphan conflicts, truncation and immutable summaries after artifact deletion. Detail and UI tests cover corrupt gzip members, byte/event/IPC limits and stale selections.
+The transport tests cover EOF before ACK, incomplete disconnect, simultaneous streams, lost/all and partial ACK replay, suffix replay, deleted-log non-repair, cross-session ID reuse, message/stream/event limits, unknown fields and nonminimal varints. SQLite-blocked tests cover close and app exit racing a started commit, including an already-reaped process. Storage tests cover parent-directory sync ordering and failure before commit, private file modes, special files, workspace membership, schema errors, orphan conflicts, truncation and immutable summaries after artifact deletion. Detail and UI tests cover corrupt gzip members, byte/event/IPC limits and stale selections. Corrupted logs use a bounded UTF-8 conversion: neither the constructed text nor its reserved capacity exceeds the output cap. This follow-up changes log decoding; the measurements below remain attributed to their recorded revision.
 
 ## Real Bazel measurements
 
