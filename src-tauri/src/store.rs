@@ -4,7 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{self, Write};
+use std::io;
+#[cfg(test)]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -66,6 +68,7 @@ pub fn create(data: &Path, ws: &Path, cmd: &str, target: &str) -> io::Result<(Ru
     Ok((rec, dir))
 }
 
+#[cfg(test)]
 pub fn append_log(dir: &Path, line: &str) -> io::Result<()> {
     let mut f = fs::OpenOptions::new()
         .append(true)
@@ -73,7 +76,7 @@ pub fn append_log(dir: &Path, line: &str) -> io::Result<()> {
     writeln!(f, "{line}")
 }
 
-/// Record the end of a run in its `run.json`.
+/// Record the end of a run in its `run.json`, stamped now.
 pub fn finish(dir: &Path, exit_code: i32) -> io::Result<RunRecord> {
     let mut rec = read_record(dir)?;
     rec.finished_at = Some(now_ms());
@@ -96,7 +99,7 @@ pub fn list(data: &Path, ws: &Path) -> Vec<RunRecord> {
 }
 
 pub fn read_log(dir: &Path) -> io::Result<String> {
-    fs::read_to_string(dir.join("log.txt"))
+    fs::read(dir.join("log.txt")).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub fn read_record(dir: &Path) -> io::Result<RunRecord> {
@@ -109,6 +112,7 @@ fn write_record(dir: &Path, rec: &RunRecord) -> io::Result<()> {
     fs::write(dir.join("run.json"), s)
 }
 
+/// Unix time in milliseconds.
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -149,7 +153,11 @@ mod tests {
         append_log(&dir, "INFO: Build completed").unwrap();
         let done = finish(&dir, 1).unwrap();
         assert_eq!(done.exit_code, Some(1));
-        assert!(done.finished_at.unwrap() >= rec.started_at);
+        assert!(
+            done.finished_at.is_some_and(|t| t >= done.started_at),
+            "finished_at: {:?}",
+            done.finished_at
+        );
 
         assert_eq!(list(&data, &ws), vec![done]);
         assert_eq!(

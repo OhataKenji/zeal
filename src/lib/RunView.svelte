@@ -12,7 +12,6 @@
   const failed = $derived(record?.finishedAt !== undefined && record.exitCode !== undefined && record.exitCode !== 0);
   const tabs = ["Logs", "Timing", "Targets", "Details"] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
-  let follow = $state(true);
 
   function tabKey(event: KeyboardEvent, index: number) {
     const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
@@ -60,8 +59,7 @@
   <div class="run-panel"
     id="run-panel-{active}" role="tabpanel" aria-labelledby="run-tab-{active}">
     {#if active === "Logs"}
-      <LogPanel section={view.detail?.log} liveLog={view.liveLog}
-        {running} loading={view.detailLoading} bind:follow />
+      <LogPanel section={view.detail?.log} {running} loading={view.detailLoading} />
     {:else if active === "Timing"}
       {#if running}<p class="panel-empty">Timing is available after the run finishes.</p>
       {:else if view.detail}

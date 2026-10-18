@@ -47,6 +47,8 @@ export interface AppState {
   snapshot: Snapshot | null;
   lastError: IngestError | null;
   running: string | null;
+  // An unconfirmed exit releases the slot with runNote.
+  runNote: string | null;
 }
 
 export interface RunRecord {
@@ -84,9 +86,4 @@ export interface RunDetail {
   log: Section<string>;
   bep: Section<Bep>;
   profile: Section<Profile>;
-}
-
-export interface RunLog {
-  id: string;
-  line: string;
 }

@@ -417,10 +417,6 @@ ul.list li:last-child {
   align-items: center;
   gap: 4px;
 }
-.log-live {
-  color: var(--ink);
-  font-size: 10px;
-}
 .run-log {
   flex: 1;
   min-height: 100px;

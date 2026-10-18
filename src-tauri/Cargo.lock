@@ -4337,6 +4337,7 @@ name = "zeal"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "libc",
  "log",
  "quick-xml 0.38.4",
  "serde",
