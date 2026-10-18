@@ -1,7 +1,7 @@
 # Zeal 設計 M2: 一回の run の説明
 
 _OhataKenji_
-_Last update: 2026/10/17_
+_Last update: 2026/10/18_
 _Status: Approved_
 
 ## Goal
@@ -16,7 +16,7 @@ phase の区切りとスレッド上の event を示し、観測できる範囲�
 - action の内部ログ(stdout/stderr)の再生
 - remote cache と remote execution の詳細な内訳
 - 二回の run の diff。比較用の追加の条件収集と合わせて次版で扱う
-- stop、中断、`bazel run`。これらは [m3](./m3-find-and-run.md) で扱う
+- stop、中断、`bazel run`
 
 ## Background
 
@@ -90,7 +90,6 @@ profile は gzip と JSON が完結していることを前提とし、完結し
 
 各成果物の状態(ok / incomplete / missing / parse error)は parse 時に決める。
 上限による解析の中断や部分的な BEP は incomplete とし、理由を詳細画面に出す。
-DB への集計値の保存と retention は M4 で導入し、この表示契約を引き継ぐ。
 
 ### timing と phase の帯
 
@@ -122,7 +121,7 @@ Skymeld で analysis と execution が重なることを注記する。
 
 展開後 bytes、受理する event 数、一回の UI 送信 bytes の上限は、この測定で値を決めて導入する追加設計とする。
 これは未実装であり、現在の parser が無制限な展開を防げるとは扱わない。
-上限超過時は incomplete と理由を示し、完全な profile として M5 の集計へ入れない。
+上限超過時は incomplete と理由を示し、完全な profile として表示しない。
 送信を分割する場合も event の field やスレッドの範囲を変えず、データの欠損とは区別する。
 [BuildBuddy の設定一覧](https://www.buildbuddy.io/docs/config-all-options/)にあるイベント数や profile サイズの制限も、この境界を設ける根拠とする。
 
@@ -131,13 +130,13 @@ Skymeld で analysis と execution が重なることを注記する。
 - **exec log で action 一覧を出す**：action と target の対応を詳しく出せるが、mock に対応する画面がなく、flag と parser が増える。オーナーの判断により採用しない
 - **BEP や profile から再利用を出す**：BEP の cache 統計は件数だけで、profile の event 名からの判別は内部実装の推定になる。再利用の表示を採用しない
 - **aquery で実行されなかった action を分類する**：設定の再現と別呼び出しの結果との照合が必要になる。今版では profile の可視化に絞る
-- **M2 から SQLite に parse 結果を保存する**：再表示を速くできるが、生 file と保存値の整合を管理する必要がある。履歴の lifecycle を扱う M4 まで導入しない
+- **SQLite に parse 結果を保存する**：再表示を速くできるが、生 file と保存値の整合を管理する必要がある。今版は表示のたびに parse する
 
 ## Caveats
 
 - profile の可視化は計測された event の範囲を示す。記録が少ないことを、処理がなかったことや cache の不調とは解釈しない
-- M2 の `run.json` の時刻差は壁時計上の差である。monotonic な呼び出しの経過時間の計測は M4 の追加設計で扱う
-- 中断や強制終了では成果物が欠損するか、gzip/JSON の末尾が欠け得る。中断処理は M3 で扱う
+- `run.json` の時刻差は壁時計上の差であり、monotonic な計測値ではない
+- 中断や強制終了では成果物が欠損するか、gzip/JSON の末尾が欠け得る
 - 観測 flag 自体に負担がある。profile の採用セットと解析上限の確定は Test Plan の実測を残して行う
 - 観測のために clean、shutdown、別の output base を強制せず、既存の Bazel の状態を維持する
 
@@ -160,4 +159,4 @@ profile や BEP の文字列は HTML や実行コードとして解釈しない�
 - BEP と profile の golden test に、末尾の欠けた BEP、壊れた gzip/JSON、`Finishing` の欠損、成果物欠損を含める
 - 同名で異なる `tid`、重なる span、instant、counter を含む profile で、event を実行スレッドに限定せず可視化できることを確かめる
 - 観測 flag の有無、slim/noslim、snapshot 更新の有無を分けて、生成サイズ、追加時間、parse メモリ、UI 転送量を測定する
-- 追加の解析上限を導入する際は、超過が incomplete として表示され、完全な集計値として扱われないことを fixture で確認する
+- 追加の解析上限を導入する際は、超過が incomplete と理由付きで表示されることを fixture で確認する

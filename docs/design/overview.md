@@ -1,7 +1,7 @@
 # Zeal 設計: 全体構成
 
 _OhataKenji_
-_Last update: 2026/10/17_
+_Last update: 2026/10/18_
 _Status: Approved_
 
 ## Goal
@@ -57,7 +57,8 @@ flowchart TD
 データは二系統に分かれる。
 構造データのうち静的な部分(target・依存・file)は `bazel query` の結果を起動のたびに取り込み、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
 観測データは run ごとの BEP と profile に残す。
-M2 は run dir の file を表示のたびに parse し、M4 で run record と phase の集計値を SQLite に保存する。
+run dir の file は詳細表示のたびに parse し、M4 から run record を SQLite に保存する。
+phase の集計値や parse 結果は DB に保存しない。
 
 設計全体を通じた判断基準は「構造と観測を区別し、観測できないものは不明と示す」である。
 構造上存在する action が今回実行されたとは限らず、実行の事実は観測データがなければ分からない。
@@ -71,13 +72,13 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ### コンポーネントと責務
 
-| コンポーネント  | 責務                                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------------ |
-| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧                         |
-| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                                 |
-| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理                  |
-| core::ingest    | query XML / BEP / profile の parse。M2 は表示のたびに観測 file を読む。M4 から集計値を DB へ書く |
-| core::store     | run record と成果物の永続化。M2 は file、M4 から SQLite(rusqlite)                                |
+| コンポーネント  | 責務                                                                            |
+| --------------- | ------------------------------------------------------------------------------- |
+| UI(Svelte)      | content 3状態(target / run / analytics)の表示、composer、tree、runs 一覧        |
+| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                |
+| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理 |
+| core::ingest    | query XML / BEP / profile の parse。観測 file は詳細表示のたびに読む            |
+| core::store     | run record と成果物の永続化。M2 は file、M4 から SQLite(rusqlite)               |
 
 UI への実行中の通知は、runner が捕捉した stdout/stderr を Tauri の event で WebView に streaming して届ける。
 stdout/stderr は専用スレッドで常時 drain し(pipe 詰まりで bazel 本体をブロックしない)、M2 は1行ずつ UI に送り、負荷と欠損の扱いを検証する。
@@ -96,7 +97,8 @@ spawn 後に出力が来ない場合は「出力待ち」とし、無出力だ�
 spawn は独立したプロセスグループで行い、stop・中断・hard kill はグループ単位で送る(`bazel run` が起こした対象 binary も回収できるようにするため)。
 中断のエスカレーションと判定規則は [m3](./m3-find-and-run.md) で定める。
 アプリ終了時に実行中の run があれば SIGINT を送り、猶予のあとでグループを kill してから終了する。
-起動時には前回の crash で残った「running のままの run」を reconcile する(規則は [m4](./m4-run-history.md))。
+M4 の起動時には前回の未完了 record を lost にするだけで、以前の process を照合したり signal を送ったりしない。
+現在の handle を持つ run の wait エラーでも実行枠は解放しない(規則は [m4](./m4-run-history.md))。
 
 ### run の定義
 
@@ -104,15 +106,17 @@ run の起動時に Zeal 側で UUID を発行し、観測用の成果物(BEP・
 build・test・run の spawn には `--tool_tag=zeal` を付与する。共有 output base 上の BEP 解析等で Zeal 発の呼び出しを識別できるようにするためである(query 系はこの flag を受理しない version があり得るため付けない)。
 
 M4 からの run 一覧は、終了結果(outcome)の記号と詳細の有無(detail)を別に表示する。
-詳細が欠損した場合や保存期限が過ぎた場合も、既知の成功や失敗の記号を残す。
+詳細が欠損した場合や保持容量の整理で削除した場合も、既知の成功や失敗の記号を残す。
 M2 の file record から導出できる終了結果は M2 の範囲で表示する。
 規則は [m4](./m4-run-history.md)で定める。
 
 ### データの置き場所
 
 DB と run の成果物は Tauri の app data dir 配下に置き、workspace ごとに領域を分ける。
-workspace はルートパスを正規化したもので識別し、ディレクトリ名にはパスの hash を使う(衝突した場合は正規化パスとの対応で弁別する。M2 では弁別しない)。
-core 自身の動作ログ(reconcile の結果・spawn argv・DB 破損時の退避等)も app data dir 配下に出力し、障害時の手がかりとする。
+workspace はルートパスを正規化したもので識別し、ディレクトリ名にはパスの hash を使う。
+M4 では DB 内の canonical path と照合し、不一致や照合不能ならその保存領域の利用を拒否する(M2 では照合しない)。
+core 自身の動作ログは app data dir 配下に置き、UUID、処理種別、エラー分類だけを記録する。
+raw 入力、spawn argv、観測成果物の生の値は出さない。
 リポジトリ内には何も書き込まない(bazel 自身が作成する convenience symlink は除く)。
 
 ### bazel の解決
@@ -127,9 +131,11 @@ workspace の判定は `MODULE.bazel` / `WORKSPACE`(`WORKSPACE.bazel`)の存在�
 
 M2 では DB を持たず、run の dir の file を表示のたびに parse する([m2](./m2-run-detail.md))。以下は DB を入れる M4 からの運用である。
 DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理して migration を store 内に置く。
-起動時の全件 check は行わず、SQLite が破損系エラー(SQLITE_CORRUPT 等)を返した時点で退避・再作成する(disk full 等の一時的なエラーとは区別する)。
-旧 run.json や残存 file から一部を復元できるが、DB だけに残した事実は復元できない場合がある。
-破損時の退避と再作成、復元できる範囲は [m4](./m4-run-history.md)で扱う。
+起動時の全件 check は行わず、破損系エラーは履歴利用不能として表示し、新規 run を抑止する。
+DB と sidecar の自動削除や再作成、復元用 manifest、backup は設けない。
+利用者が停止と対象 workspace を確認して DB を手動初期化した場合、M2 run.json だけを再移行し、M4 以降の履歴は失われる。
+permission、disk full、新しすぎる schema は別のエラーとして扱い、DB 初期化を勧めない。
+生存する子の stop と drain は DB 障害時も維持する([m4](./m4-run-history.md))。
 
 ### UI の一貫性
 

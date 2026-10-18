@@ -33,8 +33,9 @@ cmd は利用者が `build` / `test` / `run` から選ぶ。
 flowchart LR
     pick["検索 / tree / pattern"] --> input["target 欄"]
     input --> send["Send: 入力制約を確認"]
-    send -->|"対象を1引数で渡す"| bazel["Bazel を実行"]
-    bazel --> record["run 記録"]
+    send --> record["開始 record を保存"]
+    record -->|"保存成功後に対象を1引数で渡す"| bazel["Bazel を実行"]
+    bazel --> finish["終了 record を保存"]
 ```
 
 ## Detailed Design
@@ -75,7 +76,8 @@ Rust core は cmd を `build` / `test` / `run` に限定し、観測 flag は Ze
 取得失敗後も取り込みが終われば手入力を送れ、古い snapshot や部分結果には時刻と状態を付ける。
 spawn 後、最初の出力が一定時間なければ「出力待ち」と示す。
 原因、異常、対象プログラムの開始前後は判定せず、最初の出力後は timer を再開しない。
-入力文字列と実際の argv は別々に run record へ保存する。
+cmd と入力文字列を run record へ保存し、組み立てた argv は永続化しない。
+開始 record の保存に失敗した場合は spawn しない。
 
 ### 中断
 
@@ -83,7 +85,8 @@ stop は独立したプロセスグループへ SIGINT を送り、数秒の猶�
 対象 binary も同じグループで回収する。
 SIGKILL 後も終了未確認なら「停止を確認できません」と示し、stopping のまま終了確認と回収を続ける。
 終了確認後に record を更新して idle へ戻り、保留中の取り込みを許可する。
-exit code と signal による outcome、および再起動後の回収は [M4](./m4-run-history.md) を正本とする。
+wait がエラーになっても、handle と stop、drain、実行と query の抑止を維持する。
+以前のセッションの process に signal は送らず、この中断手順は現在保持している handle にだけ適用する。
 
 ## Alternatives Considered
 
@@ -111,4 +114,4 @@ exit code と signal による outcome、および再起動後の回収は [M4](
 - 長い label の末尾検索、一致位置の表示、キーボードでの候補確定、file から owner への挿入を検証する。案内なしに検索、tree、pattern から対象を見つけ、操作を選んで実行できれば PRD M3 の到達とする。
 - label と pattern を展開せず1引数で渡し、build/test/run の成功とエラーをそのまま表示できることを実際の Bazel で確かめる。
 - UI と core で空白、改行、NUL、先頭 `-`、許可外 cmd を拒否し、対象が変更なく1引数になることを検証する。shell 記号は解釈せず、取り込み中の抑止、取得失敗後、cmd 選択保持、初回出力前後の無出力も確認する。
-- SIGINT と SIGKILL のグループ回収、終了未確認時の送信抑止、強制終了後の M4 reconcile を検証する。
+- SIGINT と SIGKILL のグループ回収、wait エラーと終了未確認時の送信抑止、再起動時に以前の process へ signal を送らないことを検証する。
