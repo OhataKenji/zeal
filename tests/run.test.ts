@@ -11,11 +11,21 @@ const record: RunRecord = {
   startedAt: 1,
 };
 
-test("outcome distinguishes active, unfinished, succeeded and failed records", () => {
+test("outcome distinguishes active, stopping, unfinished, succeeded and failed records", () => {
   assert.equal(outcome(record, "one"), "● running");
+  assert.equal(outcome(record, "one", true), "■ stopping");
   assert.equal(outcome(record, null), "? outcome unknown");
+  assert.equal(outcome(record, "other", true), "? outcome unknown");
   assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 0 }, null), "✓ succeeded");
   assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 3 }, null), "✗ failed (exit 3)");
+});
+
+test("stopping never replaces a result the observation already confirmed", () => {
+  assert.equal(outcome({ ...record, finishedAt: 2, exitCode: 0 }, record.id, true), "✓ succeeded");
+  assert.equal(
+    outcome({ ...record, finishedAt: 2, exitCode: 3 }, record.id, true),
+    "✗ failed (exit 3)",
+  );
 });
 
 test("partial observations retain data and explain the missing tail", () => {

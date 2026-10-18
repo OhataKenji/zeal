@@ -14,7 +14,7 @@ use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use store::RunRecord;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, RunEvent, State};
 
 #[tauri::command]
 fn get_state(core: State<Arc<Core>>) -> AppStateDto {
@@ -77,6 +77,13 @@ fn start_run(
 ) -> Result<RunRecord, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     runner::start(app, core.inner().clone(), &data, &cmd, &target)
+}
+
+/// Stop the run in flight: SIGINT to its process group, then SIGKILL if it does
+/// not exit. Does nothing when no run is held or a stop is already in flight.
+#[tauri::command]
+fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
+    runner::stop(app, core.inner().clone())
 }
 
 /// Runs of the open workspace, newest first.
@@ -159,10 +166,20 @@ pub fn run() {
             open_workspace,
             refresh,
             start_run,
+            stop_run,
             list_runs,
             get_run,
             open_location
         ])
-        .run(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|handle, event| {
+            // A run in flight must not be orphaned, and the exit cannot wait for
+            // a reap: one bounded stop (SIGINT, a short poll, SIGKILL) as the
+            // process goes. `Exit` is the event that always precedes it.
+            if let RunEvent::Exit = event {
+                let core = handle.state::<Arc<Core>>().inner().clone();
+                runner::exit_stop(&core);
+            }
+        });
 }

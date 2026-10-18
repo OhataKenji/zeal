@@ -47,7 +47,8 @@ export interface AppState {
   snapshot: Snapshot | null;
   lastError: IngestError | null;
   running: string | null;
-  // An unconfirmed exit releases the slot with runNote.
+  // Stop is best-effort. An unconfirmed exit releases the slot with runNote.
+  stopping: boolean;
   runNote: string | null;
 }
 

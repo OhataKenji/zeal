@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { app, connect, refresh, session } from "./lib/state.svelte";
-  import { canSend } from "./lib/session";
+  import { canSend, canStop } from "./lib/session";
   import { outcome } from "./lib/run";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
@@ -25,6 +25,13 @@
   const busy = $derived(!app.view.ready || app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
 
   const inputError = $derived(targetField === "" ? null : targetError(targetField));
+
+  const running = $derived(!!st?.running);
+
+  function submit() {
+    if (running) void session.stop();
+    else void session.start(cmd, targetField);
+  }
 
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.
@@ -114,7 +121,7 @@
           {#each app.view.runs as run (run.id)}
             <li><button class="run-row" class:sel={app.view.selectedRun === run.id} aria-current={app.view.selectedRun === run.id ? "true" : undefined} onclick={() => session.selectRun(run.id)}>
               <span>{run.cmd} {run.target}</span>
-              <small>{outcome(run, state.running)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
+              <small>{outcome(run, state.running, state.stopping)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
             </button></li>
           {/each}
         </ul>
@@ -179,7 +186,7 @@
       placeholder="//pkg:target"
       onkeydown={(event) => { if (event.key === "Enter" && !switchingWs) void session.start(cmd, targetField); }}
     />
-    <button class="btn primary" disabled={switchingWs || !canSend(app.view, targetField)} onclick={() => session.start(cmd, targetField)}>Send</button>
+    <button class="btn primary" disabled={switchingWs || (running ? !canStop(app.view) : !canSend(app.view, targetField))} onclick={submit}>{running ? "stop" : "Send"}</button>
     {#if st?.ingest === "running"}
       <span class="label" role="status">target データの取得待ち</span>
     {/if}

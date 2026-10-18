@@ -120,3 +120,9 @@ wait がエラーになっても、handle と stop、drain、実行と query の
 
 実行は build/test に限る。target は label または pattern の1文字列とし、空文字、空白、制御文字、先頭の `-` を拒否する。
 shell を介さず1引数で渡し、trim、分割、quote の解釈はしない。
+
+## 停止の実装
+
+stop は現在の run の process group へ SIGINT を送り、3秒後も同じ run を保持していれば SIGKILL を送る。
+さらに2秒経っても終了を確認できなければ理由を表示して実行枠を解放し、record は未完了のまま残す。
+子孫すべての終了は保証しない。アプリ終了時にも現在の run に限り短い猶予付きで停止を試みる。

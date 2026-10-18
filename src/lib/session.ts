@@ -51,6 +51,11 @@ export function canSend(view: SessionView, target: string): boolean {
   );
 }
 
+// Core owns stop and may release an unconfirmed run with an explicit note.
+export function canStop(view: SessionView): boolean {
+  return !!(view.ready && view.state?.running && !view.state.stopping);
+}
+
 // One session owns request generations and subscriptions. Core remains the
 // owner of runs; this is only the current view.
 export function createSession(transport: Transport, changed: (view: SessionView) => void) {
@@ -189,6 +194,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
+  async function stop() {
+    if (!canStop(view)) return;
+    const workspace = view.state?.workspace;
+    try {
+      await transport.invoke("stop_run");
+    } catch (error) {
+      if (workspace === view.state?.workspace) update({ error: String(error) });
+    }
+  }
+
   async function openWorkspace(path: string) {
     if (
       !view.ready ||
@@ -225,5 +240,5 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  return { init, dispose, start, openWorkspace, refresh, selectRun, loadDetail, loadRuns };
+  return { init, dispose, start, stop, openWorkspace, refresh, selectRun, loadDetail, loadRuns };
 }
