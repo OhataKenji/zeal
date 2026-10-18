@@ -218,9 +218,16 @@ pub fn run_detail(dir: &Path) -> io::Result<RunDetail> {
     } else {
         match File::open(dir.join("profile.gz")) {
             Err(e) => read_error(e),
-            Ok(f) => match profile::parse(f) {
+            Ok(f) => match profile::parse_bounded(f, profile::IPC_LIMIT) {
                 Ok(data) => Section::Ok { data },
-                Err(note) => Section::ParseError { note },
+                Err(profile::ProfileError::Incomplete(note)) => Section::Incomplete {
+                    data: Profile {
+                        phases: Vec::new(),
+                        lanes: Vec::new(),
+                    },
+                    note,
+                },
+                Err(profile::ProfileError::Parse(note)) => Section::ParseError { note },
             },
         }
     };
