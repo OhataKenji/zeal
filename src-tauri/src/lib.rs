@@ -6,6 +6,7 @@ mod runner;
 mod snapshot;
 mod state;
 mod store;
+mod telemetry;
 mod workspace;
 mod xml;
 
@@ -30,7 +31,12 @@ fn open_workspace(
     app: AppHandle,
     core: State<Arc<Core>>,
     path: String,
+    operation_id: Option<String>,
 ) -> Result<AppStateDto, String> {
+    let mut operation = core
+        .telemetry
+        .start("workspace.open", operation_id.as_deref());
+    operation.outcome("rejected");
     let ws = expand_home(path.trim());
     if !ws.is_dir() {
         return Err(format!("not a directory: {}", ws.display()));
@@ -51,6 +57,7 @@ fn open_workspace(
         st.bazel = bazel;
         // A different workspace has no shared snapshot with the previous one.
         st.snapshot = None;
+        st.ingest_operation_id = None;
         st.last_error = None;
         // The note can describe a run that was released without a confirmed
         // exit, and it belongs to the workspace that run was started in.
@@ -59,14 +66,21 @@ fn open_workspace(
     if let Ok(dir) = app.path().app_data_dir() {
         workspace::save(&dir, &ws);
     }
-    ingest::request(app.clone(), core.inner().clone())?;
+    ingest::request(app.clone(), core.inner().clone(), operation)?;
     Ok(core.dto())
 }
 
 /// Manual refresh: re-run the query unless bazel is already busy.
 #[tauri::command]
-fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
-    ingest::request(app, core.inner().clone())
+fn refresh(
+    app: AppHandle,
+    core: State<Arc<Core>>,
+    operation_id: Option<String>,
+) -> Result<(), String> {
+    let operation = core
+        .telemetry
+        .start("workspace.refresh", operation_id.as_deref());
+    ingest::request(app, core.inner().clone(), operation)
 }
 
 /// Start `bazel build|test <target>`. Fails while bazel is busy.
@@ -76,26 +90,48 @@ fn start_run(
     core: State<Arc<Core>>,
     cmd: String,
     target: String,
+    operation_id: Option<String>,
 ) -> Result<RunRecord, String> {
+    let mut operation = core.telemetry.start("run", operation_id.as_deref());
+    operation.outcome("rejected");
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    runner::start(app, core.inner().clone(), &data, &cmd, &target)
+    runner::start(app, core.inner().clone(), &data, &cmd, &target, operation)
 }
 
 /// Stop the run in flight: SIGINT to its process group, then SIGKILL if it does
 /// not exit. Does nothing when no run is held or a stop is already in flight.
 #[tauri::command]
-fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
-    runner::stop(app, core.inner().clone())
+fn stop_run(
+    app: AppHandle,
+    core: State<Arc<Core>>,
+    operation_id: Option<String>,
+) -> Result<(), String> {
+    let mut operation = core.telemetry.start("run.stop", operation_id.as_deref());
+    if let Some(id) = &core.state.lock().unwrap().run {
+        operation.run_id(id);
+    }
+    operation.result(runner::stop(app, core.inner().clone()))
 }
 
 /// Runs of the open workspace, newest first.
 #[tauri::command]
-fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
+fn list_runs(
+    app: AppHandle,
+    core: State<Arc<Core>>,
+    operation_id: Option<String>,
+) -> Result<Vec<RunRecord>, String> {
+    let mut operation = core.telemetry.start("runs.list", operation_id.as_deref());
+    operation.outcome("rejected");
     let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+        operation.outcome("ok");
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    store::list(&data, &ws).map_err(|error| error.to_string())
+    let result = store::list(&data, &ws).map_err(|error| error.to_string());
+    if let Ok(runs) = &result {
+        operation.count("zeal.run_count", runs.len());
+    }
+    operation.result(result)
 }
 
 /// Aggregate only the core-owned workspace; caller cannot name a DB or root.
@@ -145,7 +181,10 @@ async fn get_run(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     id: String,
+    operation_id: Option<String>,
 ) -> Result<RunDetail, String> {
+    let mut operation = core.telemetry.start("run.detail", operation_id.as_deref());
+    operation.outcome("rejected");
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid run id".to_string())?
         .to_string();
@@ -154,9 +193,13 @@ async fn get_run(
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = DetailWorker::acquire()?;
+    operation.run_id(&id);
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+        let mut operation = operation;
+        operation.outcome("unknown");
+        let result = run_detail(&data, &ws, &id, &operation).map_err(|e| e.to_string());
+        operation.result(result)
     })
     .await
     .map_err(|_| "profile worker failed".to_string())?
@@ -175,6 +218,12 @@ fn open_location(path: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// Only an allowlisted operation, outcome, UUID and bounded duration cross this boundary.
+#[tauri::command]
+fn record_ui_operation(core: State<Arc<Core>>, record: telemetry::UiOperation) {
+    core.telemetry.record_ui(record);
 }
 
 /// `~/...` in a typed path expands to the user's home directory.
@@ -198,7 +247,9 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let core = Arc::new(Core::new());
+            let mut core = Core::new();
+            core.telemetry = telemetry::Telemetry::from_env();
+            let core = Arc::new(core);
             app.manage(core.clone());
             // Reopen the last workspace, if it is still a workspace.
             if let Ok(dir) = app.path().app_data_dir()
@@ -210,7 +261,8 @@ pub fn run() {
                     st.workspace = Some(ws);
                     st.bazel = workspace::resolve_bazel();
                 }
-                let _ = ingest::request(app.handle().clone(), core);
+                let operation = core.telemetry.start("workspace.restore", None);
+                let _ = ingest::request(app.handle().clone(), core, operation);
             }
             Ok(())
         })
@@ -223,7 +275,8 @@ pub fn run() {
             list_runs,
             get_analytics,
             get_run,
-            open_location
+            open_location,
+            record_ui_operation
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -233,6 +286,7 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 let core = handle.state::<Arc<Core>>().inner().clone();
                 runner::exit_stop(&core);
+                core.telemetry.shutdown();
             }
         });
 }

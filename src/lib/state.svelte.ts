@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSession, emptyView } from "./session";
+import { tick } from "svelte";
+import { createTelemetry } from "./telemetry";
 
 // Raw profiles avoid deep proxying. The session replaces the view; timeline
 // geometry is derived separately from the original event fields.
@@ -24,6 +26,7 @@ function newSession() {
     (next) => {
       view = next;
     },
+    createTelemetry(invoke, () => import.meta.env.DEV && !!view.state?.telemetryEnabled, tick),
   );
 }
 

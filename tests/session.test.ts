@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { canSend, canStop, createSession, emptyView, type Transport } from "../src/lib/session.ts";
+import { createTelemetry, type Telemetry } from "../src/lib/telemetry.ts";
 import type { AppState, RunDetail, RunRecord } from "../src/lib/types.ts";
 
 const idle: AppState = {
@@ -37,7 +38,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function harness(initial = Promise.resolve(idle)) {
+function harness(initial = Promise.resolve(idle), telemetry?: Telemetry) {
   let view = emptyView();
   let coreState = idle;
   let initialRequested = false;
@@ -74,9 +75,13 @@ function harness(initial = Promise.resolve(idle)) {
       };
     },
   };
-  const session = createSession(transport, (next) => {
-    view = next;
-  });
+  const session = createSession(
+    transport,
+    (next) => {
+      view = next;
+    },
+    telemetry,
+  );
   return {
     session,
     get view() {
@@ -496,4 +501,41 @@ test("an unconfirmed exit stays unknown and is not retried automatically", async
     false,
   );
   assert.equal(canSend(h.view, "//:app"), true);
+});
+
+test("discarded detail responses keep the command's operation ID in their UI report", async () => {
+  const report = deferred<Record<string, unknown>>();
+  const telemetry = createTelemetry(
+    async <T>(_command, args) => {
+      const record = args?.record as Record<string, unknown>;
+      if (record.command === "get_run") report.resolve(record);
+      return undefined as T;
+    },
+    () => true,
+  );
+  const h = harness(Promise.resolve(idle), telemetry);
+  await h.session.init();
+  h.session.selectRun("run-a");
+  const call = h.pending.find((call) => call.command === "get_run")!;
+  h.session.selectRun(null);
+  call.reply.resolve(completed);
+  const record = await report.promise;
+  assert.equal(record.operationId, call.args?.operationId);
+  assert.equal(record.outcome, "discarded");
+  assert.equal(h.view.detail, null);
+});
+
+test("query completion uses the originating operation ID even if its running event was missed", async () => {
+  const applied: string[] = [];
+  const h = harness(Promise.resolve(idle), {
+    begin: () => ({ args: {}, finish() {} }),
+    stateApplied: (id) => {
+      applied.push(id);
+    },
+  });
+  await h.session.init();
+  const operationId = crypto.randomUUID();
+  h.emit("app-state", { ...idle, ingestOperationId: operationId });
+  h.emit("app-state", { ...idle, ingestOperationId: operationId });
+  assert.deepEqual(applied, [operationId]);
 });

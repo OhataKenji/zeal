@@ -11,6 +11,8 @@ use tauri::{AppHandle, Emitter};
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStateDto {
+    pub telemetry_enabled: bool,
+    pub ingest_operation_id: Option<String>,
     /// Workspace root path, if one is open.
     pub workspace: Option<String>,
     /// Resolved bazel executable, if found on PATH.
@@ -45,6 +47,7 @@ pub struct IngestError {
 pub type RunId = String;
 
 pub struct CoreState {
+    pub ingest_operation_id: Option<String>,
     pub workspace: Option<PathBuf>,
     pub bazel: Option<PathBuf>,
     /// The latest fully built snapshot; swapped atomically per fetch.
@@ -67,6 +70,7 @@ pub struct CoreState {
 }
 
 pub struct Core {
+    pub telemetry: crate::telemetry::Telemetry,
     pub state: Mutex<CoreState>,
     pub run_finished: Condvar,
 }
@@ -74,7 +78,9 @@ pub struct Core {
 impl Core {
     pub fn new() -> Self {
         Core {
+            telemetry: crate::telemetry::Telemetry::default(),
             state: Mutex::new(CoreState {
+                ingest_operation_id: None,
                 workspace: None,
                 bazel: None,
                 snapshot: None,
@@ -93,6 +99,8 @@ impl Core {
     pub fn dto(&self) -> AppStateDto {
         let st = self.state.lock().unwrap();
         AppStateDto {
+            telemetry_enabled: self.telemetry.enabled(),
+            ingest_operation_id: st.ingest_operation_id.clone(),
             workspace: st
                 .workspace
                 .as_ref()

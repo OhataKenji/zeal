@@ -8,6 +8,7 @@
 
 use crate::state::{Core, CoreState};
 use crate::store::{self, RunRecord};
+use crate::telemetry::Operation;
 use std::fs;
 use std::io;
 use std::os::unix::process::CommandExt;
@@ -90,7 +91,9 @@ pub fn start(
     data: &Path,
     cmd: &str,
     target: &str,
+    mut operation: Operation,
 ) -> Result<RunRecord, String> {
+    operation.outcome("rejected");
     validate_cmd(cmd)?;
     validate_target(target)?;
     let mut st = core.state.lock().unwrap();
@@ -103,7 +106,18 @@ pub fn start(
     // Held across the record write and the spawn, so that the busy check above
     // and the slot below stay one atomic step, without a `starting` flag.
     // The record exists before bazel does; a failing store prevents the spawn.
-    let (rec, dir) = store::create(data, &ws, cmd, target).map_err(|e| e.to_string())?;
+    operation.field(
+        "zeal.command",
+        if cmd == "build" { "build" } else { "test" },
+    );
+    operation.outcome("zeal_error");
+    let mut create = operation.child("run.create_record");
+    let (rec, dir) = create
+        .result(store::create(data, &ws, cmd, target))
+        .map_err(|e| e.to_string())?;
+    drop(create);
+    operation.run_id(&rec.id);
+    let mut spawn = operation.child("bazel.spawn");
     // Its own process group: a stop reaches bazel and whatever it started.
     let mut child = match spawn_logged(
         Command::new(&bazel)
@@ -113,10 +127,13 @@ pub fn start(
     ) {
         Ok(c) => c,
         Err(e) => {
+            spawn.outcome("zeal_error");
             let _ = store::abort_create(data, &ws, &rec.id);
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
+    spawn.outcome("ok");
+    drop(spawn);
     st.run = Some(rec.id.clone());
     st.run_pgid = Some(child.id() as i32);
     st.run_stopping = false;
@@ -133,6 +150,9 @@ pub fn start(
             id: &id,
             emit: || core.emit(&app),
         };
+        let mut operation = operation;
+        operation.outcome("unknown");
+        let mut wait = operation.child("bazel.wait");
         let exit = observe_process(
             &core,
             &id,
@@ -144,12 +164,29 @@ pub fn start(
             STOP_GRACE,
             STOP_CONFIRM,
         );
+        wait.outcome(match &exit {
+            Ok(0) => "ok",
+            Ok(8) => "interrupted",
+            Ok(_) => "bazel_failed",
+            Err(_) => "unknown_exit",
+        });
+        drop(wait);
+        let mut save = operation.child("run.save_result");
         // Reap already revoked signal ownership. Keep the run slot through the
         // save, without holding the lock across filesystem work.
         let saved = match &exit {
             Ok(code) => store::finish(&data, &ws, &id, *code).map(|_| ()),
             Err(_) => Ok(()),
         };
+        save.outcome(if saved.is_ok() { "ok" } else { "zeal_error" });
+        drop(save);
+        operation.outcome(match (&exit, &saved) {
+            (_, Err(_)) => "zeal_error",
+            (Ok(0), _) => "ok",
+            (Ok(8), _) => "interrupted",
+            (Ok(_), _) => "bazel_failed",
+            (Err(_), _) => "unknown_exit",
+        });
         let mut st = core.state.lock().unwrap();
         if apply_reap(&mut st, &id, &exit)
             && let Err(e) = saved

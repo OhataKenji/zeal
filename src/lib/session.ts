@@ -1,4 +1,5 @@
 import { targetError } from "./target.ts";
+import { disabledTelemetry, type Telemetry } from "./telemetry.ts";
 import type { AppState, RunCmd, RunDetail, RunRecord } from "./types.ts";
 
 export interface Transport {
@@ -58,7 +59,11 @@ export function canStop(view: SessionView): boolean {
 
 // One session owns request generations and subscriptions. Core remains the
 // owner of runs; this is only the current view.
-export function createSession(transport: Transport, changed: (view: SessionView) => void) {
+export function createSession(
+  transport: Transport,
+  changed: (view: SessionView) => void,
+  telemetry: Telemetry = disabledTelemetry,
+) {
   let view = emptyView();
   let disposed = false;
   let stateRevision = 0;
@@ -75,12 +80,15 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   async function loadRuns() {
     const generation = ++listGeneration;
     if (!view.state?.workspace) return;
+    const operation = telemetry.begin("list_runs");
     try {
-      const runs = await transport.invoke<RunRecord[]>("list_runs");
+      const runs = await transport.invoke<RunRecord[]>("list_runs", operation.args);
       if (generation === listGeneration) {
         update({ runs, runsError: null });
       }
+      operation.finish(!disposed && generation === listGeneration ? "applied" : "discarded");
     } catch (error) {
+      operation.finish("failed");
       if (generation === listGeneration) {
         update({ runsError: String(error) });
       }
@@ -92,13 +100,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++detailGeneration;
     // Logs and observations are read after the run leaves the active slot.
     if (!id || !view.ready || view.starting || id === view.state?.running) return;
+    const operation = telemetry.begin("get_run");
     update({ detailLoading: true, detailError: null });
     try {
-      const detail = await transport.invoke<RunDetail>("get_run", { id });
+      const detail = await transport.invoke<RunDetail>("get_run", { id, ...operation.args });
       if (generation === detailGeneration) {
         update({ detail, detailLoading: false });
       }
+      operation.finish(!disposed && generation === detailGeneration ? "applied" : "discarded");
     } catch (error) {
+      operation.finish("failed");
       if (generation === detailGeneration) {
         update({ detailError: String(error), detailLoading: false });
       }
@@ -128,6 +139,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       });
     }
     update({ state, ready: true, ...(resumed ? { error: null } : {}) });
+    if (
+      state.ingest === "idle" &&
+      state.ingestOperationId &&
+      (before?.ingest !== "idle" || before.ingestOperationId !== state.ingestOperationId)
+    ) {
+      telemetry.stateApplied(state.ingestOperationId);
+    }
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
@@ -161,10 +179,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (!canSend(view, target)) return;
     const workspace = view.state?.workspace;
     update({ starting: true, error: null });
+    const operation = telemetry.begin("start_run");
     try {
       // The target goes through verbatim: one argument, no shell interpretation.
-      const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
-      if (disposed || workspace !== view.state?.workspace) return;
+      const record = await transport.invoke<RunRecord>("start_run", {
+        cmd,
+        target,
+        ...operation.args,
+      });
+      if (disposed || workspace !== view.state?.workspace) {
+        operation.finish("discarded");
+        return;
+      }
       update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
       selectRun(record.id);
       // Invoke responses and events use different Tauri delivery paths. The
@@ -186,10 +212,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       // The run may already have finished before start_run's reply. Never
       // write that reply back into the authoritative running state.
       void loadRuns();
+      operation.finish("applied");
     } catch (error) {
+      operation.finish("failed");
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
       update({ starting: false });
+      operation.finish("discarded");
       if (!disposed && workspace === view.state?.workspace && view.ready) void loadDetail();
     }
   }
@@ -197,9 +226,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   async function stop() {
     if (!canStop(view)) return;
     const workspace = view.state?.workspace;
+    const operation = telemetry.begin("stop_run");
     try {
-      await transport.invoke("stop_run");
+      await transport.invoke("stop_run", operation.args);
+      operation.finish("applied");
     } catch (error) {
+      operation.finish("failed");
       if (workspace === view.state?.workspace) update({ error: String(error) });
     }
   }
@@ -215,10 +247,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       throw new Error("Bazel の処理が終わってから workspace を変更してください");
     }
     update({ opening: true });
+    const operation = telemetry.begin("open_workspace");
     const revision = stateRevision;
     try {
-      const state = await transport.invoke<AppState>("open_workspace", { path });
-      if (revision === stateRevision) acceptState(state);
+      const state = await transport.invoke<AppState>("open_workspace", { path, ...operation.args });
+      const accepted = !disposed && revision === stateRevision;
+      if (accepted) acceptState(state);
+      operation.finish(accepted ? "applied" : "discarded");
+    } catch (error) {
+      operation.finish("failed");
+      throw error;
     } finally {
       update({ opening: false });
     }
@@ -233,9 +271,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.state?.ingest === "running"
     )
       return;
+    const operation = telemetry.begin("refresh");
     try {
-      await transport.invoke("refresh");
+      await transport.invoke("refresh", operation.args);
+      operation.finish("applied");
     } catch (error) {
+      operation.finish("failed");
       update({ error: String(error) });
     }
   }
