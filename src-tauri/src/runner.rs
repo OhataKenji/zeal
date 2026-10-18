@@ -27,8 +27,8 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// Time SIGKILL gets to end the run before its exit is called unknown and its
 /// slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
-/// An app exit cannot defer itself, so its stop is hard-bounded: SIGINT, at
-/// most `EXIT_GRACE` of polling, then SIGKILL.
+/// App exit gives a live child at most `EXIT_GRACE` of polling before SIGKILL.
+/// A reaped child's in-progress save is joined separately.
 const EXIT_GRACE: Duration = Duration::from_secs(1);
 const EXIT_POLL: Duration = Duration::from_millis(25);
 
@@ -120,29 +120,41 @@ pub fn start(
     st.run = Some(rec.id.clone());
     st.run_pgid = Some(child.id() as i32);
     st.run_stopping = false;
+    st.run_stop_started = None;
     st.run_note = None;
     drop(st);
     core.emit(&app);
 
     let id = rec.id.clone();
     thread::spawn(move || {
-        let exit = child.wait().map(|status| status.code().unwrap_or(-1));
-        // Finish the record before publishing idle. Holding the state lock
-        // prevents a new run or a detail read from observing a half-finished
-        // transition. A previously released run stays unknown.
+        let _slot = RunSlot {
+            core: &core,
+            id: &id,
+            emit: || core.emit(&app),
+        };
+        let exit = observe_process(
+            &core,
+            &id,
+            || {
+                child
+                    .try_wait()
+                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+            },
+            STOP_GRACE,
+            STOP_CONFIRM,
+        );
+        // Reap already revoked signal ownership. Keep the run slot through the
+        // save, without holding the lock across filesystem work.
+        let saved = match &exit {
+            Ok(code) => store::finish(&dir, *code).map(|_| ()),
+            Err(_) => Ok(()),
+        };
         let mut st = core.state.lock().unwrap();
-        if still_held(&st, &id) {
-            let saved = match &exit {
-                Ok(code) => store::finish(&dir, *code).map(|_| ()),
-                Err(_) => Ok(()),
-            };
-            apply_reap(&mut st, &id, &exit);
-            if let Err(e) = saved {
-                st.run_note = Some(format!("終了結果を保存できません: {e}"));
-            }
+        if apply_reap(&mut st, &id, &exit)
+            && let Err(e) = saved
+        {
+            st.run_note = Some(format!("終了結果を保存できません: {e}"));
         }
-        drop(st);
-        core.emit(&app);
     });
     Ok(rec)
 }
@@ -152,93 +164,138 @@ pub fn start(
 /// (2 s) later, the slot released with the note. Does nothing when no run is
 /// held or a stop is already in flight, so the slot is never held by a stop.
 pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
-    let (id, pgid) = {
-        let mut st = core.state.lock().unwrap();
-        if st.run_stopping {
-            return Ok(());
-        }
-        let (Some(id), Some(pgid)) = (st.run.clone(), st.run_pgid) else {
-            return Ok(());
-        };
-        st.run_stopping = true;
-        st.run_note = None;
-        if let Err(e) = signal_group(pgid, libc::SIGINT) {
-            log::warn!("SIGINT to run group failed: {e}");
-        }
-        (id, pgid)
-    };
+    begin_stop(&mut core.state.lock().unwrap());
     core.emit(&app);
-    escalate(app, core, id, pgid);
     Ok(())
 }
 
-/// The escalation thread of one `stop`: SIGKILL after the grace, and the
-/// give-up release and its emit if the exit never came.
-fn escalate(app: AppHandle, core: Arc<Core>, id: String, pgid: i32) {
-    thread::spawn(move || {
-        if escalate_steps(&core, &id, pgid, STOP_GRACE, STOP_CONFIRM) {
-            core.emit(&app);
-        }
-    });
-}
-
-/// The escalation sequence: kill the group of the run that is still in flight
-/// after `grace` and, if the exit is still unconfirmed `confirm` later, release
-/// its slot with the note. Returns whether it gave up; false when the run ended
-/// inside the grace. The state lock covers the liveness check and signal,
-/// but is never held across a sleep.
-fn escalate_steps(core: &Core, id: &str, pgid: i32, grace: Duration, confirm: Duration) -> bool {
-    thread::sleep(grace);
-    {
-        let st = core.state.lock().unwrap();
-        if !still_held(&st, id) {
-            return false;
-        }
-        if let Err(e) = signal_group(pgid, libc::SIGKILL) {
-            log::warn!("SIGKILL to run group failed: {e}");
-        }
-    }
-    thread::sleep(confirm);
-    // Bound first: the lock must not be held into the caller's `emit`.
-    give_up(&mut core.state.lock().unwrap(), id)
-}
-
-/// Stop the run in flight for an app exit, which cannot wait for a reap: SIGINT
-/// to the group, at most `EXIT_GRACE` of polling, SIGKILL if it is still held.
-/// The record stays unfinished, as no exit was observed.
-pub fn exit_stop(core: &Core) {
-    let (id, pgid) = {
-        let st = core.state.lock().unwrap();
-        let (Some(id), Some(pgid)) = (st.run.clone(), st.run_pgid) else {
-            return;
-        };
-        if let Err(e) = signal_group(pgid, libc::SIGINT) {
-            log::warn!("SIGINT to run group failed: {e}");
-        }
-        (id, pgid)
-    };
-    if wait_for_release(core, &id, EXIT_GRACE) {
+/// The first request sends SIGINT and fixes the deadlines. Only the thread
+/// owning the child can reap or escalate, so a reap cannot race a later signal.
+fn begin_stop(st: &mut CoreState) {
+    if st.run_stopping || st.run_pgid.is_none() {
         return;
     }
-    let st = core.state.lock().unwrap();
-    if still_held(&st, &id)
-        && let Err(e) = signal_group(pgid, libc::SIGKILL)
+    st.run_stopping = true;
+    st.run_stop_started = Some(Instant::now());
+    st.run_note = None;
+    if let Some(pgid) = st.run_pgid
+        && let Err(e) = signal_group(pgid, libc::SIGINT)
     {
-        log::warn!("SIGKILL to run group failed: {e}");
+        log::warn!("SIGINT to run group failed: {e}");
     }
 }
 
-/// Wait up to `timeout` for `id` to leave the run slot, polling in `EXIT_POLL`
-/// steps. The lock is never held across a sleep.
-fn wait_for_release(core: &Core, id: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
+/// Poll and signal under the same lock. Once try_wait reaps the child, its PID
+/// is revoked immediately, before saving or waking an app-exit waiter.
+fn observe_process(
+    core: &Core,
+    id: &str,
+    mut poll: impl FnMut() -> io::Result<Option<i32>>,
+    grace: Duration,
+    confirm: Duration,
+) -> io::Result<i32> {
+    let mut killed = false;
     loop {
-        if !still_held(&core.state.lock().unwrap(), id) {
-            return true;
+        let mut st = core.state.lock().unwrap();
+        if !still_held(&st, id) {
+            return Err(io::Error::other("run no longer owned"));
+        }
+        match poll() {
+            Ok(Some(code)) => {
+                st.run_pgid = None;
+                return Ok(code);
+            }
+            Ok(None) => (),
+            Err(error) => {
+                // A failed wait can mean another reaper already consumed the
+                // child. Its former PID is no longer safe to signal.
+                st.run_pgid = None;
+                return Err(error);
+            }
+        }
+        if let Some(started) = st.run_stop_started {
+            if started.elapsed() >= grace && !killed {
+                if let Some(pgid) = st.run_pgid
+                    && let Err(e) = signal_group(pgid, libc::SIGKILL)
+                {
+                    log::warn!("SIGKILL to run group failed: {e}");
+                }
+                killed = true;
+            }
+            if started.elapsed() >= grace + confirm {
+                st.run_pgid = None;
+                return Err(io::Error::new(io::ErrorKind::TimedOut, STOP_UNCONFIRMED));
+            }
+        }
+        drop(st);
+        thread::sleep(EXIT_POLL);
+    }
+}
+
+/// A panic in observation or saving must release the slot and wake app exit.
+/// Normal completion publishes after the slot is released.
+struct RunSlot<'a, F: Fn()> {
+    core: &'a Core,
+    id: &'a str,
+    emit: F,
+}
+impl<F: Fn()> Drop for RunSlot<'_, F> {
+    fn drop(&mut self) {
+        let mut st = self
+            .core
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if still_held(&st, self.id) {
+            clear_run(&mut st);
+            if thread::panicking() {
+                st.run_note = Some("実行結果の後処理に失敗しました".into());
+            }
+        }
+        self.core.run_finished.notify_all();
+        drop(st);
+        // Avoid a second panic from an event emission while unwinding.
+        if !thread::panicking() {
+            (self.emit)();
+        }
+    }
+}
+
+/// Bound process stopping to the short exit grace. A child already reaped has
+/// nothing left to signal; wait for its in-progress save to release the slot.
+pub fn exit_stop(core: &Core) {
+    let id = {
+        let mut st = core.state.lock().unwrap();
+        begin_stop(&mut st);
+        st.run.clone()
+    };
+    let Some(id) = id else {
+        return;
+    };
+    let deadline = Instant::now() + EXIT_GRACE;
+    loop {
+        let mut st = core.state.lock().unwrap();
+        if !still_held(&st, &id) {
+            return;
+        }
+        if st.run_pgid.is_none() {
+            while still_held(&st, &id) {
+                st = core
+                    .run_finished
+                    .wait(st)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+            return;
         }
         if Instant::now() >= deadline {
-            return false;
+            if let Some(pgid) = st.run_pgid
+                && let Err(e) = signal_group(pgid, libc::SIGKILL)
+            {
+                log::warn!("SIGKILL to run group failed: {e}");
+            }
+            return;
         }
+        drop(st);
         thread::sleep(EXIT_POLL);
     }
 }
@@ -270,6 +327,12 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool
     if !still_held(st, id) {
         return false;
     }
+    if exit
+        .as_ref()
+        .is_err_and(|error| error.kind() == io::ErrorKind::TimedOut)
+    {
+        return give_up(st, id);
+    }
     clear_run(st);
     st.run_note = match exit {
         Ok(_) => None,
@@ -284,6 +347,7 @@ fn clear_run(st: &mut CoreState) {
     st.run = None;
     st.run_pgid = None;
     st.run_stopping = false;
+    st.run_stop_started = None;
 }
 
 /// Signal a whole process group: `pgid` is the run's pid (`process_group(0)`
@@ -676,15 +740,10 @@ mod tests {
         }
     }
 
-    /// The escalation sequence itself: a group that ignores SIGINT is killed
-    /// after the grace and, when the exit is still unconfirmed after the
-    /// confirm window, its slot is released with the note. The windows are
-    /// milliseconds here; `stop` passes `STOP_GRACE` and `STOP_CONFIRM`.
     #[test]
-    fn escalate_steps_kill_then_give_up_with_the_note() {
+    fn owner_escalates_an_ignoring_group_and_observes_its_exit() {
         let mut child = Command::new("sh")
-            .arg("-c")
-            .arg("trap '' INT; sleep 30 & echo ready; wait")
+            .args(["-c", "trap '' INT; echo ready; while :; do sleep 1; done"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -693,42 +752,238 @@ mod tests {
             .unwrap();
         let pgid = child.id() as i32;
         let _guard = GroupGuard(pgid);
-
         let mut ready = String::new();
         BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut ready)
             .unwrap();
         assert_eq!(ready.trim(), "ready");
-
-        // Exactly what `stop` leaves behind for the escalation.
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("abc".to_string());
+            st.run = Some("run".into());
             st.run_pgid = Some(pgid);
-            st.run_stopping = true;
+            begin_stop(&mut st);
         }
-
-        let short = Duration::from_millis(10);
-        assert!(escalate_steps(&core, "abc", pgid, short, short));
+        let exit = observe_process(
+            &core,
+            "run",
+            || {
+                child
+                    .try_wait()
+                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+            },
+            Duration::from_millis(10),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_ne!(exit, 0);
+        assert!(core.state.lock().unwrap().run_pgid.is_none());
+    }
+    #[test]
+    fn wait_errors_immediately_revoke_signal_ownership() {
+        let core = Core::new();
         {
-            let st = core.state.lock().unwrap();
-            assert_eq!(st.run, None, "the slot is released");
-            assert_eq!(st.run_pgid, None);
-            assert!(!st.run_stopping);
-            assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
+            let mut st = core.state.lock().unwrap();
+            st.run = Some("run".into());
+            st.run_pgid = Some(i32::MAX);
         }
-        // A zombie still holds the group id, so reap the shell before asking
-        // whether the group is empty.
-        let status = child.wait().unwrap();
-        assert!(!status.success(), "unexpected status: {status}");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while group_alive(pgid) {
-            assert!(Instant::now() < deadline, "group {pgid} still has members");
-            thread::sleep(Duration::from_millis(20));
+        let started = Instant::now();
+        let error = observe_process(
+            &core,
+            "run",
+            || Err(io::Error::from_raw_os_error(libc::ECHILD)),
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let mut st = core.state.lock().unwrap();
+        assert!(st.run_pgid.is_none());
+        assert!(!st.run_stopping);
+        assert!(apply_reap(&mut st, "run", &Err(error)));
+        assert!(st.run.is_none());
+        assert!(
+            st.run_note
+                .as_ref()
+                .unwrap()
+                .contains("終了を確認できません")
+        );
+    }
+    #[test]
+    fn reap_revokes_signal_ownership_before_the_run_slot_is_released() {
+        let core = Core::new();
+        {
+            let mut st = core.state.lock().unwrap();
+            st.run = Some("run".into());
+            st.run_pgid = Some(i32::MAX);
         }
-
-        // The run left the slot inside the grace: nothing to kill, no give-up.
-        assert!(!escalate_steps(&core, "abc", pgid, short, short));
+        assert_eq!(
+            observe_process(&core, "run", || Ok(Some(7)), STOP_GRACE, STOP_CONFIRM).unwrap(),
+            7
+        );
+        let mut st = core.state.lock().unwrap();
+        begin_stop(&mut st);
+        assert_eq!(st.run.as_deref(), Some("run"));
+        assert!(st.run_pgid.is_none());
+        assert!(!st.run_stopping);
+    }
+    #[test]
+    fn repeated_stop_does_not_extend_deadlines() {
+        let core = Core::new();
+        let mut st = core.state.lock().unwrap();
+        st.run = Some("run".into());
+        st.run_pgid = Some(i32::MAX);
+        begin_stop(&mut st);
+        let first = st.run_stop_started;
+        begin_stop(&mut st);
+        assert_eq!(st.run_stop_started, first);
+    }
+    #[test]
+    fn old_owner_never_polls_or_signals_a_successor() {
+        let core = Core::new();
+        {
+            let mut st = core.state.lock().unwrap();
+            st.run = Some("next".into());
+            st.run_pgid = Some(i32::MAX);
+        }
+        assert!(
+            observe_process(
+                &core,
+                "old",
+                || panic!("old owner polled"),
+                Duration::ZERO,
+                Duration::ZERO
+            )
+            .is_err()
+        );
+        let st = core.state.lock().unwrap();
+        assert_eq!(st.run.as_deref(), Some("next"));
+        assert_eq!(st.run_pgid, Some(i32::MAX));
+    }
+    #[test]
+    fn panic_releases_the_run_slot_and_wakes_exit() {
+        let core = Arc::new(Core::new());
+        core.state.lock().unwrap().run = Some("run".into());
+        let exiting_core = core.clone();
+        let exiting = thread::spawn(move || exit_stop(&exiting_core));
+        let owning_core = core.clone();
+        let owner = thread::spawn(move || {
+            let _slot = RunSlot {
+                core: &owning_core,
+                id: "run",
+                emit: || {},
+            };
+            panic!("injected save panic");
+        });
+        assert!(owner.join().is_err());
+        exiting.join().unwrap();
+        assert!(core.state.lock().unwrap().run.is_none());
+        assert!(
+            core.state
+                .lock()
+                .unwrap()
+                .run_note
+                .as_ref()
+                .unwrap()
+                .contains("後処理")
+        );
+    }
+    #[test]
+    fn a_stop_racing_with_reap_cannot_signal_the_reaped_pid() {
+        let core = Arc::new(Core::new());
+        {
+            let mut st = core.state.lock().unwrap();
+            st.run = Some("run".into());
+            st.run_pgid = Some(i32::MAX);
+        }
+        let (polling_tx, polling_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let owner_core = core.clone();
+        let owner = thread::spawn(move || {
+            observe_process(
+                &owner_core,
+                "run",
+                || {
+                    polling_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(Some(0))
+                },
+                STOP_GRACE,
+                STOP_CONFIRM,
+            )
+        });
+        polling_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (stopping_tx, stopping_rx) = mpsc::sync_channel(1);
+        let stopping_core = core.clone();
+        let stopping = thread::spawn(move || {
+            stopping_tx.send(()).unwrap();
+            begin_stop(&mut stopping_core.state.lock().unwrap());
+        });
+        stopping_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        release_tx.send(()).unwrap();
+        assert_eq!(owner.join().unwrap().unwrap(), 0);
+        stopping.join().unwrap();
+        let st = core.state.lock().unwrap();
+        assert!(st.run_pgid.is_none());
+        assert!(!st.run_stopping);
+    }
+    #[test]
+    fn app_exit_waits_for_a_reaped_runs_save_and_never_signals_it() {
+        let core = Arc::new(Core::new());
+        core.state.lock().unwrap().run = Some("run".into());
+        let (finish_tx, finish_rx) = mpsc::sync_channel(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let finishing_core = core.clone();
+        let finishing = thread::spawn(move || {
+            let _slot = RunSlot {
+                core: &finishing_core,
+                id: "run",
+                emit: || {},
+            };
+            ready_tx.send(()).unwrap();
+            finish_rx.recv().unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (exited_tx, exited_rx) = mpsc::sync_channel(1);
+        let exiting_core = core.clone();
+        let exiting = thread::spawn(move || {
+            exit_stop(&exiting_core);
+            exited_tx.send(()).unwrap();
+        });
+        assert!(matches!(
+            exited_rx.recv_timeout(Duration::from_millis(30)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        finish_tx.send(()).unwrap();
+        exited_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        finishing.join().unwrap();
+        exiting.join().unwrap();
+        let st = core.state.lock().unwrap();
+        assert!(st.run.is_none());
+        assert!(!st.run_stopping);
+        assert!(st.run_pgid.is_none());
+    }
+    #[test]
+    fn unconfirmed_kill_expires_without_releasing_a_successors_slot() {
+        let core = Core::new();
+        {
+            let mut st = core.state.lock().unwrap();
+            st.run = Some("run".into());
+            st.run_pgid = Some(i32::MAX);
+            begin_stop(&mut st);
+        }
+        let exit = observe_process(&core, "run", || Ok(None), Duration::ZERO, Duration::ZERO);
+        assert_eq!(exit.as_ref().unwrap_err().kind(), io::ErrorKind::TimedOut);
+        let mut st = core.state.lock().unwrap();
+        assert!(st.run_pgid.is_none());
+        assert!(apply_reap(&mut st, "run", &exit));
+        assert!(st.run.is_none());
+        assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
+        st.run = Some("next".into());
+        st.run_pgid = Some(i32::MAX);
+        assert!(!apply_reap(&mut st, "run", &exit));
+        assert_eq!(st.run.as_deref(), Some("next"));
+        assert_eq!(st.run_pgid, Some(i32::MAX));
     }
 }

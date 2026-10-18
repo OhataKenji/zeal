@@ -3,7 +3,7 @@
 use crate::snapshot::Snapshot;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Emitter};
 
 /// Serializable copy of everything the UI needs, pushed as the `app-state`
@@ -60,12 +60,15 @@ pub struct CoreState {
     /// A stop was accepted for `run`: its group was signalled and a repeated
     /// stop does nothing.
     pub run_stopping: bool,
+    /// First stop request; the child owner applies its escalation deadlines.
+    pub run_stop_started: Option<std::time::Instant>,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
 }
 
 pub struct Core {
     pub state: Mutex<CoreState>,
+    pub run_finished: Condvar,
 }
 
 impl Core {
@@ -80,8 +83,10 @@ impl Core {
                 run: None,
                 run_pgid: None,
                 run_stopping: false,
+                run_stop_started: None,
                 run_note: None,
             }),
+            run_finished: Condvar::new(),
         }
     }
 

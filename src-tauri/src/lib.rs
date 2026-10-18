@@ -174,9 +174,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|handle, event| {
-            // A run in flight must not be orphaned, and the exit cannot wait for
-            // a reap: one bounded stop (SIGINT, a short poll, SIGKILL) as the
-            // process goes. `Exit` is the event that always precedes it.
+            // Bound stopping a live child; finish saving one already reaped.
+            // `Exit` always precedes application termination.
             if let RunEvent::Exit = event {
                 let core = handle.state::<Arc<Core>>().inner().clone();
                 runner::exit_stop(&core);
