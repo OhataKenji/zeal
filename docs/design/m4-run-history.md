@@ -126,7 +126,7 @@ SQLはbound parameterを使い、UIは入力と成果物をtextとして表示�
 ## Privacy Concerns
 
 入力と成果物には秘密値やlocal pathが含まれ得る。
-Zealはlocalに保存し、転送とtelemetryを追加しない。
+履歴と成果物はlocalに保存する。開発版の任意のtrace送信も、履歴の生の入力と成果物を含めない([README](../../README.md#development-traces))。
 Bazel自身の通信は既存設定に従う。
 公開fixtureへ秘密値を含めない。
 

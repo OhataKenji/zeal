@@ -170,7 +170,7 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 
 ## Privacy Concerns
 
-- Zeal の観測記録は local に保存し、Zeal 自身による telemetry や外部送信は行わない。
+- Zeal の観測記録は local に保存する。開発版は明示した `OTEL_EXPORTER_OTLP_ENDPOINT` がある場合だけ、操作と処理時間を OTLP trace として外部ツールへ送る。通常版は送信しない。設定と送信項目は [README](../../README.md#development-traces) に定める。
 - 子プロセスの bazel は利用者やリポジトリの既存設定に従い、BES、remote cache、RBE などへ通信し得る。Zeal はそれらの設定を変更しない。
 - run の成果物には build log が含まれるため、共有・同期の仕組みは設けない。
 - リポジトリは公開のため、文書・コードともに機微情報を含めない(AGENTS.md の方針に従う)。

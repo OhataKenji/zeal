@@ -12,6 +12,7 @@ use crate::profile::{self, Profile};
 use crate::snapshot::{self, Status};
 use crate::state::{Core, IngestError};
 use crate::store::{self, RunRecord};
+use crate::telemetry::Operation;
 use crate::xml::{self, RawRule};
 use serde::Serialize;
 use std::io::{self, BufReader, Read};
@@ -34,26 +35,41 @@ enum Outcome {
 }
 
 /// Start one ingestion. Busy requests are rejected rather than queued.
-pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
+pub fn request(app: AppHandle, core: Arc<Core>, mut operation: Operation) -> Result<(), String> {
+    operation.outcome("rejected");
     let (ws, bazel) = {
         let mut st = core.state.lock().unwrap();
         if st.ingest_running || st.run.is_some() {
             return Err("bazel is busy; refresh after it finishes".to_string());
         }
         let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
+            operation.outcome("not_available");
             return Ok(());
         };
         st.ingest_running = true;
+        st.ingest_operation_id = operation.id.clone();
         (ws, bazel)
     };
     core.emit(&app);
     thread::spawn(move || {
-        let outcome = fetch(&ws, &bazel);
+        operation.outcome("unknown");
+        let outcome = fetch(&ws, &bazel, &operation);
+        let mut build = operation.child("snapshot.build");
         let snapshot = match &outcome {
             Outcome::Ok(rules) => Some(Arc::new(snapshot::build(rules, Status::Ok))),
             Outcome::Partial(rules, _) => Some(Arc::new(snapshot::build(rules, Status::Partial))),
             Outcome::Failed(_) => None,
         };
+        if let Some(snapshot) = &snapshot {
+            build.count("zeal.target_count", snapshot.targets.len());
+        }
+        build.outcome("ok");
+        drop(build);
+        operation.outcome(match &outcome {
+            Outcome::Ok(_) => "ok",
+            Outcome::Partial(_, _) => "partial",
+            Outcome::Failed(_) => "query_failed",
+        });
         let mut st = core.state.lock().unwrap();
         if let Some(snapshot) = snapshot {
             st.snapshot = Some(snapshot);
@@ -64,14 +80,18 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
         };
         st.ingest_running = false;
         drop(st);
+        let mut emit = operation.child("state.emit");
         core.emit(&app);
+        emit.outcome("attempted");
     });
     Ok(())
 }
 
 /// Run `bazel query 'kind("rule", //...)' --output=xml --noimplicit_deps
 /// --keep_going` in `ws`, streaming stdout through the XML parser.
-fn fetch(ws: &Path, bazel: &Path) -> Outcome {
+fn fetch(ws: &Path, bazel: &Path, operation: &Operation) -> Outcome {
+    let mut query = operation.child("bazel.query");
+    query.outcome("zeal_error");
     let mut child = match Command::new(bazel)
         .arg("query")
         .arg("kind(\"rule\", //...)")
@@ -93,7 +113,13 @@ fn fetch(ws: &Path, bazel: &Path) -> Outcome {
     // stdout is parsed as it arrives; stderr is drained concurrently so the
     // child never blocks on a full pipe.
     let stdout = child.stdout.take().expect("stdout piped");
-    let parse_handle = thread::spawn(move || xml::parse_rules(BufReader::new(stdout)));
+    let mut parse = query.child("query.xml_parse");
+    let parse_handle = thread::spawn(move || {
+        let rules = xml::parse_rules(BufReader::new(stdout));
+        parse.count("zeal.target_count", rules.len());
+        parse.outcome("ok");
+        rules
+    });
     let mut stderr = child.stderr.take().expect("stderr piped");
     let stderr_handle = thread::spawn(move || {
         let mut buf = Vec::new();
@@ -134,6 +160,11 @@ fn fetch(ws: &Path, bazel: &Path) -> Outcome {
     let stderr_tail =
         String::from_utf8_lossy(&stderr_bytes[stderr_bytes.len().saturating_sub(8192)..]);
     let code = status.code();
+    query.outcome(if code == Some(0) {
+        "ok"
+    } else {
+        "bazel_failed"
+    });
     match code {
         Some(0) => Outcome::Ok(rules),
         _ if !rules.is_empty() => Outcome::Partial(
@@ -187,11 +218,32 @@ pub enum Section<T> {
     NotAvailable { note: String },
 }
 
+impl<T> Section<T> {
+    fn status(&self) -> &'static str {
+        match self {
+            Self::Ok { .. } => "ok",
+            Self::Incomplete { .. } => "incomplete",
+            Self::Missing => "missing",
+            Self::ParseError { .. } => "parse_error",
+            Self::ReadError { .. } => "read_error",
+            Self::NotAvailable { .. } => "not_available",
+        }
+    }
+}
+
 /// Read the record and available observations from a run dir. A missing or
 /// unreadable observation never hides the record or another observation.
 /// Timing is parsed only after the record confirms that the run finished.
-pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
-    let record = store::read_record(data, workspace, id)?;
+pub fn run_detail(
+    data: &Path,
+    workspace: &Path,
+    id: &str,
+    operation: &Operation,
+) -> io::Result<RunDetail> {
+    let mut read = operation.child("detail.record");
+    let record = read.result(store::read_record(data, workspace, id))?;
+    drop(read);
+    let mut read = operation.child("detail.log");
     let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
@@ -200,6 +252,12 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
         Ok(data) => Section::Ok { data },
         Err(e) => read_error(e),
     };
+    if let Section::Ok { data } = &log {
+        read.count("zeal.byte_count", data.len());
+    }
+    read.outcome(log.status());
+    drop(read);
+    let mut read = operation.child("detail.bep");
     let bep = match store::artifact(data, workspace, id, "bep.json") {
         Err(e) => read_error(e),
         Ok(f) => {
@@ -214,6 +272,9 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
             }
         }
     };
+    read.outcome(bep.status());
+    drop(read);
+    let mut read = operation.child("detail.profile");
     let profile = if record.finished_at.is_none() {
         Section::NotAvailable {
             note: "timing is available after run completion is recorded".to_string(),
@@ -234,6 +295,13 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
             },
         }
     };
+    read.outcome(profile.status());
+    if let Section::Ok { data } = &profile {
+        read.count(
+            "zeal.event_count",
+            data.lanes.iter().map(|l| l.events.len()).sum(),
+        );
+    }
     Ok(RunDetail {
         record,
         log,
@@ -288,6 +356,7 @@ mod tests {
             &root.0.join("data"),
             &root.0.join("ws"),
             dir.file_name().unwrap().to_str().unwrap(),
+            &Operation::default(),
         )
     }
 
@@ -432,7 +501,8 @@ mod tests {
             run_detail(
                 &root.0.join("data"),
                 &other,
-                dir.file_name().unwrap().to_str().unwrap()
+                dir.file_name().unwrap().to_str().unwrap(),
+                &Operation::default(),
             )
             .is_err()
         );

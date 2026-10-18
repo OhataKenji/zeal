@@ -41,6 +41,8 @@ export interface IngestError {
 }
 
 export interface AppState {
+  telemetryEnabled?: boolean;
+  ingestOperationId?: string | null;
   workspace: string | null;
   bazel: string | null;
   ingest: "idle" | "running";
