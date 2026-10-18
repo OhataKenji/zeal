@@ -37,7 +37,7 @@ Bazel server、解析済みの情報、既存出力の維持も速度に関わ�
 ## Overview
 
 Send で `build` または `test` を起動し、BEP と profile を run の UUID ディレクトリに残す。
-実行中は stdout/stderr を log 欄へ流し、timing は完了後に表示する。
+stdout/stderr は同じ追記用ファイルへ直接書き、ログと timing は client の終了後に表示する。
 
 M2 は SQLite を導入せず、詳細を開くたびに保存した file を parse する。
 計算済みの表示データを永続化しないことで、取り込み結果と生 file の整合を管理する状態を増やさない。
@@ -48,7 +48,8 @@ BEP や profile が欠損した場合は、利用できるセクションだけ�
 ```mermaid
 flowchart LR
     SEND["Send: build / test"] --> SPAWN["bazel + 観測 flag"]
-    SPAWN -->|"実行中"| LOG["log.txt + log 欄"]
+    SPAWN -->|"直接追記"| LOG["log.txt"]
+    LOG -->|"client 終了後に読む"| VIEW
     SPAWN -->|"完了"| FILES["run.json / bep.json / profile.gz"]
     FILES -->|"詳細を開くたびに parse"| VIEW["結果 / timing / phase の帯"]
 ```
@@ -61,7 +62,7 @@ M2 では snapshot の query 中か run 中なら Send を disabled にし、実
 成果物は `<app data dir>/ws-<fnv64(正規化した workspace path)>/runs/<uuid>/` に保存する。
 
 - `run.json`：Zeal が書く id、workspace、cmd、target、開始時刻、終了時刻、exit code
-- `log.txt`：Zeal が書く stdout/stderr の記録
+- `log.txt`：子プロセスが直接追記する stdout/stderr の記録
 - `bep.json` と `profile.gz`：Bazel が書く生の成果物。Zeal は書き換えない
 
 起動時には次の flag を付ける。
@@ -76,11 +77,13 @@ M2 では snapshot の query 中か run 中なら Send を disabled にし、実
 flag や出力形式の version 別の対応表、parser の field 名の読み替えは持たない。
 非対応の flag で起動が失敗した場合も失敗した run として残し、flag を落とした再実行は行わない。
 
-### 実行中の log
+### ログの表示
 
-runner は stdout/stderr を常時 drain し、M2 では1行ずつ event で UI に流す。
-進捗は Bazel の log を使い、BEP の tail は行わない。
-今版は profile を完了後に parse するため、実行中の timing は `not available` とする。
+runner は stdout と stderr を同じ追記用ファイルへ接続する。
+UI は client 終了後にファイルを読み、実行中はログを表示しない。
+BEP の tail とログイベントの配信は行わない。
+子孫が残った場合は完了後の追記もあり得るため、詳細を開いた時点の内容を表示する。
+実行中の timing は `not available` とする。
 
 ### 表示時の parse
 

@@ -184,6 +184,7 @@
     {/if}
   </div>
   {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
+  {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
 
   {#if st === null}
     <div class="content dim">loading…</div>

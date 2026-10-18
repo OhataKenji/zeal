@@ -1,4 +1,4 @@
-import type { AppState, RunDetail, RunLog, RunRecord } from "./types.ts";
+import type { AppState, RunDetail, RunRecord } from "./types.ts";
 
 export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -17,7 +17,6 @@ export interface SessionView {
   detail: RunDetail | null;
   detailLoading: boolean;
   detailError: string | null;
-  liveLog: string;
 }
 
 export function emptyView(): SessionView {
@@ -33,10 +32,11 @@ export function emptyView(): SessionView {
     detail: null,
     detailLoading: false,
     detailError: null,
-    liveLog: "",
   };
 }
 
+// Manual input does not depend on a snapshot: after a failed ingestion the
+// composer stays usable once ingestion is idle.
 export function canSend(view: SessionView, target: string): boolean {
   return !!(
     view.ready &&
@@ -51,45 +51,19 @@ export function canSend(view: SessionView, target: string): boolean {
 }
 
 // One session owns request generations and subscriptions. Core remains the
-// owner of runs; this is only the current view and live, not-yet-read output.
-export function createSession(
-  transport: Transport,
-  changed: (view: SessionView) => void,
-  schedule: (callback: () => void) => () => void,
-) {
+// owner of runs; this is only the current view.
+export function createSession(transport: Transport, changed: (view: SessionView) => void) {
   let view = emptyView();
   let disposed = false;
   let stateRevision = 0;
   let listGeneration = 0;
   let detailGeneration = 0;
-  const subscriptions: (() => void)[] = [];
-  let output: { id: string; lines: string[] } | null = null;
-  let cancelLogFrame: (() => void) | undefined;
+  let unlisten: (() => void) | undefined;
 
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
     view = { ...view, ...patch };
     changed(view);
-  }
-
-  function showLog() {
-    cancelLogFrame = undefined;
-    update({
-      liveLog: output?.id === view.selectedRun ? output.lines.join("\n") : "",
-    });
-  }
-
-  function releaseHiddenLogs() {
-    // There is one active run. Keep early output until start_run returns its id.
-    if (view.starting) return;
-    if (
-      view.ready &&
-      output &&
-      output.id !== view.state?.running &&
-      output.id !== view.selectedRun
-    ) {
-      output = null;
-    }
   }
 
   async function loadRuns() {
@@ -110,15 +84,13 @@ export function createSession(
   async function loadDetail() {
     const id = view.selectedRun;
     const generation = ++detailGeneration;
-    // Do not parse observations still being written. Completed reads replace
-    // live output, never append to it (run-log has no offset for deduplication).
+    // Logs and observations are read after the run leaves the active slot.
     if (!id || !view.ready || view.starting || id === view.state?.running) return;
     update({ detailLoading: true, detailError: null });
     try {
       const detail = await transport.invoke<RunDetail>("get_run", { id });
       if (generation === detailGeneration) {
-        update({ detail, detailLoading: false, liveLog: "" });
-        if (output?.id === id) output = null;
+        update({ detail, detailLoading: false });
       }
     } catch (error) {
       if (generation === detailGeneration) {
@@ -129,8 +101,6 @@ export function createSession(
 
   function selectRun(id: string | null) {
     update({ selectedRun: id, detail: null, detailError: null, detailLoading: false });
-    releaseHiddenLogs();
-    showLog();
     void loadDetail();
   }
 
@@ -142,7 +112,6 @@ export function createSession(
     if (state.workspace !== before?.workspace) {
       ++listGeneration;
       ++detailGeneration;
-      output = null;
       update({
         runs: [],
         runsError: null,
@@ -150,42 +119,29 @@ export function createSession(
         detail: null,
         detailLoading: false,
         detailError: null,
-        liveLog: "",
       });
     }
     update({ state, ready: true, ...(resumed ? { error: null } : {}) });
-    releaseHiddenLogs();
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
     if (resumed || (before?.running && before.running !== state.running)) void loadDetail();
   }
 
-  async function subscribe<T>(event: string, callback: (payload: T) => void) {
-    const unlisten = await transport.listen(event, callback);
-    if (disposed) unlisten();
-    else subscriptions.push(unlisten);
-  }
-
   function dispose() {
     disposed = true;
-    cancelLogFrame?.();
-    subscriptions.splice(0).forEach((unlisten) => unlisten());
-    output = null;
+    unlisten?.();
+    unlisten = undefined;
   }
 
   async function init() {
     try {
-      // Log first: no Send can happen until both subscriptions are ready.
-      await subscribe<RunLog>("run-log", ({ id, line }) => {
-        if (disposed) return;
-        if (output?.id !== id) output = { id, lines: [] };
-        output.lines.push(line);
-        if (!cancelLogFrame) cancelLogFrame = schedule(showLog);
-      });
-      if (disposed) return;
-      await subscribe<AppState>("app-state", acceptState);
-      if (disposed) return;
+      const remove = await transport.listen<AppState>("app-state", acceptState);
+      if (disposed) {
+        remove();
+        return;
+      }
+      unlisten = remove;
       const revision = stateRevision;
       const state = await transport.invoke<AppState>("get_state");
       if (revision === stateRevision) acceptState(state);
@@ -227,7 +183,6 @@ export function createSession(
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
       update({ starting: false });
-      releaseHiddenLogs();
       if (!disposed && workspace === view.state?.workspace && view.ready) void loadDetail();
     }
   }

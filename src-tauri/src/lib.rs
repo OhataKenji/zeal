@@ -44,6 +44,7 @@ fn open_workspace(
         // A different workspace has no shared snapshot with the previous one.
         st.snapshot = None;
         st.last_error = None;
+        st.run_note = None;
     }
     if let Ok(dir) = app.path().app_data_dir() {
         workspace::save(&dir, &ws);

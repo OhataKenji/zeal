@@ -17,13 +17,16 @@ pub struct AppStateDto {
     pub bazel: Option<String>,
     /// "idle" | "running": whether a query ingestion is in flight.
     pub ingest: &'static str,
-    /// The current snapshot. Kept across failed refreshes.
-    pub snapshot: Option<Snapshot>,
+    /// The current snapshot. Kept across failed refreshes. The DTO carries the
+    /// `Arc` so that an emit clones a pointer, not the whole snapshot.
+    pub snapshot: Option<Arc<Snapshot>>,
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
     /// Id of the run in flight, if any.
     pub running: Option<RunId>,
+    /// Why the last run's exit or saved result is unknown.
+    pub run_note: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -43,12 +46,13 @@ pub struct CoreState {
     /// The latest fully built snapshot; swapped atomically per fetch.
     pub snapshot: Option<Arc<Snapshot>>,
     pub last_error: Option<IngestError>,
-    /// At most one query runs per workspace; requests while running are
-    /// coalesced into a single follow-up.
+    /// At most one query runs; busy requests are coalesced into one follow-up.
     pub ingest_running: bool,
     pub ingest_pending: bool,
-    /// The run in flight. While set, queries are deferred via `ingest_pending`.
+    /// The run in flight.
     pub run: Option<RunId>,
+    /// Message for the UI about why the last run's exit is unknown.
+    pub run_note: Option<String>,
 }
 
 pub struct Core {
@@ -66,6 +70,7 @@ impl Core {
                 ingest_running: false,
                 ingest_pending: false,
                 run: None,
+                run_note: None,
             }),
         }
     }
@@ -79,9 +84,10 @@ impl Core {
                 .map(|p| p.to_string_lossy().into_owned()),
             bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
             ingest: if st.ingest_running { "running" } else { "idle" },
-            snapshot: st.snapshot.as_deref().cloned(),
+            snapshot: st.snapshot.clone(),
             last_error: st.last_error.clone(),
             running: st.run.clone(),
+            run_note: st.run_note.clone(),
         }
     }
 
@@ -90,5 +96,34 @@ impl Core {
         if let Err(e) = app.emit("app-state", self.dto()) {
             log::warn!("emit app-state failed: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dto_serializes_the_snapshot_unchanged() {
+        use crate::snapshot::{Meta, Status};
+
+        let snapshot = Snapshot {
+            meta: Meta {
+                fetched_at: 1,
+                status: Status::Ok,
+            },
+            targets: Vec::new(),
+            edges: Vec::new(),
+            files: Vec::new(),
+        };
+        let expected = serde_json::to_value(&snapshot).unwrap();
+        let core = Core::new();
+        core.state.lock().unwrap().snapshot = Some(Arc::new(snapshot));
+
+        let json = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(
+            json["snapshot"], expected,
+            "the Arc must not change the JSON"
+        );
     }
 }

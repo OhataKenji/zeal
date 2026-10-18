@@ -1,30 +1,19 @@
-//! Runs `bazel build|test <target>` with the observation flags, streams its
-//! output, and records it in the run store.
-//!
-//! One bazel process at a time: `start` fails while a query or another run is
-//! in flight (the UI also disables Send). There is no queue.
+//! Write build/test output directly to log.txt and read it after the client exits.
 
 use crate::ingest;
+
 use crate::state::Core;
 use crate::store::{self, RunRecord};
-use serde::Serialize;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
 use std::thread;
-use tauri::{AppHandle, Emitter};
-
-/// Payload of the `run-log` event: one line of stdout or stderr.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunLog {
-    id: String,
-    line: String,
-}
+#[cfg(test)]
+use std::time::Duration;
+use tauri::AppHandle;
 
 /// Arguments after the bazel executable. Bazel writes its artifacts into the
 /// run dir.
@@ -41,7 +30,7 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
 }
 
 /// Start a run in the open workspace and return its record. The run finishes
-/// in the background; on exit the snapshot is refetched.
+/// in the background; the snapshot is refreshed on exit.
 pub fn start(
     app: AppHandle,
     core: Arc<Core>,
@@ -59,17 +48,17 @@ pub fn start(
     if st.ingest_running || st.run.is_some() {
         return Err("bazel is busy".to_string());
     }
+    // Held across the record write and the spawn, so that the busy check above
+    // and the slot below stay one atomic step, without a `starting` flag.
+    // The record exists before bazel does; a failing store prevents the spawn.
     let (rec, dir) = store::create(data, &ws, cmd, target).map_err(|e| e.to_string())?;
-    // Its own process group, so that M3 can signal bazel and its children.
-    let mut child = match Command::new(&bazel)
-        .args(argv(cmd, target, &dir))
-        .current_dir(&ws)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-    {
+    // Its own process group: a stop reaches bazel and whatever it started.
+    let mut child = match spawn_logged(
+        Command::new(&bazel)
+            .args(argv(cmd, target, &dir))
+            .current_dir(&ws),
+        &dir,
+    ) {
         Ok(c) => c,
         Err(e) => {
             let _ = fs::remove_dir_all(&dir);
@@ -77,70 +66,180 @@ pub fn start(
         }
     };
     st.run = Some(rec.id.clone());
+    st.run_note = None;
     drop(st);
     core.emit(&app);
 
-    // Both pipes feed one channel so that only one thread writes `log.txt`.
-    let (tx, rx) = mpsc::channel();
-    read_lines(child.stdout.take().expect("stdout piped"), tx.clone());
-    read_lines(child.stderr.take().expect("stderr piped"), tx);
     let id = rec.id.clone();
     thread::spawn(move || {
-        for line in rx {
-            if let Err(e) = store::append_log(&dir, &line) {
-                log::warn!("append log failed: {e}");
+        let exit = child.wait().map(|status| status.code().unwrap_or(-1));
+        // Finish the record before publishing idle. Holding the state lock
+        // prevents a new run or a detail read from observing a half-finished
+        // transition.
+        let mut st = core.state.lock().unwrap();
+        if st.run.as_deref() == Some(&id) {
+            let saved = match &exit {
+                Ok(code) => store::finish(&dir, *code).map(|_| ()),
+                Err(_) => Ok(()),
+            };
+            st.run = None;
+            st.run_note = exit
+                .as_ref()
+                .err()
+                .map(|e| format!("終了を確認できません: {e}"));
+            if let Err(e) = saved {
+                st.run_note = Some(format!("終了結果を保存できません: {e}"));
             }
-            let _ = app.emit(
-                "run-log",
-                RunLog {
-                    id: id.clone(),
-                    line,
-                },
-            );
         }
-        // -1 when bazel was killed by a signal.
-        let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
-        if let Err(e) = store::finish(&dir, code) {
-            log::warn!("finish run failed: {e}");
-        }
-        core.state.lock().unwrap().run = None;
+        drop(st);
         core.emit(&app);
         ingest::request(app, core);
     });
     Ok(rec)
 }
 
-fn read_lines(pipe: impl Read + Send + 'static, tx: Sender<String>) {
-    thread::spawn(move || {
-        for bytes in BufReader::new(pipe).split(b'\n').map_while(Result::ok) {
-            if tx
-                .send(String::from_utf8_lossy(&bytes).into_owned())
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
+#[cfg(test)]
+/// Signal a whole process group: `pgid` is the run's pid (`process_group(0)`
+/// above), and a negative pid addresses its group.
+fn signal_group(pgid: i32, signal: i32) -> std::io::Result<()> {
+    // SAFETY: kill(2) only delivers a signal; it touches no memory.
+    if unsafe { libc::kill(-pgid, signal) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Both streams append to the same file. A descendant retaining its output
+/// cannot keep a reader or an EOF wait alive in Zeal.
+fn spawn_logged(command: &mut Command, dir: &Path) -> io::Result<Child> {
+    let log = fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("log.txt"))?;
+    let stderr = log.try_clone()?;
+    command
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(stderr)
+        .process_group(0)
+        .spawn()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+
+    struct LogDir(std::path::PathBuf);
+
+    impl LogDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("zeal-run-log-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("log.txt"), b"").unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for LogDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
-    fn argv_has_target_and_observation_flags() {
-        let dir = Path::new("/data/runs/abc");
+    fn child_writes_both_streams_to_one_log_without_pipe_readers() {
+        let dir = LogDir::new();
+        let mut child = spawn_logged(
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf 'out\\r\\n'; printf 'err\\n' >&2; printf '\\377tail'"),
+            &dir.0,
+        )
+        .unwrap();
+        let _guard = GroupGuard(child.id() as i32);
+        assert!(child.stdout.is_none());
+        assert!(child.stderr.is_none());
+        assert!(child.wait().unwrap().success());
         assert_eq!(
-            argv("test", "//pkg:t", dir),
-            [
-                "test",
-                "//pkg:t",
-                "--build_event_json_file=/data/runs/abc/bep.json",
-                "--profile=/data/runs/abc/profile.gz",
-                "--experimental_profile_include_primary_output",
-                "--noslim_profile",
-                "--tool_tag=zeal",
-            ]
+            fs::read(dir.0.join("log.txt")).unwrap(),
+            b"out\r\nerr\n\xfftail"
         );
+        assert_eq!(store::read_log(&dir.0).unwrap(), "out\r\nerr\n\u{fffd}tail");
+    }
+
+    #[test]
+    fn parent_exit_does_not_wait_for_a_descendant_holding_the_log_open() {
+        let dir = LogDir::new();
+        let mut child = spawn_logged(
+            Command::new("sh")
+                .arg("-c")
+                .arg("sleep 30 & printf 'done\\n'; exit 7"),
+            &dir.0,
+        )
+        .unwrap();
+        let pgid = child.id() as i32;
+        let _guard = GroupGuard(pgid);
+        let (tx, rx) = mpsc::channel();
+        let waiter = thread::spawn(move || tx.send(child.wait().unwrap()).unwrap());
+        let status = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("wait must not depend on descendant output");
+        waiter.join().unwrap();
+        assert_eq!(status.code(), Some(7));
+        assert!(
+            group_alive(pgid),
+            "descendant should still retain its output file"
+        );
+        assert_eq!(store::read_log(&dir.0).unwrap(), "done\n");
+    }
+
+    #[test]
+    fn missing_log_prevents_the_command_from_starting() {
+        let dir = LogDir::new();
+        fs::remove_file(dir.0.join("log.txt")).unwrap();
+        let marker = dir.0.join("spawned");
+        let result = spawn_logged(Command::new("touch").arg(&marker), &dir.0);
+        assert!(result.is_err());
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn argv_has_the_command_one_target_and_the_observation_flags() {
+        let dir = Path::new("/data/runs/abc");
+        for (cmd, target) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
+            let args = argv(cmd, target, dir);
+            assert_eq!(args[0], cmd);
+            assert_eq!(args[1], target);
+            assert_eq!(
+                &args[2..],
+                [
+                    "--build_event_json_file=/data/runs/abc/bep.json",
+                    "--profile=/data/runs/abc/profile.gz",
+                    "--experimental_profile_include_primary_output",
+                    "--noslim_profile",
+                    "--tool_tag=zeal",
+                ],
+                "{cmd}"
+            );
+        }
+    }
+
+    /// Best-effort SIGKILL of the test's group, so a failed assertion cannot
+    /// leave the `sleep` behind.
+    struct GroupGuard(i32);
+
+    impl Drop for GroupGuard {
+        fn drop(&mut self) {
+            let _ = signal_group(self.0, libc::SIGKILL);
+        }
+    }
+
+    /// Signal 0 probes the group through the one helper that may: only `ESRCH`
+    /// means it is empty.
+    fn group_alive(pgid: i32) -> bool {
+        match signal_group(pgid, 0) {
+            Ok(()) => true,
+            Err(e) => e.raw_os_error() != Some(libc::ESRCH),
+        }
     }
 }
