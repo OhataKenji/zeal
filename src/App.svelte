@@ -10,6 +10,7 @@
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import RunView from "./lib/RunView.svelte";
+  import AnalyticsView from "./lib/AnalyticsView.svelte";
   import SearchDropdown from "./lib/SearchDropdown.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
@@ -20,6 +21,7 @@
   const tree = $derived(snap ? buildTree(snap) : null);
   const known = $derived(new Set(snap?.targets.map((t) => t.label) ?? []));
 
+  let analyticsOpen = $state(false);
   let selected = $state<string | null>(null);
   let targetField = $state("");
   let cmd = $state<RunCmd>("build");
@@ -102,6 +104,7 @@
   // Every selection — tree, relation line — also lands in the composer target
   // field, which is the single source of truth for "the current target".
   function select(label: string | null) {
+    analyticsOpen = false;
     session.selectRun(null);
     selected = label;
     if (label) targetField = label;
@@ -194,7 +197,9 @@
     {#if state.ingest === "running"}
       <p class="dim">取り込み中…</p>
     {/if}
-    {#if app.view.selectedRun}
+    {#if analyticsOpen}
+      {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
+    {:else if app.view.selectedRun}
       {#key app.view.selectedRun}
         <RunView view={app.view} reload={session.loadDetail} />
       {/key}
@@ -261,6 +266,7 @@
       <span class="label" role="status">target データの取得待ち</span>
     {/if}
     {#if st?.workspace}
+      <button class="btn" onclick={() => { analyticsOpen = true; session.selectRun(null); }}>analytics</button>
       <button class="btn" onclick={refresh} disabled={busy}>
         refresh
       </button>

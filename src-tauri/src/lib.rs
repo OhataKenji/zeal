@@ -46,6 +46,7 @@ fn open_workspace(
         if st.run.is_some() || st.ingest_running {
             return Err("cannot change workspace while bazel is busy".to_string());
         }
+        store::analytics::refresh_timezone();
         st.workspace = Some(ws.clone());
         st.bazel = bazel;
         // A different workspace has no shared snapshot with the previous one.
@@ -95,6 +96,28 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     store::list(&data, &ws).map_err(|error| error.to_string())
+}
+
+/// Aggregate only the core-owned workspace; caller cannot name a DB or root.
+#[tauri::command]
+async fn get_analytics(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    filter: store::analytics::Filter,
+) -> Result<store::analytics::Analytics, String> {
+    let ws = core
+        .state
+        .lock()
+        .unwrap()
+        .workspace
+        .clone()
+        .ok_or_else(|| "no workspace".to_string())?;
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        store::analytics::query(&data, &ws, filter).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "analytics worker failed".to_string())?
 }
 
 /// No queued profile parses. The guard stays with the blocking operation even
@@ -183,6 +206,7 @@ pub fn run() {
             {
                 {
                     let mut st = core.state.lock().unwrap();
+                    store::analytics::refresh_timezone();
                     st.workspace = Some(ws);
                     st.bazel = workspace::resolve_bazel();
                 }
@@ -197,6 +221,7 @@ pub fn run() {
             start_run,
             stop_run,
             list_runs,
+            get_analytics,
             get_run,
             open_location
         ])
