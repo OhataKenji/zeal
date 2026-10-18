@@ -25,7 +25,8 @@ pub struct AppStateDto {
     pub last_error: Option<IngestError>,
     /// Id of the run in flight, if any.
     pub running: Option<RunId>,
-    /// Why the last run's exit or saved result is unknown.
+    /// Why the last run's exit is unknown: its `wait` failed, or its group was
+    /// killed and no exit was confirmed.
     pub run_note: Option<String>,
 }
 
@@ -46,9 +47,8 @@ pub struct CoreState {
     /// The latest fully built snapshot; swapped atomically per fetch.
     pub snapshot: Option<Arc<Snapshot>>,
     pub last_error: Option<IngestError>,
-    /// At most one query runs; busy requests are coalesced into one follow-up.
+    /// At most one query or run is active. Busy requests are rejected.
     pub ingest_running: bool,
-    pub ingest_pending: bool,
     /// The run in flight.
     pub run: Option<RunId>,
     /// Message for the UI about why the last run's exit is unknown.
@@ -68,7 +68,6 @@ impl Core {
                 snapshot: None,
                 last_error: None,
                 ingest_running: false,
-                ingest_pending: false,
                 run: None,
                 run_note: None,
             }),

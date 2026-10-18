@@ -177,6 +177,9 @@
       onkeydown={(event) => { if (event.key === "Enter" && !switchingWs) void session.start(cmd, targetField); }}
     />
     <button class="btn primary" disabled={switchingWs || !canSend(app.view, targetField)} onclick={() => session.start(cmd, targetField)}>Send</button>
+    {#if st?.ingest === "running"}
+      <span class="label" role="status">target データの取得待ち</span>
+    {/if}
     {#if st?.workspace}
       <button class="btn" onclick={refresh} disabled={busy}>
         refresh

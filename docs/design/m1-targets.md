@@ -60,11 +60,12 @@ label の行き先は次の規則で分ける: targets に存在する label と
 `select()` の分岐 key(`//conditions:default` 等)は除外する(key が XML の属性値に現れるかは spike で確かめる)。
 query の stdout は streaming parser で逐次読み、全量をメモリに載せない。
 `--noimplicit_deps` と implicit 属性の除外を併用し、暗黙依存が関係表示へ混入するのを防ぐ。
-取り込みは workspace 単位で1本に限る。取り込み中に要求が来たら pending として記録し、走行中の取り込み完了後に1回だけ追加で行う。
-run 実行中は bazel server lock で待たされるため、取り込みは run 完了後まで行わない([overview](./overview.md)の直列化)。
+取り込みは workspace 単位で1本に限る。
+取り込み中と run 実行中の要求は予約せず拒否し、利用者が完了後に refresh する([overview](./overview.md)の直列化)。
 query にはタイムアウト(目安 5 分。初回は bazelisk の download と cold cache を含み得るため緩める)を設け、取り込み中・待機中は UI にその状態を出す。
 grpc/grpc での実測では cache ありで約 56ms、clean 後の cold cache で約 19s だった(spike 済み)。この規模なら起動ごとの取り直しが実用的で、cold の間も「取り込み中」と出せばよい。
-取り込みのタイミングは三箇所: workspace を開いたとき(バックグラウンド)、手動 refresh、run の完了後(BUILD が変わっている可能性があるため)。
+取り込みは workspace を開いたとき(バックグラウンド)と手動 refresh で行う。
+run 完了後の自動取り込みは行わない。
 
 新しい snapshot は構築が完了してから参照を一括で差し替え、取り込み途中の失敗・中断では直前のメモリ上の snapshot がそのまま残る。
 新旧が混ざった状態は作らない。
