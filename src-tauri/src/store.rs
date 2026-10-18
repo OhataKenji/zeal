@@ -1,4 +1,5 @@
 //! SQLite run summaries. Bazel still writes observations into each run directory.
+pub mod analytics;
 #[path = "securefs.rs"]
 mod securefs;
 
