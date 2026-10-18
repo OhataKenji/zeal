@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canSend, createSession, emptyView, type Transport } from "../src/lib/session.ts";
+import { canSend, canStop, createSession, emptyView, type Transport } from "../src/lib/session.ts";
 import type { AppState, RunDetail, RunRecord } from "../src/lib/types.ts";
 
 const idle: AppState = {
@@ -10,6 +10,7 @@ const idle: AppState = {
   snapshot: null,
   lastError: null,
   running: null,
+  stopping: false,
   runNote: null,
 };
 const record: RunRecord = {
@@ -104,7 +105,7 @@ async function settle() {
   await Promise.resolve();
 }
 
-test("Send waits for listeners, then rejects busy ingestion, a live run", async () => {
+test("Send waits for listeners, then rejects busy ingestion, a live run and a stopping run", async () => {
   const h = harness();
   assert.equal(canSend(h.view, "//:app"), false);
   await h.session.init();
@@ -113,6 +114,8 @@ test("Send waits for listeners, then rejects busy ingestion, a live run", async 
   h.emit("app-state", { ...idle, ingest: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", { ...idle, running: record.id });
+  assert.equal(canSend(h.view, "//:app"), false);
+  h.emit("app-state", { ...idle, running: record.id, stopping: true });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", idle);
   assert.equal(canSend(h.view, "//:app"), true);
@@ -181,6 +184,44 @@ test("start records the selected cmd and the target string unchanged", async () 
   assert.deepEqual(call.args, { cmd: "test", target: "//app:tar;get" });
   call.reply.resolve({ ...record, cmd: "test", target: "//app:tar;get" });
   await started;
+});
+
+test("stop is offered only while a run is live and not already stopping", async () => {
+  const h = harness();
+  assert.equal(canStop(h.view), false);
+  await h.session.init();
+  assert.equal(canStop(h.view), false);
+  await h.session.stop();
+  assert.equal(
+    h.pending.some((call) => call.command === "stop_run"),
+    false,
+  );
+  h.emit("app-state", { ...idle, running: record.id });
+  assert.equal(canStop(h.view), true);
+  const stopping = h.session.stop();
+  // No optimistic local flag: the core reports stopping through app-state.
+  assert.equal(h.view.state?.stopping, false);
+  assert.equal(canStop(h.view), true);
+  assert.equal(h.pending.filter((call) => call.command === "stop_run").length, 1);
+  h.emit("app-state", { ...idle, running: record.id, stopping: true });
+  assert.equal(canStop(h.view), false);
+  await h.session.stop();
+  assert.equal(h.pending.filter((call) => call.command === "stop_run").length, 1);
+  h.pending.find((call) => call.command === "stop_run")!.reply.resolve(undefined);
+  await stopping;
+});
+
+test("stop failure is surfaced and leaves the run in flight", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...idle, running: record.id });
+  const stopping = h.session.stop();
+  h.pending
+    .find((call) => call.command === "stop_run")!
+    .reply.reject(new Error("stop unavailable"));
+  await stopping;
+  assert.match(h.view.error!, /stop unavailable/);
+  assert.equal(h.view.state?.running, record.id);
 });
 
 test("logs are read from the saved file only after the run finishes", async () => {
@@ -438,4 +479,21 @@ test("refresh is rejected while busy and is never queued", async () => {
   const refreshing = h.session.refresh();
   h.pending.find((call) => call.command === "refresh")!.reply.resolve(undefined);
   await refreshing;
+});
+
+test("an unconfirmed exit stays unknown and is not retried automatically", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...idle, running: record.id, stopping: true });
+  h.session.selectRun(record.id);
+  h.emit("app-state", { ...idle, runNote: "停止を確認できません" });
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve({ ...completed, record });
+  await settle();
+  assert.equal(h.view.detail?.record.exitCode, undefined);
+  assert.equal(h.view.state?.runNote, "停止を確認できません");
+  assert.equal(
+    h.pending.some((call) => call.command === "start_run" || call.command === "refresh"),
+    false,
+  );
+  assert.equal(canSend(h.view, "//:app"), true);
 });

@@ -31,7 +31,7 @@
     <h1>{record?.target ?? view.selectedRun}</h1>
     <div class="run-facts">
       <span class:failed>
-        {record ? outcome(record, view.state?.running ?? null) : "? outcome unknown"}
+        {record ? outcome(record, view.state?.running ?? null, view.state?.stopping) : "? outcome unknown"}
       </span>
       {#if record?.finishedAt !== undefined}
         <span title="Recorded wall-clock duration">◷ {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s</span>

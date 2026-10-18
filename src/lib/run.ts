@@ -1,10 +1,11 @@
 import type { RunRecord, Section } from "./types.ts";
 
-export function outcome(record: RunRecord, running: string | null): string {
+export function outcome(record: RunRecord, running: string | null, stopping = false): string {
   if (record.finishedAt !== undefined && record.exitCode !== undefined) {
     return record.exitCode === 0 ? "✓ succeeded" : `✗ failed (exit ${record.exitCode})`;
   }
-  return record.id === running ? "● running" : "? outcome unknown";
+  if (record.id === running) return stopping ? "■ stopping" : "● running";
+  return "? outcome unknown";
 }
 
 export function sectionData<T>(section: Section<T> | undefined): T | null {

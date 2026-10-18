@@ -25,6 +25,9 @@ pub struct AppStateDto {
     pub last_error: Option<IngestError>,
     /// Id of the run in flight, if any.
     pub running: Option<RunId>,
+    /// A stop was accepted for `running`; it stays until the run leaves the
+    /// slot, however it ends.
+    pub stopping: bool,
     /// Why the last run's exit is unknown: its `wait` failed, or its group was
     /// killed and no exit was confirmed.
     pub run_note: Option<String>,
@@ -51,6 +54,12 @@ pub struct CoreState {
     pub ingest_running: bool,
     /// The run in flight.
     pub run: Option<RunId>,
+    /// Process group of the run in flight (the child's pid), for the one stop
+    /// that signals it.
+    pub run_pgid: Option<i32>,
+    /// A stop was accepted for `run`: its group was signalled and a repeated
+    /// stop does nothing.
+    pub run_stopping: bool,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
 }
@@ -69,6 +78,8 @@ impl Core {
                 last_error: None,
                 ingest_running: false,
                 run: None,
+                run_pgid: None,
+                run_stopping: false,
                 run_note: None,
             }),
         }
@@ -86,6 +97,7 @@ impl Core {
             snapshot: st.snapshot.clone(),
             last_error: st.last_error.clone(),
             running: st.run.clone(),
+            stopping: st.run_stopping,
             run_note: st.run_note.clone(),
         }
     }
@@ -101,6 +113,26 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dto_reports_the_stopping_run_and_its_note() {
+        let core = Core::new();
+        let idle = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(idle["running"], serde_json::Value::Null);
+        assert_eq!(idle["stopping"], false);
+        assert_eq!(idle["runNote"], serde_json::Value::Null);
+
+        {
+            let mut st = core.state.lock().unwrap();
+            st.run = Some("abc".to_string());
+            st.run_stopping = true;
+            st.run_note = Some("note".to_string());
+        }
+        let json = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(json["running"], "abc");
+        assert_eq!(json["stopping"], true);
+        assert_eq!(json["runNote"], "note");
+    }
 
     #[test]
     fn the_dto_serializes_the_snapshot_unchanged() {
