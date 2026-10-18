@@ -20,13 +20,8 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
 ## UI preview
 
-`pnpm dev` opens the frontend server. Visit `http://localhost:1420/?preview`
-for an interactive browser preview with synthetic workspace, run and profile data.
-`?preview=empty` shows workspace setup. Preview actions never invoke Bazel or
-read local workspace data. The preview module is excluded from production builds and cannot replace the
-IPC connection inside Tauri.
-
-The UI uses the existing Svelte + Vite stack. It does not require SvelteKit.
+Run `pnpm dev`, then open `http://localhost:1420/?preview` for sample data
+or `?preview=empty` for workspace setup.
 
 ## Checks
 
