@@ -8,7 +8,8 @@
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import RunView from "./lib/RunView.svelte";
-  import type { AppState } from "./lib/types";
+  import { targetError } from "./lib/target";
+  import type { AppState, RunCmd } from "./lib/types";
 
   onMount(connect);
 
@@ -19,9 +20,11 @@
 
   let selected = $state<string | null>(null);
   let targetField = $state("");
-  let cmd = $state<"build" | "test">("build");
+  let cmd = $state<RunCmd>("build");
   let switchingWs = $state(false);
   const busy = $derived(!app.view.ready || app.view.starting || app.view.opening || !!st?.running || st?.ingest === "running");
+
+  const inputError = $derived(targetField === "" ? null : targetError(targetField));
 
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.
@@ -186,6 +189,7 @@
       </button>
     {/if}
   </div>
+  {#if inputError}<p class="app-error err" role="alert">{inputError}</p>{/if}
   {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
 

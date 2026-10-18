@@ -51,6 +51,9 @@ export interface AppState {
   runNote: string | null;
 }
 
+// The commands the core accepts from the composer.
+export type RunCmd = "build" | "test";
+
 export interface RunRecord {
   id: string;
   workspace: string;
