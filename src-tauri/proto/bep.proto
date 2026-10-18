@@ -1,17 +1,39 @@
 syntax = "proto3";
 package build_event_stream;
+
 import "google/protobuf/timestamp.proto";
-message Pattern { repeated string pattern = 1; }
-message BuildEventId { Pattern pattern = 4; }
-message Progress { string stdout = 1; string stderr = 2; }
-message BuildStarted {
- string uuid = 1; optional int64 start_time_millis = 2; string command = 5;
- string working_directory = 6; string workspace_directory = 7;
- google.protobuf.Timestamp start_time = 9;
+message Pattern {
+  repeated string pattern = 1;
 }
-message ExitCode { int32 code = 2; }
-message BuildFinished { optional int64 finish_time_millis = 2; ExitCode exit_code = 3; google.protobuf.Timestamp finish_time = 5; }
+message BuildEventId {
+  Pattern pattern = 4;
+}
+message Progress {
+  string stdout = 1;
+  string stderr = 2;
+}
+message BuildStarted {
+  string uuid = 1;
+  optional int64 start_time_millis = 2;
+  string command = 5;
+  string working_directory = 6;
+  string workspace_directory = 7;
+  google.protobuf.Timestamp start_time = 9;
+}
+message ExitCode {
+  int32 code = 2;
+}
+message BuildFinished {
+  optional int64 finish_time_millis = 2;
+  ExitCode exit_code = 3;
+  google.protobuf.Timestamp finish_time = 5;
+}
 message BuildEvent {
- BuildEventId id = 1; repeated BuildEventId children = 2;
- oneof payload { Progress progress = 3; BuildStarted started = 5; BuildFinished finished = 14; }
+  BuildEventId id = 1;
+  repeated BuildEventId children = 2;
+  oneof payload {
+    Progress progress = 3;
+    BuildStarted started = 5;
+    BuildFinished finished = 14;
+  }
 }
