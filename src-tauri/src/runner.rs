@@ -1,7 +1,5 @@
 //! Write build/test output directly to log.txt and read it after the client exits.
 
-use crate::ingest;
-
 use crate::state::Core;
 use crate::store::{self, RunRecord};
 use std::fs;
@@ -30,7 +28,7 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
 }
 
 /// Start a run in the open workspace and return its record. The run finishes
-/// in the background; the snapshot is refreshed on exit.
+/// in the background; target data is refreshed only on request.
 pub fn start(
     app: AppHandle,
     core: Arc<Core>,
@@ -93,7 +91,6 @@ pub fn start(
         }
         drop(st);
         core.emit(&app);
-        ingest::request(app, core);
     });
     Ok(rec)
 }

@@ -22,7 +22,8 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
 }
 
 /// Open a directory as the Bazel workspace: validate it, resolve bazel, and
-/// start a background snapshot ingestion.
+/// start a background snapshot ingestion. Refused while a run is in flight: its
+/// process group belongs to the workspace it was started in.
 #[tauri::command]
 fn open_workspace(
     app: AppHandle,
@@ -39,25 +40,31 @@ fn open_workspace(
     let bazel = workspace::resolve_bazel();
     {
         let mut st = core.state.lock().unwrap();
+        // Keep the busy check and workspace assignment atomic with start
+        // and query. Filesystem validation above holds no shared state.
+        if st.run.is_some() || st.ingest_running {
+            return Err("cannot change workspace while bazel is busy".to_string());
+        }
         st.workspace = Some(ws.clone());
         st.bazel = bazel;
         // A different workspace has no shared snapshot with the previous one.
         st.snapshot = None;
         st.last_error = None;
+        // The note can describe a run that was released without a confirmed
+        // exit, and it belongs to the workspace that run was started in.
         st.run_note = None;
     }
     if let Ok(dir) = app.path().app_data_dir() {
         workspace::save(&dir, &ws);
     }
-    ingest::request(app.clone(), core.inner().clone());
+    ingest::request(app.clone(), core.inner().clone())?;
     Ok(core.dto())
 }
 
-/// Manual refresh: re-run the query and swap the snapshot. Coalesced into one
-/// follow-up run if an ingestion is already in flight.
+/// Manual refresh: re-run the query unless bazel is already busy.
 #[tauri::command]
-fn refresh(app: AppHandle, core: State<Arc<Core>>) {
-    ingest::request(app, core.inner().clone());
+fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
+    ingest::request(app, core.inner().clone())
 }
 
 /// Start `bazel build|test <target>`. Fails while bazel is busy.
@@ -143,7 +150,7 @@ pub fn run() {
                     st.workspace = Some(ws);
                     st.bazel = workspace::resolve_bazel();
                 }
-                ingest::request(app.handle().clone(), core);
+                let _ = ingest::request(app.handle().clone(), core);
             }
             Ok(())
         })

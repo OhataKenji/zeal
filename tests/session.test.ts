@@ -386,3 +386,20 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
     false,
   );
 });
+
+test("refresh is rejected while busy and is never queued", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...idle, running: record.id });
+  await h.session.refresh();
+  h.emit("app-state", { ...idle, ingest: "running" });
+  await h.session.refresh();
+  h.emit("app-state", idle);
+  assert.equal(
+    h.pending.some((call) => call.command === "refresh"),
+    false,
+  );
+  const refreshing = h.session.refresh();
+  h.pending.find((call) => call.command === "refresh")!.reply.resolve(undefined);
+  await refreshing;
+});

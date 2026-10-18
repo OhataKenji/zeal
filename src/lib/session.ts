@@ -208,6 +208,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function refresh() {
+    if (
+      !view.ready ||
+      view.starting ||
+      view.opening ||
+      view.state?.running ||
+      view.state?.ingest === "running"
+    )
+      return;
     try {
       await transport.invoke("refresh");
     } catch (error) {

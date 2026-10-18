@@ -1,11 +1,8 @@
 //! Snapshot ingestion: run `bazel query` once per workspace at a time, parse
 //! the XML stream, and swap the in-memory snapshot.
 //!
-//! Triggers: workspace open (background), manual refresh, and after a run
-//! completes. Requests arriving while an ingestion runs are recorded as
-//! pending and collapse into a single follow-up run; the new snapshot only
-//! replaces the old one once it is fully built, so a failed or killed fetch
-//! leaves the previous snapshot in place.
+//! Triggers: workspace open and manual refresh. Busy requests are rejected;
+//! no pending query or post-run refresh is kept.
 //!
 //! [`run_detail`] reads a run dir into what the run view shows. It parses the
 //! artifacts on every call; nothing is cached.
@@ -37,65 +34,40 @@ enum Outcome {
     Failed(IngestError),
 }
 
-/// Request an ingestion. No-op without an open workspace and a resolved bazel.
-pub fn request(app: AppHandle, core: Arc<Core>) {
-    {
+/// Start one ingestion. Busy requests are rejected rather than queued.
+pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
+    let (ws, bazel) = {
         let mut st = core.state.lock().unwrap();
-        if st.workspace.is_none() || st.bazel.is_none() {
-            return;
-        }
-        // During a run the query waits; the run's exit requests it again.
         if st.ingest_running || st.run.is_some() {
-            st.ingest_pending = true;
-            drop(st);
-            core.emit(&app);
-            return;
+            return Err("bazel is busy; refresh after it finishes".to_string());
         }
+        let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
+            return Ok(());
+        };
         st.ingest_running = true;
-        // This fetch also serves requests deferred by a run.
-        st.ingest_pending = false;
-    }
+        (ws, bazel)
+    };
     core.emit(&app);
     thread::spawn(move || {
-        loop {
-            let (ws, bazel) = {
-                let st = core.state.lock().unwrap();
-                (
-                    st.workspace.clone().expect("ingest without workspace"),
-                    st.bazel.clone().expect("ingest without bazel"),
-                )
-            };
-            let outcome = fetch(&ws, &bazel);
-            let mut st = core.state.lock().unwrap();
-            match outcome {
-                Outcome::Ok(rules) => {
-                    log::info!("ingest: {} rules", rules.len());
-                    st.snapshot = Some(Arc::new(snapshot::build(&rules, Status::Ok)));
-                    st.last_error = None;
-                }
-                Outcome::Partial(rules, err) => {
-                    log::warn!("ingest partial: {} rules; {}", rules.len(), err.summary);
-                    st.snapshot = Some(Arc::new(snapshot::build(&rules, Status::Partial)));
-                    st.last_error = Some(err);
-                }
-                Outcome::Failed(err) => {
-                    log::warn!("ingest failed: {}", err.summary);
-                    // The previous snapshot stays.
-                    st.last_error = Some(err);
-                }
-            }
-            if st.ingest_pending {
-                st.ingest_pending = false;
-                drop(st);
-                core.emit(&app);
-                continue;
-            }
-            st.ingest_running = false;
-            drop(st);
-            core.emit(&app);
-            break;
+        let outcome = fetch(&ws, &bazel);
+        let snapshot = match &outcome {
+            Outcome::Ok(rules) => Some(Arc::new(snapshot::build(rules, Status::Ok))),
+            Outcome::Partial(rules, _) => Some(Arc::new(snapshot::build(rules, Status::Partial))),
+            Outcome::Failed(_) => None,
+        };
+        let mut st = core.state.lock().unwrap();
+        if let Some(snapshot) = snapshot {
+            st.snapshot = Some(snapshot);
         }
+        st.last_error = match outcome {
+            Outcome::Ok(_) => None,
+            Outcome::Partial(_, err) | Outcome::Failed(err) => Some(err),
+        };
+        st.ingest_running = false;
+        drop(st);
+        core.emit(&app);
     });
+    Ok(())
 }
 
 /// Run `bazel query 'kind("rule", //...)' --output=xml --noimplicit_deps
