@@ -1,11 +1,16 @@
-# M4: 実行履歴とprofile
+# Zeal 設計: M4 実行履歴と profile
 
-_Last update: 2026/10/18_ · _Status: Approved_
+_OhataKenji_
+_Last update: 2026/10/18_
+_Status: Approved_
 
-GUIの `build` / `test` を記録し、入力、Bazelの結果、実行時間、log、profileを開けるようにする。
-受信完了したinvocationだけを保存し、IDはBazelが発行したUUIDを使う。
+## Goal
 
-対象外は次の5つとする。
+GUIの `build` / `test` の履歴から、過去の入力、Bazelの結果、実行時間、log、profileを振り返れるようにする([PRD](../prd.md)シナリオ4とM4)。
+詳細fileを削除した後も、既知の成功や失敗を確認できるようにする。
+画面の構成は[mock](../mock/)に従う。
+
+### Non Goals
 
 - CLI向けの設定導線、並列収集、外部BESへの転送
 - `bazel run`、実行中のログ表示
@@ -13,7 +18,37 @@ GUIの `build` / `test` を記録し、入力、Bazelの結果、実行時間、
 - 旧履歴の移行、未完了の復旧、DBの自動修復
 - 容量監視、自動整理、共有、同期、export、run同士のdiff
 
-## 全体像
+## Background
+
+GUIが起動するBazel clientのprocessと、Bazel内部の実行単位は区別する。
+一回のGUI操作から複数の実行単位が生じることがあり、BESへの送信障害もclientの終了コードに影響する。
+共通用語は[overview](./overview.md#background)に従い、この文書では次の意味で使う。
+
+- **invocation**：BazelがUUIDを発行する一回の実行。
+- **BEP**(Build Event Protocol)：入力、開始、進捗、終了結果などを表すBazelのevent列。
+- **BES**(Build Event Service)：BEPをgRPCで受信し、保存完了したsequenceへACKを返す受信口。
+- **run record**：invocationの入力、時刻、結果などをSQLiteに保存した要約。
+- **profile**：Bazelが出力するgzip圧縮されたJSON trace。詳細画面で処理の時系列を示す。
+- **実行session**：runnerが一回のGUI操作について保持するchild、固定context、RPC受付状態、commit済みID。
+
+M2とM3の開始recordとfile収集を、この設計のBES記録へ置き換える。
+profileの可視化規則は[M2](./m2-run-detail.md)、期限付きの停止は[M3](./m3-find-and-run.md)を引き継ぐ。
+
+仕様参照: [BES RPC](https://github.com/googleapis/googleapis/blob/master/google/devtools/build/v1/publish_build_event.proto)、[Bazel 8.7のflag](https://github.com/bazelbuild/bazel/blob/8.7.0/src/main/java/com/google/devtools/build/lib/buildeventservice/BuildEventServiceOptions.java)、[profile ID](https://github.com/bazelbuild/bazel/blob/8.7.0/src/main/java/com/google/devtools/build/lib/profiler/JsonTraceFileWriter.java#L244-L247)。
+
+## Overview
+
+runnerは一つの実行sessionを所有し、固定したworkspaceと入力でBazelを起動する。
+BESはそのsessionに対するBEPを受信する。
+reducerはeventの検証と解釈を一度だけ行い、要約更新とlog断片を返す。
+file書込とDB操作はreducerの外で行う。
+
+受信完了したinvocationだけを保存し、IDはBazelが発行したUUIDを使う。
+logの配置とSQLiteへのcommitを終えてからACKすることで、再送時も保存済みの記録を置き換えずに応答できる。
+要約を詳細fileから独立させ、fileの欠損が結果やM5の件数に影響しないようにする。
+
+runnerはprocessの終了を確認してから、profileのIDを同じsessionの保存済みIDと照合して添付する。
+履歴と実行画面は同じ保存済みlogとprofileを参照し、表示時の読込と解析に上限を設ける。
 
 ```mermaid
 flowchart LR
@@ -31,10 +66,9 @@ flowchart LR
     PROFILE --> DETAIL
 ```
 
-reducerはeventの検証と解釈を一度だけ行い、要約更新とlog断片を返す。
-file書込とDB操作はreducerの外で行う。
+## Detailed Design
 
-## 保存する値
+### 保存する値
 
 DBはアプリ全体で一つの `<app data dir>/zeal.db` とする。
 WAL、`synchronous=FULL`、`PRAGMA user_version` を使い、新規DBから始める。
@@ -63,9 +97,7 @@ cmdとtarget_rawはStartedとchild Pattern IDから取る。
 成果物は `workspaces/<workspace_id>/runs/<invocation_id>/` に置く。
 pathは検証済みUUIDから作り、開く前にDBで所属を確認する。
 
-## 実行手順
-
-### 1. 起動する
+### 起動と実行session
 
 BESはRust core内のtonic/prostで実装し、起動時に `127.0.0.1:0` へbindする。
 gRPC-Webとreflectionは公開せず、終了時に閉じる。
@@ -96,7 +128,7 @@ BES宛先とproxy設定は継承せず、remote cache/RBE設定は変えない�
 `--invocation_id` とBEP file出力は付けず、queryも観測しない。
 `--bes_timeout` はupload待ちの上限であり、process全体のtimeoutではない。
 
-### 2. 受信して保存する
+### 受信と保存
 
 `PublishBuildToolEventStream` だけを処理し、lifecycle RPCにはUNIMPLEMENTEDを返す。
 新規記録には次の4条件をすべて求める。
@@ -128,7 +160,7 @@ Progressは受信順、event内はstdout→stderrの順でtext追記し、改行
 実行画面と履歴は同じ保存済みlogを使い、実行画面では終了処理後に読む。
 記録なしならlog利用不能と示し、未完了logやraw stderrで補完しない。
 
-### 3. 終了する
+### 終了とprofile添付
 
 停止は[M3](./m3-find-and-run.md)に従う。
 SIGINT後3秒でSIGKILL、さらに2秒で打ち切り、waitエラーでも終了確認を待ち続けない。
@@ -148,9 +180,8 @@ recordのworkspaceも一致した場合だけ、`profile.gz` を排他的に添�
 receiverは自身の一時dirだけを片付ける。
 削除失敗は表示し、自動再試行しない。
 runnerが後始末後にslotを解放し、回収済みprocessと解放後の残存processにはsignalを送らない。
-BES完了をprocess終了扱いせず、process結果と記録成否は別に示す。
 
-## 上限と障害
+### 詳細表示と資源上限
 
 | 対象                             | 上限                                 |
 | -------------------------------- | ------------------------------------ |
@@ -168,16 +199,31 @@ profile workerは一つ、同時要求はbusy、待ち行列と途中取消な�
 UIは選択と要求の世代で古い結果を捨てる。
 profileの表示は[M2](./m2-run-detail.md)の契約を保つ。
 
+### DB障害
+
 DB障害では新規起動を抑止するが、現在のprocessのstopは維持する。
 破損、permission、disk full、新しすぎるschemaは区別し、自動修復や代替記録はしない。
 permission、disk full、新しすぎるschemaでは初期化を勧めない。
 DBなしでsidecarだけ残る場合も自動初期化しない。
+
+## Alternatives Considered
+
+| 案                                                           | 利点                         | 採用しない理由                                                                                                           |
+| ------------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 起動時にrecordを作り、processの結果とstdout/stderrを保存する | BEPが出ない早期失敗も残せる  | GUI操作とinvocationが一致せず、Bazelの結果や時刻とprocessの観測値が混ざる。Bazel由来の完了記録に揃える                   |
+| BEPを正本にして表示のたびに再解析する                        | 保存後に別の項目も解析できる | BEPを削除すると要約の根拠も失われ、詳細の欠損と履歴の件数を独立させられない。要約はSQLiteを正本とし、BEP自体は保存しない |
+| 外部BESへ送信して履歴を得る                                  | 既存の収集基盤を利用できる   | 接続設定と外部へのデータ転送が必要になる。localだけで完結する今版では、Rust core内の受信口を使う                         |
+
+## Caveats
+
+BES完了をprocess終了扱いせず、process結果と記録成否は別に示す。
+
 crashの孤児dirは採用も上書きもせず、再起動後の復旧や過去processへのsignal送信もしない。
 手動整理は全Zealと残存processを停止し、詳細fileと一時dirだけを対象にする。
 同じ停止確認後、DBとsidecarを退避して手動初期化すると全workspaceの履歴を失う。
 保存後ACKでもBES障害はclientのupload待ちや終了コードに影響し得る。
 
-## 安全性と確認
+## Security Concerns
 
 local processを信頼し、token認証と偽装防止は設けない。
 UIから任意backend/root/pathを受け付けず、受信pathを保存先へ連結しない。
@@ -187,9 +233,15 @@ symlink/FIFO/deviceを拒否し、DB/sidecarも保護dir内の通常fileに限�
 リポジトリroot、既存artifactの権限、Bazelのumaskは変えず、安全な保存先を用意できなければspawnしない。
 
 SQLはbound parameter、入力とlog/profileのeventはtext表示とする。
+リポジトリコードの隔離と完全な改竄防止は保証しない。
+
+## Privacy Concerns
+
+入力、log、profileには、対象のパスや実行内容に由来する情報が含まれ得る。
 記録はlocalに限り、転送とtelemetryは設けない。
 coreログはUUID、処理種別、エラー分類だけとし、metadata/argv/生値や秘密入りfixtureを公開しない。
-リポジトリコードの隔離と完全な改竄防止は保証しない。
+
+## Test Plan
 
 受入では次の5群を確認する。
 
@@ -203,5 +255,3 @@ coreログはUUID、処理種別、エラー分類だけとし、metadata/argv/�
 通常build、広いpattern、巨大event、上限付近profileでflag負担、受信/保存bytes、最大メモリ、parse/IPC量とworker待ち時間を測る。
 bytesと実メモリを同一視せず、BESの実測とM2表示を確認して完了とする。
 固定SLOと常設の計測基盤は作らない。
-
-仕様参照: [BES RPC](https://github.com/googleapis/googleapis/blob/master/google/devtools/build/v1/publish_build_event.proto)、[Bazel 8.7のflag](https://github.com/bazelbuild/bazel/blob/8.7.0/src/main/java/com/google/devtools/build/lib/buildeventservice/BuildEventServiceOptions.java)、[profile ID](https://github.com/bazelbuild/bazel/blob/8.7.0/src/main/java/com/google/devtools/build/lib/profiler/JsonTraceFileWriter.java#L244-L247)。
