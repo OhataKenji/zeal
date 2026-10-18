@@ -465,16 +465,44 @@ pub fn read_log(data: &Path, ws: &Path, id: &str) -> Result<LogRead, StoreError>
         .read_to_end(&mut bytes)?;
     let truncated = bytes.len() > MAX_LOG_BYTES;
     bytes.truncate(MAX_LOG_BYTES);
-    let mut text = String::from_utf8_lossy(&bytes).into_owned();
-    // UTF-8 replacement of invalid bytes can expand a hostile existing log.
-    let mut end = MAX_LOG_BYTES.min(text.len());
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let truncated = truncated || end < text.len();
-    text.truncate(end);
-    Ok(LogRead { text, truncated })
+    let mut result = bounded_lossy(&bytes, MAX_LOG_BYTES);
+    result.truncated |= truncated;
+    Ok(result)
 }
+
+/// Build a lossy UTF-8 prefix without allocating an expanded intermediate.
+/// Invalid bytes can expand threefold; reserve that bound only up to the cap.
+fn bounded_lossy(bytes: &[u8], limit: usize) -> LogRead {
+    let mut text = String::with_capacity(limit.min(bytes.len().saturating_mul(3)));
+    for chunk in bytes.utf8_chunks() {
+        let valid = chunk.valid();
+        let mut end = valid.len().min(limit - text.len());
+        while !valid.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.push_str(&valid[..end]);
+        if end < valid.len() {
+            return LogRead {
+                text,
+                truncated: true,
+            };
+        }
+        if !chunk.invalid().is_empty() {
+            if limit - text.len() < '\u{fffd}'.len_utf8() {
+                return LogRead {
+                    text,
+                    truncated: true,
+                };
+            }
+            text.push('\u{fffd}');
+        }
+    }
+    LogRead {
+        text,
+        truncated: false,
+    }
+}
+
 pub fn open_profile(data: &Path, ws: &Path, id: &str) -> Result<File, StoreError> {
     let rec = record(data, ws, id)?;
     let store = Store::open(data)?;
@@ -1011,5 +1039,40 @@ mod tests {
         assert_eq!(record(&fixture.data, &fixture.ws, &rec.id).unwrap(), rec);
         fs::remove_file(temporary.join("unexpected")).unwrap();
         assert!(temporary.exists(), "cleanup is never retried automatically");
+    }
+    #[test]
+    fn lossy_invalid_bytes_stop_before_output_allocation_exceeds_budget() {
+        let read = bounded_lossy(&[0xff; 32], 10);
+        assert_eq!(read.text, "\u{fffd}\u{fffd}\u{fffd}");
+        assert!(read.truncated);
+        assert!(read.text.capacity() <= 10);
+    }
+    #[test]
+    fn lossy_multibyte_cut_keeps_prefix_and_never_skips_to_later_ascii() {
+        let read = bounded_lossy("abあz".as_bytes(), 4);
+        assert_eq!(read.text, "ab");
+        assert!(read.truncated);
+        assert!(read.text.capacity() <= 4);
+    }
+    #[test]
+    fn lossy_error_replacement_at_boundary_preserves_standard_semantics() {
+        let read = bounded_lossy(b"a\xe2\x82z", 4);
+        assert_eq!(read.text, "a\u{fffd}");
+        assert!(read.truncated);
+        let exact = bounded_lossy(b"a\xe2\x82", 4);
+        assert_eq!(exact.text, String::from_utf8_lossy(b"a\xe2\x82"));
+        assert!(!exact.truncated);
+        let insufficient = bounded_lossy(b"a\xffz", 3);
+        assert_eq!(insufficient.text, "a");
+        assert!(insufficient.truncated);
+    }
+    #[test]
+    fn lossy_empty_and_zero_budget_outputs_are_distinct() {
+        let empty = bounded_lossy(b"", 0);
+        assert!(empty.text.is_empty());
+        assert!(!empty.truncated);
+        let zero = bounded_lossy(b"a", 0);
+        assert!(zero.text.is_empty());
+        assert!(zero.truncated);
     }
 }
