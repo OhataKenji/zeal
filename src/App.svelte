@@ -167,7 +167,7 @@
           {#each app.view.runs as run (run.id)}
             <li><button class="run-row" class:sel={app.view.selectedRun === run.id} aria-current={app.view.selectedRun === run.id ? "true" : undefined} onclick={() => session.selectRun(run.id)}>
               <span>{run.cmd} {run.target}</span>
-              <small>{outcome(run, state.running, state.stopping)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
+              <small>{outcome(run)} · {new Date(run.startedAt).toLocaleTimeString()}</small>
             </button></li>
           {/each}
         </ul>
@@ -267,6 +267,8 @@
     {/if}
   </div>
   {#if app.view.error}<p class="app-error err" role="alert">{app.view.error}</p>{/if}
+  {#if st?.running}<p class="app-error" role="status">{st.stopping ? "停止処理中" : "Bazel 実行中"}。ログは終了処理後に表示します。</p>
+  {:else if st?.processExit !== null && st?.processExit !== undefined}<p class="app-error" role="status">Process exit: {st.processExit} · 保存済み記録: {st.completedRuns.length}{#if st.completedRuns.length === 0} · log 利用不能{/if}</p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
   {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
 

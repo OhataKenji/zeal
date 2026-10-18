@@ -3,14 +3,13 @@
   import { outcome, sectionData, sectionMessage } from "./run";
   import LogPanel from "./run/LogPanel.svelte";
   import ProfileView from "./ProfileView.svelte";
-  import TargetsPanel from "./run/TargetsPanel.svelte";
 
   let { view, reload }: { view: SessionView; reload: () => void } = $props();
   const record = $derived(view.detail?.record ?? view.runs.find((run) => run.id === view.selectedRun));
-  const running = $derived(view.state?.running === view.selectedRun);
+  const running = false;
   const profile = $derived(sectionData(view.detail?.profile));
-  const failed = $derived(record?.finishedAt !== undefined && record.exitCode !== undefined && record.exitCode !== 0);
-  const tabs = ["Logs", "Timing", "Targets", "Details"] as const;
+  const failed = $derived(record?.outcome === "failed");
+  const tabs = ["Logs", "Timing", "Details"] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
 
   function tabKey(event: KeyboardEvent, index: number) {
@@ -31,10 +30,10 @@
     <h1>{record?.target ?? view.selectedRun}</h1>
     <div class="run-facts">
       <span class:failed>
-        {record ? outcome(record, view.state?.running ?? null, view.state?.stopping) : "? outcome unknown"}
+        {record ? outcome(record) : "? outcome unknown"}
       </span>
-      {#if record?.finishedAt !== undefined}
-        <span title="Recorded wall-clock duration">◷ {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s</span>
+      {#if record?.bazelElapsedMs != null}
+        <span title="Bazel execution time">◷ {(record.bazelElapsedMs / 1000).toFixed(3)}s</span>
       {/if}
       {#if record}
         <span>{new Date(record.startedAt).toLocaleString()}</span>
@@ -66,8 +65,6 @@
         {#if view.detail.profile.status !== "ok"}<p class="run-notice">{sectionMessage(view.detail.profile)}</p>{/if}
         {#if profile}{#key view.detail}<ProfileView {profile} />{/key}{/if}
       {:else if view.detailLoading}<p class="panel-empty">Loading profile…</p>{/if}
-    {:else if active === "Targets"}
-      <TargetsPanel section={view.detail?.bep} {running} />
     {:else}
       <h2 class="panel-heading">Run details</h2>
       {#if record}
@@ -78,7 +75,7 @@
           <dt>Started</dt><dd>{new Date(record.startedAt).toLocaleString()}</dd>
           <dt>Finished</dt><dd>{record.finishedAt === undefined ? "Not recorded" : new Date(record.finishedAt).toLocaleString()}</dd>
           <dt>Exit code</dt><dd>{record.exitCode ?? "Unknown"}</dd>
-          {#if record.finishedAt !== undefined}<dt>Wall time</dt><dd>{((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s</dd>{/if}
+          {#if record.bazelElapsedMs != null}<dt>Bazel execution time</dt><dd>{(record.bazelElapsedMs / 1000).toFixed(3)}s</dd>{/if}
         </dl>
       {/if}
     {/if}

@@ -1,7 +1,10 @@
-mod bep;
+#[cfg(test)]
+mod acceptance;
+mod bes;
 mod ingest;
 mod label;
 mod profile;
+mod protocol;
 mod runner;
 mod snapshot;
 mod state;
@@ -13,6 +16,7 @@ use ingest::{RunDetail, run_detail};
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use store::RunRecord;
 use tauri::{AppHandle, Manager, RunEvent, State};
 
@@ -37,6 +41,9 @@ fn open_workspace(
     if !workspace::is_workspace(&ws) {
         return Err("no MODULE.bazel / WORKSPACE at this path".to_string());
     }
+    let ws = ws
+        .canonicalize()
+        .map_err(|_| "workspace canonicalization failed".to_string())?;
     let bazel = workspace::resolve_bazel();
     {
         let mut st = core.state.lock().unwrap();
@@ -53,6 +60,8 @@ fn open_workspace(
         // The note can describe a run that was released without a confirmed
         // exit, and it belongs to the workspace that run was started in.
         st.run_note = None;
+        st.completed_runs.clear();
+        st.process_exit = None;
     }
     if let Ok(dir) = app.path().app_data_dir() {
         workspace::save(&dir, &ws);
@@ -74,7 +83,7 @@ fn start_run(
     core: State<Arc<Core>>,
     cmd: String,
     target: String,
-) -> Result<RunRecord, String> {
+) -> Result<String, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     runner::start(app, core.inner().clone(), &data, &cmd, &target)
 }
@@ -93,21 +102,46 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(store::list(&data, &ws))
+    store::list(&data, &ws).map_err(|e| e.to_string())
 }
 
-/// A run of the open workspace with its artifacts parsed.
-/// Parse and serialize whole artifacts off the UI thread.
-#[tauri::command(async)]
-fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDetail, String> {
+/// One bounded detail worker. Reject concurrent requests before scheduling work.
+static DETAIL_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct DetailWorker;
+impl Drop for DetailWorker {
+    fn drop(&mut self) {
+        DETAIL_BUSY.store(false, Ordering::Release);
+    }
+}
+
+#[tauri::command]
+async fn get_run(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: String,
+) -> Result<RunDetail, String> {
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid run id".to_string())?
         .to_string();
-    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
-        return Err("no workspace".to_string());
-    };
+    let ws = core
+        .state
+        .lock()
+        .unwrap()
+        .workspace
+        .clone()
+        .ok_or("no workspace")?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    run_detail(&store::run_dir(&data, &ws, &id)).map_err(|e| e.to_string())
+    DETAIL_BUSY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| "profile worker busy".to_string())?;
+    let worker = DetailWorker;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _worker = worker;
+        run_detail(&data, &ws, &id)
+    })
+    .await
+    .map_err(|_| "profile worker failed".to_string())?
 }
 
 /// Open a BUILD/bzl file at its recorded location with the OS default app.
@@ -147,10 +181,19 @@ pub fn run() {
                 )?;
             }
             let core = Arc::new(Core::new());
+            let data = app.path().app_data_dir()?;
+            if let Err(error) = store::ensure_ready(&data) {
+                core.state.lock().unwrap().run_note = Some(error.to_string());
+            }
+            let server = bes::Server::start(core.clone(), data)?;
+            core.state.lock().unwrap().bes_port = Some(server.port);
+            app.manage(server);
             app.manage(core.clone());
             // Reopen the last workspace, if it is still a workspace.
             if let Ok(dir) = app.path().app_data_dir()
-                && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))
+                && let Some(ws) = workspace::load_saved(&dir)
+                    .and_then(|w| w.canonicalize().ok())
+                    .filter(|w| workspace::is_workspace(w))
             {
                 {
                     let mut st = core.state.lock().unwrap();

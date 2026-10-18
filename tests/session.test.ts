@@ -12,10 +12,16 @@ const idle: AppState = {
   running: null,
   stopping: false,
   runNote: null,
+  completedRuns: [],
+  processExit: null,
 };
 const record: RunRecord = {
   id: "run-a",
   workspace: "/workspace",
+  workspaceId: "workspace-a",
+  outcome: "ok",
+  bazelElapsedMs: null,
+  logTruncated: false,
   cmd: "build",
   target: "//:app",
   startedAt: 1,
@@ -23,7 +29,6 @@ const record: RunRecord = {
 const completed: RunDetail = {
   record: { ...record, finishedAt: 2, exitCode: 0 },
   log: { status: "ok", data: "same\nsame\n" },
-  bep: { status: "missing" },
   profile: { status: "missing" },
 };
 
@@ -182,7 +187,7 @@ test("start records the selected cmd and the target string unchanged", async () 
   const started = h.session.start("test", "//app:tar;get");
   const call = h.pending.find((item) => item.command === "start_run")!;
   assert.deepEqual(call.args, { cmd: "test", target: "//app:tar;get" });
-  call.reply.resolve({ ...record, cmd: "test", target: "//app:tar;get" });
+  call.reply.resolve("session-a");
   await started;
 });
 
@@ -224,32 +229,33 @@ test("stop failure is surfaced and leaves the run in flight", async () => {
   assert.equal(h.view.state?.running, record.id);
 });
 
-test("logs are read from the saved file only after the run finishes", async () => {
+test("logs use saved invocation IDs after session cleanup", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...idle, running: "session-a" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
   await started;
-  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.selectedRun, null);
+  assert.deepEqual(h.view.runs, []);
   assert.equal(
     h.pending.some((call) => call.command === "get_run"),
     false,
   );
-  h.emit("app-state", idle);
+  h.emit("app-state", { ...idle, completedRuns: [record.id], processExit: 0 });
+  assert.equal(h.view.selectedRun, record.id);
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
   await settle();
   assert.deepEqual(h.view.detail, completed);
-  assert.equal(h.view.detail?.log.status, "ok");
 });
 
-test("run completing before start response still opens completed detail", async () => {
+test("completion before start response still opens the saved invocation", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.emit("app-state", idle);
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...idle, running: "session-a" });
+  h.emit("app-state", { ...idle, completedRuns: [record.id], processExit: 0 });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
   await started;
   assert.equal(h.view.state?.running, null);
   assert.equal(h.view.selectedRun, record.id);
@@ -263,7 +269,7 @@ test("start response before the running event reconciles state without reading a
   await h.session.init();
   const started = h.session.start("build", "//:app");
   h.setCore({ ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
   await started;
   assert.equal(h.view.state?.running, record.id);
   assert.equal(
@@ -273,48 +279,40 @@ test("start response before the running event reconciles state without reading a
   h.emit("app-state", { ...idle, running: record.id });
 });
 
-test("completion event during post-start reconciliation wins over its stale running response", async () => {
+test("completion during reconciliation wins over a stale running reply", async () => {
   const h = harness();
   await h.session.init();
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...idle, running: "session-a" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
   await settle();
-  h.emit("app-state", idle);
-  reconciled.resolve({ ...idle, running: record.id });
+  h.emit("app-state", { ...idle, completedRuns: [record.id], processExit: 42 });
+  reconciled.resolve({ ...idle, running: "session-a" });
   await started;
   assert.equal(h.view.state?.running, null);
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
+  assert.equal(h.view.state?.processExit, 42);
 });
 
-test("failed state reconciliation preserves the started run until a later state event", async () => {
+test("failed reconciliation blocks Send until a later state event", async () => {
   const h = harness();
   await h.session.init();
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
   const started = h.session.start("build", "//:app");
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
   await settle();
   reconciled.reject(new Error("state unavailable"));
   await started;
   assert.match(h.view.error!, /実行は開始済み/);
   assert.equal(canSend(h.view, "//:app"), false);
-  assert.equal(h.view.runs[0].id, record.id);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_run"),
-    false,
-  );
-  h.session.selectRun(null);
-  h.session.selectRun(record.id);
-  h.emit("app-state", idle);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
-  await settle();
+  assert.deepEqual(h.view.runs, []);
+  h.emit("app-state", { ...idle, completedRuns: [record.id], processExit: 0 });
   assert.equal(h.view.error, null);
-  assert.equal(h.view.detail?.record.exitCode, 0);
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
@@ -329,17 +327,21 @@ test("late bootstrap state cannot overwrite a newer workspace event", async () =
   assert.equal(h.view.state?.workspace, "/new-workspace");
 });
 
-test("a slow previous run detail cannot replace the selected run", async () => {
+test("a slow detail cannot replace selection and concurrent requests are not queued", async () => {
   const h = harness();
   await h.session.init();
   h.session.selectRun("run-a");
   h.session.selectRun("run-b");
+  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 1);
+  assert.match(h.view.detailError!, /Retry/);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.equal(h.view.detail, null);
+  assert.equal(h.view.selectedRun, "run-b");
+  const retry = h.session.loadDetail();
   const requests = h.pending.filter((call) => call.command === "get_run");
   requests[1].reply.resolve({ ...completed, record: { ...completed.record, id: "run-b" } });
-  await settle();
-  requests[0].reply.resolve(completed);
-  await settle();
-  assert.equal(h.view.selectedRun, "run-b");
+  await retry;
   assert.equal(h.view.detail?.record.id, "run-b");
 });
 
@@ -481,19 +483,32 @@ test("refresh is rejected while busy and is never queued", async () => {
   await refreshing;
 });
 
-test("an unconfirmed exit stays unknown and is not retried automatically", async () => {
+test("an unconfirmed exit exposes no fabricated history or log", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id, stopping: true });
-  h.session.selectRun(record.id);
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...idle, running: "session-a", stopping: true });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
+  await started;
   h.emit("app-state", { ...idle, runNote: "停止を確認できません" });
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve({ ...completed, record });
   await settle();
-  assert.equal(h.view.detail?.record.exitCode, undefined);
-  assert.equal(h.view.state?.runNote, "停止を確認できません");
+  assert.equal(h.view.detail, null);
+  assert.equal(h.view.selectedRun, null);
   assert.equal(
-    h.pending.some((call) => call.command === "start_run" || call.command === "refresh"),
+    h.pending.some((call) => call.command === "get_run"),
     false,
   );
-  assert.equal(canSend(h.view, "//:app"), true);
+  assert.equal(h.view.state?.runNote, "停止を確認できません");
+});
+
+test("manual selection during a session wins over automatic completion selection", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...idle, running: "session-a" });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve("session-a");
+  await started;
+  h.session.selectRun("older-run");
+  h.emit("app-state", { ...idle, completedRuns: [record.id, "second-invocation"], processExit: 0 });
+  assert.equal(h.view.selectedRun, "older-run");
 });

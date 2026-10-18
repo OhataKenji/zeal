@@ -31,6 +31,8 @@ pub struct AppStateDto {
     /// Why the last run's exit is unknown: its `wait` failed, or its group was
     /// killed and no exit was confirmed.
     pub run_note: Option<String>,
+    pub completed_runs: Vec<String>,
+    pub process_exit: Option<i32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -62,6 +64,11 @@ pub struct CoreState {
     pub run_stopping: bool,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
+    pub completed_runs: Vec<String>,
+    pub process_exit: Option<i32>,
+    pub bes_port: Option<u16>,
+    pub session: Option<Arc<crate::bes::Session>>,
+    pub stop_started: Option<std::time::Instant>,
 }
 
 pub struct Core {
@@ -81,6 +88,11 @@ impl Core {
                 run_pgid: None,
                 run_stopping: false,
                 run_note: None,
+                completed_runs: Vec::new(),
+                process_exit: None,
+                bes_port: None,
+                session: None,
+                stop_started: None,
             }),
         }
     }
@@ -99,6 +111,8 @@ impl Core {
             running: st.run.clone(),
             stopping: st.run_stopping,
             run_note: st.run_note.clone(),
+            completed_runs: st.completed_runs.clone(),
+            process_exit: st.process_exit,
         }
     }
 

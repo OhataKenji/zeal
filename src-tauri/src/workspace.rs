@@ -37,12 +37,11 @@ fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 
-const SAVED_FILE: &str = "workspace.json";
-
 /// Read the persisted workspace path from `data_dir`, if any.
 pub fn load_saved(data_dir: &Path) -> Option<PathBuf> {
-    let s = std::fs::read_to_string(data_dir.join(SAVED_FILE)).ok()?;
-    serde_json::from_str::<serde_json::Value>(&s)
+    let bytes = crate::store::read_setting(data_dir).ok()?;
+    let s = std::str::from_utf8(&bytes).ok()?;
+    serde_json::from_str::<serde_json::Value>(s)
         .ok()?
         .get("path")?
         .as_str()
@@ -51,9 +50,6 @@ pub fn load_saved(data_dir: &Path) -> Option<PathBuf> {
 
 /// Persist the workspace path under `data_dir`. Best-effort.
 pub fn save(data_dir: &Path, ws: &Path) {
-    if std::fs::create_dir_all(data_dir).is_err() {
-        return;
-    }
     let body = serde_json::json!({ "path": ws.to_string_lossy() });
-    let _ = std::fs::write(data_dir.join(SAVED_FILE), body.to_string());
+    let _ = crate::store::save_setting(data_dir, body.to_string().as_bytes());
 }

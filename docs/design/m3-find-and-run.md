@@ -20,6 +20,11 @@ PRD シナリオ3の「label を覚えていなくても対象を見つけて実
 
 ## Overview
 
+以下は M3 段階の試作の仕様である。
+M4 以降の履歴 ID、BEP 取得、保存手順は [M4](./m4-run-history.md) の設計へ置き換える。
+現在の実装は M4 の保存手順に従う。以下の file 保存は M3 時点の記録として残す。
+M4 では log を BEP Progress からの記録へ置き換え、stdout/stderr の file 収集は行わない。
+
 実行の入口は composer(cmd 選択、target 欄、Send)のみとする。
 tree と dropdown は target 欄を置き換え、cmd は利用者が `build` / `test` から選ぶ。
 入力の展開と対象の最終判断は Bazel に委ねる。
@@ -125,5 +130,6 @@ Enter は候補確定、実行は Send に統一し、矢印キーを操作し�
 | stop を SIGINT 1回に限定する                      | M3 の中断                 | 保留。止まらない場合の手動対処が増えるため、現行の段階的な停止を維持する |
 | run ID、pgid、stopping を ActiveRun にまとめる    | M3 の実行状態             | 保留。今回の検索入力の変更には不要                                       |
 
-M4 設計書に残る、wait エラー後も実行を抑止する方針と child handle の扱いは、M4 で整合させる。
-今回の PR では M4 設計書を変更しない。
+M4 では BES による履歴保存と、runner による実行sessionの生成・終了管理を導入する。
+stdout/stderr は null へ接続し、log は Progress 由来に一本化する。
+build/test のみ、期限付きの停止と終了不明時の実行枠解放は維持する。
