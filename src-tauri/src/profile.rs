@@ -5,7 +5,7 @@ use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -267,7 +267,9 @@ fn parse_limits<R: Read>(
         },
         incomplete: false,
     };
-    let mut decoder = serde_json::Deserializer::from_reader(expanded);
+    // serde_json reads individual bytes. Buffer after the expanded-byte limit
+    // so gzip inflation works in chunks while both byte limits remain enforced.
+    let mut decoder = serde_json::Deserializer::from_reader(BufReader::new(expanded));
     let result = serde::de::Deserializer::deserialize_map(&mut decoder, Trace(&mut collector))
         .and_then(|()| decoder.end());
     if let Err(error) = result {
