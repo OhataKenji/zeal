@@ -93,7 +93,7 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(store::list(&data, &ws))
+    store::list(&data, &ws).map_err(|error| error.to_string())
 }
 
 /// A run of the open workspace with its artifacts parsed.
@@ -107,7 +107,7 @@ fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDeta
         return Err("no workspace".to_string());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    run_detail(&store::run_dir(&data, &ws, &id)).map_err(|e| e.to_string())
+    run_detail(&data, &ws, &id).map_err(|e| e.to_string())
 }
 
 /// Open a BUILD/bzl file at its recorded location with the OS default app.

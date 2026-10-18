@@ -113,7 +113,7 @@ pub fn start(
     ) {
         Ok(c) => c,
         Err(e) => {
-            let _ = fs::remove_dir_all(&dir);
+            let _ = store::abort_create(data, &ws, &rec.id);
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
@@ -125,6 +125,7 @@ pub fn start(
     core.emit(&app);
 
     let id = rec.id.clone();
+    let data = data.to_path_buf();
     thread::spawn(move || {
         let exit = child.wait().map(|status| status.code().unwrap_or(-1));
         // Finish the record before publishing idle. Holding the state lock
@@ -133,7 +134,7 @@ pub fn start(
         let mut st = core.state.lock().unwrap();
         if still_held(&st, &id) {
             let saved = match &exit {
-                Ok(code) => store::finish(&dir, *code).map(|_| ()),
+                Ok(code) => store::finish(&data, &ws, &id, *code).map(|_| ()),
                 Err(_) => Ok(()),
             };
             apply_reap(&mut st, &id, &exit);
