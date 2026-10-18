@@ -13,6 +13,7 @@ use ingest::{RunDetail, run_detail};
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use store::RunRecord;
 use tauri::{AppHandle, Manager, RunEvent, State};
 
@@ -96,10 +97,32 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
     store::list(&data, &ws).map_err(|error| error.to_string())
 }
 
-/// A run of the open workspace with its artifacts parsed.
-/// Parse and serialize whole artifacts off the UI thread.
-#[tauri::command(async)]
-fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDetail, String> {
+/// No queued profile parses. The guard stays with the blocking operation even
+/// if the caller stops awaiting its response.
+static DETAIL_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct DetailWorker;
+impl DetailWorker {
+    fn acquire() -> Result<Self, String> {
+        DETAIL_BUSY
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "profile worker busy".to_string())?;
+        Ok(Self)
+    }
+}
+impl Drop for DetailWorker {
+    fn drop(&mut self) {
+        DETAIL_BUSY.store(false, Ordering::Release);
+    }
+}
+
+/// Parse artifacts off the UI thread, with at most one detail operation active.
+#[tauri::command]
+async fn get_run(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: String,
+) -> Result<RunDetail, String> {
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid run id".to_string())?
         .to_string();
@@ -107,7 +130,13 @@ fn get_run(app: AppHandle, core: State<Arc<Core>>, id: String) -> Result<RunDeta
         return Err("no workspace".to_string());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+    let worker = DetailWorker::acquire()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _worker = worker;
+        run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "profile worker failed".to_string())?
 }
 
 /// Open a BUILD/bzl file at its recorded location with the OS default app.
@@ -182,4 +211,17 @@ pub fn run() {
                 runner::exit_stop(&core);
             }
         });
+}
+
+#[cfg(test)]
+mod detail_worker_tests {
+    use super::DetailWorker;
+
+    #[test]
+    fn concurrent_detail_is_busy_until_worker_is_dropped() {
+        let first = DetailWorker::acquire().unwrap();
+        assert!(DetailWorker::acquire().is_err());
+        drop(first);
+        assert!(DetailWorker::acquire().is_ok());
+    }
 }
