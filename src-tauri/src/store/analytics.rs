@@ -36,7 +36,8 @@ const MATCH: &str = "workspace_id=:workspace
     AND (:cmd IS NULL OR cmd=:cmd)
     AND (:outcome IS NULL OR
         CASE WHEN exit_code=0 THEN 'ok' WHEN exit_code=8 THEN 'interrupted'
-        ELSE 'failed' END = :outcome)";
+        ELSE 'failed' END = :outcome)
+    AND date(started_at_ms / 1000,'unixepoch','localtime') BETWEEN :first_day AND :last_day";
 
 fn valid_day(conn: &Connection, day: &str) -> Result<(), StoreError> {
     if day.len() != 10
@@ -58,18 +59,18 @@ fn valid_day(conn: &Connection, day: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// Add the calendar day BEFORE converting local midnight to UTC. In particular,
-/// this must not add a fixed number of seconds across a DST transition.
+/// An indexable superset of the selected local dates. A nonexistent midnight
+/// may normalize backwards, and some historical rollbacks even cross the date
+/// boundary twice. The shared local-date predicate is authoritative, rather
+/// than assuming every local date is one contiguous UTC interval. Neighboring
+/// calendar dates give a conservative scan without fixed-length-day arithmetic.
 fn bounds(conn: &Connection, start: &str, end: &str) -> Result<(i64, i64), StoreError> {
     let (start, end): (Option<i64>, Option<i64>) = conn.query_row(
-        "SELECT unixepoch(?1,'utc')*1000,unixepoch(?2,'+1 day','utc')*1000",
+        "SELECT unixepoch(?1,'-2 days','utc')*1000,unixepoch(?2,'+3 days','utc')*1000",
         params![start, end],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    start
-        .zip(end)
-        .filter(|(a, b)| a <= b)
-        .ok_or_else(|| fail(ErrorKind::Invalid))
+    start.zip(end).ok_or_else(|| fail(ErrorKind::Invalid))
 }
 
 /// POSIX timezone state is refreshed when opening a workspace. No TZ env or
@@ -151,6 +152,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             .query_map(
                 named_params! {
                     ":workspace":ws_id, ":start":from, ":end":until,
+                    ":first_day":start, ":last_day":end,
                     ":cmd":filter.cmd, ":outcome":filter.outcome,
                 },
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
@@ -172,6 +174,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 .query_map(
                     named_params! {
                         ":workspace":ws_id, ":start":from, ":end":until,
+                        ":first_day":day, ":last_day":day,
                         ":cmd":filter.cmd, ":outcome":filter.outcome,
                     },
                     |r| row_record(r, &ws),
@@ -361,7 +364,15 @@ mod tests {
     // Rust test process would be unsafe and contaminate unrelated tests.
     #[test]
     fn timezone_boundaries_in_isolated_processes() {
-        for zone in ["America/New_York", "Asia/Tokyo", "UTC"] {
+        for zone in [
+            "America/New_York",
+            "Asia/Tokyo",
+            "UTC",
+            "Asia/Beirut",
+            "America/Havana",
+            "Pacific/Apia",
+            "America/Goose_Bay",
+        ] {
             assert!(
                 Command::new(std::env::current_exe().unwrap())
                     .args([
@@ -379,19 +390,59 @@ mod tests {
     #[test]
     #[ignore = "invoked with an explicit TZ by timezone_boundaries_in_isolated_processes"]
     fn timezone_probe() {
+        refresh_timezone();
         let f = Fixture::new();
         let store = Store::open(&f.data).unwrap();
-        let spring = bounds(&store.conn, "2026-03-08", "2026-03-08").unwrap();
-        let fall = bounds(&store.conn, "2026-11-01", "2026-11-01").unwrap();
-        if std::env::var("TZ").unwrap() == "America/New_York" {
+        let zone = std::env::var("TZ").unwrap();
+        let spring: (i64, i64) = store
+            .conn
+            .query_row(
+                "SELECT unixepoch('2026-03-08','utc')*1000,unixepoch('2026-03-09','utc')*1000",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let spring = if zone == "America/New_York" || zone == "America/Havana" {
+            store.conn.query_row("SELECT unixepoch('2026-03-08 05:00:00')*1000,unixepoch('2026-03-09 04:00:00')*1000",[],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).unwrap()
+        } else {
+            spring
+        };
+        if ["America/New_York", "America/Havana", "America/Goose_Bay"].contains(&zone.as_str()) {
             assert_eq!(spring.1 - spring.0, 23 * 3_600_000);
-            assert_eq!(fall.1 - fall.0, 25 * 3_600_000);
         } else {
             assert_eq!(spring.1 - spring.0, 24 * 3_600_000);
         }
-        let expected = f.insert("2026-03-08 00:00:00", "build", Some(0));
+        if zone == "Asia/Beirut" {
+            let before = f.insert("2026-03-28 23:30:00", "build", Some(0));
+            let inside = f.insert("2026-03-29 01:00:00", "build", Some(0));
+            let result = f.query(Filter {
+                start: Some("2026-03-29".into()),
+                end: Some("2026-03-29".into()),
+                day: Some("2026-03-29".into()),
+                ..Filter::default()
+            });
+            assert_eq!(result.total, 1);
+            assert_eq!(result.runs[0].id, inside);
+            assert!(result.runs.iter().all(|r| r.id != before));
+        }
+        if zone == "Pacific/Apia" {
+            // The calendar skipped December 30, 2011 entirely.
+            let skipped = f.query(Filter {
+                start: Some("2011-12-30".into()),
+                end: Some("2011-12-30".into()),
+                day: Some("2011-12-30".into()),
+                ..Filter::default()
+            });
+            assert_eq!(skipped.total, 0);
+            assert!(skipped.runs.is_empty());
+        }
+        let expected = f.insert("2026-03-08 12:00:00", "build", Some(0));
         let last = f.insert("2026-03-08 23:59:59", "build", Some(0));
         let sql = "UPDATE run SET started_at_ms=?1 WHERE id=?2";
+        store
+            .conn
+            .execute(sql, params![spring.0, expected])
+            .unwrap();
         // One millisecond before each exclusive boundary must stay on that day.
         store
             .conn
@@ -418,6 +469,48 @@ mod tests {
             ..Filter::default()
         });
         assert_eq!(result.total, 0);
+        if zone == "America/New_York" || zone == "America/Havana" {
+            let (from, until): (i64, i64) = store
+                .conn
+                .query_row(
+                    "SELECT unixepoch('2026-11-01 04:00:00')*1000,unixepoch('2026-11-02 05:00:00')*1000",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(until - from, 25 * 3_600_000);
+            let first = f.insert("2026-11-01 12:00:00", "build", Some(0));
+            let last = f.insert("2026-11-01 12:01:00", "build", Some(0));
+            store.conn.execute(sql, params![from, first]).unwrap();
+            store.conn.execute(sql, params![until - 1, last]).unwrap();
+            let selected = f.query(Filter {
+                start: Some("2026-11-01".into()),
+                end: Some("2026-11-01".into()),
+                day: Some("2026-11-01".into()),
+                ..Filter::default()
+            });
+            assert_eq!(selected.total, 2);
+            assert_eq!(selected.runs.len(), 2);
+        }
+        if zone == "America/Goose_Bay" {
+            // In 1988 the clock rolled from Oct 30 00:01 back into Oct 29.
+            // Oct 30 is not a contiguous UTC interval. Both its short early
+            // occurrence and its later occurrence count, but Oct 29 does not.
+            let early = f.insert("1988-10-30 12:00:00", "build", Some(0));
+            let previous = f.insert("1988-10-30 12:01:00", "build", Some(0));
+            store.conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",[early]).unwrap();
+            store.conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",[previous]).unwrap();
+            let later = f.insert("1988-10-30 12:02:00", "build", Some(0));
+            let selected = f.query(Filter {
+                start: Some("1988-10-30".into()),
+                end: Some("1988-10-30".into()),
+                day: Some("1988-10-30".into()),
+                ..Filter::default()
+            });
+            assert_eq!(selected.total, 2);
+            assert_eq!(selected.runs.len(), 2);
+            assert!(selected.runs.iter().any(|r| r.id == later));
+        }
     }
     #[test]
     #[ignore = "manual synthetic 5,000-record measurement; run with --ignored --nocapture"]

@@ -1,8 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { createAnalytics, emptyAnalytics, type AnalyticsFilter } from "./analytics";
+  import { createAnalytics, emptyAnalytics, recordedOutcome, type AnalyticsFilter } from "./analytics";
   import { app, session } from "./state.svelte";
-  import { outcome } from "./run";
   import RunView from "./RunView.svelte";
   import type { RunRecord } from "./types";
 
@@ -29,10 +28,10 @@
   }
 </script>
 
-<section class="analytics">
+<section class="analytics" class:detail={!!app.view.selectedRun}>
   <h1>日次の実行件数</h1>
   {#if app.view.selectedRun}
-    <button class="btn" onclick={() => session.selectRun(null)}>← 日次の履歴へ戻る</button>
+    <button class="btn back" onclick={() => session.selectRun(null)}>← 日次の履歴へ戻る</button>
     <RunView view={app.view} reload={session.loadDetail} />
   {:else}
     <div class="filters">
@@ -90,7 +89,7 @@
         <ul class="list">
           {#each data.runs as run (run.id)}
             <li><button class="run-row" onclick={() => session.selectRun(run.id)}>
-              <span>{run.cmd} {run.target}</span><small>{outcome(run, null)} · {run.id}</small>
+              <span>{run.cmd} {run.target}</span><small>{recordedOutcome(run)} · {run.id}</small>
             </button></li>
           {/each}
         </ul>
@@ -101,6 +100,9 @@
 
 <style>
   .analytics { min-width: 0; }
+  .analytics.detail { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .detail > h1 { flex: 0 0 auto; margin: 14px; }
+  .back { flex: 0 0 auto; align-self: flex-start; margin: 0 14px; }
   .filters, .day-list { display: flex; gap: 8px; flex-wrap: wrap; }
   .filters label { display: flex; gap: 4px; align-items: center; }
   .day-list { margin: 12px 0; max-height: 180px; overflow: auto; }

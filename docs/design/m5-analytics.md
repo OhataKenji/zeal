@@ -26,7 +26,9 @@ workspaceはM4のcanonical pathとworkspace表で照合する。
 全queryにworkspace_idとfilterのbound parameterを使い、別workspaceを混ぜない。
 
 基準は `started_at_ms`、dayはSQLの `date(started_at_ms / 1000, 'unixepoch', 'localtime')` とする。
-期間はlocalの開始日00:00以上、終了日の翌日00:00未満をUnix msへ変換して絞る。
+期間はlocal日付の開始日以上、終了日の翌日未満で絞る。
+index用のUnix ms範囲は前後のcalendar日まで広く取り、同じSQLの日付条件で正確に絞る。
+存在しない深夜0時や、日付をまたいで時計が戻る地域でも、集計と一覧の日付を一致させる。
 固定86,400秒で日付境界を計算しない。
 タイムゾーンと期間と表示を一致させ、OS設定変更はworkspaceを開き直したときに反映する。
 

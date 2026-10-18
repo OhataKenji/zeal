@@ -63,3 +63,9 @@ export function createAnalytics(
     },
   };
 }
+
+// M5 completion is the saved exit code, independent of finish timestamps.
+export function recordedOutcome(record: RunRecord): string {
+  if (record.exitCode === undefined) return "unknown";
+  return record.exitCode === 0 ? "ok" : record.exitCode === 8 ? "interrupted" : "failed";
+}

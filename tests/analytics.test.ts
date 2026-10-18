@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAnalytics, emptyAnalytics, type DailyAnalytics } from "../src/lib/analytics.ts";
+import {
+  createAnalytics,
+  emptyAnalytics,
+  recordedOutcome,
+  type DailyAnalytics,
+} from "../src/lib/analytics.ts";
 
 function harness() {
   let view = emptyAnalytics();
@@ -87,4 +92,18 @@ test("errors remove stale data and retry preserves requested conditions", async 
   await retry;
   assert.equal(h.view.error, null);
   assert.equal(h.view.data?.total, 2);
+});
+
+test("analytics row outcomes use saved exit codes even without a finish timestamp", () => {
+  const record = {
+    id: "synthetic",
+    workspace: "/workspace",
+    cmd: "build" as const,
+    target: "//:app",
+    startedAt: 0,
+  };
+  assert.equal(recordedOutcome({ ...record, exitCode: 0 }), "ok");
+  assert.equal(recordedOutcome({ ...record, exitCode: 8 }), "interrupted");
+  assert.equal(recordedOutcome({ ...record, exitCode: 1 }), "failed");
+  assert.equal(recordedOutcome({ ...record, exitCode: -1 }), "failed");
 });
