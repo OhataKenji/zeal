@@ -17,6 +17,14 @@
     onselect: (label: string) => void;
   } = $props();
   const rel = $derived(relations(snap, label));
+  const reverseAttrs = $derived(
+    new Map(
+      rel?.usedBy.map((used) => [
+        used.label,
+        used.attrs.filter((attr) => attr !== "deps" && attr !== "data").join(", "),
+      ]) ?? [],
+    ),
+  );
   const sources = $derived([
     ...new Set(
       rel?.inputs
@@ -50,7 +58,7 @@
   }
 </script>
 
-{#snippet labels(values: string[], id: string, pkg: string)}
+{#snippet labels(values: string[], id: string, pkg: string, attrs?: Map<string, string>)}
   {@const filtered = values.filter(matches)}
   <div class="chips">
     {#each expanded.has(id) || query ? filtered : filtered.slice(0, 12) as value (value)}
@@ -60,6 +68,7 @@
           <span>{displayLabel(value, pkg)}</span><small
             >{target.ruleClass}</small
           >
+          {#if attrs?.get(value)}<small>{attrs.get(value)}</small>{/if}
         </button>
       {:else}<span class="chip" title={value}>{displayLabel(value, pkg)}</span
         >{/if}
@@ -153,15 +162,11 @@
     <dt>rdeps<small>depth=1</small></dt>
     <dd>
       {@render labels(
-        [...new Set(rel.usedBy.map((used) => used.label))],
+        rel.usedBy.map((used) => used.label),
         "rdeps",
         target.pkg,
+        reverseAttrs,
       )}
-      {#each rel.usedBy.filter((used) => used.attr !== "deps" && used.attr !== "data" && matches(used.label)) as used}
-        <small class="dim"
-          >{displayLabel(used.label, target.pkg)} · {used.attr}</small
-        >
-      {/each}
     </dd>
   </dl>
 {:else}<p class="dim">{label} は snapshot にありません</p>{/if}

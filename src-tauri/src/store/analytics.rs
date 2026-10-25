@@ -1,6 +1,6 @@
 //! Read-only projections of completed GUI runs. Artifacts and live runner state
 //! never participate in counting or filtering.
-use super::{ErrorKind, RunRecord, Store, StoreError, fail, row_record};
+use super::{ErrorKind, Store, StoreError, fail};
 use rusqlite::{Connection, OptionalExtension, named_params, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -12,7 +12,6 @@ pub struct Filter {
     pub end: Option<String>,
     pub cmd: Option<String>,
     pub outcome: Option<String>,
-    pub day: Option<String>,
 }
 #[derive(Debug, Serialize)]
 pub struct Day {
@@ -24,12 +23,10 @@ pub struct Analytics {
     pub filter: Filter,
     pub today: String,
     pub days: Vec<Day>,
-    pub total: i64,
-    pub runs: Vec<RunRecord>,
 }
 
-// The same predicate is used by the aggregate and its drill-down. The existing
-// index supplies the workspace + millisecond range scan; no LIMIT loses runs.
+// The existing index supplies the workspace + millisecond range scan.
+// The local-date predicate determines which calendar days to count.
 const MATCH: &str = "workspace_id=:workspace
     AND started_at_ms >= :start AND started_at_ms < :end
     AND exit_code IS NOT NULL AND cmd IN ('build','test')
@@ -116,12 +113,6 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         return Err(fail(ErrorKind::Invalid));
     }
     let (from, until) = bounds(&tx, &start, &end)?;
-    if let Some(day) = &filter.day {
-        valid_day(&tx, day)?;
-        if day < &start || day > &end {
-            return Err(fail(ErrorKind::Invalid));
-        }
-    }
     let ws_id: Option<String> = tx
         .query_row(
             "SELECT id FROM workspace WHERE canonical_path=?1",
@@ -142,7 +133,6 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             })
         })?
         .collect::<Result<_, _>>()?;
-    let mut runs = Vec::new();
     if let Some(ws_id) = ws_id {
         let sql = format!(
             "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),COUNT(*) FROM run WHERE {MATCH} GROUP BY 1 ORDER BY 1"
@@ -164,30 +154,11 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 .map_err(|_| fail(ErrorKind::Invalid))?;
             days[i].count = count;
         }
-        if let Some(day) = &filter.day {
-            let (from, until) = bounds(&tx, day, day)?;
-            let sql = format!(
-                "SELECT id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code FROM run WHERE {MATCH} ORDER BY started_at_ms DESC,id"
-            );
-            runs = tx
-                .prepare(&sql)?
-                .query_map(
-                    named_params! {
-                        ":workspace":ws_id, ":start":from, ":end":until,
-                        ":first_day":day, ":last_day":day,
-                        ":cmd":filter.cmd, ":outcome":filter.outcome,
-                    },
-                    |r| row_record(r, &ws),
-                )?
-                .collect::<Result<_, _>>()?;
-        }
     }
     Ok(Analytics {
-        total: days.iter().map(|d| d.count).sum(),
         filter,
         today,
         days,
-        runs,
     })
 }
 
@@ -195,6 +166,10 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
 mod tests {
     use super::*;
     use std::{fs, path::PathBuf, process::Command, time::Instant};
+    fn total(result: &Analytics) -> i64 {
+        result.days.iter().map(|day| day.count).sum()
+    }
+
     struct Fixture {
         root: PathBuf,
         data: PathBuf,
@@ -245,9 +220,9 @@ mod tests {
     }
 
     #[test]
-    fn counts_and_drilldown_share_workspace_range_command_and_outcome() {
+    fn counts_follow_workspace_range_command_and_outcome() {
         let f = Fixture::new();
-        let expected = f.insert("2026-03-07 00:00:00", "build", Some(0));
+        f.insert("2026-03-07 00:00:00", "build", Some(0));
         f.insert("2026-03-07 23:59:59", "test", Some(8));
         f.insert("2026-03-09 23:59:59", "build", Some(1));
         f.insert("2026-03-06 23:59:59", "build", Some(0));
@@ -270,31 +245,23 @@ mod tests {
             all.days.iter().map(|d| d.count).collect::<Vec<_>>(),
             vec![2, 0, 1]
         );
-        assert_eq!(all.total, 3);
-        assert!(all.runs.is_empty());
+        assert_eq!(total(&all), 3);
         let selected = f.query(Filter {
             cmd: Some("build".into()),
             outcome: Some("ok".into()),
-            day: Some("2026-03-07".into()),
             ..f.filter()
         });
-        assert_eq!(selected.total, 1);
-        assert_eq!(selected.runs.len(), 1);
-        assert_eq!(selected.runs[0].id, expected);
-        assert_eq!(
-            selected.runs[0].workspace,
-            f.ws.canonicalize().unwrap().to_string_lossy()
-        );
+        assert_eq!(total(&selected), 1);
         let interrupted = f.query(Filter {
             outcome: Some("interrupted".into()),
             ..f.filter()
         });
-        assert_eq!(interrupted.total, 1);
+        assert_eq!(total(&interrupted), 1);
         let failed = f.query(Filter {
             outcome: Some("failed".into()),
             ..f.filter()
         });
-        assert_eq!(failed.total, 1);
+        assert_eq!(total(&failed), 1);
     }
     #[test]
     fn artifacts_and_missing_finish_do_not_affect_counts_and_late_records_are_visible() {
@@ -303,26 +270,26 @@ mod tests {
         super::super::finish(&f.data, &f.ws, &rec.id, 0).unwrap();
         let store = Store::open(&f.data).unwrap();
         store.conn.execute("UPDATE run SET started_at_ms=unixepoch('2026-03-07','utc')*1000,finished_at_ms=NULL WHERE id=?1",[rec.id]).unwrap();
-        assert_eq!(f.query(f.filter()).total, 1);
+        assert_eq!(total(&f.query(f.filter())), 1);
         fs::remove_dir_all(dir).unwrap();
-        assert_eq!(f.query(f.filter()).total, 1);
+        assert_eq!(total(&f.query(f.filter())), 1);
         f.insert("2026-03-07 12:00:00", "test", Some(0));
-        assert_eq!(f.query(f.filter()).total, 2);
+        assert_eq!(total(&f.query(f.filter())), 2);
     }
     #[test]
     fn defaults_empty_workspace_alias_and_invalid_bound_values() {
         let f = Fixture::new();
         let result = f.query(Filter::default());
         assert_eq!(result.days.len(), 30);
-        assert_eq!(result.total, 0);
+        assert_eq!(total(&result), 0);
         assert_eq!(result.filter.end, Some(result.today));
         let other = f.root.join("unregistered");
         fs::create_dir(&other).unwrap();
-        assert_eq!(query(&f.data, &other, f.filter()).unwrap().total, 0);
+        assert_eq!(total(&query(&f.data, &other, f.filter()).unwrap()), 0);
         let alias = f.root.join("alias");
         std::os::unix::fs::symlink(&f.ws, &alias).unwrap();
         f.insert("2026-03-07", "build", Some(0));
-        assert_eq!(query(&f.data, &alias, f.filter()).unwrap().total, 1);
+        assert_eq!(total(&query(&f.data, &alias, f.filter()).unwrap()), 1);
         for filter in [
             Filter {
                 start: Some("2026-02-30".into()),
@@ -344,21 +311,13 @@ mod tests {
                 outcome: Some("ok' OR 1=1 --".into()),
                 ..f.filter()
             },
-            Filter {
-                day: Some("2026-03-10".into()),
-                ..f.filter()
-            },
-            Filter {
-                day: Some("now".into()),
-                ..f.filter()
-            },
         ] {
             assert_eq!(
                 query(&f.data, &f.ws, filter).unwrap_err().kind,
                 ErrorKind::Invalid
             );
         }
-        assert_eq!(f.query(f.filter()).total, 1);
+        assert_eq!(total(&f.query(f.filter())), 1);
     }
     // Each timezone is a separate process. Changing TZ inside a multithreaded
     // Rust test process would be unsafe and contaminate unrelated tests.
@@ -413,28 +372,23 @@ mod tests {
             assert_eq!(spring.1 - spring.0, 24 * 3_600_000);
         }
         if zone == "Asia/Beirut" {
-            let before = f.insert("2026-03-28 23:30:00", "build", Some(0));
-            let inside = f.insert("2026-03-29 01:00:00", "build", Some(0));
+            f.insert("2026-03-28 23:30:00", "build", Some(0));
+            f.insert("2026-03-29 01:00:00", "build", Some(0));
             let result = f.query(Filter {
                 start: Some("2026-03-29".into()),
                 end: Some("2026-03-29".into()),
-                day: Some("2026-03-29".into()),
                 ..Filter::default()
             });
-            assert_eq!(result.total, 1);
-            assert_eq!(result.runs[0].id, inside);
-            assert!(result.runs.iter().all(|r| r.id != before));
+            assert_eq!(total(&result), 1);
         }
         if zone == "Pacific/Apia" {
             // The calendar skipped December 30, 2011 entirely.
             let skipped = f.query(Filter {
                 start: Some("2011-12-30".into()),
                 end: Some("2011-12-30".into()),
-                day: Some("2011-12-30".into()),
                 ..Filter::default()
             });
-            assert_eq!(skipped.total, 0);
-            assert!(skipped.runs.is_empty());
+            assert_eq!(total(&skipped), 0);
         }
         let expected = f.insert("2026-03-08 12:00:00", "build", Some(0));
         let last = f.insert("2026-03-08 23:59:59", "build", Some(0));
@@ -457,18 +411,15 @@ mod tests {
         let result = f.query(Filter {
             start: Some("2026-03-08".into()),
             end: Some("2026-03-08".into()),
-            day: Some("2026-03-08".into()),
             ..Filter::default()
         });
-        assert_eq!(result.total, 2);
-        assert_eq!(result.runs.len(), 2);
-        assert!(result.runs.iter().any(|r| r.id == expected));
+        assert_eq!(total(&result), 2);
         let result = f.query(Filter {
             start: Some("2026-11-01".into()),
             end: Some("2026-11-01".into()),
             ..Filter::default()
         });
-        assert_eq!(result.total, 0);
+        assert_eq!(total(&result), 0);
         if zone == "America/New_York" || zone == "America/Havana" {
             let (from, until): (i64, i64) = store
                 .conn
@@ -486,11 +437,9 @@ mod tests {
             let selected = f.query(Filter {
                 start: Some("2026-11-01".into()),
                 end: Some("2026-11-01".into()),
-                day: Some("2026-11-01".into()),
                 ..Filter::default()
             });
-            assert_eq!(selected.total, 2);
-            assert_eq!(selected.runs.len(), 2);
+            assert_eq!(total(&selected), 2);
         }
         if zone == "America/Goose_Bay" {
             // In 1988 the clock rolled from Oct 30 00:01 back into Oct 29.
@@ -500,16 +449,13 @@ mod tests {
             let previous = f.insert("1988-10-30 12:01:00", "build", Some(0));
             store.conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",[early]).unwrap();
             store.conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",[previous]).unwrap();
-            let later = f.insert("1988-10-30 12:02:00", "build", Some(0));
+            f.insert("1988-10-30 12:02:00", "build", Some(0));
             let selected = f.query(Filter {
                 start: Some("1988-10-30".into()),
                 end: Some("1988-10-30".into()),
-                day: Some("1988-10-30".into()),
                 ..Filter::default()
             });
-            assert_eq!(selected.total, 2);
-            assert_eq!(selected.runs.len(), 2);
-            assert!(selected.runs.iter().any(|r| r.id == later));
+            assert_eq!(total(&selected), 2);
         }
     }
     #[test]
@@ -539,30 +485,20 @@ mod tests {
         for i in 0..10 {
             let at = Instant::now();
             let result = f.query(filter.clone());
-            assert_eq!(result.total, 2500);
+            assert_eq!(total(&result), 2500);
             let bytes = serde_json::to_vec(&result).unwrap().len();
             eprintln!("initial[{i}]={:?}, bytes={bytes}", at.elapsed());
             let at = Instant::now();
             let result = f.query(Filter {
                 cmd: Some("test".into()),
                 outcome: Some("failed".into()),
-                day: Some("2026-03-11".into()),
                 ..filter.clone()
             });
-            assert_eq!(result.total, 416);
-            assert_eq!(
-                result.runs.len() as i64,
-                result
-                    .days
-                    .iter()
-                    .find(|d| d.day == "2026-03-11")
-                    .unwrap()
-                    .count
-            );
+            assert_eq!(total(&result), 416);
             eprintln!(
-                "refilter[{i}]={:?}, rows={}",
+                "refilter[{i}]={:?}, days={}",
                 at.elapsed(),
-                result.runs.len()
+                result.days.len()
             );
         }
     }

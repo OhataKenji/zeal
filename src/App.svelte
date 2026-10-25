@@ -279,12 +279,12 @@
     {#if state.ingest === "running"}
       <p class="dim">取り込み中…</p>
     {/if}
-    {#if analyticsOpen}
-      {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
-    {:else if app.view.selectedRun}
+    {#if app.view.selectedRun}
       {#key app.view.selectedRun}
         <RunView view={app.view} reload={session.loadDetail} />
       {/key}
+    {:else if analyticsOpen}
+      {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
     {:else if snap && selected}
       <TargetView
         {snap}
@@ -317,7 +317,6 @@
       {:else}
         <strong>Zeal</strong>
       {/if}
-      <CaretDown size={10} />
       {#if st?.workspace}
         <button
           type="button"
@@ -362,7 +361,8 @@
       </div>
       <button
         type="button"
-        class="button button-primary"
+        class="button button-primary icon-button"
+        aria-label={actionLabel}
         title={actionLabel}
         disabled={switchingWs ||
           (running ? !canStop(app.view) : !canSend(app.view, targetField))}
@@ -372,7 +372,6 @@
             size={12}
             weight="fill"
           />{/if}
-        <span>{actionLabel}</span>
       </button>
     </div>
     {#if st?.ingest === "running"}
