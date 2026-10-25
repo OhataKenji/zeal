@@ -35,6 +35,7 @@ pub struct TestResult {
     pub status: String,
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "detail.bep_parse", skip_all)]
 pub fn parse<R: BufRead>(input: R) -> Bep {
     let mut bep = Bep::default();
     for line in input.lines() {

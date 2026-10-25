@@ -204,6 +204,7 @@ fn begin_stop(st: &mut CoreState) {
 
 /// Poll and signal under the same lock. Once try_wait reaps the child, its PID
 /// is revoked immediately, before saving or waking an app-exit waiter.
+#[tracing::instrument(target = "zeal::operations", name = "bazel.wait", skip_all)]
 fn observe_process(
     core: &Core,
     id: &str,

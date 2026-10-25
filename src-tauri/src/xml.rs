@@ -45,6 +45,7 @@ pub struct RawRule {
     pub outputs: Vec<String>,
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "query.xml_parse", skip_all)]
 pub fn parse_rules<R: BufRead>(input: R) -> Vec<RawRule> {
     let mut reader = Reader::from_reader(input);
     let mut rules = Vec::new();

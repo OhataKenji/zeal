@@ -283,6 +283,7 @@ fn parse_limits<R: Read>(
     collector.finish()
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "detail.profile_parse", skip_all)]
 pub fn parse_bounded<R: Read>(input: R, ipc_budget: usize) -> Result<Profile, ProfileError> {
     parse_limits(
         input,

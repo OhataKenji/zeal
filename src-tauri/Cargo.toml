@@ -35,3 +35,19 @@ prost = "0.13.5"
 prost-types = "0.13.5"
 tokio = { version = "1", features = ["net", "sync", "time", "rt", "macros"] }
 tokio-stream = { version = "0.1", features = ["net"] }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = [
+  "trace",
+  "http-proto",
+] }
+opentelemetry-http = { version = "0.33", default-features = false, features = [
+  "reqwest",
+  "reqwest-blocking",
+] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+async-trait = "0.1"
+url = "2"
+tracing = { version = "0.1", default-features = false, features = ["attributes", "std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+tracing-opentelemetry = { version = "0.34", default-features = false }

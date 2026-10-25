@@ -239,6 +239,7 @@ fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord>
     })
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "run.create_record", skip_all)]
 pub fn create(
     data: &Path,
     ws: &Path,
@@ -274,6 +275,7 @@ pub fn create(
     };
     Ok((rec, dir.path().to_owned()))
 }
+#[tracing::instrument(target = "zeal::operations", name = "detail.record", skip_all)]
 pub fn read_record(data: &Path, ws: &Path, run_id: &str) -> Result<RunRecord, StoreError> {
     let ws = ws.canonicalize()?;
     let store = Store::open(data)?;
@@ -308,6 +310,7 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
     Ok(records)
 }
 /// Only an unfinished record can transition to a completed summary.
+#[tracing::instrument(target = "zeal::operations", name = "run.save_result", skip_all)]
 pub fn finish(
     data: &Path,
     ws: &Path,

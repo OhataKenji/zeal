@@ -108,6 +108,7 @@ pub fn refresh_timezone() {
     }
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "analytics.query", skip_all)]
 pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, StoreError> {
     let ws = ws.canonicalize()?;
     let mut store = Store::open(data)?;
