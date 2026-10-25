@@ -296,6 +296,62 @@ test("counter names and numeric fields form separate series without losing raw a
   assert.deepEqual(result.lanes[0].events[0].event.args, { used: 10, free: 20, unit: "MB" });
 });
 
+test("positive resource counters use a zero baseline like BuildBuddy", () => {
+  const lane = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "main",
+        events: [
+          { ph: "C", ts: 0, name: "Memory usage (Bazel)", args: { memory: 100 } },
+          { ph: "C", ts: 1, name: "Memory usage (Bazel)", args: { memory: 200 } },
+        ],
+      },
+    ],
+  }).lanes[0];
+  const counter = lane.counters[0];
+  assert.deepEqual([counter.min, counter.max], [0, 200]);
+  assert.equal(counterPointY(counter, 100), 22);
+  assert.equal(counterPointY(counter, 200), 7);
+  assert.deepEqual(
+    counter.points.map((point) => point.value),
+    [100, 200],
+  );
+});
+
+test("constant positive counters plot above zero instead of on the baseline", () => {
+  const counter = layoutProfile({
+    phases: [],
+    lanes: [{ tid: 1, name: "", events: [{ ph: "C", ts: 0, name: "cpu", args: { cpu: 2 } }] }],
+  }).lanes[0].counters[0];
+  assert.deepEqual([counter.min, counter.max], [0, 2]);
+  assert.equal(counterPointY(counter, 2), 7);
+});
+
+test("zero and negative counters retain finite geometry and their original values", () => {
+  const lane = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "",
+        events: [
+          { ph: "C", ts: 0, name: "zero", args: { value: 0 } },
+          { ph: "C", ts: 1, name: "negative", args: { value: -2 } },
+        ],
+      },
+    ],
+  }).lanes[0];
+  const [zero, negative] = lane.counters;
+  assert.deepEqual([zero.min, zero.max], [0, 0]);
+  assert.equal(counterPointY(zero, 0), 37);
+  assert.deepEqual([negative.min, negative.max], [-2, 0]);
+  assert.equal(counterPointY(negative, -2), 37);
+  assert.equal(counterPointY(negative, 0), 7);
+  assert.equal(negative.points[0].value, -2);
+});
+
 test("all counter series follow every event track without changing raw geometry", () => {
   const layout = layoutProfile({
     phases: [],
