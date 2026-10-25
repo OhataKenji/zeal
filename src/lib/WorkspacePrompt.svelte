@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import { untrack } from "svelte";
   import { openWorkspace } from "./state.svelte";
 
-  let { initial = "", onclose }: { initial?: string; onclose?: () => void } = $props();
+  let { initial = "", onclose }: { initial?: string; onclose?: () => void } =
+    $props();
 
   // The prop only seeds the input once.
   let path = $state(untrack(() => initial));
@@ -32,16 +35,23 @@
 >
   <label>
     workspace
-    <input
-      class="input"
+    <Input
+      class="font-mono"
       bind:value={path}
       placeholder="/path/to/bazel/workspace"
       disabled={busy}
     />
   </label>
-  <button class="btn primary" disabled={busy || path.trim() === ""}>open</button>
+  <Button
+    type="submit"
+    variant="default"
+    size="sm"
+    disabled={busy || path.trim() === ""}>open</Button
+  >
   {#if onclose}
-    <button type="button" class="btn" onclick={onclose}>cancel</button>
+    <Button type="button" variant="outline" size="sm" onclick={onclose}
+      >cancel</Button
+    >
   {/if}
 </form>
 {#if error}<p class="err">{error}</p>{/if}

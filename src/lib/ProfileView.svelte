@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from "$lib/components/ui/button/index.js";
   import { tick } from "svelte";
   import type { Profile } from "./types";
   import {
@@ -303,23 +304,29 @@
       >{layout.lanes.length} threads</span
     ><span class="trace-input-hint">Drag to pan</span>
     <div class="trace-actions">
-      <button class="btn" onclick={fit} title="Fit the complete profile (F)"
-        >Fit</button
+      <Button
+        variant="outline"
+        size="sm"
+        onclick={fit}
+        title="Fit the complete profile (F)">Fit</Button
       >
-      <button
-        class="btn"
+      <Button
+        variant="outline"
+        size="sm"
         onclick={() => zoom(1 / 1.5)}
         aria-label="Zoom out"
-        title="Zoom out (S)">−</button
+        title="Zoom out (S)">−</Button
       >
-      <button
-        class="btn"
+      <Button
+        variant="outline"
+        size="sm"
         onclick={() => zoom(1.5)}
         aria-label="Zoom in"
-        title="Zoom in (W)">+</button
+        title="Zoom in (W)">+</Button
       >
-      <button
-        class="btn"
+      <Button
+        variant="outline"
+        size="sm"
         onclick={() => {
           collapsed =
             collapsed.size === layout.lanes.length
@@ -328,7 +335,7 @@
         }}
       >
         {collapsed.size === layout.lanes.length ? "Expand all" : "Collapse all"}
-      </button>
+      </Button>
     </div>
   </div>
   <div class="trace-layout">

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import {
     Cube,
     CaretDown,
@@ -52,6 +54,7 @@
       st?.ingest === "running",
   );
   const running = $derived(!!st?.running);
+  const actionLabel = $derived(running ? "Stop" : cmd === "test" ? "Test" : "Build");
   const inputError = $derived(
     targetField === "" ? null : targetError(targetField),
   );
@@ -178,7 +181,7 @@
           <p class="dim">取り込み中…</p>
         {:else if state.lastError}
           <p class="err">{state.lastError.summary}</p>
-          <button class="btn" onclick={refresh}>retry</button>
+          <Button variant="outline" size="sm" onclick={refresh}>retry</Button>
         {:else}
           <p class="dim">—</p>
         {/if}
@@ -220,7 +223,7 @@
             <li>
               <button
                 class="run-row"
-                title={status.label}
+                title={`${run.cmd} ${run.target} — ${status.label}`}
                 aria-label={`${run.cmd} ${run.target}: ${status.label}`}
                 class:sel={app.view.selectedRun === run.id}
                 aria-current={app.view.selectedRun === run.id
@@ -229,17 +232,27 @@
                 onclick={() => session.selectRun(run.id)}
               >
                 <span class="run-label"
-                  ><RunStatus {...status} compact />{run.cmd} {run.target}</span
+                  ><RunStatus {...status} compact /><span class="run-command"
+                    >{run.cmd}</span
+                  >
+                  <time datetime={new Date(run.startedAt).toISOString()}
+                    >{new Date(run.startedAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}</time
+                  ></span
                 >
-                <small>{new Date(run.startedAt).toLocaleTimeString()}</small>
+                <span class="run-target">{run.target}</span>
               </button>
             </li>
           {/each}
         </ul>
         {#if app.view.runsError}<p class="err">{app.view.runsError}</p>
-          <button class="btn" onclick={session.loadRuns}>retry</button>
+          <Button variant="outline" size="sm" onclick={session.loadRuns}
+            >retry</Button
+          >
         {:else if app.view.runs.length === 0}<p class="dim">
-            Send で build / test を実行
+            Build / Test で実行
           </p>{/if}
       </div>
     {/if}
@@ -283,7 +296,7 @@
       <p class="dim">tree から target を選択</p>
     {:else if state.ingest !== "running" && state.lastError}
       <p class="err">取り込みに失敗しました: {state.lastError.summary}</p>
-      <button class="btn" onclick={refresh}>retry</button>
+      <Button variant="outline" size="sm" onclick={refresh}>retry</Button>
     {/if}
   </main>
 {/snippet}
@@ -306,15 +319,16 @@
       {/if}
       <CaretDown size={10} />
       {#if st?.workspace}
-        <button
-          class="btn icon-button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label="Reload targets"
           title="Reload targets"
           onclick={refresh}
           disabled={busy}
         >
           <ArrowClockwise size={14} />
-        </button>
+        </Button>
       {/if}
     </div>
     <div class="composer">
@@ -323,8 +337,8 @@
         <option>test</option>
       </select>
       <div class="composer-search">
-        <input
-          class="input composer-target"
+        <Input
+          class="composer-target h-8 border-0 shadow-none focus-visible:ring-0"
           aria-label="Target label or pattern"
           role="combobox"
           aria-expanded={dropdownOpen && !!snap}
@@ -346,10 +360,10 @@
           <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
         {/if}
       </div>
-      <button
-        class="btn primary icon-button"
-        aria-label={running ? "Stop" : "Send"}
-        title={running ? "Stop" : "Send"}
+      <Button
+        variant="default"
+        size="sm"
+        title={actionLabel}
         disabled={switchingWs ||
           (running ? !canStop(app.view) : !canSend(app.view, targetField))}
         onclick={submit}
@@ -358,7 +372,8 @@
             size={12}
             weight="fill"
           />{/if}
-      </button>
+        <span>{actionLabel}</span>
+      </Button>
     </div>
     {#if st?.ingest === "running"}
       <span class="label" role="status">target データの取得待ち</span>

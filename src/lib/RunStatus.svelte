@@ -34,17 +34,17 @@
     flex-shrink: 0;
     width: 40px;
     height: 40px;
-    border-radius: 12px;
-    color: var(--note);
-    background: var(--surface);
+    border-radius: var(--radius-lg);
+    color: var(--muted-foreground);
+    background: var(--muted);
   }
   .success {
-    color: var(--green);
-    background: #e8f4e9;
+    color: var(--success);
+    background: var(--success-muted);
   }
   .failed {
-    color: var(--err);
-    background: #fff0ee;
+    color: var(--destructive);
+    background: color-mix(in oklch, var(--destructive) 10%, var(--background));
   }
   .compact {
     width: 12px;

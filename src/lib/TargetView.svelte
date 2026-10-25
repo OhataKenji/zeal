@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import { SvelteSet } from "svelte/reactivity";
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
   import type { Snapshot } from "./types";
@@ -110,7 +112,7 @@
 {#if rel}
   {@const target = rel.target}
   <header class="target-head">
-    <span class="badge rule-badge">{target.ruleClass}</span>
+    <Badge variant="secondary" class="font-mono">{target.ruleClass}</Badge>
     <h1>{target.label}</h1>
     {#if target.location}
       <button
@@ -121,14 +123,18 @@
         {location(target.location.file, target.location.line)}
       </button>
     {/if}
+  </header>
+  <div class="attributes-head">
+    <h2>Attributes</h2>
     <label class="relation-filter"
-      ><MagnifyingGlass size={13} /><input
+      ><MagnifyingGlass size={13} /><Input
+        class="h-8 pl-8"
         aria-label="Filter labels and files"
         placeholder="Filter labels…"
         bind:value={query}
       /></label
     >
-  </header>
+  </div>
   <dl class="rel">
     <dt>srcs</dt>
     <dd>{@render files(sources, "srcs", target.pkg)}</dd>

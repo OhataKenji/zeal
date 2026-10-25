@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
   import RunStatus from "./RunStatus.svelte";
   import type { SessionView } from "./session";
   import { runStatus, sectionData, sectionMessage } from "./run";
@@ -53,7 +55,9 @@
       <div>
         <h1>
           {record?.target ?? view.selectedRun}
-          {#if record}<span class="badge">bazel {record.cmd}</span>{/if}
+          {#if record}<Badge variant="secondary" class="font-mono"
+              >bazel {record.cmd}</Badge
+            >{/if}
         </h1>
         <div class="run-facts">
           {#if record?.finishedAt !== undefined}
@@ -71,10 +75,13 @@
     </header>
     <div class="run-tabs" role="tablist" aria-label="Run views">
       {#each tabs as tab, index}
-        <button
+        <Button
           id="run-tab-{tab}"
-          class="btn run-tab"
-          class:active={active === tab}
+          variant="ghost"
+          size="sm"
+          class={active === tab
+            ? "bg-background font-semibold shadow-xs"
+            : undefined}
           role="tab"
           aria-selected={active === tab}
           aria-controls="run-panel-{tab}"
@@ -82,7 +89,7 @@
           onclick={() => (active = tab)}
           onkeydown={(event) => tabKey(event, index)}
           >{tab}{#if tab === "Targets" && view.detail?.bep.status === "ok"}
-            ({view.detail.bep.data.targets.length}){/if}</button
+            ({view.detail.bep.data.targets.length}){/if}</Button
         >
       {/each}
       {#if view.detailLoading}<span class="panel-loading" role="status"
@@ -94,7 +101,7 @@
   {#if view.detailError}
     <div class="run-notice err">
       詳細を読めません: {view.detailError}
-      <button class="btn" onclick={reload}>Retry</button>
+      <Button variant="outline" size="sm" onclick={reload}>Retry</Button>
     </div>
   {/if}
 
