@@ -251,9 +251,7 @@
           <button type="button" class="button" onclick={session.loadRuns}
             >retry</button
           >
-        {:else if app.view.runs.length === 0}<p class="dim">
-            Build / Test で実行
-          </p>{/if}
+        {/if}
       </div>
     {/if}
   </section>
