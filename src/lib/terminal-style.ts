@@ -4,22 +4,25 @@ export const terminalFont = {
   lineHeight: 1,
 };
 
+// ANSI hues derive from the timeline trace palette (timeline.ts eventColors —
+// orange, green, teal, purple), darkened for text on white. The palette has no
+// red or blue, so errors take brick orange and blue borrows indigo.
 export const terminalColors = {
   black: "#222222",
-  red: "#b42318",
-  green: "#18713c",
-  yellow: "#856400",
-  blue: "#175cd3",
-  magenta: "#9333a8",
-  cyan: "#087c8c",
+  red: "#ac3e15",
+  green: "#307e3d",
+  yellow: "#967008",
+  blue: "#5c58bb",
+  magenta: "#8049a2",
+  cyan: "#257e6a",
   white: "#d4d4d4",
   brightBlack: "#666666",
-  brightRed: "#d92d20",
-  brightGreen: "#218445",
-  brightYellow: "#997000",
-  brightBlue: "#2563eb",
-  brightMagenta: "#ad3dc3",
-  brightCyan: "#078899",
+  brightRed: "#ca4616",
+  brightGreen: "#359742",
+  brightYellow: "#ab8007",
+  brightBlue: "#6e6bc7",
+  brightMagenta: "#9558bb",
+  brightCyan: "#2c967d",
   brightWhite: "#eeeeee",
 };
 
