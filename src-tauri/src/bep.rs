@@ -10,11 +10,11 @@
 //! Bazel appends while it runs, so a killed run leaves a cut last line. The
 //! first line that does not parse ends the read with `truncated = true`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::BufRead;
 
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bep {
     pub targets: Vec<TargetResult>,
@@ -22,13 +22,13 @@ pub struct Bep {
     pub truncated: bool,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct TargetResult {
     pub label: String,
     pub ok: bool,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct TestResult {
     pub label: String,
     /// `overallStatus` as Bazel writes it, e.g. `PASSED` or `FAILED`.

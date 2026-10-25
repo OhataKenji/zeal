@@ -1,5 +1,6 @@
 //! SQLite run summaries. Bazel still writes observations into each run directory.
 pub mod analytics;
+pub mod events;
 #[path = "securefs.rs"]
 mod securefs;
 
@@ -18,6 +19,7 @@ pub enum ErrorKind {
     Corrupt,
     Permission,
     DiskFull,
+    Capacity,
     NewerSchema,
     Missing,
     Conflict,
@@ -35,6 +37,7 @@ impl fmt::Display for StoreError {
             ErrorKind::Corrupt => "history database is corrupt or has an unsupported schema",
             ErrorKind::Permission => "history storage permission or file safety error",
             ErrorKind::DiskFull => "history storage is full",
+            ErrorKind::Capacity => "BES result display limit reached",
             ErrorKind::NewerSchema => "history database requires a newer Zeal version",
             ErrorKind::Missing => "history record or artifact is missing",
             ErrorKind::Conflict => "history record or directory already exists",
@@ -110,6 +113,8 @@ pub struct RunRecord {
     pub finished_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external: bool,
 }
 
 fn id(value: &str) -> Result<String, StoreError> {
@@ -157,10 +162,10 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(2))?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(fail(ErrorKind::NewerSchema));
         }
-        if exists && version != 1 {
+        if exists && ![1, 2].contains(&version) {
             return Err(fail(ErrorKind::Corrupt));
         }
         let journal: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
@@ -175,6 +180,11 @@ impl Store {
                     cmd TEXT NOT NULL,target_raw TEXT NOT NULL,started_at_ms INTEGER NOT NULL,finished_at_ms INTEGER,exit_code INTEGER);
                 CREATE INDEX run_workspace_started ON run(workspace_id,started_at_ms DESC);
                 PRAGMA user_version=1;")?;
+            tx.commit()?;
+        }
+        if version < 2 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(events::SCHEMA)?;
             tx.commit()?;
         }
         conn.prepare("SELECT id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code FROM run LIMIT 0")
@@ -225,6 +235,7 @@ fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord>
             })
             .transpose()?,
         exit_code: row.get(5)?,
+        external: false,
     })
 }
 
@@ -259,17 +270,25 @@ pub fn create(
         started_at: started as u64,
         finished_at: None,
         exit_code: None,
+        external: false,
     };
     Ok((rec, dir.path().to_owned()))
 }
 pub fn read_record(data: &Path, ws: &Path, run_id: &str) -> Result<RunRecord, StoreError> {
     let ws = ws.canonicalize()?;
     let store = Store::open(data)?;
-    Ok(store.conn.query_row(
+    let result = store.conn.query_row(
         &format!("{SELECT} AND r.id=?2"),
         params![ws.as_os_str().as_bytes(), id(run_id)?],
         |row| row_record(row, &ws),
-    )?)
+    );
+    match result {
+        Ok(record) => Ok(record),
+        Err(rusqlite::Error::QueryReturnedNoRows) => events::read(&store, &ws, run_id)?
+            .map(|observation| observation.record())
+            .ok_or_else(|| fail(ErrorKind::Missing)),
+        Err(error) => Err(error.into()),
+    }
 }
 pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
     let ws = ws.canonicalize()?;
@@ -277,9 +296,16 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
     let mut statement = store
         .conn
         .prepare(&format!("{SELECT} ORDER BY r.started_at_ms DESC,r.id"))?;
-    Ok(statement
+    let mut records = statement
         .query_map([ws.as_os_str().as_bytes()], |row| row_record(row, &ws))?
-        .collect::<Result<_, _>>()?)
+        .collect::<Result<Vec<_>, _>>()?;
+    for observation in events::list(&store, &ws)? {
+        if !records.iter().any(|record| record.id == observation.id) {
+            records.push(observation);
+        }
+    }
+    records.sort_by(|a, b| b.started_at.cmp(&a.started_at).then(a.id.cmp(&b.id)));
+    Ok(records)
 }
 /// Only an unfinished record can transition to a completed summary.
 pub fn finish(
@@ -595,7 +621,7 @@ mod tests {
     fn newer_schema_and_database_sidecar_links_are_rejected() {
         let f = Fixture::new();
         let store = Store::open(&f.data).unwrap();
-        store.conn.pragma_update(None, "user_version", 2).unwrap();
+        store.conn.pragma_update(None, "user_version", 3).unwrap();
         drop(store);
         assert_eq!(
             Store::open(&f.data).err().unwrap().kind,

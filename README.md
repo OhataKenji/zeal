@@ -38,6 +38,15 @@ All of the above run in CI (`.github/workflows/`).
 
 See [docs/prd.md](docs/prd.md) and [docs/design/](docs/design/) for more details.
 
+## Record terminal builds
+
+Add to `.bazelrc` and use `bazel build --config=zeal //...` while Zeal is open:
+
+```bazelrc
+build:zeal --bes_backend=grpc://127.0.0.1:4718
+build:zeal --bes_timeout=5s
+```
+
 ## License
 
 [Apache-2.0](LICENSE)

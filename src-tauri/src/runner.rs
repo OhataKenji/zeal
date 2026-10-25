@@ -114,6 +114,7 @@ pub fn start(
     let (mut child, terminal, mut capture) = match crate::terminal::spawn(
         Command::new(&bazel)
             .args(argv(cmd, target, &dir))
+            .arg(format!("--invocation_id={}", rec.id))
             .current_dir(&ws),
         &dir,
     ) {

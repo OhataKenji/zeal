@@ -31,6 +31,7 @@
 
 <section class="analytics">
   <h1>Analytics</h1>
+  <p class="panel-empty">Zeal-launched build and test runs.</p>
   <div class="filters">
     <label
       >Start date <input

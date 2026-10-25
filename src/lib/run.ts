@@ -12,8 +12,11 @@ export function runStatus(
 ): RunStatus {
   if (record?.finishedAt !== undefined && record.exitCode !== undefined) {
     return record.exitCode === 0
-      ? { kind: "succeeded", label: "✓ succeeded" }
-      : { kind: "failed", label: `✗ failed (exit ${record.exitCode})` };
+      ? { kind: "succeeded", label: record.external ? "✓ build succeeded" : "✓ succeeded" }
+      : {
+          kind: "failed",
+          label: `✗ ${record.external ? "build " : ""}failed (exit ${record.exitCode})`,
+        };
   }
   if (record && record.id === running) {
     return stopping

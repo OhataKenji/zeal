@@ -69,6 +69,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let disposed = false;
   let stateRevision = 0;
   let listGeneration = 0;
+  let listing = false;
   let detailGeneration = 0;
   let unlisten: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
@@ -91,18 +92,22 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function loadRuns() {
+    if (listing || !view.state?.workspace || disposed) return;
+    listing = true;
     const generation = ++listGeneration;
-    if (!view.state?.workspace) return;
     try {
       const records = await transport.invoke<RunRecord[]>("list_runs");
       const runs = records.filter((run) => run.id !== view.state?.running);
       if (generation === listGeneration) {
-        update({ runs, runsError: null });
+        if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError)
+          update({ runs, runsError: null });
       }
     } catch (error) {
       if (generation === listGeneration) {
         update({ runsError: String(error) });
       }
+    } finally {
+      listing = false;
     }
   }
 

@@ -398,6 +398,7 @@
       {app.view.error}
     </p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
+  {#if st?.besError}<p class="app-error warn" role="status">BES receiver: {st.besError}</p>{/if}
   {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
 
   {#if st === null}
