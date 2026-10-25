@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { Input } from "$lib/components/ui/input/index.js";
-  import { Button } from "$lib/components/ui/button/index.js";
   import { untrack } from "svelte";
   import { openWorkspace } from "./state.svelte";
 
@@ -35,23 +33,20 @@
 >
   <label>
     workspace
-    <Input
-      class="font-mono"
+    <input
+      class="input workspace-path"
       bind:value={path}
       placeholder="/path/to/bazel/workspace"
       disabled={busy}
     />
   </label>
-  <Button
+  <button
+    class="button button-primary"
     type="submit"
-    variant="default"
-    size="sm"
-    disabled={busy || path.trim() === ""}>open</Button
+    disabled={busy || path.trim() === ""}>open</button
   >
   {#if onclose}
-    <Button type="button" variant="outline" size="sm" onclick={onclose}
-      >cancel</Button
-    >
+    <button class="button" type="button" onclick={onclose}>cancel</button>
   {/if}
 </form>
 {#if error}<p class="err">{error}</p>{/if}

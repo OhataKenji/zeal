@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { Input } from "$lib/components/ui/input/index.js";
-  import { Button } from "$lib/components/ui/button/index.js";
   import {
     Cube,
     CaretDown,
@@ -54,7 +52,9 @@
       st?.ingest === "running",
   );
   const running = $derived(!!st?.running);
-  const actionLabel = $derived(running ? "Stop" : cmd === "test" ? "Test" : "Build");
+  const actionLabel = $derived(
+    running ? "Stop" : cmd === "test" ? "Test" : "Build",
+  );
   const inputError = $derived(
     targetField === "" ? null : targetError(targetField),
   );
@@ -181,7 +181,7 @@
           <p class="dim">取り込み中…</p>
         {:else if state.lastError}
           <p class="err">{state.lastError.summary}</p>
-          <Button variant="outline" size="sm" onclick={refresh}>retry</Button>
+          <button type="button" class="button" onclick={refresh}>retry</button>
         {:else}
           <p class="dim">—</p>
         {/if}
@@ -248,8 +248,8 @@
           {/each}
         </ul>
         {#if app.view.runsError}<p class="err">{app.view.runsError}</p>
-          <Button variant="outline" size="sm" onclick={session.loadRuns}
-            >retry</Button
+          <button type="button" class="button" onclick={session.loadRuns}
+            >retry</button
           >
         {:else if app.view.runs.length === 0}<p class="dim">
             Build / Test で実行
@@ -296,7 +296,7 @@
       <p class="dim">tree から target を選択</p>
     {:else if state.ingest !== "running" && state.lastError}
       <p class="err">取り込みに失敗しました: {state.lastError.summary}</p>
-      <Button variant="outline" size="sm" onclick={refresh}>retry</Button>
+      <button type="button" class="button" onclick={refresh}>retry</button>
     {/if}
   </main>
 {/snippet}
@@ -319,16 +319,16 @@
       {/if}
       <CaretDown size={10} />
       {#if st?.workspace}
-        <Button
-          variant="ghost"
-          size="icon-sm"
+        <button
+          type="button"
+          class="button button-ghost icon-button"
           aria-label="Reload targets"
           title="Reload targets"
           onclick={refresh}
           disabled={busy}
         >
           <ArrowClockwise size={14} />
-        </Button>
+        </button>
       {/if}
     </div>
     <div class="composer">
@@ -337,8 +337,8 @@
         <option>test</option>
       </select>
       <div class="composer-search">
-        <Input
-          class="composer-target h-8 border-0 shadow-none focus-visible:ring-0"
+        <input
+          class="input composer-target"
           aria-label="Target label or pattern"
           role="combobox"
           aria-expanded={dropdownOpen && !!snap}
@@ -360,9 +360,9 @@
           <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
         {/if}
       </div>
-      <Button
-        variant="default"
-        size="sm"
+      <button
+        type="button"
+        class="button button-primary"
         title={actionLabel}
         disabled={switchingWs ||
           (running ? !canStop(app.view) : !canSend(app.view, targetField))}
@@ -373,7 +373,7 @@
             weight="fill"
           />{/if}
         <span>{actionLabel}</span>
-      </Button>
+      </button>
     </div>
     {#if st?.ingest === "running"}
       <span class="label" role="status">target データの取得待ち</span>

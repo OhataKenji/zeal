@@ -21,18 +21,14 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
-    "@tailwindcss/vite": "4.3.3",
     "@tauri-apps/cli": "^2.12.2",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.13.3",
-    "cn": "0.5.0",
     "lefthook": "^2.2.2",
     "oxfmt": "^0.73.0",
     "oxlint": "^1.88.0",
     "svelte": "^5.57.0",
     "svelte-check": "^4.7.6",
-    "tailwind-variants": "3.3.1",
-    "tailwindcss": "4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   },
