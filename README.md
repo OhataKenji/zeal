@@ -20,6 +20,26 @@ pnpm tauri build  # build a release bundle
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
+## Features
+
+### Fuzzy Search Target and Run
+
+Find targets or source files with fuzzy search and choose `build`, `test`, or `run`.
+
+![Fuzzy search finding parser targets and source files from “parsr”](docs/screenshots/fuzzy-search.jpg)
+
+### Run Page
+
+Inspect a run's logs, target results, details, and per-thread timing trace from the history.
+
+![Run Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
+
+### Analytics Page
+
+Filter local build and test history to compare run counts, outcomes, total run time, and p50/p95 durations.
+
+![Analytics Page showing date filters and daily run counts by outcome](docs/screenshots/analytics-page.jpg)
+
 ## Checks
 
 Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.
@@ -43,26 +63,6 @@ Add to `.bazelrc` and use `bazel build --config=zeal //...` while Zeal is open:
 build:zeal --bes_backend=grpc://127.0.0.1:4718
 build:zeal --bes_timeout=5s
 ```
-
-## Features
-
-### Fuzzy Search Target and Run
-
-Find targets or source files with fuzzy search and choose `build`, `test`, or `run`.
-
-![Fuzzy search finding parser targets and source files from “parsr”](docs/screenshots/fuzzy-search.jpg)
-
-### Run Page
-
-Inspect a run's logs, target results, details, and per-thread timing trace from the history.
-
-![Run Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
-
-### Analytics Page
-
-Filter local build and test history to compare run counts, outcomes, total run time, and p50/p95 durations.
-
-![Analytics Page showing date filters and daily run counts by outcome](docs/screenshots/analytics-page.jpg)
 
 ## License
 
