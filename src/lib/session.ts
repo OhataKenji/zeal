@@ -96,8 +96,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     listing = true;
     const generation = ++listGeneration;
     try {
-      const records = await transport.invoke<RunRecord[]>("list_runs");
-      const runs = records.filter((run) => run.id !== view.state?.running);
+      // `runs` keeps the live record: its row is the way back to the Console.
+      const runs = await transport.invoke<RunRecord[]>("list_runs");
       if (generation === listGeneration) {
         if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError)
           update({ runs, runsError: null });
@@ -143,6 +143,24 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     void loadDetail();
   }
 
+  // Reopen the live run's Console; anything else falls through to detail.
+  function openConsole(record: RunRecord) {
+    if (record.id !== view.state?.running) {
+      selectRun(record.id);
+      return;
+    }
+    if (view.consoleOpen && view.console?.id === record.id) return;
+    ++detailGeneration;
+    update({
+      console: record,
+      consoleOpen: true,
+      selectedRun: null,
+      detail: null,
+      detailError: null,
+      detailLoading: false,
+    });
+  }
+
   function acceptState(state: AppState) {
     if (disposed) return;
     const before = view.state;
@@ -165,7 +183,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       state,
       ready: true,
-      runs: view.runs.filter((run) => run.id !== state.running),
       ...(resumed ? { error: null } : {}),
     });
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
@@ -288,6 +305,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     openWorkspace,
     refresh,
     selectRun,
+    openConsole,
     loadDetail,
     loadRuns,
   };

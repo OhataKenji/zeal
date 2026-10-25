@@ -558,3 +558,90 @@ test("process completion selects All immediately, before history finishes loadin
   await settle();
   assert.deepEqual(h.view.detail, completed);
 });
+
+test("the live run stays in the list so its row can reopen the Console", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...idle, running: record.id });
+  h.pending.find((call) => call.command === "list_runs")!.reply.resolve([record]);
+  await settle();
+  assert.deepEqual(h.view.runs, [record]);
+});
+
+test("openConsole returns to a Console left while its run is in flight", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("run", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  h.session.selectRun(null);
+  assert.equal(h.view.consoleOpen, false);
+  h.session.openConsole(record);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.console?.id, record.id);
+  assert.equal(
+    h.pending.some((call) => call.command === "stop_run" || call.command === "get_run"),
+    false,
+  );
+});
+
+test("openConsole restores the Console for a run already in flight at connect", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...idle, running: record.id });
+  assert.equal(h.view.console, null);
+  h.session.openConsole(record);
+  assert.equal(h.view.console?.id, record.id);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.selectedRun, null);
+});
+
+test("openConsole cancels an in-flight run detail read", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...idle, running: record.id });
+  h.session.selectRun("run-b");
+  h.session.openConsole(record);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.equal(h.view.detail, null);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.consoleOpen, true);
+});
+
+test("openConsole on a finished run lands on its detail view", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.openConsole(record);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.initialRunTab, "All");
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.equal(h.view.detail?.record.id, record.id);
+});
+
+test("a run finishing while its reopened Console is shown selects its All view", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("run", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  h.session.selectRun(null);
+  h.session.openConsole(record);
+  assert.equal(h.view.consoleOpen, true);
+  h.emit("app-state", idle);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.initialRunTab, "All");
+  assert.equal(h.view.detailLoading, true);
+  h.pending
+    .filter((call) => call.command === "get_run")
+    .at(-1)!
+    .reply.resolve(completed);
+  await settle();
+  assert.deepEqual(h.view.detail, completed);
+});
