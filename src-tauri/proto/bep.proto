@@ -1,0 +1,44 @@
+// Read projection of Bazel's build_event_stream.proto (Apache-2.0), tag 8.4.2.
+// https://github.com/bazelbuild/bazel/blob/8.4.2/src/main/java/com/google/devtools/build/lib/buildeventstream/proto/build_event_stream.proto
+// Unknown fields are intentionally not projected. The complete incoming BEP
+// bytes are stored before decoding, so future readers can recover them.
+syntax = "proto3";
+package build_event_stream;
+import "google/protobuf/timestamp.proto";
+
+message Label { string label = 1; }
+message Pattern { repeated string pattern = 1; }
+message BuildEventId {
+  Pattern pattern = 4;
+  Label target_completed = 5;
+  Label test_summary = 7;
+  Label target_configured = 16;
+}
+message Progress { string stdout = 1; string stderr = 2; }
+message Aborted { int32 reason = 1; string description = 2; }
+message BuildStarted {
+  string uuid = 1;
+  int64 start_time_millis = 2;
+  string command = 5;
+  string workspace_directory = 7;
+  google.protobuf.Timestamp start_time = 9;
+}
+message TargetComplete { bool success = 1; }
+message TestSummary { int32 overall_status = 5; }
+message ExitCode { int32 code = 2; }
+message BuildFinished {
+  int64 finish_time_millis = 2;
+  ExitCode exit_code = 3;
+  google.protobuf.Timestamp finish_time = 5;
+}
+message BuildEvent {
+  BuildEventId id = 1;
+  repeated BuildEventId children = 2;
+  Progress progress = 3;
+  Aborted aborted = 4;
+  BuildStarted started = 5;
+  TargetComplete completed = 8;
+  TestSummary test_summary = 9;
+  BuildFinished finished = 14;
+  bool last_message = 20;
+}
