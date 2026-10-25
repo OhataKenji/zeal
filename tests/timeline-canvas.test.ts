@@ -26,6 +26,7 @@ function recordingCanvas() {
   let clips: number[][] = [];
   const savedClips: number[][][] = [];
   const strokedArcs: { x: number; y: number; radius: number }[] = [];
+  const filledArcs: typeof strokedArcs = [];
   let pathArcs: typeof strokedArcs = [];
   const lines: number[][] = [];
   let position = [0, 0];
@@ -56,7 +57,9 @@ function recordingCanvas() {
     fillRect(x: number, y: number, width: number, height: number) {
       fills.push({ bounds: [x, y, width, height], clips });
     },
-    fill() {},
+    fill() {
+      filledArcs.push(...pathArcs);
+    },
     stroke() {
       strokes.push({ lines: path, clips });
       strokedLines.push(...path);
@@ -82,6 +85,7 @@ function recordingCanvas() {
     context: canvas as unknown as CanvasRenderingContext2D,
     outlines,
     strokedArcs,
+    filledArcs,
     lines,
     fills,
     strokedLines,
@@ -217,7 +221,15 @@ test("numeric counters are visible initially without duplicate span-row marks", 
     { tid: 7, name: "metrics", events: [{ ph: "C", ts: 10, name: "cpu", args: { usage: 1 } }] },
   ]);
 
-  assert.deepEqual(hits, [{ x: 106, y: 79, width: 8, height: 8, tid: 7, index: 0 }]);
+  assert.deepEqual(hits, [{ x: 106, y: 49, width: 8, height: 8, tid: 7, index: 0 }]);
+});
+
+test("a single counter sample is painted even without a connecting line or selection", () => {
+  const { filledArcs } = render([
+    { tid: 7, name: "metrics", events: [{ ph: "C", ts: 10, name: "cpu", args: { usage: 1 } }] },
+  ]);
+
+  assert.deepEqual(filledArcs, [{ x: 110, y: 53, radius: 2 }]);
 });
 
 test("a counter without numeric fields remains selectable as a raw mark", () => {
@@ -245,7 +257,7 @@ test("counter tracks expose hits only for points within the visible time range",
     },
   ]);
 
-  assert.deepEqual(hits, [{ x: 146, y: 64, width: 8, height: 8, tid: 7, index: 1 }]);
+  assert.deepEqual(hits, [{ x: 146, y: 59, width: 8, height: 8, tid: 7, index: 1 }]);
 });
 
 test("the selected counter point receives a ring at its hit center", () => {
@@ -320,7 +332,7 @@ test("a counter track paints a connecting line between sample positions", () => 
 
   assert.deepEqual(
     strokedLines.find(([start, , end]) => start === 110 && end === 190),
-    [110, 83, 190, 53],
+    [110, 73, 190, 53],
   );
 });
 
@@ -367,7 +379,7 @@ test("collapsing a thread keeps its separate counter visible at the new position
     { collapsed: [7] },
   );
 
-  assert.deepEqual(hits, [{ x: 146, y: 53, width: 8, height: 8, tid: 7, index: 1 }]);
+  assert.deepEqual(hits, [{ x: 146, y: 23, width: 8, height: 8, tid: 7, index: 1 }]);
 });
 
 test("counter tracks follow global series order rather than their thread order", () => {
@@ -377,8 +389,8 @@ test("counter tracks follow global series order rather than their thread order",
   ]);
 
   assert.deepEqual(hits, [
-    { x: 146, y: 125, width: 8, height: 8, tid: 8, index: 0 },
-    { x: 146, y: 167, width: 8, height: 8, tid: 7, index: 0 },
+    { x: 146, y: 95, width: 8, height: 8, tid: 8, index: 0 },
+    { x: 146, y: 137, width: 8, height: 8, tid: 7, index: 0 },
   ]);
 });
 
@@ -389,8 +401,8 @@ test("equal counter names from different threads remain separate rows", () => {
   ]);
 
   assert.deepEqual(hits, [
-    { x: 146, y: 125, width: 8, height: 8, tid: 7, index: 0 },
-    { x: 146, y: 167, width: 8, height: 8, tid: 8, index: 0 },
+    { x: 146, y: 95, width: 8, height: 8, tid: 7, index: 0 },
+    { x: 146, y: 137, width: 8, height: 8, tid: 8, index: 0 },
   ]);
 });
 
@@ -410,7 +422,7 @@ test("scrolling to the counters excludes rows outside the viewport", () => {
     { scrollTop: 96, height: 30 },
   );
 
-  assert.deepEqual(hits, [{ x: 146, y: 25, width: 8, height: 8, tid: 7, index: 1 }]);
+  assert.deepEqual(hits, [{ x: 146, y: -5, width: 8, height: 8, tid: 7, index: 1 }]);
 });
 
 test("a counter line is painted inside its own row clip", () => {

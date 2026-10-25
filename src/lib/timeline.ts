@@ -131,7 +131,9 @@ function counterSeries(events: EventGeometry[]): CounterSeries[] {
       if (value === null) continue;
       const name = eventName(event);
       const key = JSON.stringify([name, field]);
-      const counter = series.get(key) ?? { name, field, points: [], min: value, max: value };
+      // Include zero so resource usage and constant positive values keep their
+      // magnitude, matching BuildBuddy's baseline. Retain negative samples too.
+      const counter = series.get(key) ?? { name, field, points: [], min: 0, max: 0 };
       counter.points.push({ time: start, value, index });
       counter.min = Math.min(counter.min, value);
       counter.max = Math.max(counter.max, value);

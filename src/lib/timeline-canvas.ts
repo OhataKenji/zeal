@@ -211,6 +211,14 @@ function drawCounterSeries(
     const pointX = timeX(point.time);
     if (pointX < gutter || pointX > width) continue;
     const pointY = valueY(point.value);
+    // Cached builds can record only one sample. A moveTo-only path has no
+    // stroke, so paint that sample even when it has not been selected.
+    if (counter.points.length === 1) {
+      context.fillStyle = theme.chartBar;
+      context.beginPath();
+      context.arc(pointX, pointY, 2, 0, Math.PI * 2);
+      context.fill();
+    }
     if (selection?.tid === lane.tid && selection.index === point.index) {
       context.save();
       context.strokeStyle = theme.foreground;
