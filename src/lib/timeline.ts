@@ -76,6 +76,7 @@ export function eventName(event: TraceEvent): string {
 }
 
 // Keep trace-provided color groups without reproducing another viewer's palette.
+// AnalyticsView.svelte copies these hexes; terminal-style.ts derives ANSI hues.
 const eventColors = [
   "#a7d6a9",
   "#b2dfdb",
