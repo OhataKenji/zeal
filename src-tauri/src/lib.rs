@@ -1,8 +1,10 @@
 mod bep;
+mod bes;
 mod console;
 mod ingest;
 mod label;
 mod profile;
+mod protocol;
 mod runner;
 mod snapshot;
 mod state;
@@ -234,6 +236,25 @@ pub fn run() {
             }
             let core = Arc::new(Core::new());
             app.manage(core.clone());
+            let data = app.path().app_data_dir().map_err(|error| error.to_string());
+            let receiver_core = core.clone();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let result = async {
+                    let data = data?;
+                    let listener = tokio::net::TcpListener::bind(bes::ADDRESS)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    bes::serve(listener, data)
+                        .await
+                        .map_err(|error| error.to_string())
+                }
+                .await;
+                if let Err(error) = result {
+                    receiver_core.state.lock().unwrap().bes_error = Some(error);
+                    receiver_core.emit(&handle);
+                }
+            });
             // Reopen the last workspace, if it is still a workspace.
             if let Ok(dir) = app.path().app_data_dir()
                 && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))

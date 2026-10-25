@@ -192,6 +192,26 @@ pub enum Section<T> {
 /// Timing is parsed only after the record confirms that the run finished.
 pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
     let record = store::read_record(data, workspace, id)?;
+    if record.external {
+        let observed = store::events::get(data, workspace, id)?
+            .ok_or_else(|| io::Error::other("missing BES record"))?;
+        let bep = if observed.bep.truncated {
+            Section::Incomplete {
+                data: observed.bep,
+                note: "BES result display reached its 8 MiB limit.".into(),
+            }
+        } else {
+            Section::Ok { data: observed.bep }
+        };
+        return Ok(RunDetail {
+            record,
+            log: Section::Ok { data: observed.log },
+            bep,
+            profile: Section::NotAvailable {
+                note: "Profiles from terminal builds are not imported.".into(),
+            },
+        });
+    }
     let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
         let start = file.metadata()?.len().saturating_sub(512 * 1024);
         file.seek(SeekFrom::Start(start))?;

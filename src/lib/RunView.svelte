@@ -85,6 +85,10 @@
       <button type="button" class="button" onclick={reload}>Retry</button>
     </div>
   {/if}
+  {#if record?.external && record.cmd === "run"}
+    <p class="run-notice">Build events from a terminal. Program input, output and exit status remain in that terminal.</p>
+  {/if}
+
   <div
     class="run-panel"
     bind:this={panel}
@@ -111,6 +115,7 @@
               <dl class="run-details">
                 <dt>Command</dt>
                 <dd><code>bazel {record.cmd} {record.target}</code></dd>
+                <dt>Source</dt><dd>{record.external ? "Terminal / BES" : "Zeal"}</dd>
                 <dt>Workspace</dt>
                 <dd><code>{record.workspace}</code></dd>
                 <dt>Run ID</dt>

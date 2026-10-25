@@ -41,6 +41,7 @@ export interface IngestError {
 }
 
 export interface AppState {
+  besError?: string | null;
   workspace: string | null;
   bazel: string | null;
   ingest: "idle" | "running";
@@ -56,6 +57,7 @@ export interface AppState {
 export type RunCmd = "build" | "test" | "run";
 
 export interface RunRecord {
+  external?: boolean;
   id: string;
   workspace: string;
   cmd: string;
