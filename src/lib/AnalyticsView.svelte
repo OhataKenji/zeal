@@ -3,6 +3,8 @@
   import {
     createAnalytics,
     emptyAnalytics,
+    fmtMs,
+    segments,
     type AnalyticsFilter,
   } from "./analytics";
   import type { RunRecord } from "./types";
@@ -23,7 +25,14 @@
   });
   const data = $derived(view.data);
   const max = $derived(Math.max(1, ...(data?.days.map((d) => d.count) ?? [])));
+  const maxTotal = $derived(
+    Math.max(1, ...(data?.days.map((d) => d.totalMs) ?? [])),
+  );
+  const maxP95 = $derived(
+    Math.max(1, ...(data?.days.map((d) => d.p95Ms) ?? [])),
+  );
   const width = $derived(Math.max(640, (data?.days.length ?? 0) * 24 + 60));
+  const step = $derived((width - 70) / Math.max(1, data?.days.length ?? 1));
   function filter(patch: Partial<AnalyticsFilter>) {
     void controller?.load({ ...view.filter, ...patch });
   }
@@ -31,14 +40,13 @@
 
 <section class="analytics">
   <h1>Analytics</h1>
-  <p class="panel-empty">Zeal-launched build and test runs.</p>
   <div class="filters">
     <label
       >Start date <input
         type="date"
         aria-label="Start date"
         value={view.filter.start ?? ""}
-        onchange={(e) => filter({ start: e.currentTarget.value })}
+        onchange={(e) => filter({ start: e.currentTarget.value || null })}
       /></label
     >
     <label
@@ -46,7 +54,7 @@
         type="date"
         aria-label="End date"
         value={view.filter.end ?? ""}
-        onchange={(e) => filter({ end: e.currentTarget.value })}
+        onchange={(e) => filter({ end: e.currentTarget.value || null })}
       /></label
     >
     <label
@@ -77,6 +85,16 @@
           >failed</option
         ><option>interrupted</option>
       </select></label
+    >
+    <label
+      >Target <input
+        type="text"
+        aria-label="Target"
+        placeholder="//app:server"
+        value={view.filter.target ?? ""}
+        onchange={(e) =>
+          filter({ target: e.currentTarget.value || null })}
+      /></label
     >
     <button type="button" class="button" onclick={() => controller?.load()}
       >Refresh</button
@@ -115,15 +133,80 @@
           >
           <text x={width - 45} y="236">Date</text>
           {#each data.days as day, index}
-            {@const step = (width - 70) / data.days.length}
+            {@const h = (day.count / max) * 160}
+            {@const okH = day.count ? (day.ok / day.count) * h : 0}
+            {@const failedH = day.count ? (day.failed / day.count) * h : 0}
+            <g>
+              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "run" : "runs"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted})${day.day === data.today ? " (in progress)" : ""}`}</title>
+              {#if okH > 0}
+                <rect
+                  class="bar-ok"
+                  x={55 + index * step}
+                  y={200 - okH}
+                  width={Math.max(1, step - 3)}
+                  height={okH}
+                />
+              {/if}
+              {#if failedH > 0}
+                <rect
+                  class="bar-failed"
+                  x={55 + index * step}
+                  y={200 - okH - failedH}
+                  width={Math.max(1, step - 3)}
+                  height={failedH}
+                />
+              {/if}
+              {#if h - okH - failedH > 0}
+                <rect
+                  class="bar-interrupted"
+                  x={55 + index * step}
+                  y={200 - h}
+                  width={Math.max(1, step - 3)}
+                  height={h - okH - failedH}
+                />
+              {/if}
+            </g>
+            {#if index === 0 || index === data.days.length - 1}
+              <text
+                x={55 + index * step}
+                y="218"
+                text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
+              >
+            {/if}
+          {/each}
+        </svg>
+      </div>
+      <p class="legend">
+        <span><i class="sw bar-ok"></i>ok</span>
+        <span><i class="sw bar-failed"></i>failed</span>
+        <span><i class="sw bar-interrupted"></i>interrupted</span>
+      </p>
+    </section>
+    <section class="analytics-card">
+      <h2>Wait time</h2>
+      <p class="dim">Total run time per day</p>
+      <div class="chart-scroll">
+        <svg
+          viewBox="0 0 {width} 240"
+          style:width="{width}px"
+          role="img"
+          aria-label="Total run time per day"
+        >
+          <title>Total run time per day</title>
+          <line x1="50" y1="20" x2="50" y2="200" />
+          <line x1="50" y1="200" x2={width - 10} y2="200" />
+          <text x="4" y="16">{fmtMs(maxTotal)}</text><text x="30" y="200"
+            >0</text
+          >
+          <text x={width - 45} y="236">Date</text>
+          {#each data.days as day, index}
             <rect
-              rx="5"
               x={55 + index * step}
-              y={200 - (day.count / max) * 160}
+              y={200 - (day.totalMs / maxTotal) * 160}
               width={Math.max(1, step - 3)}
-              height={(day.count / max) * 160}
+              height={(day.totalMs / maxTotal) * 160}
             >
-              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "run" : "runs"}${day.day === data.today ? " (in progress)" : ""}`}</title>
+              <title>{`${day.day}: ${fmtMs(day.totalMs)}${day.day === data.today ? " (in progress)" : ""}`}</title>
             </rect>
             {#if index === 0 || index === data.days.length - 1}
               <text
@@ -136,6 +219,105 @@
         </svg>
       </div>
     </section>
+    <section class="analytics-card">
+      <h2>Duration</h2>
+      <p class="dim">Per-day run duration percentiles</p>
+      <div class="chart-scroll">
+        <svg
+          viewBox="0 0 {width} 240"
+          style:width="{width}px"
+          role="img"
+          aria-label="Run duration percentiles per day"
+        >
+          <title>Run duration percentiles per day</title>
+          <line x1="50" y1="20" x2="50" y2="200" />
+          <line x1="50" y1="200" x2={width - 10} y2="200" />
+          <text x="4" y="16">{fmtMs(maxP95)}</text><text x="30" y="200">0</text>
+          <text x={width - 45} y="236">Date</text>
+          {#each segments(
+            data.days.map((d) => (d.timed ? d.p95Ms : null)),
+            maxP95,
+            step,
+          ) as points}
+            <polyline class="line-p95" {points} />
+          {/each}
+          {#each segments(
+            data.days.map((d) => (d.timed ? d.p50Ms : null)),
+            maxP95,
+            step,
+          ) as points}
+            <polyline class="line-p50" {points} />
+          {/each}
+          {#each data.days as day, index}
+            {#if day.timed}
+              <circle
+                class="dot-p95"
+                cx={55 + index * step + step / 2}
+                cy={200 - (day.p95Ms / maxP95) * 160}
+                r="2.5"
+              >
+                <title>{`${day.day}: p95 ${fmtMs(day.p95Ms)}`}</title>
+              </circle>
+              <circle
+                class="dot-p50"
+                cx={55 + index * step + step / 2}
+                cy={200 - (day.p50Ms / maxP95) * 160}
+                r="2.5"
+              >
+                <title>{`${day.day}: p50 ${fmtMs(day.p50Ms)}, p95 ${fmtMs(day.p95Ms)}`}</title>
+              </circle>
+            {/if}
+            {#if index === 0 || index === data.days.length - 1}
+              <text
+                x={55 + index * step}
+                y="218"
+                text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
+              >
+            {/if}
+          {/each}
+        </svg>
+      </div>
+      <p class="legend">
+        <span><i class="sw sw-p50"></i>p50</span>
+        <span><i class="sw sw-p95"></i>p95</span>
+      </p>
+    </section>
+    {#if data.targets.length}
+      <section class="analytics-card">
+        <h2>Targets</h2>
+        <p class="dim">By total wait time</p>
+        <table class="targets">
+          <thead
+            ><tr
+              ><th>Target</th><th>Runs</th><th>Total</th><th>p50</th><th
+                >p95</th
+              ></tr
+            ></thead
+          >
+          <tbody>
+            {#each data.targets as t}
+              <tr class:active={view.filter.target === t.target}>
+                <td
+                  ><button
+                    type="button"
+                    class="target-link"
+                    onclick={() =>
+                      filter({
+                        target:
+                          view.filter.target === t.target ? null : t.target,
+                      })}>{t.target}</button
+                  ></td
+                >
+                <td>{t.runs}</td>
+                <td>{fmtMs(t.totalMs)}</td>
+                <td>{fmtMs(t.p50Ms)}</td>
+                <td>{fmtMs(t.p95Ms)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </section>
+    {/if}
   {/if}
 </section>
 
@@ -198,7 +380,94 @@
     fill: var(--foreground);
     font-size: 11px;
   }
+  /* Shares the timeline trace palette (timeline.ts eventColors). */
   rect {
-    fill: var(--chart-bar);
+    fill: #99d4c6;
+  }
+  .bar-ok {
+    fill: #a7d6a9;
+  }
+  .bar-failed {
+    fill: #ffdda6;
+  }
+  .bar-interrupted {
+    fill: #c5afd4;
+  }
+  .legend {
+    display: flex;
+    gap: 14px;
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+  .legend span {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .sw {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+  .line-p50 {
+    fill: none;
+    stroke: #80c784;
+    stroke-width: 2;
+  }
+  .line-p95 {
+    fill: none;
+    stroke: #c5afd4;
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+  }
+  .dot-p50 {
+    fill: #80c784;
+  }
+  .dot-p95 {
+    fill: #c5afd4;
+  }
+  .sw-p50 {
+    background: #80c784;
+  }
+  .sw-p95 {
+    background: #c5afd4;
+  }
+  .targets {
+    width: 100%;
+    margin-top: 10px;
+    border-collapse: collapse;
+  }
+  .targets th,
+  .targets td {
+    padding: 4px 8px;
+    font-size: 12px;
+    text-align: right;
+  }
+  .targets th:first-child,
+  .targets td:first-child {
+    text-align: left;
+  }
+  .targets thead th {
+    color: var(--muted-foreground);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+  }
+  .targets tr.active td {
+    background: var(--accent);
+  }
+  .target-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-family: var(--mono);
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .target-link:hover {
+    text-decoration: underline;
   }
 </style>

@@ -109,6 +109,13 @@ const snapshot: Snapshot = {
 function dayString(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
+const previewTargets = [
+  "//app:server",
+  "//app/lib:all",
+  "//app/cli:zeal_cli",
+  "//app/lsp:completion_test",
+  "//...",
+];
 const records: RunRecord[] = Array.from({ length: 30 }, (_, d) => {
   const day = new Date(now);
   day.setDate(day.getDate() - d);
@@ -118,10 +125,11 @@ const records: RunRecord[] = Array.from({ length: 30 }, (_, d) => {
       id: `preview-${d}-${n}`,
       workspace,
       cmd: n % 3 === 1 ? "test" : "build",
-      target: n % 3 === 1 ? "//app/lib:all" : "//app:server",
+      target: previewTargets[(d + n) % previewTargets.length],
       startedAt,
-      finishedAt: startedAt + (n === 0 ? 9420 : 4180),
-      exitCode: n === 2 ? 1 : 0,
+      // n === 4 keeps an exit code but no finish time: counted, never timed.
+      ...(n === 4 ? {} : { finishedAt: startedAt + 4180 + n * 1200 + (d % 5) * 900 }),
+      exitCode: n === 2 ? 1 : n === 5 ? 8 : 0,
     };
   });
 }).flat();
@@ -296,42 +304,134 @@ export function installPreview() {
           };
         }
         case "get_analytics": {
-          const requested = payload?.filter as AnalyticsFilter;
+          const requested = (payload?.filter ?? {}) as AnalyticsFilter;
           const from = new Date(now);
           from.setDate(from.getDate() - 29);
           const filter = {
             ...requested,
-            start: requested.start || dayString(from),
-            end: requested.end || dayString(new Date(now)),
+            start: requested.start ?? dayString(from),
+            end: requested.end ?? dayString(new Date(now)),
           };
-          const filtered = records.filter((run) => {
+          // Mirror the backend contract: reject, never silently truncate.
+          // Pure proleptic-Gregorian checks — local-time Date parsing would
+          // reject days a skipped-timezone calendar still counts.
+          const utcDay = (s: string): number | null => {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+            if (!m) return null;
+            const d = new Date(0);
+            d.setUTCFullYear(+m[1], +m[2] - 1, +m[3]);
+            return d.getUTCFullYear() === +m[1] &&
+              d.getUTCMonth() === +m[2] - 1 &&
+              d.getUTCDate() === +m[3]
+              ? d.getTime()
+              : null;
+          };
+          const first = utcDay(filter.start);
+          const last = utcDay(filter.end);
+          const spanDays = first !== null && last !== null ? (last - first) / 86400000 + 1 : NaN;
+          if (
+            !(spanDays >= 1 && spanDays <= 366) ||
+            (filter.cmd != null && !["build", "test"].includes(filter.cmd)) ||
+            (filter.outcome != null && !["ok", "failed", "interrupted"].includes(filter.outcome)) ||
+            (filter.target != null && new TextEncoder().encode(filter.target).length > 64 * 1024)
+          ) {
+            throw new Error("invalid analytics filter");
+          }
+          const pct = (sorted: number[], p: number) =>
+            sorted.length ? sorted[Math.ceil((sorted.length * p) / 100) - 1] : 0;
+          const inPeriod = records.filter((run) => {
             const day = dayString(new Date(run.startedAt));
             const outcome =
               run.exitCode === 0 ? "ok" : run.exitCode === 8 ? "interrupted" : "failed";
             return (
               run.exitCode !== undefined &&
+              !run.external &&
+              ["build", "test"].includes(run.cmd) &&
               day >= filter.start &&
               day <= filter.end &&
-              (!filter.cmd || run.cmd === filter.cmd) &&
-              (!filter.outcome || outcome === filter.outcome)
+              (filter.cmd == null || run.cmd === filter.cmd) &&
+              (filter.outcome == null || outcome === filter.outcome)
             );
           });
-          const days = [];
+          const days = new Map<
+            string,
+            {
+              count: number;
+              timed: number;
+              ok: number;
+              failed: number;
+              interrupted: number;
+              durations: number[];
+            }
+          >();
+          const utcString = (d: Date) =>
+            `${String(d.getUTCFullYear()).padStart(4, "0")}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
           for (
-            const d = new Date(`${filter.start}T12:00:00`);
-            dayString(d) <= filter.end && days.length < 366;
-            d.setDate(d.getDate() + 1)
+            const d = new Date(first!);
+            utcString(d) <= filter.end;
+            d.setUTCDate(d.getUTCDate() + 1)
           ) {
-            const day = dayString(d);
-            days.push({
-              day,
-              count: filtered.filter((run) => dayString(new Date(run.startedAt)) === day).length,
+            days.set(utcString(d), {
+              count: 0,
+              timed: 0,
+              ok: 0,
+              failed: 0,
+              interrupted: 0,
+              durations: [],
             });
+          }
+          const byTarget = new Map<string, { runs: number; durations: number[] }>();
+          for (const run of inPeriod) {
+            const duration =
+              run.finishedAt === undefined ? null : Math.max(0, run.finishedAt - run.startedAt);
+            const agg = byTarget.get(run.target) ?? { runs: 0, durations: [] };
+            agg.runs += 1;
+            if (duration !== null) agg.durations.push(duration);
+            byTarget.set(run.target, agg);
+            if (filter.target != null && run.target !== filter.target) continue;
+            const slot = days.get(dayString(new Date(run.startedAt)))!;
+            slot.count += 1;
+            if (run.exitCode === 0) slot.ok += 1;
+            else if (run.exitCode === 8) slot.interrupted += 1;
+            else slot.failed += 1;
+            if (duration !== null) {
+              slot.timed += 1;
+              slot.durations.push(duration);
+            }
           }
           return {
             filter,
             today: dayString(new Date(now)),
-            days,
+            days: [...days].map(([day, slot]) => {
+              const sorted = [...slot.durations].sort((a, b) => a - b);
+              return {
+                day,
+                count: slot.count,
+                timed: slot.timed,
+                ok: slot.ok,
+                failed: slot.failed,
+                interrupted: slot.interrupted,
+                totalMs: sorted.reduce((a, b) => a + b, 0),
+                p50Ms: pct(sorted, 50),
+                p95Ms: pct(sorted, 95),
+              };
+            }),
+            targets: [...byTarget]
+              .map(([target, agg]) => {
+                const sorted = agg.durations.sort((a, b) => a - b);
+                return {
+                  target,
+                  runs: agg.runs,
+                  totalMs: sorted.reduce((a, b) => a + b, 0),
+                  p50Ms: pct(sorted, 50),
+                  p95Ms: pct(sorted, 95),
+                };
+              })
+              .sort(
+                (a, b) =>
+                  b.totalMs - a.totalMs || (a.target < b.target ? -1 : a.target > b.target ? 1 : 0),
+              )
+              .slice(0, 10),
           };
         }
         case "open_workspace":
