@@ -225,16 +225,20 @@
         <ul class="list">
           {#each app.view.runs as run (run.id)}
             {@const status = runStatus(run, state.running, state.stopping)}
+            {@const active =
+              app.view.selectedRun === run.id ||
+              (app.view.consoleOpen && app.view.console?.id === run.id)}
             <li>
               <button
                 class="run-row"
                 title={`${run.cmd} ${run.target} — ${status.label}`}
                 aria-label={`${run.cmd} ${run.target}: ${status.label}`}
-                class:sel={app.view.selectedRun === run.id}
-                aria-current={app.view.selectedRun === run.id
-                  ? "true"
-                  : undefined}
-                onclick={() => session.selectRun(run.id)}
+                class:sel={active}
+                aria-current={active ? "true" : undefined}
+                onclick={() =>
+                  run.id === state.running
+                    ? session.openConsole(run)
+                    : session.selectRun(run.id)}
               >
                 <span class="run-label"
                   ><RunStatus {...status} compact /><span class="run-command"
