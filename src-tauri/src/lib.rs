@@ -1,11 +1,15 @@
 mod bep;
+mod bes;
 mod ingest;
 mod label;
+mod observation;
 mod profile;
+mod protocol;
 mod runner;
 mod snapshot;
 mod state;
 mod store;
+mod terminal;
 mod workspace;
 mod xml;
 
@@ -69,7 +73,7 @@ fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     ingest::request(app, core.inner().clone())
 }
 
-/// Start `bazel build|test <target>`. Fails while bazel is busy.
+/// Start `bazel build|test|run <target>` in a PTY. Fails while bazel is busy.
 #[tauri::command]
 fn start_run(
     app: AppHandle,
@@ -88,14 +92,81 @@ fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
 }
 
+#[tauri::command]
+fn write_console(core: State<Arc<Core>>, id: String, data: Vec<u8>) -> Result<usize, String> {
+    terminal::write(&core, &id, &data)
+}
+
+#[tauri::command]
+fn resize_console(core: State<Arc<Core>>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    terminal::resize(&core, &id, cols, rows)
+}
+
+#[tauri::command]
+async fn read_console(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: String,
+    offset: u64,
+) -> Result<terminal::Output, String> {
+    let (ws, running) = {
+        let st = core.state.lock().unwrap();
+        (
+            st.workspace.clone().ok_or("no workspace")?,
+            st.run.as_deref() == Some(&id),
+        )
+    };
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        terminal::read(&data, &ws, &id, offset, running).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "terminal read worker failed".to_string())?
+}
+
+#[tauri::command]
+async fn get_live_run(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: String,
+) -> Result<observation::RunLive, String> {
+    let ws = core
+        .state
+        .lock()
+        .unwrap()
+        .workspace
+        .clone()
+        .ok_or("no workspace")?;
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        observation::read(&data, &ws, &id).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "live record worker failed".to_string())?
+}
+
 /// Runs of the open workspace, newest first.
 #[tauri::command]
 fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
-    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+    let (workspace, running) = {
+        let st = core.state.lock().unwrap();
+        (st.workspace.clone(), st.run.clone())
+    };
+    let Some(ws) = workspace else {
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    store::list(&data, &ws).map_err(|error| error.to_string())
+    let records = store::list(&data, &ws).map_err(|error| error.to_string())?;
+    Ok(records
+        .into_iter()
+        .filter(|record| {
+            Some(record.id.as_str()) != running.as_deref()
+                && (!record.external || record.finished_at.is_some())
+        })
+        .collect())
 }
 
 /// Aggregate only the core-owned workspace; caller cannot name a DB or root.
@@ -200,6 +271,38 @@ pub fn run() {
             }
             let core = Arc::new(Core::new());
             app.manage(core.clone());
+            match app
+                .path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())
+                .and_then(|data| {
+                    bes::bind()
+                        .map(|listener| (data, listener))
+                        .map_err(|error| error.to_string())
+                }) {
+                Ok((data, listener)) => {
+                    core.state.lock().unwrap().bes.endpoint =
+                        Some(format!("grpc://{}", bes::ADDRESS));
+                    let core = core.clone();
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let result = match tokio::net::TcpListener::from_std(listener) {
+                            Ok(listener) => bes::serve(listener, data)
+                                .await
+                                .map_err(|error| error.to_string()),
+                            Err(error) => Err(error.to_string()),
+                        };
+                        if let Err(error) = result {
+                            let mut st = core.state.lock().unwrap();
+                            st.bes.endpoint = None;
+                            st.bes.error = Some(error);
+                            drop(st);
+                            core.emit(&handle);
+                        }
+                    });
+                }
+                Err(error) => core.state.lock().unwrap().bes.error = Some(error),
+            }
             // Reopen the last workspace, if it is still a workspace.
             if let Ok(dir) = app.path().app_data_dir()
                 && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))
@@ -220,6 +323,10 @@ pub fn run() {
             refresh,
             start_run,
             stop_run,
+            write_console,
+            resize_console,
+            read_console,
+            get_live_run,
             list_runs,
             get_analytics,
             get_run,

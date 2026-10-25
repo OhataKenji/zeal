@@ -34,7 +34,12 @@ export function connect() {
   view = emptyView();
   session = newSession();
   void session.init();
-  return session.dispose;
+  const current = session;
+  const timer = setInterval(() => void current.poll(), 250);
+  return () => {
+    clearInterval(timer);
+    current.dispose();
+  };
 }
 
 export const openWorkspace = (path: string) => session.openWorkspace(path);

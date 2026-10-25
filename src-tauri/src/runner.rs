@@ -1,6 +1,6 @@
-//! Runs `bazel build|test <target>` and writes stdout/stderr directly to log.txt.
-//! The UI reads saved observations after the client exits. No output pipes or
-//! log events are held by Zeal. Snapshot refresh is manual.
+//! Runs `bazel build|test|run <target>` and writes stdout/stderr to log.txt.
+//! All commands use a PTY; output is saved independently of the Console view.
+//! Build observations arrive independently through BES.
 //!
 //! Stop is best-effort: SIGINT, then SIGKILL after a grace period. An unknown
 //! exit releases the slot with a note and leaves the record unfinished. Only
@@ -8,11 +8,15 @@
 
 use crate::state::{Core, CoreState};
 use crate::store::{self, RunRecord};
+#[cfg(test)]
 use std::fs;
 use std::io;
+#[cfg(test)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
+#[cfg(test)]
+use std::process::Stdio;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,7 +24,7 @@ use tauri::AppHandle;
 
 /// Commands the composer offers. Zeal assembles every other argument, so a
 /// free-form command line never reaches bazel.
-const COMMANDS: [&str; 2] = ["build", "test"];
+const COMMANDS: [&str; 3] = ["build", "test", "run"];
 
 /// Time SIGINT gets to end the run before its group is killed.
 const STOP_GRACE: Duration = Duration::from_secs(3);
@@ -46,6 +50,8 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
         "--experimental_profile_include_primary_output".to_string(),
         "--noslim_profile".to_string(),
         "--tool_tag=zeal".to_string(),
+        "--color=yes".to_string(),
+        "--curses=no".to_string(),
     ]
 }
 
@@ -105,9 +111,16 @@ pub fn start(
     // The record exists before bazel does; a failing store prevents the spawn.
     let (rec, dir) = store::create(data, &ws, cmd, target).map_err(|e| e.to_string())?;
     // Its own process group: a stop reaches bazel and whatever it started.
-    let mut child = match spawn_logged(
+    let (mut child, terminal, mut capture) = match crate::terminal::spawn(
         Command::new(&bazel)
             .args(argv(cmd, target, &dir))
+            .arg(format!("--invocation_id={}", rec.id))
+            .args(
+                st.bes
+                    .endpoint
+                    .as_ref()
+                    .map(|endpoint| format!("--bes_backend={endpoint}")),
+            )
             .current_dir(&ws),
         &dir,
     ) {
@@ -118,6 +131,7 @@ pub fn start(
         }
     };
     st.run = Some(rec.id.clone());
+    st.run_terminal = Some(terminal);
     st.run_pgid = Some(child.id() as i32);
     st.run_stopping = false;
     st.run_stop_started = None;
@@ -137,15 +151,20 @@ pub fn start(
             &core,
             &id,
             || {
-                child
-                    .try_wait()
-                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+                let status = child.try_wait()?;
+                if status.is_none() && capture.failed() {
+                    // The child is still owned and unreaped. Stop it if output
+                    // can no longer be captured instead of leaving it blocked.
+                    let _ = signal_group(child.id() as i32, libc::SIGKILL);
+                }
+                Ok(status.map(|status| status.code().unwrap_or(-1)))
             },
             STOP_GRACE,
             STOP_CONFIRM,
         );
         // Reap already revoked signal ownership. Keep the run slot through the
         // save, without holding the lock across filesystem work.
+        let captured = capture.finish();
         let saved = match &exit {
             Ok(code) => store::finish(&data, &ws, &id, *code).map(|_| ()),
             Err(_) => Ok(()),
@@ -155,6 +174,9 @@ pub fn start(
             && let Err(e) = saved
         {
             st.run_note = Some(format!("終了結果を保存できません: {e}"));
+        }
+        if let Err(error) = captured {
+            st.run_note = Some(format!("端末出力の保存に失敗しました: {error}"));
         }
     });
     Ok(rec)
@@ -180,7 +202,7 @@ fn begin_stop(st: &mut CoreState) {
     st.run_stop_started = Some(Instant::now());
     st.run_note = None;
     if let Some(pgid) = st.run_pgid
-        && let Err(e) = signal_group(pgid, libc::SIGINT)
+        && let Err(e) = signal_run(st, pgid, libc::SIGINT)
     {
         log::warn!("SIGINT to run group failed: {e}");
     }
@@ -217,7 +239,7 @@ fn observe_process(
         if let Some(started) = st.run_stop_started {
             if started.elapsed() >= grace && !killed {
                 if let Some(pgid) = st.run_pgid
-                    && let Err(e) = signal_group(pgid, libc::SIGKILL)
+                    && let Err(e) = signal_run(&st, pgid, libc::SIGKILL)
                 {
                     log::warn!("SIGKILL to run group failed: {e}");
                 }
@@ -290,7 +312,7 @@ pub fn exit_stop(core: &Core) {
         }
         if Instant::now() >= deadline {
             if let Some(pgid) = st.run_pgid
-                && let Err(e) = signal_group(pgid, libc::SIGKILL)
+                && let Err(e) = signal_run(&st, pgid, libc::SIGKILL)
             {
                 log::warn!("SIGKILL to run group failed: {e}");
             }
@@ -345,6 +367,7 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool
 /// Clear the run slot: nothing is in flight, nothing is ours to signal. The
 /// note is the caller's: a recorded exit clears it, an unknown one sets it.
 fn clear_run(st: &mut CoreState) {
+    st.run_terminal = None;
     st.run = None;
     st.run_pgid = None;
     st.run_stopping = false;
@@ -361,19 +384,16 @@ fn signal_group(pgid: i32, signal: i32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Both streams append to the same file. A descendant retaining its output
-/// cannot keep a reader or an EOF wait alive in Zeal.
-fn spawn_logged(command: &mut Command, dir: &Path) -> io::Result<Child> {
-    let log = fs::OpenOptions::new()
-        .append(true)
-        .open(dir.join("log.txt"))?;
-    let stderr = log.try_clone()?;
-    command
-        .stdin(Stdio::null())
-        .stdout(log)
-        .stderr(stderr)
-        .process_group(0)
-        .spawn()
+fn signal_run(st: &CoreState, pgid: i32, signal: i32) -> io::Result<()> {
+    if let Some(foreground) = st
+        .run_terminal
+        .as_ref()
+        .and_then(|terminal| terminal.foreground_group())
+        && foreground != pgid
+    {
+        let _ = signal_group(foreground, signal);
+    }
+    signal_group(pgid, signal)
 }
 
 #[cfg(test)]
@@ -400,9 +420,9 @@ mod tests {
     }
 
     #[test]
-    fn child_writes_both_streams_to_one_log_without_pipe_readers() {
+    fn terminal_saves_both_streams_and_non_utf8_bytes() {
         let dir = LogDir::new();
-        let mut child = spawn_logged(
+        let (mut child, _terminal, mut capture) = crate::terminal::spawn(
             Command::new("sh")
                 .arg("-c")
                 .arg("printf 'out\\r\\n'; printf 'err\\n' >&2; printf '\\377tail'"),
@@ -413,20 +433,24 @@ mod tests {
         assert!(child.stdout.is_none());
         assert!(child.stderr.is_none());
         assert!(child.wait().unwrap().success());
+        capture.finish().unwrap();
         assert_eq!(
             fs::read(dir.0.join("log.txt")).unwrap(),
-            b"out\r\nerr\n\xfftail"
+            b"out\r\r\nerr\r\n\xfftail"
         );
-        assert_eq!(store::read_log(&dir.0).unwrap(), "out\r\nerr\n\u{fffd}tail");
+        assert_eq!(
+            store::read_log(&dir.0).unwrap(),
+            "out\r\r\nerr\r\n\u{fffd}tail"
+        );
     }
 
     #[test]
     fn parent_exit_does_not_wait_for_a_descendant_holding_the_log_open() {
         let dir = LogDir::new();
-        let mut child = spawn_logged(
+        let (mut child, _terminal, mut capture) = crate::terminal::spawn(
             Command::new("sh")
                 .arg("-c")
-                .arg("sleep 30 & printf 'done\\n'; exit 7"),
+                .arg("trap '' HUP; sleep 30 & printf 'done\\n'; exit 7"),
             &dir.0,
         )
         .unwrap();
@@ -443,7 +467,8 @@ mod tests {
             group_alive(pgid),
             "descendant should still retain its output file"
         );
-        assert_eq!(store::read_log(&dir.0).unwrap(), "done\n");
+        capture.finish().unwrap();
+        assert_eq!(store::read_log(&dir.0).unwrap(), "done\r\n");
     }
 
     #[test]
@@ -451,7 +476,7 @@ mod tests {
         let dir = LogDir::new();
         fs::remove_file(dir.0.join("log.txt")).unwrap();
         let marker = dir.0.join("spawned");
-        let result = spawn_logged(Command::new("touch").arg(&marker), &dir.0);
+        let result = crate::terminal::spawn(Command::new("touch").arg(&marker), &dir.0);
         assert!(result.is_err());
         assert!(!marker.exists());
     }
@@ -471,6 +496,8 @@ mod tests {
                     "--experimental_profile_include_primary_output",
                     "--noslim_profile",
                     "--tool_tag=zeal",
+                    "--color=yes",
+                    "--curses=no",
                 ],
                 "{cmd}"
             );
@@ -536,11 +563,11 @@ mod tests {
     }
 
     #[test]
-    fn command_validation_accepts_only_build_and_test() {
-        for cmd in ["build", "test"] {
+    fn command_validation_accepts_build_test_and_run() {
+        for cmd in ["build", "test", "run"] {
             assert!(validate_cmd(cmd).is_ok(), "{cmd:?}");
         }
-        for cmd in ["run", "clean", "query", ""] {
+        for cmd in ["clean", "query", ""] {
             assert!(validate_cmd(cmd).is_err(), "{cmd:?}");
         }
     }

@@ -192,14 +192,18 @@ pub enum Section<T> {
 /// Timing is parsed only after the record confirms that the run finished.
 pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
     let record = store::read_record(data, workspace, id)?;
-    let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }) {
-        Ok(data) => Section::Ok { data },
-        Err(e) => read_error(e),
-    };
+    if record.external {
+        let live = crate::observation::read(data, workspace, id)?;
+        return Ok(RunDetail {
+            record,
+            log: live.log,
+            bep: live.bep,
+            profile: Section::NotAvailable {
+                note: "BES records build events; referenced profile files are not imported.".into(),
+            },
+        });
+    }
+    let log = crate::observation::saved_log(data, workspace, id);
     let bep = match store::artifact(data, workspace, id, "bep.json") {
         Err(e) => read_error(e),
         Ok(f) => {

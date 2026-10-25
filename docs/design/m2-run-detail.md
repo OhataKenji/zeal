@@ -1,5 +1,8 @@
 # Zeal 設計 M2: 一回の run の説明
 
+実行中のログ、stdin、BES受信の現行仕様は [M6](./m6-live-runs-and-bes.md) を参照する。
+この文書の完了後ログ表示とGUI起動限定の制約は、M6で更新した。
+
 _OhataKenji_
 _Last update: 2026/10/18_
 _Status: Approved_

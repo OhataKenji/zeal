@@ -1,5 +1,5 @@
 import { targetError } from "./target.ts";
-import type { AppState, RunCmd, RunDetail, RunRecord } from "./types.ts";
+import type { AppState, RunCmd, RunDetail, RunLive, RunRecord } from "./types.ts";
 
 export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -7,6 +7,10 @@ export interface Transport {
 }
 
 export interface SessionView {
+  live: RunLive | null;
+  liveError: string | null;
+  console: RunRecord | null;
+  consoleOpen: boolean;
   state: AppState | null;
   ready: boolean;
   starting: boolean;
@@ -15,6 +19,7 @@ export interface SessionView {
   runs: RunRecord[];
   runsError: string | null;
   selectedRun: string | null;
+  initialRunTab: "All" | "Logs";
   detail: RunDetail | null;
   detailLoading: boolean;
   detailError: string | null;
@@ -22,6 +27,10 @@ export interface SessionView {
 
 export function emptyView(): SessionView {
   return {
+    live: null,
+    liveError: null,
+    console: null,
+    consoleOpen: false,
     state: null,
     ready: false,
     starting: false,
@@ -30,6 +39,7 @@ export function emptyView(): SessionView {
     runs: [],
     runsError: null,
     selectedRun: null,
+    initialRunTab: "Logs",
     detail: null,
     detailLoading: false,
     detailError: null,
@@ -65,10 +75,28 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let listGeneration = 0;
   let detailGeneration = 0;
   let unlisten: (() => void) | undefined;
-
+  let liveGeneration = 0;
+  let polling = false;
+  let pollCount = 0;
+  let finishedConsoleId: string | undefined;
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
     view = { ...view, ...patch };
+    // Reconcile start_run first: a short command can finish before its reply.
+    // Each Console gets one transition; later updates never restart it.
+    if (
+      view.console &&
+      view.ready &&
+      !view.starting &&
+      !view.state?.running &&
+      finishedConsoleId !== view.console.id
+    ) {
+      finishedConsoleId = view.console.id;
+      if (view.consoleOpen && !view.opening) {
+        selectRun(view.console.id, "All");
+        return;
+      }
+    }
     changed(view);
   }
 
@@ -76,9 +104,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++listGeneration;
     if (!view.state?.workspace) return;
     try {
-      const runs = await transport.invoke<RunRecord[]>("list_runs");
+      const records = await transport.invoke<RunRecord[]>("list_runs");
+      const runs = records.filter(
+        (run) => run.id !== view.state?.running && (!run.external || run.finishedAt !== undefined),
+      );
       if (generation === listGeneration) {
-        update({ runs, runsError: null });
+        if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
+          update({ runs, runsError: null });
+        }
       }
     } catch (error) {
       if (generation === listGeneration) {
@@ -89,9 +122,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   async function loadDetail() {
     const id = view.selectedRun;
+    // Full artifacts, including profiles, are read after the active run ends.
+    if (!id || !view.ready || view.starting || view.detailLoading || id === view.state?.running)
+      return;
     const generation = ++detailGeneration;
-    // Logs and observations are read after the run leaves the active slot.
-    if (!id || !view.ready || view.starting || id === view.state?.running) return;
     update({ detailLoading: true, detailError: null });
     try {
       const detail = await transport.invoke<RunDetail>("get_run", { id });
@@ -105,8 +139,19 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  function selectRun(id: string | null) {
-    update({ selectedRun: id, detail: null, detailError: null, detailLoading: false });
+  function selectRun(id: string | null, initialRunTab: "All" | "Logs" = "Logs") {
+    ++liveGeneration;
+    ++detailGeneration;
+    update({
+      live: null,
+      liveError: null,
+      consoleOpen: false,
+      selectedRun: id,
+      detail: null,
+      initialRunTab,
+      detailError: null,
+      detailLoading: false,
+    });
     void loadDetail();
   }
 
@@ -116,9 +161,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const resumed = !view.ready;
     ++stateRevision;
     if (state.workspace !== before?.workspace) {
+      ++liveGeneration;
       ++listGeneration;
       ++detailGeneration;
       update({
+        live: null,
+        liveError: null,
+        console: null,
+        consoleOpen: false,
         runs: [],
         runsError: null,
         selectedRun: null,
@@ -127,7 +177,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         detailError: null,
       });
     }
-    update({ state, ready: true, ...(resumed ? { error: null } : {}) });
+    update({
+      state,
+      ready: true,
+      runs: view.runs.filter((run) => run.id !== state.running),
+      ...(resumed ? { error: null } : {}),
+    });
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
@@ -138,6 +193,46 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     disposed = true;
     unlisten?.();
     unlisten = undefined;
+  }
+
+  // Called by the mounted app, never by the session itself. No timers survive
+  // unmount. A single bounded snapshot request is in flight at any time.
+  async function poll() {
+    if (
+      disposed ||
+      polling ||
+      !view.ready ||
+      view.starting ||
+      view.opening ||
+      !view.state?.workspace
+    )
+      return;
+    polling = true;
+    const generation = liveGeneration;
+    const id = view.selectedRun;
+    try {
+      if (pollCount++ % 4 !== 0) return;
+      await loadRuns();
+      if (!id || disposed || generation !== liveGeneration) return;
+      const selected = view.detail?.record ?? view.runs.find((run) => run.id === id);
+      // Owned runs have finalized files. Never replace them with a partial
+      // live projection. External BES streams may still be finishing upload.
+      if (!selected?.external || view.live?.build?.complete) return;
+      const live = await transport.invoke<RunLive>("get_live_run", { id });
+      if (disposed || generation !== liveGeneration) return;
+      update({ live, liveError: null });
+      if (
+        live.record.finishedAt !== view.detail?.record.finishedAt &&
+        !view.detailLoading &&
+        !view.detailError
+      ) {
+        void loadDetail();
+      }
+    } catch (error) {
+      if (generation === liveGeneration) update({ liveError: String(error) });
+    } finally {
+      polling = false;
+    }
   }
 
   async function init() {
@@ -165,8 +260,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       // The target goes through verbatim: one argument, no shell interpretation.
       const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
-      update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
-      selectRun(record.id);
+      selectRun(null);
+      update({ console: record, consoleOpen: true });
       // Invoke responses and events use different Tauri delivery paths. The
       // reply may precede its running event, so reconcile before deciding to
       // read completed files. Events received during this read take priority.
@@ -240,5 +335,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  return { init, dispose, start, stop, openWorkspace, refresh, selectRun, loadDetail, loadRuns };
+  return {
+    init,
+    dispose,
+    start,
+    stop,
+    openWorkspace,
+    refresh,
+    selectRun,
+    loadDetail,
+    loadRuns,
+    poll,
+  };
 }

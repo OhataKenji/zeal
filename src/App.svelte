@@ -32,6 +32,11 @@
   import SearchDropdown from "./lib/SearchDropdown.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
+  let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
+  function loadConsole() {
+    return consoleComponent ??= import("./lib/ConsoleView.svelte");
+  }
+
   onMount(connect);
 
   const st = $derived(app.state);
@@ -53,7 +58,7 @@
   );
   const running = $derived(!!st?.running);
   const actionLabel = $derived(
-    running ? "Stop" : cmd === "test" ? "Test" : "Build",
+    running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
   );
   const inputError = $derived(
     targetField === "" ? null : targetError(targetField),
@@ -260,8 +265,19 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:run-content={!!app.view.selectedRun || analyticsOpen}
+    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen}
   >
+    {#if app.view.console}
+      {#key app.view.console.id}
+        <div class="console-container" hidden={!app.view.consoleOpen}>
+          {#await loadConsole() then { default: ConsoleView }}
+          <ConsoleView record={app.view.runs.find((run) => run.id === app.view.console?.id) ?? app.view.console}
+            visible={app.view.consoleOpen} running={state.running === app.view.console.id} stopping={state.stopping} />
+          {/await}
+        </div>
+      {/key}
+    {/if}
+    {#if !app.view.consoleOpen}
     {#if snap?.meta.status === "partial"}
       <p class="warn">
         一部の package を読み飛ばしました (exit {state.lastError?.exitCode ??
@@ -295,6 +311,7 @@
     {:else if state.ingest !== "running" && state.lastError}
       <p class="err">取り込みに失敗しました: {state.lastError.summary}</p>
       <button type="button" class="button" onclick={refresh}>retry</button>
+    {/if}
     {/if}
   </main>
 {/snippet}
@@ -332,6 +349,7 @@
       <select class="select" aria-label="Bazel command" bind:value={cmd}>
         <option>build</option>
         <option>test</option>
+        <option>run</option>
       </select>
       <div class="composer-search">
         <input
@@ -380,6 +398,7 @@
       {app.view.error}
     </p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
+  {#if st?.bes?.error}<p class="app-error warn" role="status">BES receiver: {st.bes.error}</p>{/if}
   {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
 
   {#if st === null}

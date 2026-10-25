@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStateDto {
+    pub bes: crate::bes::BesStatus,
     /// Workspace root path, if one is open.
     pub workspace: Option<String>,
     /// Resolved bazel executable, if found on PATH.
@@ -45,6 +46,8 @@ pub struct IngestError {
 pub type RunId = String;
 
 pub struct CoreState {
+    pub bes: crate::bes::BesStatus,
+    pub run_terminal: Option<crate::terminal::Control>,
     pub workspace: Option<PathBuf>,
     pub bazel: Option<PathBuf>,
     /// The latest fully built snapshot; swapped atomically per fetch.
@@ -75,6 +78,8 @@ impl Core {
     pub fn new() -> Self {
         Core {
             state: Mutex::new(CoreState {
+                bes: crate::bes::BesStatus::default(),
+                run_terminal: None,
                 workspace: None,
                 bazel: None,
                 snapshot: None,
@@ -93,6 +98,7 @@ impl Core {
     pub fn dto(&self) -> AppStateDto {
         let st = self.state.lock().unwrap();
         AppStateDto {
+            bes: st.bes.clone(),
             workspace: st
                 .workspace
                 .as_ref()

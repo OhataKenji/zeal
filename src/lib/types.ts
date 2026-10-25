@@ -41,6 +41,7 @@ export interface IngestError {
 }
 
 export interface AppState {
+  bes?: { endpoint: string | null; error: string | null };
   workspace: string | null;
   bazel: string | null;
   ingest: "idle" | "running";
@@ -53,9 +54,10 @@ export interface AppState {
 }
 
 // The commands the core accepts from the composer.
-export type RunCmd = "build" | "test";
+export type RunCmd = "build" | "test" | "run";
 
 export interface RunRecord {
+  external?: boolean;
   id: string;
   workspace: string;
   cmd: string;
@@ -90,4 +92,11 @@ export interface RunDetail {
   log: Section<string>;
   bep: Section<Bep>;
   profile: Section<Profile>;
+}
+
+export interface RunLive {
+  record: RunRecord;
+  log: Section<string>;
+  bep: Section<Bep>;
+  build: { finishedAt: number | null; exitCode: number | null; complete: boolean } | null;
 }

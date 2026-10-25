@@ -134,7 +134,10 @@ const state: AppState = {
   running: null,
   stopping: false,
   runNote: null,
+  bes: { endpoint: "grpc://127.0.0.1:4718", error: null },
 };
+const consoleOutput = new Map<string, string>();
+const consoleInput = new Map<string, string>();
 const span = (name: string, ts: number, dur: number) => ({
   name,
   ts: ts * 1e6,
@@ -220,6 +223,72 @@ export function installPreview() {
           return structuredClone(state);
         case "list_runs":
           return structuredClone(records);
+        case "get_live_run": {
+          const record = records.find((run) => run.id === payload?.id);
+          if (!record) throw new Error("Preview run not found");
+          return {
+            record: structuredClone(record),
+            log: {
+              status: "ok",
+              data:
+                consoleOutput.get(record.id) ??
+                `\u001b[32mINFO:\u001b[0m ${record.cmd} ${record.target}\n\u001b[33mWARNING:\u001b[0m Example warning in preview data\n${record.finishedAt ? "Build finished\n" : "Building…\n"}`,
+            },
+            bep: { status: "ok", data: { targets: [], tests: [], truncated: false } },
+            build: null,
+          };
+        }
+        case "read_console": {
+          const id = String(payload?.id);
+          const bytes = new TextEncoder().encode(consoleOutput.get(id) ?? "");
+          const offset = Number(payload?.offset ?? 0);
+          const data = Array.from(bytes.slice(offset, offset + 64 * 1024));
+          return {
+            data,
+            offset: offset + data.length,
+            done: state.running !== id && offset + data.length === bytes.length,
+          };
+        }
+        case "resize_console":
+          return;
+        case "write_console": {
+          const id = String(payload?.id);
+          const data = payload?.data as number[];
+          if (state.running !== id) throw new Error("Preview process has ended");
+          const text = new TextDecoder().decode(Uint8Array.from(data));
+          let output = consoleOutput.get(id) ?? "";
+          let input = consoleInput.get(id) ?? "";
+          let finish: number | null = null;
+          for (const ch of text) {
+            if (ch === "\x03" || ch === "\x04") {
+              output += "^" + (ch === "\x03" ? "C" : "D") + "\r\n";
+              finish = 130;
+              break;
+            }
+            if (ch === "\r" || ch === "\n") {
+              output += `\r\n${Number(input) * 2}\r\n`;
+              finish = 0;
+              break;
+            }
+            if (ch === "\x7f") {
+              input = input.slice(0, -1);
+              output += "\b \b";
+            } else {
+              input += ch;
+              output += ch;
+            }
+          }
+          consoleInput.set(id, input);
+          consoleOutput.set(id, output);
+          if (finish !== null) {
+            const record = records.find((run) => run.id === id)!;
+            record.finishedAt = Date.now();
+            record.exitCode = finish;
+            state.running = null;
+            void emit("app-state", structuredClone(state));
+          }
+          return data.length;
+        }
         case "get_run": {
           const record = records.find((run) => run.id === payload?.id);
           if (!record) throw new Error("Preview run not found");
@@ -227,7 +296,9 @@ export function installPreview() {
             record,
             log: {
               status: "ok",
-              data: `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
+              data:
+                consoleOutput.get(record.id) ??
+                `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
             },
             bep: {
               status: "ok",
@@ -298,6 +369,15 @@ export function installPreview() {
           };
           records.unshift(record);
           state.running = record.id;
+          consoleOutput.set(
+            record.id,
+            `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.target}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+          );
+          if (record.cmd !== "run") {
+            record.finishedAt = Date.now();
+            record.exitCode = 0;
+            state.running = null;
+          }
           void emit("app-state", structuredClone(state));
           return structuredClone(record);
         }

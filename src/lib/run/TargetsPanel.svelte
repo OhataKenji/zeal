@@ -2,7 +2,7 @@
   import type { Bep, Section } from "../types";
   import { sectionData, sectionMessage } from "../run";
 
-  let { section, running }: { section: Section<Bep> | undefined; running: boolean } = $props();
+  let { section }: { section: Section<Bep> | undefined } = $props();
   const bep = $derived(sectionData(section));
 </script>
 
@@ -22,8 +22,7 @@
   {/if}
 {/snippet}
 
-{#if running}<p class="panel-empty">Target and test results are available after the run finishes.</p>
-{:else if section}
+{#if section}
   {#if section.status !== "ok"}<p class="run-notice">{sectionMessage(section)}</p>{/if}
   {#if bep}{@render results(bep)}{/if}
 {/if}

@@ -1,5 +1,6 @@
 //! SQLite run summaries. Bazel still writes observations into each run directory.
 pub mod analytics;
+pub mod events;
 #[path = "securefs.rs"]
 mod securefs;
 
@@ -18,6 +19,7 @@ pub enum ErrorKind {
     Corrupt,
     Permission,
     DiskFull,
+    Capacity,
     NewerSchema,
     Missing,
     Conflict,
@@ -28,6 +30,14 @@ pub enum ErrorKind {
 #[derive(Debug)]
 pub struct StoreError {
     pub kind: ErrorKind,
+    context: Option<String>,
+    cause: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+impl StoreError {
+    fn at(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
+    }
 }
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -35,16 +45,28 @@ impl fmt::Display for StoreError {
             ErrorKind::Corrupt => "history database is corrupt or has an unsupported schema",
             ErrorKind::Permission => "history storage permission or file safety error",
             ErrorKind::DiskFull => "history storage is full",
+            ErrorKind::Capacity => "BES storage limit reached",
             ErrorKind::NewerSchema => "history database requires a newer Zeal version",
             ErrorKind::Missing => "history record or artifact is missing",
             ErrorKind::Conflict => "history record or directory already exists",
             ErrorKind::Invalid => "invalid history input",
             ErrorKind::Busy => "history database is busy",
             ErrorKind::Io => "history storage I/O error",
-        })
+        })?;
+        if let Some(context) = &self.context {
+            write!(f, " ({context})")?;
+        }
+        if let Some(cause) = &self.cause {
+            write!(f, ": {cause}")?;
+        }
+        Ok(())
     }
 }
-impl std::error::Error for StoreError {}
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_ref().map(|cause| cause.as_ref() as _)
+    }
+}
 impl From<io::Error> for StoreError {
     fn from(error: io::Error) -> Self {
         let kind = match error.raw_os_error() {
@@ -58,14 +80,18 @@ impl From<io::Error> for StoreError {
                 _ => ErrorKind::Io,
             },
         };
-        Self { kind }
+        Self {
+            kind,
+            context: None,
+            cause: Some(Box::new(error)),
+        }
     }
 }
 impl From<rusqlite::Error> for StoreError {
     fn from(error: rusqlite::Error) -> Self {
         use rusqlite::ErrorCode;
         Self {
-            kind: match error {
+            kind: match &error {
                 rusqlite::Error::SqliteFailure(error, _) => match error.code {
                     ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase => ErrorKind::Corrupt,
                     ErrorCode::PermissionDenied | ErrorCode::ReadOnly | ErrorCode::CannotOpen => {
@@ -79,6 +105,8 @@ impl From<rusqlite::Error> for StoreError {
                 rusqlite::Error::QueryReturnedNoRows => ErrorKind::Missing,
                 _ => ErrorKind::Corrupt,
             },
+            context: None,
+            cause: Some(Box::new(error)),
         }
     }
 }
@@ -94,7 +122,11 @@ impl From<StoreError> for io::Error {
     }
 }
 fn fail(kind: ErrorKind) -> StoreError {
-    StoreError { kind }
+    StoreError {
+        kind,
+        context: None,
+        cause: None,
+    }
 }
 
 /// The existing UI record contract. Status remains derived from end and exit.
@@ -110,6 +142,8 @@ pub struct RunRecord {
     pub finished_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external: bool,
 }
 
 fn id(value: &str) -> Result<String, StoreError> {
@@ -127,20 +161,30 @@ fn now_ms() -> i64 {
 struct Store {
     conn: Connection,
     root: Dir,
+    // Fields drop in declaration order: SQLite may unlink its WAL on close.
+    // Keep that close inside the same lock as the next file safety check.
+    _access: std::sync::MutexGuard<'static, ()>,
 }
 impl Store {
     fn open(data: &Path) -> Result<Self, StoreError> {
-        let root = Dir::root(data)?;
+        // Serialize the complete connection lifetime, including close, across
+        // the receiver, process owner and UI readers in this app.
+        static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let access = OPEN.lock().unwrap();
+        let root = Dir::root(data).map_err(|e| StoreError::from(e).at("open history directory"))?;
         let exists = root.exists("zeal.db")?;
         for name in ["zeal.db-wal", "zeal.db-shm", "zeal.db-journal"] {
             if root.exists(name)? {
                 if !exists {
                     return Err(fail(ErrorKind::Corrupt));
                 }
-                root.file(name, false)?;
+                root.file(name, false)
+                    .map_err(|e| StoreError::from(e).at(format!("check {name}")))?;
             }
         }
-        let db = root.file("zeal.db", !exists)?;
+        let db = root
+            .file("zeal.db", !exists)
+            .map_err(|e| StoreError::from(e).at("open zeal.db"))?;
         if exists && db.metadata()?.len() == 0 {
             return Err(fail(ErrorKind::Corrupt));
         }
@@ -149,14 +193,15 @@ impl Store {
         let mut conn = Connection::open_with_flags(
             root.path().join("zeal.db"),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )?;
+        )
+        .map_err(|e| StoreError::from(e).at("open zeal.db with SQLite"))?;
         conn.busy_timeout(Duration::from_secs(2))?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 1 {
+        if version > 3 {
             return Err(fail(ErrorKind::NewerSchema));
         }
-        if exists && version != 1 {
+        if exists && ![1, 2, 3].contains(&version) {
             return Err(fail(ErrorKind::Corrupt));
         }
         let journal: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
@@ -173,14 +218,29 @@ impl Store {
                 PRAGMA user_version=1;")?;
             tx.commit()?;
         }
+        if version < 2 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(events::SCHEMA)?;
+            tx.commit()?;
+        }
+        if version < 3 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(events::BUDGET_SCHEMA)?;
+            tx.commit()?;
+        }
         conn.prepare("SELECT id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code FROM run LIMIT 0")
             .map_err(|_| fail(ErrorKind::Corrupt))?;
         for name in ["zeal.db-wal", "zeal.db-shm", "zeal.db-journal"] {
             if root.exists(name)? {
-                root.file(name, false)?;
+                root.file(name, false)
+                    .map_err(|e| StoreError::from(e).at(format!("check {name}")))?;
             }
         }
-        Ok(Self { conn, root })
+        Ok(Self {
+            conn,
+            root,
+            _access: access,
+        })
     }
     fn workspace_id(&self, ws: &Path) -> Result<String, StoreError> {
         Ok(self.conn.query_row(
@@ -217,6 +277,7 @@ fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord>
             })
             .transpose()?,
         exit_code: row.get(5)?,
+        external: false,
     })
 }
 
@@ -251,17 +312,25 @@ pub fn create(
         started_at: started as u64,
         finished_at: None,
         exit_code: None,
+        external: false,
     };
     Ok((rec, dir.path().to_owned()))
 }
 pub fn read_record(data: &Path, ws: &Path, run_id: &str) -> Result<RunRecord, StoreError> {
     let ws = ws.canonicalize()?;
     let store = Store::open(data)?;
-    Ok(store.conn.query_row(
+    let result = store.conn.query_row(
         &format!("{SELECT} AND r.id=?2"),
         params![ws.as_os_str().as_bytes(), id(run_id)?],
         |row| row_record(row, &ws),
-    )?)
+    );
+    match result {
+        Ok(record) => Ok(record),
+        Err(rusqlite::Error::QueryReturnedNoRows) => events::read(&store, &ws, run_id)?
+            .map(|observation| observation.record())
+            .ok_or_else(|| fail(ErrorKind::Missing)),
+        Err(error) => Err(error.into()),
+    }
 }
 pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
     let ws = ws.canonicalize()?;
@@ -269,9 +338,16 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
     let mut statement = store
         .conn
         .prepare(&format!("{SELECT} ORDER BY r.started_at_ms DESC,r.id"))?;
-    Ok(statement
+    let mut records = statement
         .query_map([ws.as_os_str().as_bytes()], |row| row_record(row, &ws))?
-        .collect::<Result<_, _>>()?)
+        .collect::<Result<Vec<_>, _>>()?;
+    for observation in events::list(&store, &ws)? {
+        if !records.iter().any(|record| record.id == observation.id) {
+            records.push(observation);
+        }
+    }
+    records.sort_by(|a, b| b.started_at.cmp(&a.started_at).then(a.id.cmp(&b.id)));
+    Ok(records)
 }
 /// Only an unfinished record can transition to a completed summary.
 pub fn finish(
@@ -392,6 +468,47 @@ mod tests {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
+    #[test]
+    fn concurrent_reads_keep_sqlite_sidecars_safe_through_close() {
+        let f = Fixture::new();
+        let (record, _) = f.create();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let f = &f;
+                let record = &record;
+                scope.spawn(move || {
+                    for _ in 0..25 {
+                        assert_eq!(list(&f.data, &f.ws).unwrap(), vec![record.clone()]);
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn permission_errors_identify_the_file_and_preserve_the_cause() {
+        let f = Fixture::new();
+        f.create();
+        fs::set_permissions(f.data.join("zeal.db"), fs::Permissions::from_mode(0o644)).unwrap();
+        let error = Store::open(&f.data).err().unwrap();
+        assert_eq!(error.kind, ErrorKind::Permission);
+        assert!(error.to_string().contains("open zeal.db"));
+        assert!(error.to_string().contains("unsafe file permissions"));
+        assert!(std::error::Error::source(&error).is_some());
+    }
+
+    #[test]
+    fn sqlite_errors_preserve_the_original_reason() {
+        let error = StoreError::from(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+            Some("unable to open database file".into()),
+        ))
+        .at("open zeal.db with SQLite");
+        assert_eq!(error.kind, ErrorKind::Permission);
+        assert!(error.to_string().contains("open zeal.db with SQLite"));
+        assert!(error.to_string().contains("unable to open database file"));
+    }
+
     #[test]
     fn create_finish_reopen_preserves_original_dto_and_private_files() {
         let f = Fixture::new();
@@ -570,7 +687,7 @@ mod tests {
     fn newer_schema_and_database_sidecar_links_are_rejected() {
         let f = Fixture::new();
         let store = Store::open(&f.data).unwrap();
-        store.conn.pragma_update(None, "user_version", 2).unwrap();
+        store.conn.pragma_update(None, "user_version", 4).unwrap();
         drop(store);
         assert_eq!(
             Store::open(&f.data).err().unwrap().kind,
