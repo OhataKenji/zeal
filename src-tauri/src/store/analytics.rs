@@ -240,6 +240,7 @@ mod tests {
                 [rec.id],
             )
             .unwrap();
+        drop(store);
         let all = f.query(f.filter());
         assert_eq!(
             all.days.iter().map(|d| d.count).collect::<Vec<_>>(),
@@ -270,6 +271,7 @@ mod tests {
         super::super::finish(&f.data, &f.ws, &rec.id, 0).unwrap();
         let store = Store::open(&f.data).unwrap();
         store.conn.execute("UPDATE run SET started_at_ms=unixepoch('2026-03-07','utc')*1000,finished_at_ms=NULL WHERE id=?1",[rec.id]).unwrap();
+        drop(store);
         assert_eq!(total(&f.query(f.filter())), 1);
         fs::remove_dir_all(dir).unwrap();
         assert_eq!(total(&f.query(f.filter())), 1);
@@ -351,9 +353,10 @@ mod tests {
     fn timezone_probe() {
         refresh_timezone();
         let f = Fixture::new();
-        let store = Store::open(&f.data).unwrap();
+
         let zone = std::env::var("TZ").unwrap();
-        let spring: (i64, i64) = store
+        let spring: (i64, i64) = Store::open(&f.data)
+            .unwrap()
             .conn
             .query_row(
                 "SELECT unixepoch('2026-03-08','utc')*1000,unixepoch('2026-03-09','utc')*1000",
@@ -362,7 +365,7 @@ mod tests {
             )
             .unwrap();
         let spring = if zone == "America/New_York" || zone == "America/Havana" {
-            store.conn.query_row("SELECT unixepoch('2026-03-08 05:00:00')*1000,unixepoch('2026-03-09 04:00:00')*1000",[],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).unwrap()
+            Store::open(&f.data).unwrap().conn.query_row("SELECT unixepoch('2026-03-08 05:00:00')*1000,unixepoch('2026-03-09 04:00:00')*1000",[],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).unwrap()
         } else {
             spring
         };
@@ -393,17 +396,20 @@ mod tests {
         let expected = f.insert("2026-03-08 12:00:00", "build", Some(0));
         let last = f.insert("2026-03-08 23:59:59", "build", Some(0));
         let sql = "UPDATE run SET started_at_ms=?1 WHERE id=?2";
-        store
+        Store::open(&f.data)
+            .unwrap()
             .conn
             .execute(sql, params![spring.0, expected])
             .unwrap();
         // One millisecond before each exclusive boundary must stay on that day.
-        store
+        Store::open(&f.data)
+            .unwrap()
             .conn
             .execute(sql, params![spring.1 - 1, last])
             .unwrap();
         let before = f.insert("2026-03-07", "build", Some(0));
-        store
+        Store::open(&f.data)
+            .unwrap()
             .conn
             .execute(sql, params![spring.0 - 1, before])
             .unwrap();
@@ -421,9 +427,7 @@ mod tests {
         });
         assert_eq!(total(&result), 0);
         if zone == "America/New_York" || zone == "America/Havana" {
-            let (from, until): (i64, i64) = store
-                .conn
-                .query_row(
+            let (from, until): (i64, i64) = Store::open(&f.data).unwrap().conn.query_row(
                     "SELECT unixepoch('2026-11-01 04:00:00')*1000,unixepoch('2026-11-02 05:00:00')*1000",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?)),
@@ -432,8 +436,16 @@ mod tests {
             assert_eq!(until - from, 25 * 3_600_000);
             let first = f.insert("2026-11-01 12:00:00", "build", Some(0));
             let last = f.insert("2026-11-01 12:01:00", "build", Some(0));
-            store.conn.execute(sql, params![from, first]).unwrap();
-            store.conn.execute(sql, params![until - 1, last]).unwrap();
+            Store::open(&f.data)
+                .unwrap()
+                .conn
+                .execute(sql, params![from, first])
+                .unwrap();
+            Store::open(&f.data)
+                .unwrap()
+                .conn
+                .execute(sql, params![until - 1, last])
+                .unwrap();
             let selected = f.query(Filter {
                 start: Some("2026-11-01".into()),
                 end: Some("2026-11-01".into()),
@@ -447,8 +459,8 @@ mod tests {
             // occurrence and its later occurrence count, but Oct 29 does not.
             let early = f.insert("1988-10-30 12:00:00", "build", Some(0));
             let previous = f.insert("1988-10-30 12:01:00", "build", Some(0));
-            store.conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",[early]).unwrap();
-            store.conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",[previous]).unwrap();
+            Store::open(&f.data).unwrap().conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",[early]).unwrap();
+            Store::open(&f.data).unwrap().conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",[previous]).unwrap();
             f.insert("1988-10-30 12:02:00", "build", Some(0));
             let selected = f.query(Filter {
                 start: Some("1988-10-30".into()),

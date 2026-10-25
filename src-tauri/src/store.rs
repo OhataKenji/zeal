@@ -127,9 +127,13 @@ fn now_ms() -> i64 {
 struct Store {
     conn: Connection,
     root: Dir,
+    // Keep SQLite close/WAL deletion inside the same lock as file checks.
+    _access: std::sync::MutexGuard<'static, ()>,
 }
 impl Store {
     fn open(data: &Path) -> Result<Self, StoreError> {
+        static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let access = ACCESS.lock().unwrap();
         let root = Dir::root(data)?;
         let exists = root.exists("zeal.db")?;
         for name in ["zeal.db-wal", "zeal.db-shm", "zeal.db-journal"] {
@@ -180,7 +184,11 @@ impl Store {
                 root.file(name, false)?;
             }
         }
-        Ok(Self { conn, root })
+        Ok(Self {
+            conn,
+            root,
+            _access: access,
+        })
     }
     fn workspace_id(&self, ws: &Path) -> Result<String, StoreError> {
         Ok(self.conn.query_row(
@@ -392,6 +400,23 @@ mod tests {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
+    #[test]
+    fn concurrent_reads_keep_sqlite_sidecars_safe_through_close() {
+        let f = Fixture::new();
+        let (record, _) = f.create();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let f = &f;
+                let record = &record;
+                scope.spawn(move || {
+                    for _ in 0..25 {
+                        assert_eq!(list(&f.data, &f.ws).unwrap(), vec![record.clone()]);
+                    }
+                });
+            }
+        });
+    }
+
     #[test]
     fn create_finish_reopen_preserves_original_dto_and_private_files() {
         let f = Fixture::new();
