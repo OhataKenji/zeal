@@ -7,6 +7,7 @@ mod runner;
 mod snapshot;
 mod state;
 mod store;
+mod terminal;
 mod workspace;
 mod xml;
 
@@ -70,7 +71,7 @@ fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     ingest::request(app, core.inner().clone())
 }
 
-/// Start `bazel build|test <target>`. Fails while bazel is busy.
+/// Start `bazel build|test|run <target>`. Fails while bazel is busy.
 #[tauri::command]
 fn start_run(
     app: AppHandle,
@@ -87,6 +88,16 @@ fn start_run(
 #[tauri::command]
 fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
+}
+
+#[tauri::command]
+fn write_console(core: State<Arc<Core>>, id: String, data: Vec<u8>) -> Result<usize, String> {
+    terminal::write(&core, &id, &data)
+}
+
+#[tauri::command]
+fn resize_console(core: State<Arc<Core>>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    terminal::resize(&core, &id, cols, rows)
 }
 
 #[tauri::command]
@@ -240,6 +251,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             read_console,
+            write_console,
+            resize_console,
             open_workspace,
             refresh,
             start_run,

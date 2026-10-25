@@ -53,7 +53,7 @@ export interface AppState {
 }
 
 // The commands the core accepts from the composer.
-export type RunCmd = "build" | "test";
+export type RunCmd = "build" | "test" | "run";
 
 export interface RunRecord {
   id: string;

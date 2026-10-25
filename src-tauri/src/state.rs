@@ -56,6 +56,7 @@ pub struct CoreState {
     pub run: Option<RunId>,
     /// Process group of the run in flight (the child's pid), for the one stop
     /// that signals it.
+    pub run_terminal: Option<crate::terminal::Control>,
     pub run_pgid: Option<i32>,
     /// A stop was accepted for `run`: its group was signalled and a repeated
     /// stop does nothing.
@@ -82,6 +83,7 @@ impl Core {
                 ingest_running: false,
                 run: None,
                 run_pgid: None,
+                run_terminal: None,
                 run_stopping: false,
                 run_stop_started: None,
                 run_note: None,
