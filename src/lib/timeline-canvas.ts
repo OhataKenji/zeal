@@ -20,11 +20,22 @@ export interface EventHit {
   index: number;
 }
 
+export interface TimelineTheme {
+  background: string;
+  foreground: string;
+  muted: string;
+  mutedForeground: string;
+  border: string;
+  sidebar: string;
+  chartBar: string;
+}
+
 interface TimelineAxis {
   width: number;
   gutter: number;
   range: TimeRange;
   ticks: number[];
+  theme: TimelineTheme;
 }
 
 interface TimelineFrame extends TimelineAxis {
@@ -35,38 +46,36 @@ interface TimelineFrame extends TimelineAxis {
 }
 
 export function drawRuler(context: CanvasRenderingContext2D, frame: TimelineAxis) {
-  const { width, gutter, range, ticks } = frame;
+  const { width, gutter, range, ticks, theme } = frame;
   const plotWidth = Math.max(1, width - gutter);
   const timeX = (time: number) => timeToX(time, range, width, gutter);
-  context.fillStyle = "#f5f5f5";
+  context.fillStyle = theme.muted;
   context.fillRect(0, 0, width, 26);
-  context.fillStyle = "#737373";
-  context.fillText("THREAD / TIME", 12, 17);
   context.save();
   context.beginPath();
   context.rect(gutter, 0, plotWidth, 26);
   context.clip();
   for (const time of ticks) {
     const tickX = timeX(time);
-    context.strokeStyle = "#cbd0d5";
+    context.strokeStyle = theme.border;
     context.beginPath();
     context.moveTo(tickX + 0.5, 18);
     context.lineTo(tickX + 0.5, 26);
     context.stroke();
-    context.fillStyle = "#737373";
+    context.fillStyle = theme.mutedForeground;
     context.fillText(formatRulerTime(time, range), tickX + 4, 13);
   }
   context.restore();
 }
 
 export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineFrame): EventHit[] {
-  const { width, height, gutter, range, ticks, scrollTop, tracks } = frame;
+  const { width, height, gutter, range, ticks, scrollTop, tracks, theme } = frame;
   const hits: EventHit[] = [];
 
   // Grid, ruler, phase bands and event hit regions share the same time transform.
   for (const time of ticks) {
     const gridX = timeToX(time, range, width, gutter) + 0.5;
-    context.strokeStyle = "#f0f0f0";
+    context.strokeStyle = theme.muted;
     context.beginPath();
     context.moveTo(gridX, 0);
     context.lineTo(gridX, height);
@@ -79,9 +88,9 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     const contentTop = trackTop + (track.kind === "events" ? LANE_HEADER : 0);
     const contentHeight = trackBottom - contentTop;
     if (track.kind === "events") {
-      context.fillStyle = "#f5f5f5";
+      context.fillStyle = theme.muted;
       context.fillRect(gutter, trackTop, Math.max(1, width - gutter), LANE_HEADER);
-      context.strokeStyle = "#d7dce0";
+      context.strokeStyle = theme.border;
       context.beginPath();
       context.moveTo(gutter, trackBottom - 0.5);
       context.lineTo(width, trackBottom - 0.5);
@@ -96,11 +105,11 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     if (track.kind === "events") drawEvents(context, track, trackTop, frame, hits);
     else drawCounterSeries(context, track, trackTop, frame, hits);
     context.restore();
-    context.fillStyle = "#fafafa";
+    context.fillStyle = theme.sidebar;
     context.fillRect(0, contentTop, gutter, contentHeight);
   }
 
-  context.strokeStyle = "#cbd0d5";
+  context.strokeStyle = theme.border;
   context.beginPath();
   context.moveTo(gutter - 0.5, 0);
   context.lineTo(gutter - 0.5, height);
@@ -135,17 +144,17 @@ function drawEvent(
   trackTop: number,
   frame: TimelineFrame,
 ): EventHit {
-  const { width, gutter, range, selection } = frame;
+  const { width, gutter, range, selection, theme } = frame;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
   const eventLeft = Math.max(gutter, timeX(event.start!));
   const eventWidth = Math.max(1, Math.min(width, timeX(event.end!)) - eventLeft);
   const eventTop = trackTop + LANE_HEADER + event.row * ROW_HEIGHT;
   const selected = selection?.tid === tid && selection.index === event.index;
-  context.fillStyle = selected ? "#262626" : eventColor(event.event);
+  context.fillStyle = selected ? theme.foreground : eventColor(event.event);
   if (event.kind === "span") {
     context.fillRect(eventLeft, eventTop, eventWidth, ROW_HEIGHT - 1);
     if (eventWidth > 28) {
-      context.fillStyle = selected ? "#fff" : "#262626";
+      context.fillStyle = selected ? theme.background : theme.foreground;
       drawClippedLabel(
         context,
         eventName(event.event),
@@ -164,7 +173,7 @@ function drawEvent(
     context.fill();
   }
   if (selected) {
-    context.strokeStyle = "#262626";
+    context.strokeStyle = theme.foreground;
     context.lineWidth = 2;
     context.strokeRect(eventLeft, eventTop + 0.5, Math.max(3, eventWidth), ROW_HEIGHT - 2);
     context.lineWidth = 1;
@@ -186,11 +195,11 @@ function drawCounterSeries(
   frame: TimelineFrame,
   hits: EventHit[],
 ) {
-  const { width, gutter, range, selection } = frame;
+  const { width, gutter, range, selection, theme } = frame;
   const { lane, counter } = track;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
   const valueY = (value: number) => trackTop + counterPointY(counter, value);
-  context.strokeStyle = "#525252";
+  context.strokeStyle = theme.chartBar;
   context.lineWidth = 1.5;
   context.beginPath();
   for (const [pointIndex, point] of counter.points.entries()) {
@@ -198,17 +207,13 @@ function drawCounterSeries(
     else context.lineTo(timeX(point.time), valueY(point.value));
   }
   context.stroke();
-  context.fillStyle = context.strokeStyle;
   for (const point of counter.points) {
     const pointX = timeX(point.time);
     if (pointX < gutter || pointX > width) continue;
     const pointY = valueY(point.value);
-    context.beginPath();
-    context.arc(pointX, pointY, 2, 0, Math.PI * 2);
-    context.fill();
     if (selection?.tid === lane.tid && selection.index === point.index) {
       context.save();
-      context.strokeStyle = "#262626";
+      context.strokeStyle = theme.foreground;
       context.beginPath();
       context.arc(pointX, pointY, 4, 0, Math.PI * 2);
       context.stroke();
