@@ -246,6 +246,7 @@ test("full artifacts are read only after the run finishes", async () => {
   );
   h.emit("app-state", idle);
   h.session.selectRun(record.id);
+  assert.equal(h.view.initialRunTab, "All");
   h.pending
     .filter((call) => call.command === "get_run")
     .at(-1)!

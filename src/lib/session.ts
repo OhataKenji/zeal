@@ -35,7 +35,7 @@ export function emptyView(): SessionView {
     runs: [],
     runsError: null,
     selectedRun: null,
-    initialRunTab: "Logs",
+    initialRunTab: "All",
     detail: null,
     detailLoading: false,
     detailError: null,
@@ -130,7 +130,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  function selectRun(id: string | null, initialRunTab: "All" | "Logs" = "Logs") {
+  function selectRun(id: string | null, initialRunTab: "All" | "Logs" = "All") {
     ++detailGeneration;
     update({
       consoleOpen: false,
