@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAnalytics, emptyAnalytics, type DailyAnalytics } from "../src/lib/analytics.ts";
+import {
+  createAnalytics,
+  emptyAnalytics,
+  fmtMs,
+  segments,
+  type DailyAnalytics,
+} from "../src/lib/analytics.ts";
 
 function harness() {
   let view = emptyAnalytics();
@@ -29,15 +35,40 @@ function harness() {
   };
 }
 const result: DailyAnalytics = {
-  filter: { start: "2026-03-01", end: "2026-03-30", cmd: null, outcome: null },
+  filter: { start: "2026-03-01", end: "2026-03-30", cmd: null, outcome: null, target: null },
   today: "2026-03-30",
-  days: [{ day: "2026-03-30", count: 2 }],
+  days: [
+    {
+      day: "2026-03-30",
+      count: 2,
+      timed: 2,
+      ok: 1,
+      failed: 1,
+      interrupted: 0,
+      totalMs: 5000,
+      p50Ms: 2000,
+      p95Ms: 3000,
+    },
+  ],
+  targets: [],
 };
+const day = (count: number, extra: Partial<DailyAnalytics["days"][number]> = {}) => ({
+  day: "2026-03-30",
+  count,
+  timed: count,
+  ok: count,
+  failed: 0,
+  interrupted: 0,
+  totalMs: 0,
+  p50Ms: 0,
+  p95Ms: 0,
+  ...extra,
+});
 test("default request uses core calendar and refresh retains all filters", async () => {
   const h = harness();
   const initial = h.model.load();
   assert.deepEqual(h.calls[0].args, {
-    filter: { start: null, end: null, cmd: null, outcome: null },
+    filter: { start: null, end: null, cmd: null, outcome: null, target: null },
   });
   h.calls[0].resolve(result);
   await initial;
@@ -56,7 +87,7 @@ test("late filters, errors and disposed workspace requests cannot replace the la
   const h = harness();
   const old = h.model.load();
   const latest = h.model.load({ ...result.filter, cmd: "test" });
-  h.calls[1].resolve({ ...result, days: [{ day: "2026-03-30", count: 9 }] });
+  h.calls[1].resolve({ ...result, days: [day(9)] });
   await latest;
   h.calls[0].reject(new Error("stale failure"));
   await old;
@@ -66,7 +97,33 @@ test("late filters, errors and disposed workspace requests cannot replace the la
   h.model.dispose();
   h.calls[2].resolve(result);
   await disposed;
+  // The disposed response never lands; the last applied data stays put.
+  assert.equal(h.view.data?.days[0].count, 9);
+});
+test("reloading keeps the previous charts until the response lands", async () => {
+  const h = harness();
+  const initial = h.model.load();
+  h.calls[0].resolve(result);
+  await initial;
+  const reloading = h.model.load({ ...result.filter, cmd: "test" });
+  assert.equal(h.view.loading, true);
+  assert.equal(h.view.data?.days[0].count, 2);
+  h.calls[1].reject(new Error("database busy"));
+  await reloading;
   assert.equal(h.view.data, null);
+  assert.match(h.view.error!, /busy/);
+});
+test("fmtMs carries rounded seconds into the larger unit", () => {
+  assert.equal(fmtMs(999), "999ms");
+  assert.equal(fmtMs(9_420), "9.4s");
+  assert.equal(fmtMs(9_950), "10s");
+  assert.equal(fmtMs(42_000), "42s");
+  assert.equal(fmtMs(119_950), "2m 0s");
+  assert.equal(fmtMs(3_600_000), "1h 0m");
+});
+test("segments splits a series at days without durations", () => {
+  assert.deepEqual(segments([1, null, 2], 2, 10), ["60,120", "80,40"]);
+  assert.deepEqual(segments([], 2, 10), []);
 });
 test("errors remove stale data and retry preserves requested conditions", async () => {
   const h = harness();

@@ -3,6 +3,7 @@
 use super::{ErrorKind, Store, StoreError, fail};
 use rusqlite::{Connection, OptionalExtension, named_params, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -12,17 +13,42 @@ pub struct Filter {
     pub end: Option<String>,
     pub cmd: Option<String>,
     pub outcome: Option<String>,
+    /// Exact `target_raw` pattern match. Restricts the daily series only; the
+    /// target ranking always reflects every pattern in the filtered period.
+    pub target: Option<String>,
 }
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Day {
     pub day: String,
     pub count: i64,
+    pub ok: i64,
+    pub failed: i64,
+    pub interrupted: i64,
+    /// Runs carrying a recorded finish time; the denominator of the
+    /// duration series. `count - timed` rows contribute nothing to it.
+    pub timed: i64,
+    /// Wall-clock total of runs with a recorded finish time.
+    pub total_ms: i64,
+    /// Nearest-rank percentiles over the day's recorded durations.
+    pub p50_ms: i64,
+    pub p95_ms: i64,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDuration {
+    pub target: String,
+    pub runs: i64,
+    pub total_ms: i64,
+    pub p50_ms: i64,
+    pub p95_ms: i64,
 }
 #[derive(Debug, Serialize)]
 pub struct Analytics {
     pub filter: Filter,
     pub today: String,
     pub days: Vec<Day>,
+    pub targets: Vec<TargetDuration>,
 }
 
 // The existing index supplies the workspace + millisecond range scan.
@@ -109,6 +135,9 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             .outcome
             .as_deref()
             .is_some_and(|s| !["ok", "failed", "interrupted"].contains(&s))
+        // Matches the observation.target limit in store::events; the write
+        // side (runner::validate_target) imposes no cap of its own.
+        || filter.target.as_deref().is_some_and(|s| s.len() > 64 * 1024)
     {
         return Err(fail(ErrorKind::Invalid));
     }
@@ -129,37 +158,115 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         .query_map(params![start, end], |r| {
             Ok(Day {
                 day: r.get(0)?,
-                count: r.get(1)?,
+                count: 0,
+                timed: 0,
+                ok: 0,
+                failed: 0,
+                interrupted: 0,
+                total_ms: 0,
+                p50_ms: 0,
+                p95_ms: 0,
             })
         })?
         .collect::<Result<_, _>>()?;
+    let mut durations: Vec<Vec<i64>> = vec![Vec::new(); days.len()];
+    let mut by_target: HashMap<String, TargetAgg> = HashMap::new();
     if let Some(ws_id) = ws_id {
+        // Overflowing subtraction promotes to REAL rather than wrapping;
+        // reading it back as i64 then fails closed as Corrupt.
         let sql = format!(
-            "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),COUNT(*) FROM run WHERE {MATCH} GROUP BY 1 ORDER BY 1"
+            "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),exit_code,target_raw,finished_at_ms - started_at_ms FROM run WHERE {MATCH}"
         );
         let mut statement = tx.prepare(&sql)?;
-        let counts = statement
+        let rows = statement
             .query_map(
                 named_params! {
                     ":workspace":ws_id, ":start":from, ":end":until,
                     ":first_day":start, ":last_day":end,
                     ":cmd":filter.cmd, ":outcome":filter.outcome,
                 },
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                    ))
+                },
             )?
             .collect::<Result<Vec<_>, _>>()?;
-        for (day, count) in counts {
+        for (day, exit_code, target, ms) in rows {
+            // A clock jump backwards must not corrupt the series.
+            let duration = ms.map(|ms| ms.max(0));
+            let entry = by_target.entry(target.clone()).or_default();
+            entry.runs += 1;
+            if let Some(duration) = duration {
+                entry.durations.push(duration);
+            }
+            if filter.target.as_deref().is_some_and(|t| t != target) {
+                continue;
+            }
             let i = days
                 .binary_search_by(|d| d.day.cmp(&day))
                 .map_err(|_| fail(ErrorKind::Invalid))?;
-            days[i].count = count;
+            let slot = &mut days[i];
+            slot.count += 1;
+            match exit_code {
+                0 => slot.ok += 1,
+                8 => slot.interrupted += 1,
+                _ => slot.failed += 1,
+            }
+            if let Some(duration) = duration {
+                slot.timed += 1;
+                slot.total_ms = slot.total_ms.saturating_add(duration);
+                durations[i].push(duration);
+            }
+        }
+        for (i, sorted) in durations.iter_mut().enumerate() {
+            sorted.sort_unstable();
+            days[i].p50_ms = percentile(sorted, 50);
+            days[i].p95_ms = percentile(sorted, 95);
         }
     }
+    let mut targets: Vec<TargetDuration> = by_target
+        .into_iter()
+        .map(|(target, agg)| {
+            let mut sorted = agg.durations;
+            sorted.sort_unstable();
+            TargetDuration {
+                target,
+                runs: agg.runs,
+                total_ms: sorted.iter().fold(0i64, |sum, ms| sum.saturating_add(*ms)),
+                p50_ms: percentile(&sorted, 50),
+                p95_ms: percentile(&sorted, 95),
+            }
+        })
+        .collect();
+    targets.sort_by(|a, b| b.total_ms.cmp(&a.total_ms).then(a.target.cmp(&b.target)));
+    targets.truncate(TARGET_LIMIT);
     Ok(Analytics {
         filter,
         today,
         days,
+        targets,
     })
+}
+
+const TARGET_LIMIT: usize = 10;
+
+#[derive(Default)]
+struct TargetAgg {
+    runs: i64,
+    durations: Vec<i64>,
+}
+
+/// Nearest-rank percentile over a sorted series; empty input reports zero.
+fn percentile(sorted: &[i64], p: u64) -> i64 {
+    debug_assert!((1..=100).contains(&p));
+    if sorted.is_empty() {
+        return 0;
+    }
+    sorted[((sorted.len() as u64 * p).div_ceil(100) - 1) as usize]
 }
 
 #[cfg(test)]
@@ -187,6 +294,16 @@ mod tests {
             Self { root, data, ws }
         }
         fn insert(&self, day: &str, cmd: &str, code: Option<i32>) -> String {
+            self.insert_at(day, cmd, code, "//synthetic:target", None)
+        }
+        fn insert_at(
+            &self,
+            started: &str,
+            cmd: &str,
+            code: Option<i32>,
+            target: &str,
+            finished: Option<&str>,
+        ) -> String {
             let store = Store::open(&self.data).unwrap();
             let ws_id = store
                 .workspace_id(&self.ws.canonicalize().unwrap())
@@ -195,9 +312,9 @@ mod tests {
             store
                 .conn
                 .execute(
-                    "INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,exit_code)
-                VALUES(?1,?2,?3,'//synthetic:target',unixepoch(?4,'utc')*1000,?5)",
-                    params![id, ws_id, cmd, day, code],
+                    "INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code)
+                VALUES(?1,?2,?3,?4,unixepoch(?5,'utc')*1000,unixepoch(?6,'utc')*1000,?7)",
+                    params![id, ws_id, cmd, target, started, finished, code],
                 )
                 .unwrap();
             id
@@ -263,6 +380,123 @@ mod tests {
             ..f.filter()
         });
         assert_eq!(total(&failed), 1);
+    }
+    #[test]
+    fn durations_outcomes_and_target_ranking() {
+        let f = Fixture::new();
+        f.insert_at(
+            "2026-03-07 10:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 10:00:10"),
+        );
+        f.insert_at(
+            "2026-03-07 11:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 11:00:30"),
+        );
+        f.insert_at(
+            "2026-03-07 12:00:00",
+            "test",
+            Some(1),
+            "//b:y",
+            Some("2026-03-07 12:00:20"),
+        );
+        f.insert("2026-03-07 13:00:00", "build", None);
+        f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
+        let result = f.query(f.filter());
+        let first = &result.days[0];
+        assert_eq!(first.count, 3);
+        assert_eq!((first.ok, first.failed, first.interrupted), (2, 1, 0));
+        assert_eq!(first.timed, 3);
+        assert_eq!(first.total_ms, 60_000);
+        assert_eq!((first.p50_ms, first.p95_ms), (20_000, 30_000));
+        let second = &result.days[1];
+        assert_eq!((second.count, second.interrupted), (1, 1));
+        assert_eq!((second.timed, second.total_ms), (0, 0));
+        assert_eq!((second.p50_ms, second.p95_ms), (0, 0));
+        assert_eq!(result.targets.len(), 2);
+        assert_eq!(result.targets[0].target, "//a:x");
+        assert_eq!(result.targets[0].runs, 3);
+        assert_eq!(result.targets[0].total_ms, 40_000);
+        assert_eq!(result.targets[0].p50_ms, 10_000);
+        assert_eq!(result.targets[1].target, "//b:y");
+        assert_eq!(result.targets[1].runs, 1);
+        // The target filter narrows the daily series but not the ranking.
+        let scoped = f.query(Filter {
+            target: Some("//a:x".into()),
+            ..f.filter()
+        });
+        assert_eq!(scoped.days[0].count, 2);
+        assert_eq!(scoped.days[0].total_ms, 40_000);
+        assert_eq!(scoped.days[1].count, 1);
+        assert_eq!(scoped.targets.len(), 2);
+        // The ranking follows the cmd/outcome filters too.
+        let failed = f.query(Filter {
+            outcome: Some("failed".into()),
+            ..f.filter()
+        });
+        assert_eq!(failed.targets.len(), 1);
+        assert_eq!(failed.targets[0].target, "//b:y");
+        assert_eq!(
+            query(
+                &f.data,
+                &f.ws,
+                Filter {
+                    target: Some("x".repeat(64 * 1024 + 1)),
+                    ..f.filter()
+                }
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Invalid
+        );
+    }
+    #[test]
+    fn target_ranking_is_ordered_and_truncated() {
+        let f = Fixture::new();
+        for i in 0..12 {
+            f.insert_at(
+                "2026-03-07 12:00:00",
+                "build",
+                Some(0),
+                &format!("//t:{i:02}"),
+                Some("2026-03-07 12:00:01"),
+            );
+        }
+        // One heavier run and a same-total pair to pin the label tie-break.
+        f.insert_at(
+            "2026-03-07 12:00:00",
+            "build",
+            Some(0),
+            "//t:heavy",
+            Some("2026-03-07 12:00:05"),
+        );
+        f.insert_at(
+            "2026-03-08 12:00:00",
+            "build",
+            Some(0),
+            "//t:extra",
+            Some("2026-03-08 12:00:01"),
+        );
+        let result = f.query(f.filter());
+        assert_eq!(result.targets.len(), TARGET_LIMIT);
+        assert_eq!(result.targets[0].target, "//t:heavy");
+        // Every 1s target ties; the byte order of the label breaks the tie.
+        let tied: Vec<&str> = result.targets[1..]
+            .iter()
+            .map(|t| t.target.as_str())
+            .collect();
+        assert_eq!(
+            tied,
+            [
+                "//t:00", "//t:01", "//t:02", "//t:03", "//t:04", "//t:05", "//t:06", "//t:07",
+                "//t:08"
+            ]
+        );
     }
     #[test]
     fn artifacts_and_missing_finish_do_not_affect_counts_and_late_records_are_visible() {

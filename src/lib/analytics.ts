@@ -1,16 +1,34 @@
 import type { Transport } from "./session.ts";
-import type { RunCmd } from "./types.ts";
 
 export interface AnalyticsFilter {
   start: string | null;
   end: string | null;
-  cmd: RunCmd | null;
+  // The store rejects every command outside build/test.
+  cmd: "build" | "test" | null;
   outcome: "ok" | "failed" | "interrupted" | null;
+  target: string | null;
 }
 export interface DailyAnalytics {
   filter: AnalyticsFilter;
   today: string;
-  days: { day: string; count: number }[];
+  days: {
+    day: string;
+    count: number;
+    timed: number;
+    ok: number;
+    failed: number;
+    interrupted: number;
+    totalMs: number;
+    p50Ms: number;
+    p95Ms: number;
+  }[];
+  targets: {
+    target: string;
+    runs: number;
+    totalMs: number;
+    p50Ms: number;
+    p95Ms: number;
+  }[];
 }
 export interface AnalyticsView {
   filter: AnalyticsFilter;
@@ -20,7 +38,7 @@ export interface AnalyticsView {
 }
 export function emptyAnalytics(): AnalyticsView {
   return {
-    filter: { start: null, end: null, cmd: null, outcome: null },
+    filter: { start: null, end: null, cmd: null, outcome: null, target: null },
     data: null,
     loading: false,
     error: null,
@@ -38,7 +56,9 @@ export function createAnalytics(
   let disposed = false;
   async function load(filter = view.filter) {
     const request = ++generation;
-    view = { filter: { ...filter }, data: null, loading: true, error: null };
+    // Keep the previous charts visible while the reload runs; an error
+    // still drops stale data so it never sits next to an error banner.
+    view = { filter: { ...filter }, data: view.data, loading: true, error: null };
     changed(view);
     try {
       const data = await transport.invoke<DailyAnalytics>("get_analytics", { filter: view.filter });
@@ -46,7 +66,7 @@ export function createAnalytics(
       view = { filter: data.filter, data, loading: false, error: null };
     } catch (error) {
       if (disposed || request !== generation) return;
-      view = { ...view, loading: false, error: String(error) };
+      view = { ...view, data: null, loading: false, error: String(error) };
     }
     changed(view);
   }
@@ -57,4 +77,36 @@ export function createAnalytics(
       ++generation;
     },
   };
+}
+
+// Compact duration formatting for chart axes, tooltips and the table.
+export function fmtMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  // Tenths of a second under 10s; 9.95 rounds up and carries into "10s".
+  const tenths = Math.round(s * 10);
+  if (tenths < 100) return `${tenths / 10}s`;
+  const total = Math.round(s);
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60);
+  if (m < 60) return `${m}m ${total % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// Polyline point lists for the 55..width-15 / 20..200 chart area. `null`
+// values split the series into separate segments instead of dropping to
+// the baseline.
+export function segments(values: (number | null)[], maxValue: number, step: number): string[] {
+  const out: string[] = [];
+  let run: string[] = [];
+  values.forEach((value, i) => {
+    if (value === null) {
+      if (run.length) out.push(run.join(" "));
+      run = [];
+      return;
+    }
+    run.push(`${55 + i * step + step / 2},${200 - (value / maxValue) * 160}`);
+  });
+  if (run.length) out.push(run.join(" "));
+  return out;
 }
