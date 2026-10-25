@@ -14,7 +14,7 @@ use crate::state::{Core, IngestError};
 use crate::store::{self, RunRecord};
 use crate::xml::{self, RawRule};
 use serde::Serialize;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -193,8 +193,17 @@ pub enum Section<T> {
 pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
     let record = store::read_record(data, workspace, id)?;
     let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
+        let start = file.metadata()?.len().saturating_sub(512 * 1024);
+        file.seek(SeekFrom::Start(start))?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
+        if start > 0 {
+            let first = bytes
+                .iter()
+                .position(|b| b & 0xc0 != 0x80)
+                .unwrap_or(bytes.len());
+            bytes.drain(..first);
+        }
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }) {
         Ok(data) => Section::Ok { data },
@@ -298,6 +307,21 @@ mod tests {
             dir.file_name().unwrap().to_str().unwrap(),
             code,
         )
+    }
+
+    #[test]
+    fn saved_log_reads_only_the_last_512_kib() {
+        let (root, dir) = run_dir("ok");
+        fs::write(
+            dir.join("log.txt"),
+            format!("{}tail", "a".repeat(600 * 1024)),
+        )
+        .unwrap();
+        let Section::Ok { data } = detail(&root, &dir).unwrap().log else {
+            panic!("expected log");
+        };
+        assert_eq!(data.len(), 512 * 1024);
+        assert!(data.ends_with("tail"));
     }
 
     #[test]

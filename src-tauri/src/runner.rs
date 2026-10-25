@@ -46,6 +46,8 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
         "--experimental_profile_include_primary_output".to_string(),
         "--noslim_profile".to_string(),
         "--tool_tag=zeal".to_string(),
+        "--color=yes".to_string(),
+        "--curses=no".to_string(),
     ]
 }
 
@@ -471,6 +473,8 @@ mod tests {
                     "--experimental_profile_include_primary_output",
                     "--noslim_profile",
                     "--tool_tag=zeal",
+                    "--color=yes",
+                    "--curses=no",
                 ],
                 "{cmd}"
             );

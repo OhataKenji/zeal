@@ -18,8 +18,13 @@
   );
   const sections = ["Targets", "Logs", "Details", "Timing"] as const;
   const tabs = ["All", ...sections] as const;
-  let active = $state<(typeof tabs)[number]>("All");
+  let active = $state<(typeof tabs)[number]>("Logs");
   let panel = $state<HTMLDivElement>();
+
+  $effect(() => {
+    void selectedRun;
+    active = "Logs";
+  });
 
   $effect(() => {
     void active;
@@ -105,7 +110,6 @@
           {:else if section === "Logs"}
             <LogPanel
               section={view.detail?.log}
-              {running}
               loading={view.detailLoading}
             />
           {:else if section === "Details"}
