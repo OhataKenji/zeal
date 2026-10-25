@@ -1,0 +1,35 @@
+// Wire-compatible subset of googleapis/google/devtools/build/v1/{build_events,publish_build_event}.proto.
+// Upstream: https://github.com/googleapis/googleapis (Apache-2.0).
+syntax = "proto3";
+package google.devtools.build.v1;
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service PublishBuildEvent {
+  rpc PublishLifecycleEvent(PublishLifecycleEventRequest) returns (google.protobuf.Empty);
+  rpc PublishBuildToolEventStream(stream PublishBuildToolEventStreamRequest)
+      returns (stream PublishBuildToolEventStreamResponse);
+}
+message StreamId { string build_id = 1; int32 component = 3; string invocation_id = 6; }
+message StreamFinished { int32 type = 1; }
+message BuildEvent {
+  google.protobuf.Timestamp event_time = 1;
+  bytes invocation_attempt_started = 51;
+  bytes invocation_attempt_finished = 52;
+  bytes build_enqueued = 53;
+  bytes build_finished = 55;
+  bytes console_output = 56;
+  StreamFinished component_stream_finished = 59;
+  google.protobuf.Any bazel_event = 60;
+  bytes build_execution_event = 61;
+  bytes source_fetch_event = 62;
+}
+message OrderedBuildEvent {
+  StreamId stream_id = 1;
+  int64 sequence_number = 2;
+  BuildEvent event = 3;
+}
+message PublishLifecycleEventRequest { OrderedBuildEvent build_event = 2; }
+message PublishBuildToolEventStreamRequest { OrderedBuildEvent ordered_build_event = 4; }
+message PublishBuildToolEventStreamResponse { StreamId stream_id = 1; int64 sequence_number = 2; }
