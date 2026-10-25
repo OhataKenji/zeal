@@ -2,6 +2,8 @@
 
 A local first Bazel GUI client.
 
+![Zeal target explorer showing source files, dependencies, and run history](docs/screenshots/overview.jpg)
+
 ## Getting Started
 
 Tauri v2 (Rust + system WebView) app. Frontend is Vite + Svelte 5 + TypeScript.
@@ -18,10 +20,25 @@ pnpm tauri build  # build a release bundle
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
-## UI preview
+## Features
 
-Run `pnpm dev`, then open `http://localhost:1420/?preview` for sample data
-or `?preview=empty` for workspace setup.
+### Fuzzy Search Target and Run
+
+Find targets or source files with fuzzy search and choose `build`, `test`, or `run`.
+
+![Fuzzy search finding parser targets and source files from “parsr”](docs/screenshots/fuzzy-search.jpg)
+
+### Run Page
+
+Inspect a run's logs, target results, details, and per-thread timing trace from the history.
+
+![Run Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
+
+### Analytics Page
+
+Filter local build and test history to compare run counts, outcomes, total run time, and p50/p95 durations.
+
+![Analytics Page showing date filters and daily run counts by outcome](docs/screenshots/analytics-page.jpg)
 
 ## Checks
 
