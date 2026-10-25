@@ -58,7 +58,7 @@
   );
   const running = $derived(!!st?.running);
   const actionLabel = $derived(
-    running ? "Stop" : cmd === "test" ? "Test" : "Build",
+    running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
   );
   const inputError = $derived(
     targetField === "" ? null : targetError(targetField),
@@ -272,7 +272,7 @@
         <div class="console-container" hidden={!app.view.consoleOpen}>
           {#await loadConsole() then { default: ConsoleView }}
           <ConsoleView record={app.view.runs.find((run) => run.id === app.view.console?.id) ?? app.view.console}
-            running={state.running === app.view.console.id} />
+            visible={app.view.consoleOpen} running={state.running === app.view.console.id} stopping={state.stopping} />
           {/await}
         </div>
       {/key}
@@ -349,6 +349,7 @@
       <select class="select" aria-label="Bazel command" bind:value={cmd}>
         <option>build</option>
         <option>test</option>
+        <option>run</option>
       </select>
       <div class="composer-search">
         <input

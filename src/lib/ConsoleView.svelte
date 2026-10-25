@@ -10,35 +10,55 @@
   import RunHeader from "./RunHeader.svelte";
   import { runStatus } from "./run";
 
-  let { record, running }: {
+  let { record, running, stopping = false, visible }: {
     record: RunRecord;
     running: boolean;
+    stopping?: boolean;
+    visible: boolean;
   } = $props();
   let host: HTMLDivElement;
+  let terminal = $state.raw<Terminal>();
   let error = $state<string | null>(null);
-  const status = $derived(runStatus(record, running ? record.id : null));
+  const status = $derived(runStatus(record, running ? record.id : null, stopping));
+
+  $effect(() => {
+    if (terminal) terminal.options.disableStdin = !running;
+  });
+
+  $effect(() => { if (visible && terminal) terminal.focus(); });
 
   onMount(() => {
     const term = new Terminal({
       ...terminalFont, theme: terminalTheme,
-      convertEol: true, cursorBlink: false, drawBoldTextInBrightColors: false,
-      scrollback: 5000, disableStdin: true,
+      convertEol: false, cursorBlink: true, drawBoldTextInBrightColors: false,
+      scrollback: 5000, disableStdin: !running,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    terminal = term;
     const connection = createConsole(record.id, { invoke },
       (bytes) => new Promise<void>((resolve) => term.write(bytes, resolve)),
       (message) => { error = message; });
+    const keys = term.onData((data) => {
+      if (running) connection.input(new TextEncoder().encode(data));
+    });
+    const binary = term.onBinary((data) => {
+      if (running) connection.input(Uint8Array.from(data, (ch) => ch.charCodeAt(0)));
+    });
+    const sizes = term.onResize(({ cols, rows }) => { void connection.resize(cols, rows); });
     const observer = new ResizeObserver(() => { if (host.clientWidth && host.clientHeight) fit.fit(); });
     observer.observe(host);
     fit.fit();
+    void connection.resize(term.cols, term.rows);
     void connection.poll();
     const timer = setInterval(() => { void connection.poll(); }, 50);
+    term.focus();
     return () => {
       clearInterval(timer);
       observer.disconnect();
       connection.dispose();
+      keys.dispose(); binary.dispose(); sizes.dispose();
       term.dispose();
     };
   });

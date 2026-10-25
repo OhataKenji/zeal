@@ -11,11 +11,12 @@
   let busy = $state(false);
 
   async function submit() {
+    const close = onclose;
     busy = true;
     error = null;
     try {
       await openWorkspace(path.trim());
-      onclose?.();
+      close?.();
     } catch (e) {
       error = String(e);
     } finally {

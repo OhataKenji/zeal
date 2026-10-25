@@ -136,6 +136,7 @@ const state: AppState = {
   runNote: null,
 };
 const consoleOutput = new Map<string, string>();
+const consoleInput = new Map<string, string>();
 const span = (name: string, ts: number, dur: number) => ({
   name,
   ts: ts * 1e6,
@@ -231,6 +232,46 @@ export function installPreview() {
             offset: offset + data.length,
             done: state.running !== id && offset + data.length === bytes.length,
           };
+        }
+        case "resize_console":
+          return;
+        case "write_console": {
+          const id = String(payload?.id);
+          const data = payload?.data as number[];
+          if (state.running !== id) throw new Error("Preview process has ended");
+          const text = new TextDecoder().decode(Uint8Array.from(data));
+          let output = consoleOutput.get(id) ?? "";
+          let input = consoleInput.get(id) ?? "";
+          let finish: number | null = null;
+          for (const ch of text) {
+            if (ch === "\x03" || ch === "\x04") {
+              output += "^" + (ch === "\x03" ? "C" : "D") + "\r\n";
+              finish = 130;
+              break;
+            }
+            if (ch === "\r" || ch === "\n") {
+              output += `\r\n${Number(input) * 2}\r\n`;
+              finish = 0;
+              break;
+            }
+            if (ch === "\x7f") {
+              input = input.slice(0, -1);
+              output += "\b \b";
+            } else {
+              input += ch;
+              output += ch;
+            }
+          }
+          consoleInput.set(id, input);
+          consoleOutput.set(id, output);
+          if (finish !== null) {
+            const record = records.find((run) => run.id === id)!;
+            record.finishedAt = Date.now();
+            record.exitCode = finish;
+            state.running = null;
+            void emit("app-state", structuredClone(state));
+          }
+          return data.length;
         }
         case "get_run": {
           const record = records.find((run) => run.id === payload?.id);
