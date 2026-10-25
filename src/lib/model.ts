@@ -26,22 +26,14 @@ export function basename(path: string): string {
 // ---------------------------------------------------------------------------
 // Tree
 //
-// The directory hierarchy of packages is the skeleton. Rules and input files
-// are listed inside their package node; files that match no package collapse
-// into their owner's package.
-
-export interface TreeFile {
-  path: string;
-  name: string;
-  owners: string[];
-}
+// The directory hierarchy of packages is the skeleton, with rules inside each
+// package. Files belong in the selected target's attributes, not in this tree.
 
 export interface DirNode {
   path: string;
   name: string;
   dirs: DirNode[];
   rules: Target[];
-  files: TreeFile[];
 }
 
 export function buildTree(snap: Snapshot): DirNode {
@@ -51,7 +43,6 @@ export function buildTree(snap: Snapshot): DirNode {
     name: path === "" ? "" : basename(path),
     dirs: [],
     rules: [],
-    files: [],
   });
   const root = mk("");
   nodes.set("", root);
@@ -65,30 +56,11 @@ export function buildTree(snap: Snapshot): DirNode {
     return n;
   };
 
-  const packages = new Set(snap.targets.map((t) => t.pkg));
   for (const t of snap.targets) ensure(t.pkg).rules.push(t);
-
-  // Input-side files, deduplicated by path.
-  const ownersByPath = new Map<string, Set<string>>();
-  for (const f of snap.files) {
-    if (f.role === "out") continue;
-    let s = ownersByPath.get(f.path);
-    if (!s) ownersByPath.set(f.path, (s = new Set()));
-    s.add(f.owner);
-  }
-  for (const [path, owners] of ownersByPath) {
-    const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-    // The deepest package that is a prefix of the file's directory.
-    const best = [...ancestorsOf(dir).reverse(), ""].find((p) => packages.has(p));
-    const ownersAsc = [...owners].sort();
-    const nodePath = best ?? splitLabel(ownersAsc[0]).pkg;
-    ensure(nodePath).files.push({ path, name: basename(path), owners: ownersAsc });
-  }
 
   const sortNode = (n: DirNode): void => {
     n.dirs.sort((a, b) => a.name.localeCompare(b.name));
     n.rules.sort((a, b) => a.name.localeCompare(b.name));
-    n.files.sort((a, b) => a.name.localeCompare(b.name));
     n.dirs.forEach(sortNode);
   };
   sortNode(root);
@@ -98,13 +70,12 @@ export function buildTree(snap: Snapshot): DirNode {
 export interface Row {
   key: string;
   depth: number;
-  kind: "dir" | "rule" | "file";
+  kind: "dir" | "rule";
   text: string;
-  sub?: string;
   /** For dir rows: the directory path that expand/collapse toggles. */
   dirPath?: string;
   expanded?: boolean;
-  /** For rule/file rows: the label selecting this row navigates to. */
+  /** For rule rows: the label selecting this row navigates to. */
   label?: string;
   ruleClass?: string;
 }
@@ -134,16 +105,6 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
         label: t.label,
       });
     }
-    for (const f of n.files) {
-      rows.push({
-        key: `f:${f.path}`,
-        depth,
-        kind: "file",
-        text: f.name,
-        sub: `→ ${f.owners.map((o) => displayLabel(o, n.path)).join(" · ")}`,
-        label: f.owners[0],
-      });
-    }
   };
   walk(root, 0);
   return rows;
@@ -161,7 +122,7 @@ export function ancestorsOf(pkg: string): string[] {
 
 export interface UsedBy {
   label: string;
-  attr: string;
+  attrs: string[];
 }
 
 export interface Relations {
@@ -179,26 +140,26 @@ export function relations(snap: Snapshot, label: string): Relations | null {
 
   const deps = new Set<string>();
   const data = new Set<string>();
-  const usedBy: UsedBy[] = [];
+  const usedBy = new Map<string, Set<string>>();
   for (const e of snap.edges) {
     if (e.from === label) {
       if (e.attr === "deps") deps.add(e.to);
       else if (e.attr === "data") data.add(e.to);
     }
     if (e.to === label) {
-      usedBy.push({
-        label: e.from,
-        attr: e.attr,
-      });
+      let attrs = usedBy.get(e.from);
+      if (!attrs) usedBy.set(e.from, (attrs = new Set()));
+      attrs.add(e.attr);
     }
   }
-  usedBy.sort((a, b) => a.label.localeCompare(b.label) || a.attr.localeCompare(b.attr));
 
   return {
     target,
     deps: [...deps].sort(),
     data: [...data].sort(),
-    usedBy,
+    usedBy: [...usedBy]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([label, attrs]) => ({ label, attrs: [...attrs].sort() })),
     inputs: snap.files.filter((f) => f.owner === label && f.role !== "out"),
     outputs: snap.files.filter((f) => f.owner === label && f.role === "out"),
   };

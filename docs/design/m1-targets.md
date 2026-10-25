@@ -94,12 +94,9 @@ target ごとに全体 query を回すのは高コストであり、`rdeps` の�
 
 ### tree の構成
 
-package のディレクトリ階層を骨格とし、package 内に rule と file を列挙する。
-tree に出す file は入力 role のみで path で重複を除き、rule の兄弟として並べ、「→ owner」を付ける(mock の `Parser.java → :parser`)。owner が複数あれば併記する。
-file は workspace 相対 path に最長一致する package の節に置き、その package が存在しなければ owner の package 節に畳む。
-file を選択した場合は、その owner target(複数なら label 昇順の先頭)の target 状態(関係4行)を表示する。
+package のディレクトリ階層を骨格とし、package 内に rule のみを列挙する。
+入力・出力ファイルは tree に並べず、選択した target の Attributes に表示する。
 関係4行の各 entry も選択でその target の状態へ遷移し、同じ見方で繰り返し辿れるようにする(PRD シナリオ1)。label の表示は選択した target の package に合わせて短形(`:name`)または `//pkg:name` 形にする。
-mock の表記(label → package → file の一致)に従う。
 
 ### BUILD 定義への導線
 
@@ -125,7 +122,7 @@ targets の location(BUILD file と行)を保持し、画面から定義位置�
 - configurable な属性(`select()`)は XML 上は全分岐の和集合で出るため、現在の設定で有効でない依存が edge に混ざる。M1 では設定による絞り込みはしない。
 - 巨大な repo では cold cache の初回取り込みに数十秒かかり得る(grpc で実測 19s)。その間は「取り込み中」を出し、表示が空であることを許容する。それを超える規模では対象 pattern を絞る設計に見直す。
 - さらに大きい monorepo では `//...` 自体が非現実的になる。roadmap には入れないが、workspace 選択時に package 範囲(例 `//src/...`)を絞る構想はここに置く。query の対象 pattern 化はその延長にある。
-- どの rule の属性にも現れない source file は files に載らず、tree にも出ない。孤立した file を拾うかは M1 の検証後に判断する。
+- どの rule の属性にも現れない source file は files に載らず、Attributes にも出ない。
 - `srcs`/`data` が他 rule の生成 file の label を指す場合、その関係は producer の `<rule-output>` と path が一致すれば files 行で見えるが、`deps →`・`used by ←` には現れない(label→producer の辺は作らない)。
 - run 完了ごとの取り込みは BUILD が変わっていなくても全量 query を打つ。計測後に mtime 等の差分検知を検討する余地を残す。
 

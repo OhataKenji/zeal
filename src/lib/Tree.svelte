@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CaretDown, CaretRight, Circle, File } from "phosphor-svelte";
+  import { CaretDown, CaretRight, Circle } from "phosphor-svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { ancestorsOf, flatten, splitLabel, type DirNode } from "./model";
 
@@ -44,23 +44,16 @@
       </button>
     {:else}
       <button
-        title={r.kind === "file"
-          ? `${r.text}\n${r.sub ?? ""}`
-          : (r.label ?? r.text)}
+        title={r.label ?? r.text}
         class="row"
-        class:sel={r.kind === "rule" && r.label === selected}
+        class:sel={r.label === selected}
         class:test={r.ruleClass?.endsWith("_test")}
-        aria-current={r.kind === "rule" && r.label === selected
-          ? "true"
-          : undefined}
+        aria-current={r.label === selected ? "true" : undefined}
         style:padding-left="{r.depth * 12 + 2}px"
         onclick={() => r.label && onselect(r.label)}
       >
-        {#if r.kind === "file"}<File size={10} />{:else}<Circle
-            size={7}
-            weight="fill"
-          />{/if}<span>{r.text}</span>
-        {#if r.kind === "rule"}<small>{r.ruleClass}</small>{/if}
+        <Circle size={7} weight="fill" /><span>{r.text}</span>
+        <small>{r.ruleClass}</small>
       </button>
     {/if}
   {/each}

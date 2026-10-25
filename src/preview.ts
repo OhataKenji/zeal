@@ -88,6 +88,7 @@ const snapshot: Snapshot = {
       "@maven//:jackson_databind",
     ].map((to) => ({ from: parser, to, attr: "deps" })),
     ...users.map((user) => ({ from: user.label, to: parser, attr: "deps" })),
+    ...["hdrs", "srcs"].map((attr) => ({ from: users[0].label, to: parser, attr })),
     ...[
       "//app:grammars",
       "//app/lib:unicode_tables",
@@ -276,10 +277,6 @@ export function installPreview() {
             filter,
             today: dayString(new Date(now)),
             days,
-            total: filtered.length,
-            runs: filter.day
-              ? filtered.filter((run) => dayString(new Date(run.startedAt)) === filter.day)
-              : [],
           };
         }
         case "open_workspace":

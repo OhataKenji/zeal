@@ -1,19 +1,16 @@
 import type { Transport } from "./session.ts";
-import type { RunCmd, RunRecord } from "./types.ts";
+import type { RunCmd } from "./types.ts";
 
 export interface AnalyticsFilter {
   start: string | null;
   end: string | null;
   cmd: RunCmd | null;
   outcome: "ok" | "failed" | "interrupted" | null;
-  day: string | null;
 }
 export interface DailyAnalytics {
   filter: AnalyticsFilter;
   today: string;
   days: { day: string; count: number }[];
-  total: number;
-  runs: RunRecord[];
 }
 export interface AnalyticsView {
   filter: AnalyticsFilter;
@@ -23,15 +20,15 @@ export interface AnalyticsView {
 }
 export function emptyAnalytics(): AnalyticsView {
   return {
-    filter: { start: null, end: null, cmd: null, outcome: null, day: null },
+    filter: { start: null, end: null, cmd: null, outcome: null },
     data: null,
     loading: false,
     error: null,
   };
 }
 
-// Lifetime is one workspace view. A request generation protects both filters
-// and drill-down against late responses; disposal protects workspace switches.
+// Lifetime is one workspace view. A request generation rejects late responses;
+// disposal protects workspace switches.
 export function createAnalytics(
   transport: Pick<Transport, "invoke">,
   changed: (view: AnalyticsView) => void,
@@ -55,17 +52,9 @@ export function createAnalytics(
   }
   return {
     load,
-    filter: (filter: AnalyticsFilter) => load({ ...filter, day: null }),
-    selectDay: (day: string | null) => load({ ...view.filter, day }),
     dispose: () => {
       disposed = true;
       ++generation;
     },
   };
-}
-
-// M5 completion is the saved exit code, independent of finish timestamps.
-export function recordedOutcome(record: RunRecord): string {
-  if (record.exitCode === undefined) return "unknown";
-  return record.exitCode === 0 ? "ok" : record.exitCode === 8 ? "interrupted" : "failed";
 }
