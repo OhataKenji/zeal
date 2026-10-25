@@ -1,26 +1,24 @@
 <script lang="ts">
   import type { Section } from "../types";
   import { sectionData, sectionMessage } from "../run";
+  import { logSpans } from "../log";
+  import { terminalTextStyle } from "../terminal-style";
 
-  let { section, running, loading }: {
+  let { section, loading }: {
     section: Section<string> | undefined;
-    running: boolean;
     loading: boolean;
   } = $props();
   const log = $derived(sectionData(section));
+  const spans = $derived(logSpans(log ?? ""));
 </script>
 
-{#if running}
-  <p class="run-notice" role="status">実行中。ログは完了後に表示します。</p>
-{:else}
-  {#if section && section.status !== "ok"}
-    <p class="run-notice">{sectionMessage(section)}</p>
-  {/if}
-  {#if log !== null}
-    <div class="log-panel">
-      <h2 class="panel-heading">Build log</h2>
-      <textarea class="run-log" aria-label="Build stdout and stderr" readonly wrap="off"
-        value={log || "(empty log)"}></textarea>
-    </div>
-  {:else if loading}<p class="panel-empty">Loading build log…</p>{/if}
+<h2 class="panel-heading">Logs</h2>
+{#if section && section.status !== "ok" && section.status !== "incomplete"}
+  <p class="run-notice">{sectionMessage(section)}</p>
 {/if}
+{#if log !== null}
+  <div class="log-panel">
+    <div class="run-log" style={terminalTextStyle} aria-label="Build stdout and stderr" role="textbox" aria-readonly="true" aria-multiline="true" tabindex="0"
+    >{#each spans as span}<span style={span.style}>{span.text}</span>{/each}</div>
+  </div>
+{:else if loading}<p class="panel-empty">Loading build log…</p>{/if}

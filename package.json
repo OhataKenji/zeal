@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.3",
+    "anser": "^2.3.5",
     "fuse.js": "^7.5.0",
     "phosphor-svelte": "^3.1.1"
   },
