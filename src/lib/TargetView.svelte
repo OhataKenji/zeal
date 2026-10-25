@@ -110,7 +110,7 @@
 {#if rel}
   {@const target = rel.target}
   <header class="target-head">
-    <span class="badge rule-badge">{target.ruleClass}</span>
+    <span class="badge">{target.ruleClass}</span>
     <h1>{target.label}</h1>
     {#if target.location}
       <button
@@ -121,14 +121,18 @@
         {location(target.location.file, target.location.line)}
       </button>
     {/if}
+  </header>
+  <div class="attributes-head">
+    <h2>Attributes</h2>
     <label class="relation-filter"
       ><MagnifyingGlass size={13} /><input
+        class="input"
         aria-label="Filter labels and files"
         placeholder="Filter labels…"
         bind:value={query}
       /></label
     >
-  </header>
+  </div>
   <dl class="rel">
     <dt>srcs</dt>
     <dd>{@render files(sources, "srcs", target.pkg)}</dd>

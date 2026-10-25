@@ -72,9 +72,9 @@
     <div class="run-tabs" role="tablist" aria-label="Run views">
       {#each tabs as tab, index}
         <button
+          type="button"
+          class="button button-ghost tab-button"
           id="run-tab-{tab}"
-          class="btn run-tab"
-          class:active={active === tab}
           role="tab"
           aria-selected={active === tab}
           aria-controls="run-panel-{tab}"
@@ -94,7 +94,7 @@
   {#if view.detailError}
     <div class="run-notice err">
       詳細を読めません: {view.detailError}
-      <button class="btn" onclick={reload}>Retry</button>
+      <button type="button" class="button" onclick={reload}>Retry</button>
     </div>
   {/if}
 

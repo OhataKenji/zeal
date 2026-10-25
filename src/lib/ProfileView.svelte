@@ -303,23 +303,29 @@
       >{layout.lanes.length} threads</span
     ><span class="trace-input-hint">Drag to pan</span>
     <div class="trace-actions">
-      <button class="btn" onclick={fit} title="Fit the complete profile (F)"
-        >Fit</button
+      <button
+        type="button"
+        class="button"
+        onclick={fit}
+        title="Fit the complete profile (F)">Fit</button
       >
       <button
-        class="btn"
+        type="button"
+        class="button"
         onclick={() => zoom(1 / 1.5)}
         aria-label="Zoom out"
         title="Zoom out (S)">−</button
       >
       <button
-        class="btn"
+        type="button"
+        class="button"
         onclick={() => zoom(1.5)}
         aria-label="Zoom in"
         title="Zoom in (W)">+</button
       >
       <button
-        class="btn"
+        type="button"
+        class="button"
         onclick={() => {
           collapsed =
             collapsed.size === layout.lanes.length

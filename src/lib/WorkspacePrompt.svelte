@@ -2,7 +2,8 @@
   import { untrack } from "svelte";
   import { openWorkspace } from "./state.svelte";
 
-  let { initial = "", onclose }: { initial?: string; onclose?: () => void } = $props();
+  let { initial = "", onclose }: { initial?: string; onclose?: () => void } =
+    $props();
 
   // The prop only seeds the input once.
   let path = $state(untrack(() => initial));
@@ -33,15 +34,19 @@
   <label>
     workspace
     <input
-      class="input"
+      class="input workspace-path"
       bind:value={path}
       placeholder="/path/to/bazel/workspace"
       disabled={busy}
     />
   </label>
-  <button class="btn primary" disabled={busy || path.trim() === ""}>open</button>
+  <button
+    class="button button-primary"
+    type="submit"
+    disabled={busy || path.trim() === ""}>open</button
+  >
   {#if onclose}
-    <button type="button" class="btn" onclick={onclose}>cancel</button>
+    <button class="button" type="button" onclick={onclose}>cancel</button>
   {/if}
 </form>
 {#if error}<p class="err">{error}</p>{/if}

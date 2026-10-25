@@ -35,10 +35,14 @@
 </script>
 
 <section class="analytics" class:detail={!!app.view.selectedRun}>
-  <h1>Local Run Analytics <span class="badge">日次の実行件数</span></h1>
+  <h1>
+    Local Run Analytics <span class="badge">日次の実行件数</span>
+  </h1>
   {#if app.view.selectedRun}
-    <button class="btn back" onclick={() => session.selectRun(null)}
-      >← 日次の履歴へ戻る</button
+    <button
+      type="button"
+      class="button analytics-back"
+      onclick={() => session.selectRun(null)}>← 日次の履歴へ戻る</button
     >
     <RunView view={app.view} reload={session.loadDetail} />
   {:else}
@@ -88,7 +92,9 @@
           ><option>interrupted</option>
         </select></label
       >
-      <button class="btn" onclick={() => controller?.load()}>再集計</button>
+      <button type="button" class="button" onclick={() => controller?.load()}
+        >再集計</button
+      >
     </div>
     <details class="analytics-notes">
       <summary>集計について</summary>
@@ -157,8 +163,8 @@
         <div class="day-list" aria-label="日付を選択">
           {#each data.days as day}
             <button
-              class="btn"
-              class:chosen={view.filter.day === day.day}
+              type="button"
+              class="button"
               aria-pressed={view.filter.day === day.day}
               onclick={() => controller?.selectDay(day.day)}
             >
@@ -170,8 +176,10 @@
         </div>
         {#if data.filter.day}
           <h2>{data.filter.day} の履歴 · {data.runs.length}件</h2>
-          <button class="btn" onclick={() => controller?.selectDay(null)}
-            >日付の選択を解除</button
+          <button
+            type="button"
+            class="button"
+            onclick={() => controller?.selectDay(null)}>日付の選択を解除</button
           >
           {#if data.runs.length === 0}<p>この条件の記録はありません。</p>{/if}
           <ul class="list">
@@ -222,8 +230,8 @@
     flex-wrap: wrap;
   }
   .analytics-card {
-    background: var(--surface);
-    border-radius: 16px;
+    background: var(--muted);
+    border-radius: var(--radius-lg);
     padding: 22px;
     margin-top: 20px;
   }
@@ -235,20 +243,20 @@
   }
   .chart-heading strong {
     font: 600 12px var(--mono);
-    color: var(--green);
+    color: var(--foreground);
   }
   .analytics-notes {
-    color: var(--note);
+    color: var(--muted-foreground);
     margin-top: 12px;
     font-size: 11px;
   }
   .filters input,
   .filters select {
-    background: var(--surface);
-    border: 1px solid var(--line);
+    background: var(--muted);
+    border: 1px solid var(--border);
     padding: 8px;
     border-radius: 8px;
-    color: var(--ink);
+    color: var(--foreground);
     font: inherit;
   }
   .analytics.detail {
@@ -262,10 +270,9 @@
     flex: 0 0 auto;
     margin: 14px;
   }
-  .back {
-    flex: 0 0 auto;
-    align-self: flex-start;
+  .analytics-back {
     margin: 0 14px;
+    align-self: flex-start;
   }
   .filters,
   .day-list {
@@ -291,17 +298,13 @@
     display: block;
   }
   svg line {
-    stroke: var(--line);
+    stroke: var(--border);
   }
   svg text {
-    fill: var(--ink);
+    fill: var(--foreground);
     font-size: 11px;
   }
   rect {
-    fill: #86c68c;
-  }
-  .chosen {
-    background: var(--selection);
-    outline: 2px solid var(--green);
+    fill: var(--chart-bar);
   }
 </style>

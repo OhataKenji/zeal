@@ -38,9 +38,9 @@ export function drawRuler(context: CanvasRenderingContext2D, frame: TimelineAxis
   const { width, gutter, range, ticks } = frame;
   const plotWidth = Math.max(1, width - gutter);
   const timeX = (time: number) => timeToX(time, range, width, gutter);
-  context.fillStyle = "#f3f8f4";
+  context.fillStyle = "#f5f5f5";
   context.fillRect(0, 0, width, 26);
-  context.fillStyle = "#627168";
+  context.fillStyle = "#737373";
   context.fillText("THREAD / TIME", 12, 17);
   context.save();
   context.beginPath();
@@ -53,7 +53,7 @@ export function drawRuler(context: CanvasRenderingContext2D, frame: TimelineAxis
     context.moveTo(tickX + 0.5, 18);
     context.lineTo(tickX + 0.5, 26);
     context.stroke();
-    context.fillStyle = "#52606b";
+    context.fillStyle = "#737373";
     context.fillText(formatRulerTime(time, range), tickX + 4, 13);
   }
   context.restore();
@@ -66,7 +66,7 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
   // Grid, ruler, phase bands and event hit regions share the same time transform.
   for (const time of ticks) {
     const gridX = timeToX(time, range, width, gutter) + 0.5;
-    context.strokeStyle = "#edf2ee";
+    context.strokeStyle = "#f0f0f0";
     context.beginPath();
     context.moveTo(gridX, 0);
     context.lineTo(gridX, height);
@@ -79,7 +79,7 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     const contentTop = trackTop + (track.kind === "events" ? LANE_HEADER : 0);
     const contentHeight = trackBottom - contentTop;
     if (track.kind === "events") {
-      context.fillStyle = "#f4f8f5";
+      context.fillStyle = "#f5f5f5";
       context.fillRect(gutter, trackTop, Math.max(1, width - gutter), LANE_HEADER);
       context.strokeStyle = "#d7dce0";
       context.beginPath();
@@ -96,7 +96,7 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     if (track.kind === "events") drawEvents(context, track, trackTop, frame, hits);
     else drawCounterSeries(context, track, trackTop, frame, hits);
     context.restore();
-    context.fillStyle = "#fafcfb";
+    context.fillStyle = "#fafafa";
     context.fillRect(0, contentTop, gutter, contentHeight);
   }
 
@@ -141,11 +141,11 @@ function drawEvent(
   const eventWidth = Math.max(1, Math.min(width, timeX(event.end!)) - eventLeft);
   const eventTop = trackTop + LANE_HEADER + event.row * ROW_HEIGHT;
   const selected = selection?.tid === tid && selection.index === event.index;
-  context.fillStyle = selected ? "#307d38" : eventColor(event.event);
+  context.fillStyle = selected ? "#262626" : eventColor(event.event);
   if (event.kind === "span") {
     context.fillRect(eventLeft, eventTop, eventWidth, ROW_HEIGHT - 1);
     if (eventWidth > 28) {
-      context.fillStyle = selected ? "#fff" : "#203a27";
+      context.fillStyle = selected ? "#fff" : "#262626";
       drawClippedLabel(
         context,
         eventName(event.event),
@@ -164,7 +164,7 @@ function drawEvent(
     context.fill();
   }
   if (selected) {
-    context.strokeStyle = "#245b2b";
+    context.strokeStyle = "#262626";
     context.lineWidth = 2;
     context.strokeRect(eventLeft, eventTop + 0.5, Math.max(3, eventWidth), ROW_HEIGHT - 2);
     context.lineWidth = 1;
@@ -190,7 +190,7 @@ function drawCounterSeries(
   const { lane, counter } = track;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
   const valueY = (value: number) => trackTop + counterPointY(counter, value);
-  context.strokeStyle = "#459b4c";
+  context.strokeStyle = "#525252";
   context.lineWidth = 1.5;
   context.beginPath();
   for (const [pointIndex, point] of counter.points.entries()) {
@@ -208,7 +208,7 @@ function drawCounterSeries(
     context.fill();
     if (selection?.tid === lane.tid && selection.index === point.index) {
       context.save();
-      context.strokeStyle = "#245b2b";
+      context.strokeStyle = "#262626";
       context.beginPath();
       context.arc(pointX, pointY, 4, 0, Math.PI * 2);
       context.stroke();
