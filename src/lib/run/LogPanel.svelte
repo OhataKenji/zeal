@@ -18,7 +18,7 @@
   {/if}
   {#if log !== null}
     <div class="log-panel">
-      <div class="log-toolbar"><strong>Build log</strong></div>
+      <h2 class="panel-heading">Build log</h2>
       <textarea class="run-log" aria-label="Build stdout and stderr" readonly wrap="off"
         value={log || "(empty log)"}></textarea>
     </div>

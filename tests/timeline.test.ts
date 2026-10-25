@@ -6,6 +6,8 @@ import {
   clampRange,
   zoomRange,
   panRange,
+  scrollbarGeometry,
+  scrollRange,
   timeTicks,
   timeToX,
   xToTime,
@@ -494,4 +496,38 @@ test("large trace retains all threads and events without a rendering limit", () 
     50_000,
   );
   assert.equal(result.lanes[99].events[499].event, profile.lanes[99].events[499]);
+});
+
+test("a fitted timeline has no horizontal scroll travel", () => {
+  const domain = { start: -200, end: 800 };
+  assert.deepEqual(scrollbarGeometry(domain, domain, 500), { width: 500, left: 0 });
+  assert.deepEqual(scrollRange(domain, domain, 0.75), domain);
+});
+
+test("horizontal scrolling reaches both ends without changing the zoom", () => {
+  const domain = { start: -200, end: 800 };
+  const range = { start: 100, end: 300 };
+  assert.deepEqual(scrollbarGeometry(range, domain, 500), { width: 2500, left: 750 });
+  assert.deepEqual(scrollRange(range, domain, 0), { start: -200, end: 0 });
+  assert.deepEqual(scrollRange(range, domain, 0.5), { start: 200, end: 400 });
+  assert.deepEqual(scrollRange(range, domain, 1), { start: 600, end: 800 });
+  assert.deepEqual(scrollRange(range, domain, -1), { start: -200, end: 0 });
+  assert.deepEqual(scrollRange(range, domain, 2), { start: 600, end: 800 });
+});
+
+test("scrollbar position follows pinch zoom, dragging and viewport resizing", () => {
+  const domain = { start: 0, end: 1000 };
+  const zoomed = zoomRange(domain, domain, 2);
+  const panned = panRange(zoomed, domain, 125);
+  const geometry = scrollbarGeometry(panned, domain, 800);
+  assert.deepEqual(geometry, { width: 1600, left: 600 });
+  assert.deepEqual(scrollRange(panned, domain, geometry.left / (geometry.width - 800)), panned);
+  assert.deepEqual(scrollbarGeometry(panned, domain, 400), { width: 800, left: 300 });
+});
+
+test("deep zoom keeps native scroll geometry bounded and the trace end reachable", () => {
+  const domain = { start: 0, end: 1_000_000_000 };
+  const range = { start: 999_999_999, end: 1_000_000_000 };
+  assert.deepEqual(scrollbarGeometry(range, domain, 500), { width: 1_000_000, left: 999_500 });
+  assert.deepEqual(scrollRange(range, domain, 1), range);
 });

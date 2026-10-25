@@ -1,8 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drawRuler, drawTimeline } from "../src/lib/timeline-canvas.ts";
+import { drawRuler, drawTimeline, type TimelineTheme } from "../src/lib/timeline-canvas.ts";
 import { layoutProfile, visibleTracks } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
+
+const theme: TimelineTheme = {
+  background: "#fff",
+  foreground: "#222",
+  muted: "#f4f4f4",
+  mutedForeground: "#666",
+  border: "#dedede",
+  sidebar: "#fafafa",
+  chartBar: "#666",
+};
 
 // This boundary supports only the canvas operations the renderer uses. Unknown
 // methods fail instead of silently succeeding, as they would with a Proxy.
@@ -98,6 +108,7 @@ function render(
     range: { start: 0, end: 100 },
     ticks: [],
     selection: null,
+    theme,
     ...viewport,
     tracks: visibleTracks(layout.lanes, new Set(collapsed)),
   });
@@ -259,7 +270,13 @@ test("the selected counter point receives a ring at its hit center", () => {
 });
 
 test("ruler ticks and timeline grid lines share the same horizontal positions", () => {
-  const axis = { width: 220, gutter: 100, range: { start: 20, end: 80 }, ticks: [20, 50, 80] };
+  const axis = {
+    width: 220,
+    gutter: 100,
+    range: { start: 20, end: 80 },
+    ticks: [20, 50, 80],
+    theme,
+  };
   const ruler = recordingCanvas();
   drawRuler(ruler.context, axis);
   const chart = render([], { ...axis, height: 100 });

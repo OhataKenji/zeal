@@ -225,6 +225,26 @@ export function panRange(range: TimeRange, domain: TimeRange, delta: number): Ti
   return clampRange({ start: range.start + delta, end: range.end + delta }, domain);
 }
 
+export function scrollbarGeometry(range: TimeRange, domain: TimeRange, viewportWidth: number) {
+  const span = range.end - range.start;
+  const total = domain.end - domain.start;
+  // Bound native scroll geometry even when a long trace is zoomed to microseconds.
+  const width = Math.max(
+    viewportWidth,
+    Math.min(1_000_000, Math.ceil((viewportWidth * total) / span)),
+  );
+  const travel = total - span;
+  const left = travel > 0 ? ((range.start - domain.start) / travel) * (width - viewportWidth) : 0;
+  return { width, left };
+}
+
+export function scrollRange(range: TimeRange, domain: TimeRange, position: number): TimeRange {
+  const span = range.end - range.start;
+  const start =
+    domain.start + (domain.end - domain.start - span) * Math.max(0, Math.min(1, position));
+  return { start, end: start + span };
+}
+
 export function timeTicks(range: TimeRange, width: number): number[] {
   const target = (range.end - range.start) / Math.max(1, width / 90);
   const base = 10 ** Math.floor(Math.log10(target));

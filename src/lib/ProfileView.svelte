@@ -10,6 +10,8 @@
     formatTime,
     layoutProfile,
     panRange,
+    scrollbarGeometry,
+    scrollRange,
     zoomRange,
     timeTicks,
     timeToX,
@@ -22,6 +24,7 @@
   } from "./timeline";
 
   import { drawRuler, drawTimeline, type EventHit } from "./timeline-canvas";
+  import { pinchZoom } from "./timeline-gestures";
 
   const phaseColors = ["#dce5df", "#b2dfdb", "#81c5b7", "#81bd86", "#c3e2c3"];
 
@@ -46,12 +49,14 @@
   let canvas = $state<HTMLCanvasElement>();
   let ruler = $state<HTMLCanvasElement>();
   let viewport = $state<HTMLDivElement>();
+  let horizontalScroll = $state<HTMLDivElement>();
   let width = $state(600);
   let height = $state(320);
   let scrollTop = $state(0);
   const gutter = 190;
   const plotWidth = $derived(Math.max(1, width - gutter));
   const ticks = $derived(timeTicks(range, plotWidth));
+  const scrollbar = $derived(scrollbarGeometry(range, layout, plotWidth));
   let pointerAnchor = 0.5;
   let drag: {
     id: number;
@@ -77,6 +82,10 @@
   function zoom(factor: number, anchor = 0.5) {
     windowRange = zoomRange(range, layout, factor, anchor);
   }
+  function pinch(factor: number, clientX: number) {
+    if (canvas)
+      zoom(factor, anchor(clientX - canvas.getBoundingClientRect().left));
+  }
   function pan(delta: number) {
     windowRange = panRange(range, layout, delta);
   }
@@ -94,23 +103,46 @@
     element.width = Math.max(1, width * ratio);
     element.height = Math.max(1, canvasHeight * ratio);
     context.scale(ratio, ratio);
-    context.fillStyle = "#fff";
+    const style = getComputedStyle(element);
+    const token = (name: string) => style.getPropertyValue(`--${name}`).trim();
+    const theme = {
+      background: token("background"),
+      foreground: token("foreground"),
+      muted: token("muted"),
+      mutedForeground: token("muted-foreground"),
+      border: token("border"),
+      sidebar: token("sidebar"),
+      chartBar: token("chart-bar"),
+    };
+    context.fillStyle = theme.background;
     context.fillRect(0, 0, width, canvasHeight);
-    context.font = "10px Menlo, monospace";
-    return context;
+    context.font = style.font;
+    return { context, theme };
   }
 
   $effect(() => {
     if (!ruler || width <= gutter) return;
-    const context = prepare(ruler, 26);
-    if (context) drawRuler(context, { width, gutter, range, ticks });
+    const drawing = prepare(ruler, 26);
+    if (drawing)
+      drawRuler(drawing.context, { width, gutter, range, ticks, theme: drawing.theme });
   });
 
   $effect(() => {
+    if (horizontalScroll) horizontalScroll.scrollLeft = scrollbar.left;
+  });
+
+  function scrollTimeline() {
+    if (!horizontalScroll || Math.abs(horizontalScroll.scrollLeft - scrollbar.left) < 1) return;
+    const extent = horizontalScroll.scrollWidth - horizontalScroll.clientWidth;
+    if (extent > 0)
+      windowRange = scrollRange(range, layout, horizontalScroll.scrollLeft / extent);
+  }
+
+  $effect(() => {
     if (!canvas || width <= gutter || height <= 0) return;
-    const context = prepare(canvas, height);
-    if (context)
-      hits = drawTimeline(context, {
+    const drawing = prepare(canvas, height);
+    if (drawing)
+      hits = drawTimeline(drawing.context, {
         width,
         height,
         gutter,
@@ -119,6 +151,7 @@
         scrollTop,
         tracks,
         selection,
+        theme: drawing.theme,
       });
   });
 
@@ -273,9 +306,9 @@
 
 {#snippet eventDetails(selected: EventGeometry, lane: LaneGeometry)}
   <section aria-labelledby="trace-event-title">
-    <h2 class="panel-heading" id="trace-event-title">
+    <h4 class="trace-event-title" id="trace-event-title">
       {eventName(selected.event)}
-    </h2>
+    </h4>
     <dl class="run-details">
       <dt>Thread</dt>
       <dd>{lane.name || "thread"} · tid {lane.tid}</dd>
@@ -284,7 +317,7 @@
         {selected.start === null ? "Unknown" : formatTime(selected.start)}
       </dd>
       {#if selected.kind === "span"}<dt>Duration</dt>
-        <dd class="event-duration">
+        <dd>
           {formatTime(selected.end! - selected.start!)}
         </dd>{/if}
       {#if typeof selected.event.cat === "string"}<dt>Category</dt>
@@ -298,123 +331,95 @@
 {/snippet}
 
 <div class="profile-view">
-  <div class="trace-toolbar">
-    <strong>Build phases</strong><span class="trace-count"
-      >{layout.lanes.length} threads</span
-    ><span class="trace-input-hint">Drag to pan</span>
-    <div class="trace-actions">
-      <button
-        type="button"
-        class="button"
-        onclick={fit}
-        title="Fit the complete profile (F)">Fit</button
-      >
-      <button
-        type="button"
-        class="button"
-        onclick={() => zoom(1 / 1.5)}
-        aria-label="Zoom out"
-        title="Zoom out (S)">−</button
-      >
-      <button
-        type="button"
-        class="button"
-        onclick={() => zoom(1.5)}
-        aria-label="Zoom in"
-        title="Zoom in (W)">+</button
-      >
-      <button
-        type="button"
-        class="button"
-        onclick={() => {
-          collapsed =
-            collapsed.size === layout.lanes.length
-              ? new Set()
-              : new Set(layout.lanes.map((lane) => lane.tid));
-        }}
-      >
-        {collapsed.size === layout.lanes.length ? "Expand all" : "Collapse all"}
-      </button>
-    </div>
-  </div>
-  <div class="trace-layout">
-    <div class="trace-chart">
-      <div class="trace-axis">
-        <canvas
-          bind:this={ruler}
-          style:width="{width}px"
-          style:height="26px"
-          aria-label="Timeline time ruler"
-        ></canvas>
-      </div>
-      <div
-        class="trace-phase-row"
+  <div class="trace-chart" use:pinchZoom={pinch}>
+    <div class="trace-axis">
+      <canvas
+        bind:this={ruler}
         style:width="{width}px"
-        title="Original phase markers. Skymeld may overlap analysis and execution."
-      >
-        <span style:width="{gutter}px">Build phases</span>
-        <div
-          class="trace-phases"
-          style:left="{gutter}px"
-          style:width="{plotWidth}px"
-        >
-          {#each profile.phases as phase, index}
-            {#if phase.endUs >= range.start && phase.startUs <= range.end}
-              <div
-                class="trace-phase"
-                style:left="{x(Math.max(range.start, phase.startUs)) -
-                  gutter}px"
-                style:width="{Math.max(
-                  1,
-                  x(Math.min(range.end, phase.endUs)) -
-                    x(Math.max(range.start, phase.startUs)),
-                )}px"
-                style:background={phaseColors[index % phaseColors.length]}
-                title={`${phase.name}: ${formatTime(phase.startUs)} — ${formatTime(phase.endUs)}`}
-              >
-                {phase.name}
-              </div>
-            {/if}
-          {/each}
-        </div>
-      </div>
+        style:height="26px"
+        aria-label="Timeline time ruler"
+      ></canvas>
+    </div>
+    <div
+      class="trace-phase-row"
+      style:width="{width}px"
+      title="Original phase markers. Skymeld may overlap analysis and execution."
+    >
+      <span style:width="{gutter}px">Build phases</span>
       <div
-        class="trace-viewport"
-        bind:this={viewport}
-        bind:clientWidth={width}
-        bind:clientHeight={height}
-        onscroll={() => {
-          if (viewport) scrollTop = viewport.scrollTop;
-        }}
+        class="trace-phases"
+        style:left="{gutter}px"
+        style:width="{plotWidth}px"
       >
-        <div
-          class="trace-scroll-content"
-          style:height="{Math.max(height, totalHeight)}px"
-        >
-          <canvas
-            bind:this={canvas}
-            style:width="{width}px"
-            style:height="{height}px"
-            tabindex="0"
-            aria-label="Profile timeline. Drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
-            onpointerdown={pointerDown}
-            onpointermove={pointerMove}
-            onpointerup={pointerUp}
-            onpointercancel={cancelDrag}
-            onlostpointercapture={cancelDrag}
-            onkeydown={keydown}
-          ></canvas>
-          {@render threadLabels()}
-        </div>
+        {#each profile.phases as phase, index}
+          {#if phase.endUs >= range.start && phase.startUs <= range.end}
+            <div
+              class="trace-phase"
+              style:left="{x(Math.max(range.start, phase.startUs)) -
+                gutter}px"
+              style:width="{Math.max(
+                1,
+                x(Math.min(range.end, phase.endUs)) -
+                  x(Math.max(range.start, phase.startUs)),
+              )}px"
+              style:background={phaseColors[index % phaseColors.length]}
+              title={`${phase.name}: ${formatTime(phase.startUs)} — ${formatTime(phase.endUs)}`}
+            >
+              {phase.name}
+            </div>
+          {/if}
+        {/each}
       </div>
     </div>
-    <aside class="trace-inspector">
-      <h2 class="eyebrow">Selected event</h2>
-      {#if selected && selectedLane}
-        {@render eventDetails(selected, selectedLane)}
-      {:else}<p class="dim">
-          Select an event to inspect its timing and raw fields.
-        </p>{/if}
-    </aside>
+    <div
+      class="trace-viewport"
+      bind:this={viewport}
+      bind:clientWidth={width}
+      bind:clientHeight={height}
+      onscroll={() => {
+        if (viewport) scrollTop = viewport.scrollTop;
+      }}
+    >
+      <div
+        class="trace-scroll-content"
+        style:height="{Math.max(height, totalHeight)}px"
+      >
+        <canvas
+          bind:this={canvas}
+          style:width="{width}px"
+          style:height="{height}px"
+          tabindex="0"
+          aria-label="Profile timeline. Pinch to zoom, drag to pan. W/S zoom, A/D pan, F fit. Left/right selects adjacent events. Escape closes event details."
+          onpointerdown={pointerDown}
+          onpointermove={pointerMove}
+          onpointerup={pointerUp}
+          onpointercancel={cancelDrag}
+          onlostpointercapture={cancelDrag}
+          onkeydown={keydown}
+        ></canvas>
+        {@render threadLabels()}
+      </div>
+    </div>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Native scroll container needs focus for keyboard scrolling.) -->
+    <div
+      class="trace-horizontal-scroll"
+      bind:this={horizontalScroll}
+      style:margin-left="{gutter}px"
+      style:width="{plotWidth}px"
+      role="region"
+      aria-label="Timeline horizontal scroll"
+      tabindex="0"
+      onscroll={scrollTimeline}
+    >
+      <div style:width="{scrollbar.width}px"></div>
+    </div>
   </div>
+  <section class="trace-inspector" aria-labelledby="selected-event-heading">
+    <h3 class="trace-inspector-heading" id="selected-event-heading">Selected event</h3>
+    {#if selected && selectedLane}
+      {@render eventDetails(selected, selectedLane)}
+    {:else}<p class="dim">
+        Select an event to inspect its timing and raw fields.
+      </p>{/if}
+  </section>
 </div>

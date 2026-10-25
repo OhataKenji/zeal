@@ -7,19 +7,24 @@
   import TargetsPanel from "./run/TargetsPanel.svelte";
 
   let { view, reload }: { view: SessionView; reload: () => void } = $props();
+  const selectedRun = $derived(view.selectedRun);
   const record = $derived(
-    view.detail?.record ?? view.runs.find((run) => run.id === view.selectedRun),
+    view.detail?.record ?? view.runs.find((run) => run.id === selectedRun),
   );
-  const running = $derived(view.state?.running === view.selectedRun);
+  const running = $derived(view.state?.running === selectedRun);
   const profile = $derived(sectionData(view.detail?.profile));
   const status = $derived(
     runStatus(record, view.state?.running ?? null, view.state?.stopping),
   );
-  const tabs = ["Timing", "Logs", "Targets", "Details"] as const;
-  let active = $state<(typeof tabs)[number]>("Timing");
+  const sections = ["Targets", "Logs", "Details", "Timing"] as const;
+  const tabs = ["All", ...sections] as const;
+  let active = $state<(typeof tabs)[number]>("All");
+  let panel = $state<HTMLDivElement>();
 
   $effect(() => {
-    if (running) active = "Logs";
+    void active;
+    void selectedRun;
+    if (panel) panel.scrollTop = 0;
   });
 
   function tabKey(event: KeyboardEvent, index: number) {
@@ -52,21 +57,9 @@
       <RunStatus {...status} />
       <div>
         <h1>
-          {record?.target ?? view.selectedRun}
+          {record?.target ?? selectedRun}
           {#if record}<span class="badge">bazel {record.cmd}</span>{/if}
         </h1>
-        <div class="run-facts">
-          {#if record?.finishedAt !== undefined}
-            <span title="Recorded wall-clock duration"
-              >◷ {((record.finishedAt - record.startedAt) / 1000).toFixed(
-                3,
-              )}s</span
-            >
-          {/if}
-          {#if record}
-            <span>{new Date(record.startedAt).toLocaleString()}</span>
-          {/if}
-        </div>
       </div>
     </header>
     <div class="run-tabs" role="tablist" aria-label="Run views">
@@ -81,9 +74,7 @@
           tabindex={active === tab ? 0 : -1}
           onclick={() => (active = tab)}
           onkeydown={(event) => tabKey(event, index)}
-          >{tab}{#if tab === "Targets" && view.detail?.bep.status === "ok"}
-            ({view.detail.bep.data.targets.length}){/if}</button
-        >
+        >{tab}</button>
       {/each}
       {#if view.detailLoading}<span class="panel-loading" role="status"
           >Loading record…</span
@@ -100,56 +91,65 @@
 
   <div
     class="run-panel"
+    bind:this={panel}
+    class:run-all={active === "All"}
     id="run-panel-{active}"
     role="tabpanel"
     aria-labelledby="run-tab-{active}"
   >
-    {#if active === "Logs"}
-      <LogPanel
-        section={view.detail?.log}
-        {running}
-        loading={view.detailLoading}
-      />
-    {:else if active === "Timing"}
-      {#if running}<p class="panel-empty">
-          Timing is available after the run finishes.
-        </p>
-      {:else if view.detail}
-        {#if view.detail.profile.status !== "ok"}<p class="run-notice">
-            {sectionMessage(view.detail.profile)}
-          </p>{/if}
-        {#if profile}{#key view.detail}<ProfileView {profile} />{/key}{/if}
-      {:else if view.detailLoading}<p class="panel-empty">
-          Loading profile…
-        </p>{/if}
-    {:else if active === "Targets"}
-      <TargetsPanel section={view.detail?.bep} {running} />
-    {:else}
-      <h2 class="panel-heading">Run details</h2>
-      {#if record}
-        <dl class="run-details">
-          <dt>Command</dt>
-          <dd><code>bazel {record.cmd} {record.target}</code></dd>
-          <dt>Workspace</dt>
-          <dd><code>{record.workspace}</code></dd>
-          <dt>Run ID</dt>
-          <dd><code>{record.id}</code></dd>
-          <dt>Started</dt>
-          <dd>{new Date(record.startedAt).toLocaleString()}</dd>
-          <dt>Finished</dt>
-          <dd>
-            {record.finishedAt === undefined
-              ? "Not recorded"
-              : new Date(record.finishedAt).toLocaleString()}
-          </dd>
-          <dt>Exit code</dt>
-          <dd>{record.exitCode ?? "Unknown"}</dd>
-          {#if record.finishedAt !== undefined}<dt>Wall time</dt>
-            <dd>
-              {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
-            </dd>{/if}
-        </dl>
+    {#each sections as section}
+      {#if active === "All" || active === section}
+        <section class="run-section" aria-label={section}>
+          {#if section === "Targets"}
+            <TargetsPanel section={view.detail?.bep} {running} />
+          {:else if section === "Logs"}
+            <LogPanel
+              section={view.detail?.log}
+              {running}
+              loading={view.detailLoading}
+            />
+          {:else if section === "Details"}
+            <h2 class="panel-heading">Run details</h2>
+            {#if record}
+              <dl class="run-details">
+                <dt>Command</dt>
+                <dd><code>bazel {record.cmd} {record.target}</code></dd>
+                <dt>Workspace</dt>
+                <dd><code>{record.workspace}</code></dd>
+                <dt>Run ID</dt>
+                <dd><code>{record.id}</code></dd>
+                <dt>Started</dt>
+                <dd>{new Date(record.startedAt).toLocaleString()}</dd>
+                <dt>Finished</dt>
+                <dd>
+                  {record.finishedAt === undefined
+                    ? "Not recorded"
+                    : new Date(record.finishedAt).toLocaleString()}
+                </dd>
+                <dt>Exit code</dt>
+                <dd>{record.exitCode ?? "Unknown"}</dd>
+                {#if record.finishedAt !== undefined}<dt>Wall time</dt>
+                  <dd>
+                    {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
+                  </dd>{/if}
+              </dl>
+            {/if}
+          {:else}
+            <h2 class="panel-heading">Timing</h2>
+            {#if running}<p class="panel-empty">
+                Timing is available after the run finishes.
+              </p>
+            {:else if view.detail}
+              {#if view.detail.profile.status !== "ok"}<p class="run-notice">
+                  {sectionMessage(view.detail.profile)}
+                </p>{/if}
+              {#if profile}{#key view.detail}<ProfileView {profile} />{/key}{/if}
+            {:else if view.detailLoading}<p class="panel-empty">
+                Loading profile…
+              </p>{/if}
+          {/if}
+        </section>
       {/if}
-    {/if}
+    {/each}
   </div>
 </div>
