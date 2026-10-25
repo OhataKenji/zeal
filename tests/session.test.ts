@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { canSend, canStop, createSession, emptyView, type Transport } from "../src/lib/session.ts";
 import type { AppState, RunDetail, RunRecord } from "../src/lib/types.ts";
@@ -36,6 +36,11 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+const cleanup: (() => void)[] = [];
+afterEach(() => {
+  cleanup.splice(0).forEach((dispose) => dispose());
+});
 
 function harness(initial = Promise.resolve(idle)) {
   let view = emptyView();
@@ -77,6 +82,7 @@ function harness(initial = Promise.resolve(idle)) {
   const session = createSession(transport, (next) => {
     view = next;
   });
+  cleanup.push(session.dispose);
   return {
     session,
     get view() {
@@ -224,26 +230,32 @@ test("stop failure is surfaced and leaves the run in flight", async () => {
   assert.equal(h.view.state?.running, record.id);
 });
 
-test("logs are read from the saved file only after the run finishes", async () => {
+test("full artifacts are read only after the run finishes", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
   h.emit("app-state", { ...idle, running: record.id });
   h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
   await started;
-  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.console?.id, record.id);
+  assert.equal(h.view.consoleOpen, true);
   assert.equal(
     h.pending.some((call) => call.command === "get_run"),
     false,
   );
   h.emit("app-state", idle);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.session.selectRun(record.id);
+  h.pending
+    .filter((call) => call.command === "get_run")
+    .at(-1)!
+    .reply.resolve(completed);
   await settle();
   assert.deepEqual(h.view.detail, completed);
   assert.equal(h.view.detail?.log.status, "ok");
 });
 
-test("run completing before start response still opens completed detail", async () => {
+test("run completing before start response immediately selects its All view", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
@@ -252,10 +264,15 @@ test("run completing before start response still opens completed detail", async 
   h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
   await started;
   assert.equal(h.view.state?.running, null);
+  assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedRun, record.id);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  assert.equal(h.view.initialRunTab, "All");
+  h.pending
+    .filter((call) => call.command === "get_run")
+    .at(-1)!
+    .reply.resolve(completed);
   await settle();
-  assert.equal(h.view.detail?.record.exitCode, 0);
+  assert.deepEqual(h.view.detail, completed);
 });
 
 test("start response before the running event reconciles state without reading active observations", async () => {
@@ -286,7 +303,11 @@ test("completion event during post-start reconciliation wins over its stale runn
   reconciled.resolve({ ...idle, running: record.id });
   await started;
   assert.equal(h.view.state?.running, null);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.session.selectRun(record.id);
+  h.pending
+    .filter((call) => call.command === "get_run")
+    .at(-1)!
+    .reply.resolve(completed);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
 });
@@ -303,7 +324,7 @@ test("failed state reconciliation preserves the started run until a later state 
   await started;
   assert.match(h.view.error!, /実行は開始済み/);
   assert.equal(canSend(h.view, "//:app"), false);
-  assert.equal(h.view.runs[0].id, record.id);
+  assert.equal(h.view.console?.id, record.id);
   assert.equal(
     h.pending.some((call) => call.command === "get_run"),
     false,
@@ -496,4 +517,43 @@ test("an unconfirmed exit stays unknown and is not retried automatically", async
     false,
   );
   assert.equal(canSend(h.view, "//:app"), true);
+});
+
+test("leaving Console keeps the process and prevents automatic navigation", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("run", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  h.session.selectRun(null);
+  assert.equal(h.view.state?.running, record.id);
+  assert.equal(
+    h.pending.some((call) => call.command === "stop_run"),
+    false,
+  );
+  h.emit("app-state", idle);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, null);
+});
+
+test("process completion selects All immediately, before history finishes loading", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("run", "//:app");
+  h.emit("app-state", { ...idle, running: record.id });
+  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  await started;
+  assert.equal(h.view.consoleOpen, true);
+  h.emit("app-state", idle);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.initialRunTab, "All");
+  assert.equal(h.view.detailLoading, true);
+  h.pending
+    .filter((call) => call.command === "get_run")
+    .at(-1)!
+    .reply.resolve(completed);
+  await settle();
+  assert.deepEqual(h.view.detail, completed);
 });

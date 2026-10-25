@@ -135,6 +135,7 @@ const state: AppState = {
   stopping: false,
   runNote: null,
 };
+const consoleOutput = new Map<string, string>();
 const span = (name: string, ts: number, dur: number) => ({
   name,
   ts: ts * 1e6,
@@ -220,6 +221,17 @@ export function installPreview() {
           return structuredClone(state);
         case "list_runs":
           return structuredClone(records);
+        case "read_console": {
+          const id = String(payload?.id);
+          const bytes = new TextEncoder().encode(consoleOutput.get(id) ?? "");
+          const offset = Number(payload?.offset ?? 0);
+          const data = Array.from(bytes.slice(offset, offset + 64 * 1024));
+          return {
+            data,
+            offset: offset + data.length,
+            done: state.running !== id && offset + data.length === bytes.length,
+          };
+        }
         case "get_run": {
           const record = records.find((run) => run.id === payload?.id);
           if (!record) throw new Error("Preview run not found");
@@ -227,7 +239,9 @@ export function installPreview() {
             record,
             log: {
               status: "ok",
-              data: `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
+              data:
+                consoleOutput.get(record.id) ??
+                `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
             },
             bep: {
               status: "ok",
@@ -298,6 +312,15 @@ export function installPreview() {
           };
           records.unshift(record);
           state.running = record.id;
+          consoleOutput.set(
+            record.id,
+            `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.target}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+          );
+          if (record.cmd !== "run") {
+            record.finishedAt = Date.now();
+            record.exitCode = 0;
+            state.running = null;
+          }
           void emit("app-state", structuredClone(state));
           return structuredClone(record);
         }
