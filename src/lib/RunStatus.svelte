@@ -15,6 +15,7 @@
   class:compact
   class:success={kind === "succeeded"}
   class:failed={kind === "failed"}
+  class:running={kind === "running"}
   role="img"
   aria-label={label}
   title={label}
@@ -27,6 +28,11 @@
 </span>
 
 <style>
+  .running :global(svg) { animation: spin 1.2s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .running :global(svg) { animation: none; }
+  }
   .run-status-icon {
     display: inline-flex;
     align-items: center;

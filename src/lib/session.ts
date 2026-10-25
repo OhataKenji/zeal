@@ -7,6 +7,8 @@ export interface Transport {
 }
 
 export interface SessionView {
+  console: RunRecord | null;
+  consoleOpen: boolean;
   state: AppState | null;
   ready: boolean;
   starting: boolean;
@@ -15,6 +17,7 @@ export interface SessionView {
   runs: RunRecord[];
   runsError: string | null;
   selectedRun: string | null;
+  initialRunTab: "All" | "Logs";
   detail: RunDetail | null;
   detailLoading: boolean;
   detailError: string | null;
@@ -22,6 +25,8 @@ export interface SessionView {
 
 export function emptyView(): SessionView {
   return {
+    console: null,
+    consoleOpen: false,
     state: null,
     ready: false,
     starting: false,
@@ -30,6 +35,7 @@ export function emptyView(): SessionView {
     runs: [],
     runsError: null,
     selectedRun: null,
+    initialRunTab: "Logs",
     detail: null,
     detailLoading: false,
     detailError: null,
@@ -65,10 +71,22 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let listGeneration = 0;
   let detailGeneration = 0;
   let unlisten: (() => void) | undefined;
-
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
     view = { ...view, ...patch };
+    // Reconcile start_run first: a short command can finish before its reply.
+    // Each Console gets one transition; later updates never restart it.
+    if (
+      view.console &&
+      view.consoleOpen &&
+      !view.opening &&
+      view.ready &&
+      !view.starting &&
+      !view.state?.running
+    ) {
+      selectRun(view.console.id, "All");
+      return;
+    }
     changed(view);
   }
 
@@ -76,7 +94,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++listGeneration;
     if (!view.state?.workspace) return;
     try {
-      const runs = await transport.invoke<RunRecord[]>("list_runs");
+      const records = await transport.invoke<RunRecord[]>("list_runs");
+      const runs = records.filter((run) => run.id !== view.state?.running);
       if (generation === listGeneration) {
         update({ runs, runsError: null });
       }
@@ -89,9 +108,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   async function loadDetail() {
     const id = view.selectedRun;
+    // Full artifacts, including profiles, are read after the active run ends.
+    if (!id || !view.ready || view.starting || view.detailLoading || id === view.state?.running)
+      return;
     const generation = ++detailGeneration;
-    // Logs and observations are read after the run leaves the active slot.
-    if (!id || !view.ready || view.starting || id === view.state?.running) return;
     update({ detailLoading: true, detailError: null });
     try {
       const detail = await transport.invoke<RunDetail>("get_run", { id });
@@ -105,8 +125,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  function selectRun(id: string | null) {
-    update({ selectedRun: id, detail: null, detailError: null, detailLoading: false });
+  function selectRun(id: string | null, initialRunTab: "All" | "Logs" = "Logs") {
+    ++detailGeneration;
+    update({
+      consoleOpen: false,
+      selectedRun: id,
+      detail: null,
+      initialRunTab,
+      detailError: null,
+      detailLoading: false,
+    });
     void loadDetail();
   }
 
@@ -119,6 +147,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ++listGeneration;
       ++detailGeneration;
       update({
+        console: null,
+        consoleOpen: false,
         runs: [],
         runsError: null,
         selectedRun: null,
@@ -127,7 +157,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         detailError: null,
       });
     }
-    update({ state, ready: true, ...(resumed ? { error: null } : {}) });
+    update({
+      state,
+      ready: true,
+      runs: view.runs.filter((run) => run.id !== state.running),
+      ...(resumed ? { error: null } : {}),
+    });
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
@@ -165,8 +200,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       // The target goes through verbatim: one argument, no shell interpretation.
       const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
-      update({ runs: [record, ...view.runs.filter((run) => run.id !== record.id)] });
-      selectRun(record.id);
+      selectRun(null);
+      update({ console: record, consoleOpen: true });
       // Invoke responses and events use different Tauri delivery paths. The
       // reply may precede its running event, so reconcile before deciding to
       // read completed files. Events received during this read take priority.
@@ -240,5 +275,15 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  return { init, dispose, start, stop, openWorkspace, refresh, selectRun, loadDetail, loadRuns };
+  return {
+    init,
+    dispose,
+    start,
+    stop,
+    openWorkspace,
+    refresh,
+    selectRun,
+    loadDetail,
+    loadRuns,
+  };
 }

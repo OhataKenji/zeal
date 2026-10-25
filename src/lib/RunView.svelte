@@ -1,5 +1,5 @@
 <script lang="ts">
-  import RunStatus from "./RunStatus.svelte";
+  import RunHeader from "./RunHeader.svelte";
   import type { SessionView } from "./session";
   import { runStatus, sectionData, sectionMessage } from "./run";
   import LogPanel from "./run/LogPanel.svelte";
@@ -9,21 +9,22 @@
   let { view, reload }: { view: SessionView; reload: () => void } = $props();
   const selectedRun = $derived(view.selectedRun);
   const record = $derived(
-    view.detail?.record ?? view.runs.find((run) => run.id === selectedRun),
+    view.detail?.record ?? view.runs.find((run) => run.id === selectedRun)
+      ?? (view.console?.id === selectedRun ? view.console : undefined),
   );
   const running = $derived(view.state?.running === selectedRun);
   const profile = $derived(sectionData(view.detail?.profile));
   const status = $derived(
     runStatus(record, view.state?.running ?? null, view.state?.stopping),
   );
-  const sections = ["Targets", "Logs", "Details", "Timing"] as const;
+  const sections = ["Logs", "Targets", "Details", "Timing"] as const;
   const tabs = ["All", ...sections] as const;
   let active = $state<(typeof tabs)[number]>("Logs");
   let panel = $state<HTMLDivElement>();
 
   $effect(() => {
     void selectedRun;
-    active = "Logs";
+    active = view.initialRunTab;
   });
 
   $effect(() => {
@@ -57,16 +58,7 @@
 </script>
 
 <div class="run-page">
-  <div class="run-header">
-    <header class="run-summary">
-      <RunStatus {...status} />
-      <div>
-        <h1>
-          {record?.target ?? selectedRun}
-          {#if record}<span class="badge">bazel {record.cmd}</span>{/if}
-        </h1>
-      </div>
-    </header>
+  <RunHeader {record} {status} fallback={selectedRun}>
     <div class="run-tabs" role="tablist" aria-label="Run views">
       {#each tabs as tab, index}
         <button
@@ -85,7 +77,7 @@
           >Loading record…</span
         >{/if}
     </div>
-  </div>
+  </RunHeader>
 
   {#if view.detailError}
     <div class="run-notice err">
@@ -93,7 +85,6 @@
       <button type="button" class="button" onclick={reload}>Retry</button>
     </div>
   {/if}
-
   <div
     class="run-panel"
     bind:this={panel}
@@ -106,12 +97,14 @@
       {#if active === "All" || active === section}
         <section class="run-section" aria-label={section}>
           {#if section === "Targets"}
-            <TargetsPanel section={view.detail?.bep} {running} />
+            <TargetsPanel section={view.detail?.bep} />
           {:else if section === "Logs"}
+            {#key selectedRun}
             <LogPanel
               section={view.detail?.log}
               loading={view.detailLoading}
             />
+            {/key}
           {:else if section === "Details"}
             <h2 class="panel-heading">Run details</h2>
             {#if record}

@@ -630,6 +630,13 @@ ul.list li {
   background: var(--terminal-selection);
 }
 
+.console-container {
+  height: 100%;
+  min-height: 0;
+}
+.console-container[hidden] {
+  display: none;
+}
 .panel-heading {
   flex: 0 0 auto;
   font-size: 13px;

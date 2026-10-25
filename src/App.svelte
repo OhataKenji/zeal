@@ -32,6 +32,11 @@
   import SearchDropdown from "./lib/SearchDropdown.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
+  let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
+  function loadConsole() {
+    return consoleComponent ??= import("./lib/ConsoleView.svelte");
+  }
+
   onMount(connect);
 
   const st = $derived(app.state);
@@ -260,8 +265,19 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:run-content={!!app.view.selectedRun || analyticsOpen}
+    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen}
   >
+    {#if app.view.console}
+      {#key app.view.console.id}
+        <div class="console-container" hidden={!app.view.consoleOpen}>
+          {#await loadConsole() then { default: ConsoleView }}
+          <ConsoleView record={app.view.runs.find((run) => run.id === app.view.console?.id) ?? app.view.console}
+            running={state.running === app.view.console.id} />
+          {/await}
+        </div>
+      {/key}
+    {/if}
+    {#if !app.view.consoleOpen}
     {#if snap?.meta.status === "partial"}
       <p class="warn">
         一部の package を読み飛ばしました (exit {state.lastError?.exitCode ??
@@ -295,6 +311,7 @@
     {:else if state.ingest !== "running" && state.lastError}
       <p class="err">取り込みに失敗しました: {state.lastError.summary}</p>
       <button type="button" class="button" onclick={refresh}>retry</button>
+    {/if}
     {/if}
   </main>
 {/snippet}

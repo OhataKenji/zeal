@@ -1,4 +1,5 @@
 mod bep;
+mod console;
 mod ingest;
 mod label;
 mod profile;
@@ -86,6 +87,28 @@ fn start_run(
 #[tauri::command]
 fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
+}
+
+#[tauri::command]
+async fn read_console(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: String,
+    offset: u64,
+) -> Result<console::Output, String> {
+    let (ws, running) = {
+        let st = core.state.lock().unwrap();
+        (
+            st.workspace.clone().ok_or("no workspace")?,
+            st.run.as_deref() == Some(&id),
+        )
+    };
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        console::read(&data, &ws, &id, offset, running).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "terminal read worker failed".to_string())?
 }
 
 /// Runs of the open workspace, newest first.
@@ -216,6 +239,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            read_console,
             open_workspace,
             refresh,
             start_run,
