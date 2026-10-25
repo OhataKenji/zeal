@@ -13,6 +13,7 @@ pub struct Output {
     done: bool,
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "console.read", skip_all)]
 pub fn read(
     data: &Path,
     workspace: &Path,

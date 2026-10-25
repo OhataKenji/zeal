@@ -74,9 +74,9 @@ ZEAL_OTLP_ENDPOINT=http://127.0.0.1:4318 pnpm tauri dev
 ```
 
 Open [Jaeger](http://localhost:16686) and select `zeal-dev` to inspect workspace
-queries, builds/tests and run-detail reads. UI rendering and discarded responses
-are not measured. Background threads use separate traces; traces may be lost at
-application exit.
+queries, command execution, Console reads, BES event storage and run details.
+UI rendering and discarded responses are not measured. Background threads use
+separate traces; traces may be lost at application exit.
 
 Tracing is disabled without this setting and in release builds. Paths, targets
 and raw Bazel artifacts stay local. Inherited OTLP credentials are not forwarded.
