@@ -45,6 +45,7 @@
 
   let analyticsOpen = $state(false);
   let selected = $state<string | null>(null);
+  let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<RunCmd>("build");
   let switchingWs = $state(false);
@@ -79,7 +80,9 @@
   );
 
   function pickTarget(value: string) {
-    targetField = value;
+    select(value);
+    collapsed.targets = false;
+    revealRequest += 1;
     dropdownOpen = false;
     matchIndex = 0;
   }
@@ -180,7 +183,7 @@
     {#if !collapsed.targets}
       <div class="pane-body">
         {#if snap && tree}
-          <Tree root={tree} {selected} onselect={select} />
+          <Tree root={tree} {selected} {revealRequest} onselect={select} />
         {:else if state.ingest === "running"}
           <p class="dim">取り込み中…</p>
         {:else if state.lastError}

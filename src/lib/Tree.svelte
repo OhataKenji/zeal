@@ -6,10 +6,12 @@
   let {
     root,
     selected,
+    revealRequest = 0,
     onselect,
   }: {
     root: DirNode;
     selected: string | null;
+    revealRequest?: number;
     onselect: (label: string) => void;
   } = $props();
 
@@ -23,6 +25,8 @@
 
   // A selection made anywhere reveals the target's package in the tree.
   $effect(() => {
+    // Re-picking the same target must reveal it after a manual collapse.
+    void revealRequest;
     if (selected) {
       for (const p of ancestorsOf(splitLabel(selected).pkg)) expanded.add(p);
     }
