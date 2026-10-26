@@ -243,7 +243,8 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
     Ok(RunDetail { record, log, bep })
 }
 
-/// Timing is read independently and only after the record confirms completion.
+/// Read a saved profile, reporting artifact failures as section statuses.
+/// Unfinished and external runs return `Section::NotAvailable`.
 pub fn run_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
     let record = store::read_record(data, workspace, id)?;
     Ok(if record.external {
