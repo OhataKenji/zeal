@@ -9,6 +9,7 @@ mod runner;
 mod snapshot;
 mod state;
 mod store;
+mod telemetry;
 mod terminal;
 mod workspace;
 mod xml;
@@ -30,6 +31,7 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
 /// start a background snapshot ingestion. Refused while a run is in flight: its
 /// process group belongs to the workspace it was started in.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "workspace.open", skip_all)]
 fn open_workspace(
     app: AppHandle,
     core: State<Arc<Core>>,
@@ -69,12 +71,14 @@ fn open_workspace(
 
 /// Manual refresh: re-run the query unless bazel is already busy.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "workspace.refresh", skip_all)]
 fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     ingest::request(app, core.inner().clone())
 }
 
 /// Start `bazel build|test|run <target>`. Fails while bazel is busy.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "run.start", skip_all)]
 fn start_run(
     app: AppHandle,
     core: State<Arc<Core>>,
@@ -88,6 +92,7 @@ fn start_run(
 /// Stop the run in flight: SIGINT to its process group, then SIGKILL if it does
 /// not exit. Does nothing when no run is held or a stop is already in flight.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "run.stop", skip_all)]
 fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
 }
@@ -126,6 +131,7 @@ async fn read_console(
 
 /// Runs of the open workspace, newest first.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "runs.list", skip_all)]
 fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
     let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
         return Ok(Vec::new());
@@ -177,6 +183,7 @@ impl Drop for DetailWorker {
 
 /// Parse artifacts off the UI thread, with at most one detail operation active.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "run.detail.request", skip_all)]
 async fn get_run(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -200,6 +207,7 @@ async fn get_run(
 
 /// Open a BUILD/bzl file at its recorded location with the OS default app.
 #[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "file.open", skip_all)]
 fn open_location(path: String) -> Result<(), String> {
     let opener = if cfg!(target_os = "macos") {
         "open"
@@ -234,6 +242,7 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            telemetry::init(app);
             let core = Arc::new(Core::new());
             app.manage(core.clone());
             let data = app.path().app_data_dir().map_err(|error| error.to_string());
@@ -291,6 +300,7 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 let core = handle.state::<Arc<Core>>().inner().clone();
                 runner::exit_stop(&core);
+                telemetry::shutdown(handle);
             }
         });
 }

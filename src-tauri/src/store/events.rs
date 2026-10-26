@@ -146,6 +146,7 @@ fn test_status(status: i32) -> &'static str {
 
 /// Reject gaps and contradictory retries; acknowledge identical retries without
 /// applying their effects twice. Workspaces come from BuildStarted, not the UI.
+#[tracing::instrument(target = "zeal::operations", name = "bes.save_event", skip_all)]
 pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreError> {
     let stream = ordered
         .stream_id
@@ -289,6 +290,7 @@ fn decode(value: &str) -> Result<Observation, StoreError> {
     serde_json::from_str(value).map_err(|_| fail(ErrorKind::Corrupt))
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "detail.observation", skip_all)]
 pub fn get(data: &Path, ws: &Path, id: &str) -> Result<Option<Observation>, StoreError> {
     read(&Store::open(data)?, &ws.canonicalize()?, id)
 }

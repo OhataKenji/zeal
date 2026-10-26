@@ -64,6 +64,18 @@ build:zeal --bes_backend=grpc://127.0.0.1:4718
 build:zeal --bes_timeout=5s
 ```
 
+## Development traces
+
+Start [Jaeger](https://www.jaegertracing.io/docs/2.22/getting-started/) with OTLP/HTTP on port 4318, then run:
+
+```sh
+ZEAL_OTLP_ENDPOINT=http://127.0.0.1:4318 pnpm tauri dev
+```
+
+View native timings under `zeal-dev` in [Jaeger](http://localhost:16686).
+Export is debug-only and opt-in. Inputs, artifacts and inherited OTLP credentials stay local.
+Background threads use separate traces; exit may drop traces.
+
 ## License
 
 [Apache-2.0](LICENSE)

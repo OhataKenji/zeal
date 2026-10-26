@@ -87,6 +87,7 @@ impl Drop for Capture {
     }
 }
 
+#[tracing::instrument(target = "zeal::operations", name = "bazel.spawn", skip_all)]
 pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, Capture)> {
     let mut log = OpenOptions::new().append(true).open(dir.join("log.txt"))?;
     let mut master = -1;

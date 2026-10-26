@@ -76,6 +76,7 @@ pub struct Snapshot {
 /// Build a snapshot from parsed rules. Labels are canonicalized before being
 /// classified: a label that names a known target or starts with `@`/`@@`
 /// becomes an edge; anything else is a file reference.
+#[tracing::instrument(target = "zeal::operations", name = "snapshot.build", skip_all)]
 pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
     let mut known = HashSet::new();
     let mut targets = Vec::new();

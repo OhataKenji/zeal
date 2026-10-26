@@ -71,6 +71,7 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
 
 /// Run `bazel query 'kind("rule", //...)' --output=xml --noimplicit_deps
 /// --keep_going` in `ws`, streaming stdout through the XML parser.
+#[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
 fn fetch(ws: &Path, bazel: &Path) -> Outcome {
     let mut child = match Command::new(bazel)
         .arg("query")
@@ -190,6 +191,7 @@ pub enum Section<T> {
 /// Read the record and available observations from a run dir. A missing or
 /// unreadable observation never hides the record or another observation.
 /// Timing is parsed only after the record confirms that the run finished.
+#[tracing::instrument(target = "zeal::operations", name = "run.detail", skip_all)]
 pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
     let record = store::read_record(data, workspace, id)?;
     if record.external {
