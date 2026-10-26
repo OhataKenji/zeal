@@ -163,11 +163,11 @@ async fn get_analytics(
     .map_err(|_| "analytics worker failed".to_string())?
 }
 
-/// Each artifact reader admits one operation without queuing. The guard stays
-/// with the blocking operation even if the caller stops awaiting its response.
 static DETAIL_BUSY: AtomicBool = AtomicBool::new(false);
 static PROFILE_BUSY: AtomicBool = AtomicBool::new(false);
 
+/// A non-queuing permit for one active artifact read per flag.
+/// The blocking worker owns it until completion, even if its caller stops waiting.
 struct ArtifactWorker(&'static AtomicBool);
 impl ArtifactWorker {
     fn acquire(busy: &'static AtomicBool, error: &str) -> Result<Self, String> {
@@ -182,7 +182,8 @@ impl Drop for ArtifactWorker {
     }
 }
 
-/// Read the record, log and results without waiting for timing.
+/// Return the saved record, log and build results.
+/// Reject the request if another detail read is active.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "run.detail.request", skip_all)]
 async fn get_run(
@@ -206,7 +207,8 @@ async fn get_run(
     .map_err(|_| "run detail worker failed".to_string())?
 }
 
-/// Parse timing off the UI thread, with at most one profile operation active.
+/// Return the saved timing profile and its availability status.
+/// Reject the request if another profile read is active.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "run.profile.request", skip_all)]
 async fn get_run_profile(

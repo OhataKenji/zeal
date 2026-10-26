@@ -156,7 +156,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function loadSelected() {
-    // Start both requests together; each response updates its own section.
     void loadDetail();
     void loadProfile();
   }

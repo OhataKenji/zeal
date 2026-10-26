@@ -4,8 +4,8 @@
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-run refresh is kept.
 //!
-//! [`run_detail`] reads the record, log and results. [`run_profile`] parses
-//! timing separately so log display never waits for profile parsing.
+//! Saved run observations: [`run_detail`] returns the record, log and build
+//! results; [`run_profile`] returns the timing profile and its availability.
 
 use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
