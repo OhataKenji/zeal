@@ -6,14 +6,18 @@
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
 
-  let { view, reload }: { view: SessionView; reload: () => void } = $props();
+  let { view, reload, reloadProfile }: {
+    view: SessionView;
+    reload: () => void;
+    reloadProfile: () => void;
+  } = $props();
   const selectedRun = $derived(view.selectedRun);
   const record = $derived(
     view.detail?.record ?? view.runs.find((run) => run.id === selectedRun)
       ?? (view.console?.id === selectedRun ? view.console : undefined),
   );
   const running = $derived(view.state?.running === selectedRun);
-  const profile = $derived(sectionData(view.detail?.profile));
+  const profile = $derived(sectionData(view.profile ?? undefined));
   const status = $derived(
     runStatus(record, view.state?.running ?? null, view.state?.stopping),
   );
@@ -141,14 +145,19 @@
             {#if running}<p class="panel-empty">
                 Timing is available after the run finishes.
               </p>
-            {:else if view.detail}
-              {#if view.detail.profile.status !== "ok"}<p class="run-notice">
-                  {sectionMessage(view.detail.profile)}
-                </p>{/if}
-              {#if profile}{#key view.detail}<ProfileView {profile} />{/key}{/if}
-            {:else if view.detailLoading}<p class="panel-empty">
+            {:else if view.profileLoading}<p class="panel-empty" role="status">
                 Loading profile…
-              </p>{/if}
+              </p>
+            {:else if view.profileError}<div class="run-notice err">
+                Timing を読めません: {view.profileError}
+                <button type="button" class="button" onclick={reloadProfile}>Retry</button>
+              </div>
+            {:else if view.profile}
+              {#if view.profile.status !== "ok"}<p class="run-notice">
+                  {sectionMessage(view.profile)}
+                </p>{/if}
+              {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
+            {/if}
           {/if}
         </section>
       {/if}

@@ -14,7 +14,8 @@ mod terminal;
 mod workspace;
 mod xml;
 
-use ingest::{RunDetail, run_detail};
+use ingest::{RunDetail, Section, run_detail, run_profile};
+use profile::Profile;
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -162,26 +163,27 @@ async fn get_analytics(
     .map_err(|_| "analytics worker failed".to_string())?
 }
 
-/// No queued profile parses. The guard stays with the blocking operation even
-/// if the caller stops awaiting its response.
 static DETAIL_BUSY: AtomicBool = AtomicBool::new(false);
+static PROFILE_BUSY: AtomicBool = AtomicBool::new(false);
 
-struct DetailWorker;
-impl DetailWorker {
-    fn acquire() -> Result<Self, String> {
-        DETAIL_BUSY
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| "profile worker busy".to_string())?;
-        Ok(Self)
+/// A non-queuing permit for one active artifact read per flag.
+/// The blocking worker owns it until completion, even if its caller stops waiting.
+struct ArtifactWorker(&'static AtomicBool);
+impl ArtifactWorker {
+    fn acquire(busy: &'static AtomicBool, error: &str) -> Result<Self, String> {
+        busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| error.to_string())?;
+        Ok(Self(busy))
     }
 }
-impl Drop for DetailWorker {
+impl Drop for ArtifactWorker {
     fn drop(&mut self) {
-        DETAIL_BUSY.store(false, Ordering::Release);
+        self.0.store(false, Ordering::Release);
     }
 }
 
-/// Parse artifacts off the UI thread, with at most one detail operation active.
+/// Return the saved record, log and build results.
+/// Reject the request if another detail read is active.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "run.detail.request", skip_all)]
 async fn get_run(
@@ -196,10 +198,35 @@ async fn get_run(
         return Err("no workspace".to_string());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let worker = DetailWorker::acquire()?;
+    let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "run detail worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
         run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "run detail worker failed".to_string())?
+}
+
+/// Return the saved timing profile and its availability status.
+/// Reject the request if another profile read is active.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "run.profile.request", skip_all)]
+async fn get_run_profile(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: String,
+) -> Result<Section<Profile>, String> {
+    let id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| "invalid run id".to_string())?
+        .to_string();
+    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+        return Err("no workspace".to_string());
+    };
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _worker = worker;
+        run_profile(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "profile worker failed".to_string())?
@@ -290,6 +317,7 @@ pub fn run() {
             list_runs,
             get_analytics,
             get_run,
+            get_run_profile,
             open_location
         ])
         .build(tauri::generate_context!())
@@ -306,14 +334,19 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod detail_worker_tests {
-    use super::DetailWorker;
+mod artifact_worker_tests {
+    use super::{ArtifactWorker, DETAIL_BUSY, PROFILE_BUSY};
 
     #[test]
-    fn concurrent_detail_is_busy_until_worker_is_dropped() {
-        let first = DetailWorker::acquire().unwrap();
-        assert!(DetailWorker::acquire().is_err());
-        drop(first);
-        assert!(DetailWorker::acquire().is_ok());
+    fn readers_are_independent_and_each_stays_busy_until_its_worker_is_dropped() {
+        let detail = ArtifactWorker::acquire(&DETAIL_BUSY, "detail busy").unwrap();
+        let profile = ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").unwrap();
+        assert!(ArtifactWorker::acquire(&DETAIL_BUSY, "detail busy").is_err());
+        assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_err());
+        drop(detail);
+        assert!(ArtifactWorker::acquire(&DETAIL_BUSY, "detail busy").is_ok());
+        assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_err());
+        drop(profile);
+        assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_ok());
     }
 }

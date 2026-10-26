@@ -300,8 +300,12 @@ export function installPreview() {
                 truncated: false,
               },
             },
-            profile: { status: "ok", data: profile },
           };
+        }
+        case "get_run_profile": {
+          if (!records.some((run) => run.id === payload?.id))
+            throw new Error("Preview run not found");
+          return { status: "ok", data: profile };
         }
         case "get_analytics": {
           const requested = (payload?.filter ?? {}) as AnalyticsFilter;

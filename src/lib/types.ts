@@ -91,5 +91,4 @@ export interface RunDetail {
   record: RunRecord;
   log: Section<string>;
   bep: Section<Bep>;
-  profile: Section<Profile>;
 }

@@ -1,5 +1,5 @@
 import { targetError } from "./target.ts";
-import type { AppState, RunCmd, RunDetail, RunRecord } from "./types.ts";
+import type { AppState, Profile, RunCmd, RunDetail, RunRecord, Section } from "./types.ts";
 
 export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -21,6 +21,9 @@ export interface SessionView {
   detail: RunDetail | null;
   detailLoading: boolean;
   detailError: string | null;
+  profile: Section<Profile> | null;
+  profileLoading: boolean;
+  profileError: string | null;
 }
 
 export function emptyView(): SessionView {
@@ -39,6 +42,9 @@ export function emptyView(): SessionView {
     detail: null,
     detailLoading: false,
     detailError: null,
+    profile: null,
+    profileLoading: false,
+    profileError: null,
   };
 }
 
@@ -71,6 +77,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let listGeneration = 0;
   let listing = false;
   let detailGeneration = 0;
+  let profileGeneration = 0;
   let unlisten: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
@@ -113,7 +120,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   async function loadDetail() {
     const id = view.selectedRun;
-    // Full artifacts, including profiles, are read after the active run ends.
+    // Saved observations are read after the active run ends.
     if (!id || !view.ready || view.starting || view.detailLoading || id === view.state?.running)
       return;
     const generation = ++detailGeneration;
@@ -130,8 +137,32 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
+  async function loadProfile() {
+    const id = view.selectedRun;
+    if (!id || !view.ready || view.starting || view.profileLoading || id === view.state?.running)
+      return;
+    const generation = ++profileGeneration;
+    update({ profileLoading: true, profileError: null });
+    try {
+      const profile = await transport.invoke<Section<Profile>>("get_run_profile", { id });
+      if (generation === profileGeneration) {
+        update({ profile, profileLoading: false });
+      }
+    } catch (error) {
+      if (generation === profileGeneration) {
+        update({ profileError: String(error), profileLoading: false });
+      }
+    }
+  }
+
+  function loadSelected() {
+    void loadDetail();
+    void loadProfile();
+  }
+
   function selectRun(id: string | null, initialRunTab: "All" | "Logs" = "All") {
     ++detailGeneration;
+    ++profileGeneration;
     update({
       consoleOpen: false,
       selectedRun: id,
@@ -139,8 +170,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       initialRunTab,
       detailError: null,
       detailLoading: false,
+      profile: null,
+      profileLoading: false,
+      profileError: null,
     });
-    void loadDetail();
+    loadSelected();
   }
 
   // Reopen the live run's Console; anything else falls through to detail.
@@ -151,6 +185,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
     if (view.consoleOpen && view.console?.id === record.id) return;
     ++detailGeneration;
+    ++profileGeneration;
     update({
       console: record,
       consoleOpen: true,
@@ -158,6 +193,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       detail: null,
       detailError: null,
       detailLoading: false,
+      profile: null,
+      profileLoading: false,
+      profileError: null,
     });
   }
 
@@ -169,6 +207,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (state.workspace !== before?.workspace) {
       ++listGeneration;
       ++detailGeneration;
+      ++profileGeneration;
       update({
         console: null,
         consoleOpen: false,
@@ -178,6 +217,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         detail: null,
         detailLoading: false,
         detailError: null,
+        profile: null,
+        profileLoading: false,
+        profileError: null,
       });
     }
     update({
@@ -188,7 +230,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
-    if (resumed || (before?.running && before.running !== state.running)) void loadDetail();
+    if (resumed || (before?.running && before.running !== state.running)) loadSelected();
   }
 
   function dispose() {
@@ -247,7 +289,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
       update({ starting: false });
-      if (!disposed && workspace === view.state?.workspace && view.ready) void loadDetail();
+      if (!disposed && workspace === view.state?.workspace && view.ready) loadSelected();
     }
   }
 
@@ -307,6 +349,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     selectRun,
     openConsole,
     loadDetail,
+    loadProfile,
     loadRuns,
   };
 }
