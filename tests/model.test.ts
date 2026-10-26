@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTree, flatten, relations } from "../src/lib/model.ts";
+import { ancestorsOf, buildTree, flatten, relations, splitLabel } from "../src/lib/model.ts";
 import type { Snapshot } from "../src/lib/types.ts";
 
 test("target tree lists packages and rules without input or output files", () => {
@@ -32,6 +32,31 @@ test("target tree lists packages and rules without input or output files", () =>
   );
   assert.equal(rows[1].label, "//app:parser_test");
   assert.equal(rows[1].ruleClass, "cc_test");
+});
+
+test("revealing a target expands every ancestor and keeps other branches open", () => {
+  const snapshot: Snapshot = {
+    meta: { fetchedAt: 0, status: "ok" },
+    targets: ["//app/lib/deep:parser", "//other:lib", "//:root"].map((label) => ({
+      label,
+      ...splitLabel(label),
+      ruleClass: "cc_library",
+      location: null,
+    })),
+    edges: [],
+    files: [],
+  };
+  const tree = buildTree(snapshot);
+  const expanded = new Set(["other"]);
+  const label = "//app/lib/deep:parser";
+  assert.ok(!flatten(tree, expanded).some((row) => row.label === label));
+
+  for (const path of ancestorsOf(splitLabel(label).pkg)) expanded.add(path);
+
+  assert.deepEqual([...expanded], ["other", "app", "app/lib", "app/lib/deep"]);
+  assert.ok(flatten(tree, expanded).some((row) => row.label === label));
+  assert.deepEqual(ancestorsOf(splitLabel("//:root").pkg), []);
+  assert.ok(flatten(tree, new Set()).some((row) => row.label === "//:root"));
 });
 
 test("reverse dependencies group unique attributes under each direct user", () => {
