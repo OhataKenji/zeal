@@ -1,7 +1,7 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { canSend, canStop, createSession, emptyView, type Transport } from "../src/lib/session.ts";
-import type { AppState, RunDetail, RunRecord } from "../src/lib/types.ts";
+import type { AppState, Profile, RunDetail, RunRecord, Section } from "../src/lib/types.ts";
 
 const idle: AppState = {
   workspace: "/workspace",
@@ -24,8 +24,8 @@ const completed: RunDetail = {
   record: { ...record, finishedAt: 2, exitCode: 0 },
   log: { status: "ok", data: "same\nsame\n" },
   bep: { status: "missing" },
-  profile: { status: "missing" },
 };
+const profile: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -110,6 +110,102 @@ async function settle() {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+test("logs and results arrive while profile parsing is still pending", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.selectRun(record.id);
+  const detailRequest = h.pending.find((call) => call.command === "get_run")!;
+  const profileRequest = h.pending.find((call) => call.command === "get_run_profile")!;
+  assert.deepEqual(profileRequest.args, { id: record.id });
+  detailRequest.reply.resolve(completed);
+  await settle();
+  assert.deepEqual(h.view.detail, completed);
+  assert.equal(h.view.detailLoading, false);
+  assert.equal(h.view.profileLoading, true);
+  assert.equal(h.view.profile, null);
+  profileRequest.reply.resolve(profile);
+  await settle();
+  assert.deepEqual(h.view.profile, profile);
+  assert.equal(h.view.profileLoading, false);
+});
+
+test("timing can arrive before logs without clearing either response", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.selectRun(record.id);
+  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  await settle();
+  assert.deepEqual(h.view.profile, profile);
+  assert.equal(h.view.detailLoading, true);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  await settle();
+  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.profile, profile);
+});
+
+test("a profile failure leaves logs visible and retries only timing", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.selectRun(record.id);
+  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.pending
+    .find((call) => call.command === "get_run_profile")!
+    .reply.reject(new Error("profile worker busy"));
+  await settle();
+  assert.deepEqual(h.view.detail, completed);
+  assert.equal(h.view.detailError, null);
+  assert.match(h.view.profileError!, /profile worker busy/);
+  const retry = h.session.loadProfile();
+  h.pending
+    .filter((call) => call.command === "get_run_profile")
+    .at(-1)!
+    .reply.resolve(profile);
+  await retry;
+  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 1);
+  assert.deepEqual(h.view.profile, profile);
+  assert.equal(h.view.profileError, null);
+});
+
+test("a log request failure leaves timing visible and retries only the summary", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.selectRun(record.id);
+  h.pending
+    .find((call) => call.command === "get_run")!
+    .reply.reject(new Error("record unavailable"));
+  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  await settle();
+  assert.deepEqual(h.view.profile, profile);
+  assert.match(h.view.detailError!, /record unavailable/);
+  const retry = h.session.loadDetail();
+  h.pending
+    .filter((call) => call.command === "get_run")
+    .at(-1)!
+    .reply.resolve(completed);
+  await retry;
+  assert.deepEqual(h.view.detail, completed);
+  assert.equal(h.view.detailError, null);
+  assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 1);
+});
+
+test("a late profile response or error cannot replace a newer selection", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.selectRun("run-a");
+  h.session.selectRun("run-b");
+  h.session.selectRun("run-c");
+  const requests = h.pending.filter((call) => call.command === "get_run_profile");
+  requests[2].reply.resolve(profile);
+  await settle();
+  requests[0].reply.resolve({ status: "missing" });
+  requests[1].reply.reject(new Error("stale error"));
+  await settle();
+  assert.equal(h.view.selectedRun, "run-c");
+  assert.deepEqual(h.view.profile, profile);
+  assert.equal(h.view.profileError, null);
+  assert.equal(h.view.profileLoading, false);
+});
 
 test("Send waits for listeners, then rejects busy ingestion, a live run and a stopping run", async () => {
   const h = harness();
@@ -241,7 +337,7 @@ test("full artifacts are read only after the run finishes", async () => {
   assert.equal(h.view.console?.id, record.id);
   assert.equal(h.view.consoleOpen, true);
   assert.equal(
-    h.pending.some((call) => call.command === "get_run"),
+    h.pending.some((call) => call.command === "get_run" || call.command === "get_run_profile"),
     false,
   );
   h.emit("app-state", idle);
@@ -372,9 +468,12 @@ test("workspace switch rejects both stale run list and stale detail", async () =
   h.emit("app-state", { ...idle, workspace: "/other" });
   h.pending.find((call) => call.command === "list_runs")!.reply.resolve([record]);
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
   await settle();
   assert.deepEqual(h.view.runs, []);
   assert.equal(h.view.detail, null);
+  assert.equal(h.view.profile, null);
+  assert.equal(h.view.profileLoading, false);
   assert.equal(h.view.selectedRun, null);
 });
 
@@ -384,9 +483,12 @@ test("target selection cancels an in-flight detail without changing core running
   h.session.selectRun("run-a");
   h.session.selectRun(null);
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
   await settle();
   assert.equal(h.view.detail, null);
   assert.equal(h.view.detailLoading, false);
+  assert.equal(h.view.profile, null);
+  assert.equal(h.view.profileLoading, false);
 });
 
 test("failed spawn is visible and allows another Send", async () => {
@@ -428,9 +530,11 @@ test("dispose removes listeners and ignores late reads", async () => {
   h.session.selectRun("run-a");
   h.session.dispose();
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
   await settle();
   assert.deepEqual(h.removed, ["app-state"]);
   assert.equal(h.view.detail, null);
+  assert.equal(h.view.profile, null);
 });
 
 test("unmount during listener registration immediately cleans the late subscription", async () => {
@@ -605,8 +709,11 @@ test("openConsole cancels an in-flight run detail read", async () => {
   h.session.selectRun("run-b");
   h.session.openConsole(record);
   h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
   await settle();
   assert.equal(h.view.detail, null);
+  assert.equal(h.view.profile, null);
+  assert.equal(h.view.profileLoading, false);
   assert.equal(h.view.selectedRun, null);
   assert.equal(h.view.consoleOpen, true);
 });

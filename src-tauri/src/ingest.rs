@@ -4,8 +4,8 @@
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-run refresh is kept.
 //!
-//! [`run_detail`] reads a run dir into what the run view shows. It parses the
-//! artifacts on every call; nothing is cached.
+//! [`run_detail`] reads the record, log and results. [`run_profile`] parses
+//! timing separately so log display never waits for profile parsing.
 
 use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
@@ -172,7 +172,6 @@ pub struct RunDetail {
     pub record: RunRecord,
     pub log: Section<String>,
     pub bep: Section<Bep>,
-    pub profile: Section<Profile>,
 }
 
 /// Observation availability is independent of the process exit code.
@@ -190,7 +189,6 @@ pub enum Section<T> {
 
 /// Read the record and available observations from a run dir. A missing or
 /// unreadable observation never hides the record or another observation.
-/// Timing is parsed only after the record confirms that the run finished.
 #[tracing::instrument(target = "zeal::operations", name = "run.detail", skip_all)]
 pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
     let record = store::read_record(data, workspace, id)?;
@@ -209,9 +207,6 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
             record,
             log: Section::Ok { data: observed.log },
             bep,
-            profile: Section::NotAvailable {
-                note: "Profiles from terminal builds are not imported.".into(),
-            },
         });
     }
     let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
@@ -245,7 +240,17 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
             }
         }
     };
-    let profile = if record.finished_at.is_none() {
+    Ok(RunDetail { record, log, bep })
+}
+
+/// Timing is read independently and only after the record confirms completion.
+pub fn run_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
+    let record = store::read_record(data, workspace, id)?;
+    Ok(if record.external {
+        Section::NotAvailable {
+            note: "Profiles from terminal builds are not imported.".into(),
+        }
+    } else if record.finished_at.is_none() {
         Section::NotAvailable {
             note: "timing is available after run completion is recorded".to_string(),
         }
@@ -264,12 +269,6 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
                 Err(profile::ProfileError::Parse(note)) => Section::ParseError { note },
             },
         }
-    };
-    Ok(RunDetail {
-        record,
-        log,
-        bep,
-        profile,
     })
 }
 
@@ -322,6 +321,14 @@ mod tests {
         )
     }
 
+    fn timing(root: &TempRoot, dir: &Path) -> io::Result<Section<Profile>> {
+        run_profile(
+            &root.0.join("data"),
+            &root.0.join("ws"),
+            dir.file_name().unwrap().to_str().unwrap(),
+        )
+    }
+
     fn finish(root: &TempRoot, dir: &Path, code: i32) -> Result<RunRecord, store::StoreError> {
         store::finish(
             &root.0.join("data"),
@@ -357,7 +364,8 @@ mod tests {
         assert_eq!(json["record"]["exitCode"], 0);
         assert_eq!(json["log"]["status"], "ok");
         assert_eq!(json["log"]["data"], "INFO: Build completed\n");
-        assert_eq!(json["profile"]["status"], "ok");
+        assert!(json.get("profile").is_none());
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
         assert!(matches!(d.log, Section::Ok { data } if data == "INFO: Build completed\n"));
     }
 
@@ -374,7 +382,10 @@ mod tests {
             finish(&_root, &dir, 0).unwrap();
             let d = detail(&_root, &dir).unwrap();
             assert!(matches!(d.bep, Section::Ok { .. }), "{case}");
-            assert!(matches!(d.profile, Section::Ok { .. }), "{case}");
+            assert!(
+                matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }),
+                "{case}"
+            );
         }
     }
 
@@ -386,7 +397,7 @@ mod tests {
         assert_eq!(d.record.exit_code, Some(1));
         assert!(matches!(d.bep, Section::Incomplete { data, note }
             if !data.targets.is_empty() && !note.is_empty()));
-        assert!(matches!(d.profile, Section::Missing));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Missing));
     }
 
     #[test]
@@ -396,20 +407,22 @@ mod tests {
         let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record.exit_code, Some(42));
         assert!(matches!(d.bep, Section::Ok { .. }));
-        assert!(matches!(d.profile, Section::Ok { .. }));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
     }
 
     #[test]
     fn unfinished_profile_is_not_parsed_even_when_it_is_valid() {
         let (_root, dir) = run_dir("ok");
         let d = detail(&_root, &dir).unwrap();
-        assert!(matches!(d.profile, Section::NotAvailable { .. }));
+        assert!(matches!(
+            timing(&_root, &dir).unwrap(),
+            Section::NotAvailable { .. }
+        ));
         assert_eq!(d.record.finished_at, None);
         assert_eq!(d.record.exit_code, None);
 
         finish(&_root, &dir, 0).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert!(matches!(d.profile, Section::Ok { .. }));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
     }
 
     #[test]
@@ -417,14 +430,16 @@ mod tests {
         let (_root, dir) = run_dir("ok");
         fs::write(dir.join("profile.gz"), b"not gzip").unwrap();
         assert!(matches!(
-            detail(&_root, &dir).unwrap().profile,
+            timing(&_root, &dir).unwrap(),
             Section::NotAvailable { .. }
         ));
 
         finish(&_root, &dir, 0).unwrap();
         let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record.exit_code, Some(0));
-        assert!(matches!(d.profile, Section::ParseError { note } if !note.is_empty()));
+        assert!(
+            matches!(timing(&_root, &dir).unwrap(), Section::ParseError { note } if !note.is_empty())
+        );
         assert!(matches!(d.bep, Section::Ok { .. }));
     }
 
@@ -439,7 +454,7 @@ mod tests {
         assert_eq!(d.record, rec);
         assert!(matches!(d.log, Section::Missing));
         assert!(matches!(d.bep, Section::Missing));
-        assert!(matches!(d.profile, Section::Missing));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Missing));
     }
 
     #[test]
@@ -451,22 +466,16 @@ mod tests {
         let d = detail(&_root, &dir).unwrap();
         assert!(matches!(d.log, Section::ReadError { note } if !note.is_empty()));
         assert!(matches!(d.bep, Section::Ok { .. }));
-        assert!(matches!(d.profile, Section::Ok { .. }));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
     }
 
     #[test]
     fn each_request_reads_the_current_artifacts() {
         let (_root, dir) = run_dir("ok");
         finish(&_root, &dir, 0).unwrap();
-        assert!(matches!(
-            detail(&_root, &dir).unwrap().profile,
-            Section::Ok { .. }
-        ));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
         fs::remove_file(dir.join("profile.gz")).unwrap();
-        assert!(matches!(
-            detail(&_root, &dir).unwrap().profile,
-            Section::Missing
-        ));
+        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Missing));
     }
 
     #[test]
@@ -476,6 +485,14 @@ mod tests {
         fs::create_dir(&other).unwrap();
         assert!(
             run_detail(
+                &root.0.join("data"),
+                &other,
+                dir.file_name().unwrap().to_str().unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            run_profile(
                 &root.0.join("data"),
                 &other,
                 dir.file_name().unwrap().to_str().unwrap()

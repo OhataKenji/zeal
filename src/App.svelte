@@ -299,7 +299,7 @@
     {/if}
     {#if app.view.selectedRun}
       {#key app.view.selectedRun}
-        <RunView view={app.view} reload={session.loadDetail} />
+        <RunView view={app.view} reload={session.loadDetail} reloadProfile={session.loadProfile} />
       {/key}
     {:else if analyticsOpen}
       {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
