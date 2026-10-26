@@ -24,7 +24,7 @@
   {#if matches.length === 0}
     <div class="match dim">一致する target はありません</div>
   {:else}
-    {#each matches as match, i (`${match.candidate.kind}:${match.candidate.key}`)}
+    {#each matches as match, i (match.target.label)}
       <button
         bind:this={rows[i]}
         type="button"
@@ -36,15 +36,15 @@
         tabindex={-1}
         onmousedown={(event) => {
           event.preventDefault();
-          onpick(match.candidate.insert);
+          onpick(match.target.label);
         }}
       >
         <span
-          >{#each segments(match.candidate.text, match.indices) as part, j (j)}<span
+          >{#each segments(match.target.label, match.indices) as part, j (j)}<span
               class:hit={part.hit}>{part.text}</span
             >{/each}</span
         >
-        <span class="label">{match.candidate.note}</span>
+        <span class="label">{match.target.ruleClass}</span>
       </button>
     {/each}
   {/if}

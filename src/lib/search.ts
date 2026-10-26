@@ -1,93 +1,32 @@
-import Fuse from "fuse.js";
-import type { Snapshot } from "./types.ts";
-
-export interface Candidate {
-  kind: "target" | "file";
-  /** The key Fuse matches on: the full label (targets) or workspace-relative path (files). */
-  key: string;
-  /** The text shown in the row: the label itself, or a file's basename. */
-  text: string;
-  /** The string inserted into the target field when the row is picked. */
-  insert: string;
-  /** Right-hand annotation: the rule class, or `→ <owner label>` for files. */
-  note: string;
-}
+import fuzzysort, { type SnapshotKey } from "fuzzysort";
+import type { Target } from "./types.ts";
 
 export interface Match {
-  candidate: Candidate;
-  /** Highlight ranges into `candidate.text`, inclusive [start, end] pairs. */
+  target: Target;
+  /** Highlight ranges into `target.label`, inclusive [start, end] pairs. */
   indices: readonly (readonly [number, number])[];
 }
 
 /**
- * Rows to search: every snapshot target in order, then each input file once as
- * a route to its owner. Outputs are not candidates; they are not sendable.
- */
-export function candidates(snap: Snapshot): Candidate[] {
-  const out: Candidate[] = snap.targets.map((target) => ({
-    kind: "target",
-    key: target.label,
-    text: target.label,
-    insert: target.label,
-    note: target.ruleClass,
-  }));
-
-  const ownersByPath = new Map<string, Set<string>>();
-  for (const file of snap.files) {
-    if (file.role === "out") continue;
-    let owners = ownersByPath.get(file.path);
-    if (!owners) ownersByPath.set(file.path, (owners = new Set()));
-    owners.add(file.owner);
-  }
-  for (const [path, owners] of ownersByPath) {
-    // Same rule as the M1 tree: several owners collapse into the label that
-    // sorts first.
-    const owner = [...owners].sort()[0];
-    out.push({
-      kind: "file",
-      key: path,
-      text: baseName(path),
-      insert: owner,
-      note: `→ ${owner}`,
-    });
-  }
-  return out;
-}
-
-/**
- * Builds the index over `cands`. Every `app-state` event carries a new snapshot
+ * Builds the index over `targets`. Every `app-state` event carries a new snapshot
  * object, so the component derives a fresh index on each state change — a
  * handful per run — rather than once per fetch; typing then only searches the
  * index it holds.
  */
-export function createIndex(cands: Candidate[]): Fuse<Candidate> {
-  return new Fuse(cands, {
-    keys: ["key", "text"],
-    ignoreLocation: true,
-    includeMatches: true,
-    threshold: 0.4,
-    minMatchCharLength: 1,
-  });
+export function createIndex(targets: Target[]): SnapshotKey<Target> {
+  return fuzzysort.snapshot(targets, { key: "label" });
 }
 
 /**
- * Fuse decides matching, scoring and matched positions. `ignoreLocation` keeps
- * the tail of a long label searchable, and the matches drive the highlight.
+ * fuzzysort decides matching, scoring and matched positions. Queries match
+ * subsequences and space-separated terms; the matches drive the highlight.
  */
-export function search(index: Fuse<Candidate>, query: string, limit = 20): Match[] {
-  if (query === "") return [];
-  return index
-    .search(query)
-    .slice(0, Math.max(0, limit))
-    .map((result) => {
-      const { item } = result;
-      const onText = result.matches?.find((match) => match.key === "text");
-      const onKey = result.matches?.find((match) => match.key === "key");
-      // A file matched only through its path has no range inside the displayed
-      // basename, so it shows without an underline.
-      const ranges = onText ?? (item.text === item.key ? onKey : undefined);
-      return { candidate: item, indices: ranges?.indices ?? [] };
-    });
+export function search(index: SnapshotKey<Target>, query: string, limit = 20): Match[] {
+  if (query.trim() === "" || limit <= 0) return [];
+  return fuzzysort.go(query, index, { limit, threshold: 0 }).map((result) => ({
+    target: result.obj,
+    indices: result.indexes.map((position) => [position, position] as const),
+  }));
 }
 
 /**
@@ -156,8 +95,8 @@ export function keyAction(
         : { kind: "move", index: 0 };
     case "Enter": {
       if (!state.open || length === 0) return { kind: "none" };
-      const { candidate } = matches[moveIndex(state.index, 0, length)];
-      return { kind: "pick", value: candidate.insert };
+      const { target } = matches[moveIndex(state.index, 0, length)];
+      return { kind: "pick", value: target.label };
     }
     case "Escape":
       return state.open ? { kind: "close" } : { kind: "none" };
@@ -174,8 +113,4 @@ export const LIST_ID = "qo-list";
 
 export function optionId(index: number): string {
   return `qo-opt-${index}`;
-}
-
-function baseName(path: string): string {
-  return path.split("/").pop() ?? path;
 }

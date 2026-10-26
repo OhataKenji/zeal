@@ -13,7 +13,6 @@
   import { canSend, canStop } from "./lib/session";
   import { runStatus } from "./lib/run";
   import {
-    candidates,
     createIndex,
     keyAction,
     LIST_ID,
@@ -70,7 +69,7 @@
   // while closed, because ↑/↓ reopen the list from the current text.
   let dropdownOpen = $state(false);
   let matchIndex = $state(0);
-  const index = $derived(snap ? createIndex(candidates(snap)) : null);
+  const index = $derived(snap ? createIndex(snap.targets) : null);
   const matches = $derived(index ? search(index, targetField) : []);
   // A snapshot swap can shorten the list under the selection, so clamp here:
   // the highlight, `aria-activedescendant` and Enter all name the same row.

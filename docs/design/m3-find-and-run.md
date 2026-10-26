@@ -38,10 +38,10 @@ flowchart LR
 
 ### 索引と検索
 
-[M1](./m1-targets.md) の snapshot を Fuse.js に渡す。
-`ignoreLocation: true` と `includeMatches: true` を使い、照合、スコア、一致位置を自作しない。
-label と入力 file を候補にし、rule class または owner を添える。
-file の owner が複数なら label 昇順の先頭を挿入する。
+[M1](./m1-targets.md) の snapshot に含まれる target を fuzzysort に渡す。
+部分列と空白区切りの複数語で検索し、照合、スコア、一致位置を自作しない。
+検索候補は target のフル label のみとし、rule class を添える。
+選択した label をそのまま target 欄に挿入する。
 
 ↑↓で候補を選び、Enter で target 欄全体を置き換える。
 Enter は候補の確定だけに使い、矢印キーを操作した履歴を持たない。
