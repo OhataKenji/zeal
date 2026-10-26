@@ -85,7 +85,7 @@
 
   {#if view.detailError}
     <div class="run-notice err">
-      詳細を読めません: {view.detailError}
+      Could not load run details: {view.detailError}
       <button type="button" class="button" onclick={reload}>Retry</button>
     </div>
   {/if}
@@ -149,7 +149,7 @@
                 Loading profile…
               </p>
             {:else if view.profileError}<div class="run-notice err">
-                Timing を読めません: {view.profileError}
+                Could not load timing data: {view.profileError}
                 <button type="button" class="button" onclick={reloadProfile}>Retry</button>
               </div>
             {:else if view.profile}

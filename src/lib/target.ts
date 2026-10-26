@@ -7,8 +7,8 @@
 const forbidden = /[\p{White_Space}\p{Cc}]/u;
 
 export function targetError(raw: string): string | null {
-  if (raw === "") return "対象を入力してください";
-  if (raw.startsWith("-")) return '対象を "-" で始めることはできません';
-  if (forbidden.test(raw)) return "対象に空白や制御文字は使えません";
+  if (raw === "") return "Enter a target";
+  if (raw.startsWith("-")) return 'A target cannot start with "-"';
+  if (forbidden.test(raw)) return "A target cannot contain whitespace or control characters";
   return null;
 }

@@ -37,7 +37,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(1);
 const EXIT_POLL: Duration = Duration::from_millis(25);
 
 /// Shown when the group was killed but no exit was confirmed.
-const STOP_UNCONFIRMED: &str = "停止を確認できません";
+const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
 /// Arguments after the bazel executable. Bazel writes its artifacts into the
 /// run dir.
@@ -167,10 +167,10 @@ pub fn start(
         if apply_reap(&mut st, &id, &exit)
             && let Err(e) = saved
         {
-            st.run_note = Some(format!("終了結果を保存できません: {e}"));
+            st.run_note = Some(format!("Could not save the exit result: {e}"));
         }
         if let Err(error) = captured {
-            st.run_note = Some(format!("端末出力の保存に失敗しました: {error}"));
+            st.run_note = Some(format!("Failed to save the terminal output: {error}"));
         }
     });
     Ok(rec)
@@ -267,7 +267,7 @@ impl<F: Fn()> Drop for RunSlot<'_, F> {
         if still_held(&st, self.id) {
             clear_run(&mut st);
             if thread::panicking() {
-                st.run_note = Some("実行結果の後処理に失敗しました".into());
+                st.run_note = Some("Failed to finish processing the run result".into());
             }
         }
         self.core.run_finished.notify_all();
@@ -354,7 +354,7 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool
     clear_run(st);
     st.run_note = match exit {
         Ok(_) => None,
-        Err(e) => Some(format!("終了を確認できません: {e}")),
+        Err(e) => Some(format!("Could not confirm the exit: {e}")),
     };
     true
 }
@@ -626,7 +626,7 @@ mod tests {
         assert!(apply_reap(&mut st, "abc", &Err(why)));
         assert_eq!(st.run, None, "an unknown exit still releases the slot");
         let note = st.run_note.clone().expect("the reason is shown");
-        assert!(note.starts_with("終了を確認できません:"), "{note}");
+        assert!(note.starts_with("Could not confirm the exit:"), "{note}");
     }
 
     /// A reap after the stop gave up: the slot is no longer this run's, so its
@@ -830,7 +830,7 @@ mod tests {
             st.run_note
                 .as_ref()
                 .unwrap()
-                .contains("終了を確認できません")
+                .contains("Could not confirm the exit")
         );
     }
     #[test]
@@ -909,7 +909,7 @@ mod tests {
                 .run_note
                 .as_ref()
                 .unwrap()
-                .contains("後処理")
+                .contains("finish processing")
         );
     }
     #[test]

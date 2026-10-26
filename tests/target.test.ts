@@ -38,8 +38,8 @@ test("the rejection set matches the core's Unicode White_Space + Cc rule", () =>
 });
 
 test("rejections explain the rule that was broken", () => {
-  assert.match(targetError("")!, /入力/);
-  assert.match(targetError("//a:b ")!, /空白/);
-  assert.match(targetError("a\0b")!, /空白/);
+  assert.match(targetError("")!, /Enter a target/);
+  assert.match(targetError("//a:b ")!, /whitespace/);
+  assert.match(targetError("a\0b")!, /whitespace/);
   assert.match(targetError("-//a:b")!, /"-"/);
 });
