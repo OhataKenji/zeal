@@ -182,7 +182,7 @@
         {#if snap && tree}
           <Tree root={tree} {selected} onselect={select} />
         {:else if state.ingest === "running"}
-          <p class="dim">取り込み中…</p>
+          <p class="dim">Loading targets…</p>
         {:else if state.lastError}
           <p class="err">{state.lastError.summary}</p>
           <button type="button" class="button" onclick={refresh}>retry</button>
@@ -283,18 +283,19 @@
     {#if !app.view.consoleOpen}
     {#if snap?.meta.status === "partial"}
       <p class="warn">
-        一部の package を読み飛ばしました (exit {state.lastError?.exitCode ??
-          "?"}) —
-        {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の部分結果
+        Skipped some packages (exit {state.lastError?.exitCode ?? "?"}) —
+        partial results from
+        {new Date(snap.meta.fetchedAt).toLocaleTimeString()}
       </p>
     {:else if snap && state.lastError}
       <p class="warn">
-        更新に失敗 — {new Date(snap.meta.fetchedAt).toLocaleTimeString()} の snapshot
-        を表示中 ({state.lastError.summary})
+        Refresh failed — showing the snapshot from {new Date(
+          snap.meta.fetchedAt,
+        ).toLocaleTimeString()} ({state.lastError.summary})
       </p>
     {/if}
     {#if state.ingest === "running"}
-      <p class="dim">取り込み中…</p>
+      <p class="dim">Loading targets…</p>
     {/if}
     {#if app.view.selectedRun}
       {#key app.view.selectedRun}
@@ -310,9 +311,9 @@
         onselect={select}
       />
     {:else if snap}
-      <p class="dim">tree から target を選択</p>
+      <p class="dim">Select a target in the tree</p>
     {:else if state.ingest !== "running" && state.lastError}
-      <p class="err">取り込みに失敗しました: {state.lastError.summary}</p>
+      <p class="err">Failed to load targets: {state.lastError.summary}</p>
       <button type="button" class="button" onclick={refresh}>retry</button>
     {/if}
     {/if}
@@ -394,7 +395,7 @@
       </button>
     </div>
     {#if st?.ingest === "running"}
-      <span class="label" role="status">target データの取得待ち</span>
+      <span class="label" role="status">Waiting for target data</span>
     {/if}
   </div>
   {#if app.view.error}<p class="app-error err" role="alert">
@@ -413,7 +414,7 @@
         onclose={st.workspace ? () => (switchingWs = false) : undefined}
       />
       {#if st.workspace && st.bazel === null}
-        <p class="err">PATH に bazelisk / bazel が見つかりません</p>
+        <p class="err">bazelisk / bazel not found on PATH</p>
       {/if}
     </div>
   {:else}

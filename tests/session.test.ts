@@ -419,7 +419,7 @@ test("failed state reconciliation preserves the started run until a later state 
   await settle();
   reconciled.reject(new Error("state unavailable"));
   await started;
-  assert.match(h.view.error!, /実行は開始済み/);
+  assert.match(h.view.error!, /run started/);
   assert.equal(canSend(h.view, "//:app"), false);
   assert.equal(h.view.console?.id, record.id);
   assert.equal(
@@ -612,11 +612,11 @@ test("an unconfirmed exit stays unknown and is not retried automatically", async
   await h.session.init();
   h.emit("app-state", { ...idle, running: record.id, stopping: true });
   h.session.selectRun(record.id);
-  h.emit("app-state", { ...idle, runNote: "停止を確認できません" });
+  h.emit("app-state", { ...idle, runNote: "Could not confirm the stop" });
   h.pending.find((call) => call.command === "get_run")!.reply.resolve({ ...completed, record });
   await settle();
   assert.equal(h.view.detail?.record.exitCode, undefined);
-  assert.equal(h.view.state?.runNote, "停止を確認できません");
+  assert.equal(h.view.state?.runNote, "Could not confirm the stop");
   assert.equal(
     h.pending.some((call) => call.command === "start_run" || call.command === "refresh"),
     false,

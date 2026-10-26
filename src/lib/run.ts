@@ -37,7 +37,7 @@ export function sectionMessage(section: Section<unknown>): string {
     case "incomplete":
       return `incomplete — ${section.note}`;
     case "missing":
-      return "missing — 記録がありません";
+      return "missing — no record";
     case "parse_error":
       return `parse error — ${section.note}`;
     case "read_error":

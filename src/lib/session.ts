@@ -251,7 +251,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       const state = await transport.invoke<AppState>("get_state");
       if (revision === stateRevision) acceptState(state);
     } catch (error) {
-      update({ error: `接続できません: ${String(error)}` });
+      update({ error: `Could not connect: ${String(error)}` });
       dispose();
     }
   }
@@ -278,7 +278,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         if (workspace === view.state?.workspace && revision === stateRevision) {
           update({
             ready: false,
-            error: `実行は開始済みです。状態の取得に失敗しました。次の通知を待っています: ${String(error)}`,
+            error: `The run started, but getting its state failed; waiting for the next update: ${String(error)}`,
           });
         }
       }
@@ -311,7 +311,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.state?.running ||
       view.state?.ingest === "running"
     ) {
-      throw new Error("Bazel の処理が終わってから workspace を変更してください");
+      throw new Error(
+        "Wait for the current Bazel operation to finish before changing the workspace",
+      );
     }
     update({ opening: true });
     const revision = stateRevision;

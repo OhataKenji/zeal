@@ -22,7 +22,7 @@
 
 <div class="qo" id={LIST_ID} role="listbox">
   {#if matches.length === 0}
-    <div class="match dim">一致する target はありません</div>
+    <div class="match dim">No matching targets</div>
   {:else}
     {#each matches as match, i (match.target.label)}
       <button

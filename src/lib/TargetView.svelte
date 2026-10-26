@@ -169,4 +169,4 @@
       )}
     </dd>
   </dl>
-{:else}<p class="dim">{label} は snapshot にありません</p>{/if}
+{:else}<p class="dim">{label} is not in the snapshot</p>{/if}
