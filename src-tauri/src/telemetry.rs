@@ -124,6 +124,7 @@ fn trace_endpoint(base: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(debug_assertions)]
     use std::thread;
 
     #[test]
@@ -247,6 +248,10 @@ mod tests {
                 "--ignored",
             ])
             .env("ZEAL_OTLP_ENDPOINT", endpoint)
+            // Keep all probe spans in one explicit flush, regardless of the caller's settings.
+            .env("OTEL_BSP_MAX_QUEUE_SIZE", "32")
+            .env("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "32")
+            .env("OTEL_BSP_SCHEDULE_DELAY", "60000")
             .env_remove("OTEL_EXPORTER_OTLP_HEADERS")
             .env_remove("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
             .env(
