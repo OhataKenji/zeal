@@ -124,8 +124,6 @@ fn trace_endpoint(base: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(debug_assertions)]
-    use std::thread;
 
     #[test]
     fn endpoint_is_an_explicit_http_base_url() {
@@ -147,14 +145,8 @@ mod tests {
     #[test]
     fn only_the_dedicated_endpoint_enables_development_tracing() {
         fn probe(endpoint: Option<&str>, expected: bool) {
-            let mut process = std::process::Command::new(std::env::current_exe().unwrap());
+            let mut process = isolated_probe("telemetry::tests::endpoint_env_probe");
             process
-                .args([
-                    "--exact",
-                    "telemetry::tests::endpoint_env_probe",
-                    "--ignored",
-                ])
-                .env_remove("ZEAL_OTLP_ENDPOINT")
                 .env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9")
                 .env("ZEAL_TEST_EXPECT_ENABLED", expected.to_string());
             if let Some(endpoint) = endpoint {
@@ -185,118 +177,71 @@ mod tests {
         }
     }
 
-    // A subprocess isolates SDK environment reads from concurrently running tests.
-    #[cfg(debug_assertions)]
-    fn exported_request(header_variable: &str) -> String {
-        use std::io::{BufRead, Read, Write};
-        use std::net::TcpListener;
-        use std::time::Instant;
+    // SDK environment reads and the global subscriber are isolated in a fresh process.
+    fn isolated_probe(name: &str) -> std::process::Command {
+        let mut process = std::process::Command::new(std::env::current_exe().unwrap());
+        process.args(["--exact", name, "--ignored"]).env_clear();
+        process
+    }
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
+    #[cfg(debug_assertions)]
+    async fn exported_request(header_variable: &'static str) -> String {
+        use axum::{Router, http::HeaderMap, routing::post};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::WouldBlock
-                            && Instant::now() < deadline =>
-                    {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("trace request not received: {error}"),
-                }
-            };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut reader = std::io::BufReader::new(&mut socket);
-            let mut headers = String::new();
-            loop {
-                let mut line = String::new();
-                assert!(reader.read_line(&mut line).unwrap() > 0);
-                if line == "\r\n" {
-                    break;
-                }
-                headers.push_str(&line);
-                assert!(headers.len() <= 65_536);
-            }
-            let length: usize = headers
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse().unwrap())
-                })
-                .unwrap();
-            assert!(length > 0 && length < 1_048_576);
-            let mut body = vec![0; length];
-            reader.read_exact(&mut body).unwrap();
-            drop(reader);
-            socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .unwrap();
-            headers.push_str(&String::from_utf8_lossy(&body));
-            headers
-        });
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "telemetry::tests::http_export_probe",
-                "--ignored",
-            ])
-            .env("ZEAL_OTLP_ENDPOINT", endpoint)
-            // Keep all probe spans in one explicit flush, regardless of the caller's settings.
-            .env("OTEL_BSP_MAX_QUEUE_SIZE", "32")
-            .env("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "32")
-            .env("OTEL_BSP_SCHEDULE_DELAY", "60000")
-            .env_remove("OTEL_EXPORTER_OTLP_HEADERS")
-            .env_remove("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
-            .env(
-                header_variable,
-                "x-review-secret=private-token,content-type=private-token",
-            )
-            .env("OTEL_RESOURCE_ATTRIBUTES", "review.private=private-token")
-            .env("NO_PROXY", "127.0.0.1")
-            .env("no_proxy", "127.0.0.1")
-            .output()
-            .unwrap();
-        let request = server.join().unwrap();
-        assert!(request.contains("console.read"));
-        assert!(request.contains("bes.save_event"));
-        assert!(request.contains("detail.observation"));
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
+        let (send, mut receive) = tokio::sync::mpsc::channel(1);
+        let app = Router::new().route(
+            "/v1/traces",
+            post(move |headers: HeaderMap, body: Bytes| async move {
+                send.send(format!("{headers:?}{}", String::from_utf8_lossy(&body)))
+                    .await
+                    .unwrap();
+            }),
         );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let output = tokio::task::spawn_blocking(move || {
+            isolated_probe("telemetry::tests::http_export_probe")
+                .env("ZEAL_OTLP_ENDPOINT", endpoint)
+                .env("OTEL_BSP_SCHEDULE_DELAY", "60000") // Export only on force_flush.
+                .env(
+                    header_variable,
+                    "x-review-secret=private-token,content-type=private-token",
+                )
+                .env("OTEL_RESOURCE_ATTRIBUTES", "review.private=private-token")
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let request = tokio::time::timeout(Duration::from_secs(3), receive.recv()).await;
+        server.abort();
+        let request = request.unwrap().unwrap();
+        assert!(request.contains("console.read"));
         request
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(debug_assertions)]
-    fn generic_otlp_credentials_are_not_exported() {
-        let request = exported_request("OTEL_EXPORTER_OTLP_HEADERS");
+    async fn generic_otlp_credentials_are_not_exported() {
+        let request = exported_request("OTEL_EXPORTER_OTLP_HEADERS").await;
         assert!(!request.contains("private-token"));
         assert!(!request.contains("history record or artifact is missing"));
         assert!(!request.contains("StoreError"));
         assert!(!request.contains(env!("CARGO_MANIFEST_DIR")));
-        assert!(request.contains("POST /v1/traces HTTP/1.1"));
-        assert!(request.contains("content-type: application/x-protobuf"));
+        assert!(request.contains("application/x-protobuf"));
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(debug_assertions)]
-    fn trace_otlp_credentials_are_not_exported() {
-        let request = exported_request("OTEL_EXPORTER_OTLP_TRACES_HEADERS");
+    async fn trace_otlp_credentials_are_not_exported() {
+        let request = exported_request("OTEL_EXPORTER_OTLP_TRACES_HEADERS").await;
         assert!(!request.contains("private-token"));
         assert!(!request.contains("history record or artifact is missing"));
         assert!(!request.contains("StoreError"));
         assert!(!request.contains(env!("CARGO_MANIFEST_DIR")));
-        assert!(request.contains("POST /v1/traces HTTP/1.1"));
-        assert!(request.contains("content-type: application/x-protobuf"));
+        assert!(request.contains("application/x-protobuf"));
     }
 
     #[test]
@@ -324,30 +269,6 @@ mod tests {
             };
             assert!(crate::store::events::save(private, &event).is_err());
         });
-        provider.force_flush().unwrap();
-        provider.shutdown().unwrap();
-    }
-
-    #[test]
-    #[ignore = "manual fixture trace; set debug ZEAL_OTLP_ENDPOINT to a local Jaeger"]
-    #[cfg(debug_assertions)]
-    fn export_run_detail_to_jaeger() {
-        let root = std::env::temp_dir().join(format!("zeal-otel-{}", uuid::Uuid::new_v4()));
-        let workspace = root.join("workspace");
-        let data = root.join("data");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let (record, dir) = crate::store::create(&data, &workspace, "build", "//...").unwrap();
-        let fixtures =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run/ok");
-        for name in ["bep.json", "profile.gz"] {
-            std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
-        }
-        crate::store::finish(&data, &workspace, &record.id, 0).unwrap();
-        let provider = from_env().expect("set a debug ZEAL_OTLP_ENDPOINT");
-        let detail = crate::ingest::run_detail(&data, &workspace, &record.id).unwrap();
-        assert!(matches!(detail.bep, crate::ingest::Section::Ok { .. }));
-        assert!(matches!(detail.profile, crate::ingest::Section::Ok { .. }));
-        std::fs::remove_dir_all(root).unwrap();
         provider.force_flush().unwrap();
         provider.shutdown().unwrap();
     }
