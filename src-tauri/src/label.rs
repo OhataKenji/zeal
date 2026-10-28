@@ -6,6 +6,7 @@
 /// most stable form to compare and display) and `@@//` to `//`.
 /// `//pkg` expands to `//pkg:<last segment>`; likewise `@repo//pkg`.
 /// Anything else is returned unchanged.
+#[must_use]
 pub fn canonical(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix("@@") {
         return match rest.split_once("//") {
@@ -46,47 +47,65 @@ fn last_segment(p: &str) -> &str {
     p.rsplit('/').next().unwrap_or(p)
 }
 
-/// Split a label into (package, name). For `@repo//p:n` the package is `p`
+/// The package and target name extracted from a label.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LabelParts {
+    pub package: String,
+    pub name: String,
+}
+
+/// Split a label into its package and name. For `@repo//p:n` the package is `p`
 /// (the repo part is dropped; the tree only spans the main repository).
-pub fn split(label: &str) -> (String, String) {
+#[must_use]
+pub fn split(label: &str) -> LabelParts {
     let rest = match label.find("//") {
         Some(i) => &label[i + 2..],
         None => label,
     };
     match rest.split_once(':') {
-        Some((p, n)) => (p.to_string(), n.to_string()),
-        None => (rest.to_string(), last_segment(rest).to_string()),
+        Some((p, n)) => LabelParts {
+            package: p.to_string(),
+            name: n.to_string(),
+        },
+        None => LabelParts {
+            package: rest.to_string(),
+            name: last_segment(rest).to_string(),
+        },
     }
 }
 
 /// Workspace-relative path of a file label: `//pkg:name` -> `pkg/name`.
+#[must_use]
 pub fn label_to_path(label: &str) -> String {
-    let (pkg, name) = split(label);
-    if pkg.is_empty() {
+    let LabelParts { package, name } = split(label);
+    if package.is_empty() {
         name
     } else {
-        format!("{pkg}/{name}")
+        format!("{package}/{name}")
     }
 }
 
 /// Whether the label points into an external repository (`@repo//...`).
+#[must_use]
 pub fn is_external(label: &str) -> bool {
     label.starts_with('@')
 }
 
 /// Whether the label looks like a `select()` branch key
 /// (`//conditions:default`, `//tools/conditions:arm` etc.).
+#[must_use]
 pub fn is_select_key(label: &str) -> bool {
     if is_external(label) {
         return false;
     }
-    let (pkg, _) = split(label);
-    pkg == "conditions" || pkg.ends_with("/conditions")
+    let parts = split(label);
+    parts.package == "conditions" || parts.package.ends_with("/conditions")
 }
 
 /// Whether a label-valued attribute expresses a dependency edge.
 /// `visibility` is access control and names starting with `$` or `:` are
 /// implicit (late-bound) attributes; neither is a dependency.
+#[must_use]
 pub fn is_dep_attr(attr: &str) -> bool {
     !attr.is_empty() && !attr.starts_with('$') && !attr.starts_with(':') && attr != "visibility"
 }
@@ -111,10 +130,25 @@ mod tests {
     fn splits_labels() {
         assert_eq!(
             split("//app/lib:parser"),
-            ("app/lib".into(), "parser".into())
+            LabelParts {
+                package: "app/lib".into(),
+                name: "parser".into(),
+            }
         );
-        assert_eq!(split("//:root"), ("".into(), "root".into()));
-        assert_eq!(split("@maven//:guava"), ("".into(), "guava".into()));
+        assert_eq!(
+            split("//:root"),
+            LabelParts {
+                package: "".into(),
+                name: "root".into(),
+            }
+        );
+        assert_eq!(
+            split("@maven//:guava"),
+            LabelParts {
+                package: "".into(),
+                name: "guava".into(),
+            }
+        );
     }
 
     #[test]

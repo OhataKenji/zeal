@@ -1,8 +1,13 @@
 //! The app-owned, loopback-only Build Event Service. It never owns child
 //! processes. Each stream acknowledges only committed events.
-use crate::{protocol::bes as wire, store};
-use std::{path::PathBuf, pin::Pin, sync::Arc, time::Duration};
-use tokio_stream::{Stream, wrappers::ReceiverStream};
+use crate::protocol::bes as wire;
+use crate::store;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServer};
 
@@ -156,13 +161,12 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{protocol::bep, store::events};
+    use crate::protocol::bep;
+    use crate::store::events;
     use prost::Message;
-    use std::{
-        fs,
-        io::Write,
-        process::{Command, Stdio},
-    };
+    use std::fs;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
 
     struct Temp(PathBuf);
     impl Temp {

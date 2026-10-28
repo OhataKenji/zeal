@@ -4,7 +4,9 @@
 //! contribute to the existing display model. The source file remains intact,
 //! including fields this projection does not know about.
 
-use crate::protocol::bep::{BuildEvent, build_event::Payload, build_event_id::Id};
+use crate::protocol::bep::BuildEvent;
+use crate::protocol::bep::build_event::Payload;
+use crate::protocol::bep::build_event_id::Id;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -152,11 +154,11 @@ fn project(event: BuildEvent, bep: &mut Bep) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::bep::{
-        Aborted, BuildEventId, TargetComplete, TestSummary,
-        build_event::Payload,
-        build_event_id::{Id, TargetCompletedId, TargetConfiguredId, TestSummaryId},
+    use crate::protocol::bep::build_event::Payload;
+    use crate::protocol::bep::build_event_id::{
+        Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
     };
+    use crate::protocol::bep::{Aborted, BuildEventId, TargetComplete, TestSummary};
     use prost::Message;
 
     fn event(event: BuildEvent) -> Vec<u8> {

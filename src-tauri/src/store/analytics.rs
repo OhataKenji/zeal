@@ -1,7 +1,7 @@
 //! Read-only projections of completed GUI runs. Artifacts and live runner state
 //! never participate in counting or filtering.
-use super::{ErrorKind, Store, StoreError, fail};
-use rusqlite::{Connection, OptionalExtension, named_params, params};
+use super::{ErrorKind, Store, StoreError};
+use rusqlite::{Connection, named_params, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -72,12 +72,12 @@ fn valid_day(conn: &Connection, day: &str) -> Result<(), StoreError> {
             }
         })
     {
-        return Err(fail(ErrorKind::Invalid));
+        return Err(super::fail(ErrorKind::Invalid));
     }
     let normalized: Option<String> =
         conn.query_row("SELECT date(?1,'+0 days')", [day], |r| r.get(0))?;
     if normalized.as_deref() != Some(day) {
-        return Err(fail(ErrorKind::Invalid));
+        return Err(super::fail(ErrorKind::Invalid));
     }
     Ok(())
 }
@@ -93,16 +93,21 @@ fn bounds(conn: &Connection, start: &str, end: &str) -> Result<(i64, i64), Store
         params![start, end],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    start.zip(end).ok_or_else(|| fail(ErrorKind::Invalid))
+    start
+        .zip(end)
+        .ok_or_else(|| super::fail(ErrorKind::Invalid))
 }
 
 /// POSIX timezone state is refreshed when opening a workspace. No TZ env or
 /// process-global environment mutation is needed by the app.
 pub fn refresh_timezone() {
+    // SAFETY: this declaration matches POSIX libc's argument-free `tzset`.
     unsafe extern "C" {
         fn tzset();
     }
     // SAFETY: tzset takes no arguments and initializes libc's timezone tables.
+    // SQLite's localtime conversion reads this libc state; Rust has no safe API
+    // for refreshing it after the platform timezone configuration changes.
     unsafe {
         tzset();
     }
@@ -110,6 +115,8 @@ pub fn refresh_timezone() {
 
 #[tracing::instrument(target = "zeal::operations", name = "analytics.query", skip_all)]
 pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, StoreError> {
+    use rusqlite::OptionalExtension;
+
     let ws = ws.canonicalize()?;
     let mut store = Store::open(data)?;
     let tx = store.conn.transaction()?;
@@ -140,7 +147,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         // side (runner::validate_target) imposes no cap of its own.
         || filter.target.as_deref().is_some_and(|s| s.len() > 64 * 1024)
     {
-        return Err(fail(ErrorKind::Invalid));
+        return Err(super::fail(ErrorKind::Invalid));
     }
     let (from, until) = bounds(&tx, &start, &end)?;
     let ws_id: Option<String> = tx
@@ -209,7 +216,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             }
             let i = days
                 .binary_search_by(|d| d.day.cmp(&day))
-                .map_err(|_| fail(ErrorKind::Invalid))?;
+                .map_err(|_| super::fail(ErrorKind::Invalid))?;
             let slot = &mut days[i];
             slot.count += 1;
             match exit_code {
@@ -273,7 +280,10 @@ fn percentile(sorted: &[i64], p: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf, process::Command, time::Instant};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::time::Instant;
     fn total(result: &Analytics) -> i64 {
         result.days.iter().map(|day| day.count).sum()
     }
