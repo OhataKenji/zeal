@@ -3,6 +3,7 @@
 use super::{ErrorKind, RunRecord, Store, StoreError, fail};
 use crate::bep::{Bep, TargetResult, TestResult};
 use crate::protocol::{bep, bes};
+use bep::{build_event::Payload, build_event_id::Id};
 use prost::Message;
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -51,53 +52,54 @@ impl Observation {
     }
 
     /// Pure projection. The saved event bytes retain fields not shown by this UI.
+    #[allow(deprecated)] // Fall back to legacy millisecond timestamps when needed.
     fn apply(&mut self, event: &bep::BuildEvent) {
-        if let Some(started) = &event.started {
+        if let Some(Payload::Started(started)) = &event.payload {
             self.workspace = started.workspace_directory.clone();
             self.cmd = started.command.clone();
             self.started_at = millis(started.start_time.as_ref(), started.start_time_millis);
             self.target = event
                 .children
                 .iter()
-                .filter_map(|id| id.pattern.as_ref())
-                .flat_map(|pattern| pattern.pattern.iter().cloned())
+                .filter_map(|id| id.id.as_ref())
+                .filter_map(|id| match id {
+                    Id::Pattern(pattern) | Id::PatternSkipped(pattern) => Some(&pattern.pattern),
+                    _ => None,
+                })
+                .flat_map(|patterns| patterns.iter().cloned())
                 .collect::<Vec<_>>()
                 .join(" ");
         }
-        if let Some(progress) = &event.progress {
+        if let Some(Payload::Progress(progress)) = &event.payload {
             self.log.push_str(&progress.stderr);
             self.log.push_str(&progress.stdout);
             trim_log(&mut self.log);
         }
-        if let Some(id) = &event.id {
-            let target = id
-                .target_completed
-                .as_ref()
-                .zip(event.completed.as_ref())
-                .map(|(id, result)| TargetResult {
+        match (
+            event.id.as_ref().and_then(|id| id.id.as_ref()),
+            event.payload.as_ref(),
+        ) {
+            (Some(Id::TargetCompleted(id)), Some(Payload::Completed(result))) => {
+                self.bep.targets.push(TargetResult {
                     label: id.label.clone(),
                     ok: result.success,
-                })
-                .or_else(|| {
-                    id.target_configured
-                        .as_ref()
-                        .filter(|_| event.aborted.is_some())
-                        .map(|id| TargetResult {
-                            label: id.label.clone(),
-                            ok: false,
-                        })
                 });
-            if let Some(target) = target {
-                self.bep.targets.push(target);
             }
-            if let Some((id, summary)) = id.test_summary.as_ref().zip(event.test_summary.as_ref()) {
+            (Some(Id::TargetConfigured(id)), Some(Payload::Aborted(_))) => {
+                self.bep.targets.push(TargetResult {
+                    label: id.label.clone(),
+                    ok: false,
+                });
+            }
+            (Some(Id::TestSummary(id)), Some(Payload::TestSummary(summary))) => {
                 self.bep.tests.push(TestResult {
                     label: id.label.clone(),
                     status: crate::bep::test_status(summary.overall_status).to_string(),
                 });
             }
+            _ => {}
         }
-        if let Some(finished) = &event.finished {
+        if let Some(Payload::Finished(finished)) = &event.payload {
             self.finished_at = Some(millis(
                 finished.finish_time.as_ref(),
                 finished.finish_time_millis,
@@ -211,7 +213,7 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
         ],
     )?;
     if let Some(mut event) = event {
-        if let Some(started) = &mut event.started {
+        if let Some(Payload::Started(started)) = &mut event.payload {
             if started.uuid != stream.invocation_id {
                 return Err(fail(ErrorKind::Conflict));
             }
@@ -240,7 +242,10 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
                 id: stream.invocation_id.clone(),
                 ..Observation::default()
             });
-        if observation.complete || (!observation.workspace.is_empty() && event.started.is_some()) {
+        if observation.complete
+            || (!observation.workspace.is_empty()
+                && matches!(event.payload.as_ref(), Some(Payload::Started(_))))
+        {
             return Err(fail(ErrorKind::Conflict));
         }
         // Bazel may publish progress before BuildStarted. Keep those events;
@@ -303,9 +308,22 @@ pub(super) fn list(store: &Store, ws: &Path) -> Result<Vec<RunRecord>, StoreErro
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
+    use bep::{
+        build_event::Payload,
+        build_event_id::{Id, PatternExpandedId, TargetCompletedId},
+        build_finished::ExitCode,
+    };
     use std::{fs, path::PathBuf};
+
+    fn payload(payload: Payload) -> bep::BuildEvent {
+        bep::BuildEvent {
+            payload: Some(payload),
+            ..Default::default()
+        }
+    }
 
     struct Fixture {
         root: PathBuf,
@@ -346,18 +364,17 @@ mod tests {
             self.event(
                 1,
                 bep::BuildEvent {
-                    started: Some(bep::BuildStarted {
+                    payload: Some(Payload::Started(bep::BuildStarted {
                         uuid: self.id.clone(),
                         command: "run".into(),
                         workspace_directory: self.ws.to_string_lossy().into_owned(),
                         start_time_millis: 123,
                         ..Default::default()
-                    }),
+                    })),
                     children: vec![bep::BuildEventId {
-                        pattern: Some(bep::Pattern {
+                        id: Some(Id::Pattern(PatternExpandedId {
                             pattern: vec!["//:double".into()],
-                        }),
-                        ..Default::default()
+                        })),
                     }],
                     ..Default::default()
                 },
@@ -375,13 +392,10 @@ mod tests {
         let f = Fixture::new();
         let progress = f.event(
             1,
-            bep::BuildEvent {
-                progress: Some(bep::Progress {
-                    stdout: "early output".into(),
-                    ..Default::default()
-                }),
+            payload(Payload::Progress(bep::Progress {
+                stdout: "early output".into(),
                 ..Default::default()
-            },
+            })),
         );
         save(&f.data, &progress).unwrap();
         assert!(get(&f.data, &f.ws, &f.id).unwrap().is_none());
@@ -400,17 +414,17 @@ mod tests {
     fn another_component_or_build_cannot_replace_a_completed_invocation() {
         let f = Fixture::new();
         save(&f.data, &f.start()).unwrap();
-        let finished = f.event(
-            2,
-            bep::BuildEvent {
-                finished: Some(bep::BuildFinished {
-                    exit_code: Some(bep::ExitCode { code: 1 }),
+        let finished = f.event(2, {
+            let mut event = payload(Payload::Finished(bep::BuildFinished {
+                exit_code: Some(ExitCode {
+                    code: 1,
                     ..Default::default()
                 }),
-                last_message: true,
                 ..Default::default()
-            },
-        );
+            }));
+            event.last_message = true;
+            event
+        });
         save(&f.data, &finished).unwrap();
         let mut forged = finished.clone();
         forged.sequence_number = 1;
@@ -441,12 +455,15 @@ mod tests {
         save(&f.data, &f.start()).unwrap();
         let target = bep::BuildEvent {
             id: Some(bep::BuildEventId {
-                target_completed: Some(bep::Label {
+                id: Some(Id::TargetCompleted(TargetCompletedId {
                     label: "x".repeat(5 * 1024 * 1024),
-                }),
-                ..Default::default()
+                    ..Default::default()
+                })),
             }),
-            completed: Some(bep::TargetComplete { success: true }),
+            payload: Some(Payload::Completed(bep::TargetComplete {
+                success: true,
+                ..Default::default()
+            })),
             ..Default::default()
         };
         save(&f.data, &f.event(2, target.clone())).unwrap();
@@ -472,13 +489,10 @@ mod tests {
         save(&f.data, &f.start()).unwrap();
         let progress = f.event(
             2,
-            bep::BuildEvent {
-                progress: Some(bep::Progress {
-                    stdout: "hello\n".into(),
-                    stderr: String::new(),
-                }),
-                ..Default::default()
-            },
+            payload(Payload::Progress(bep::Progress {
+                stdout: "hello\n".into(),
+                stderr: String::new(),
+            })),
         );
         save(&f.data, &progress).unwrap();
         save(&f.data, &progress).unwrap();
@@ -489,13 +503,7 @@ mod tests {
         // BuildFinished can precede final test/target results: publish only at last_message.
         save(
             &f.data,
-            &f.event(
-                3,
-                bep::BuildEvent {
-                    finished: Some(bep::BuildFinished::default()),
-                    ..Default::default()
-                },
-            ),
+            &f.event(3, payload(Payload::Finished(bep::BuildFinished::default()))),
         )
         .unwrap();
         assert!(super::super::list(&f.data, &f.ws).unwrap().is_empty());
@@ -536,18 +544,18 @@ mod tests {
         save(&f.data, &f.start()).unwrap();
         save(
             &f.data,
-            &f.event(
-                2,
-                bep::BuildEvent {
-                    finished: Some(bep::BuildFinished {
-                        exit_code: Some(bep::ExitCode { code: 0 }),
-                        finish_time_millis: 456,
+            &f.event(2, {
+                let mut event = payload(Payload::Finished(bep::BuildFinished {
+                    exit_code: Some(ExitCode {
+                        code: 0,
                         ..Default::default()
                     }),
-                    last_message: true,
+                    finish_time_millis: 456,
                     ..Default::default()
-                },
-            ),
+                }));
+                event.last_message = true;
+                event
+            }),
         )
         .unwrap();
         assert_eq!(

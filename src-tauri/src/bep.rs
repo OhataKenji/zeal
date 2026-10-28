@@ -4,7 +4,7 @@
 //! contribute to the existing display model. The source file remains intact,
 //! including fields this projection does not know about.
 
-use crate::protocol::bep::BuildEvent;
+use crate::protocol::bep::{BuildEvent, build_event::Payload, build_event_id::Id};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -104,33 +104,40 @@ pub(crate) fn test_status(status: i32) -> &'static str {
 }
 
 fn project(event: BuildEvent, bep: &mut Bep) {
-    let Some(id) = event.id else { return };
-    if let Some(label) = id.target_completed {
-        bep.targets.push(TargetResult {
-            label: label.label,
-            ok: event.completed.is_some_and(|result| result.success),
-        });
-    } else if let Some(label) = id.target_configured {
-        if event.aborted.is_some() {
+    let Some(id) = event.id.and_then(|id| id.id) else {
+        return;
+    };
+    match (id, event.payload) {
+        (Id::TargetCompleted(id), Some(Payload::Completed(result))) => {
             bep.targets.push(TargetResult {
-                label: label.label,
+                label: id.label,
+                ok: result.success,
+            });
+        }
+        (Id::TargetConfigured(id), Some(Payload::Aborted(_))) => {
+            bep.targets.push(TargetResult {
+                label: id.label,
                 ok: false,
             });
         }
-    } else if let Some(label) = id.test_summary
-        && let Some(summary) = event.test_summary
-    {
-        bep.tests.push(TestResult {
-            label: label.label,
-            status: test_status(summary.overall_status).to_string(),
-        });
+        (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
+            bep.tests.push(TestResult {
+                label: id.label,
+                status: test_status(summary.overall_status).to_string(),
+            });
+        }
+        _ => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::bep::{Aborted, BuildEventId, Label, TargetComplete, TestSummary};
+    use crate::protocol::bep::{
+        Aborted, BuildEventId, TargetComplete, TestSummary,
+        build_event::Payload,
+        build_event_id::{Id, TargetCompletedId, TargetConfiguredId, TestSummaryId},
+    };
     use prost::Message;
 
     fn event(event: BuildEvent) -> Vec<u8> {
@@ -150,12 +157,15 @@ mod tests {
     fn target(label: &str, success: bool) -> BuildEvent {
         BuildEvent {
             id: Some(BuildEventId {
-                target_completed: Some(Label {
+                id: Some(Id::TargetCompleted(TargetCompletedId {
                     label: label.into(),
-                }),
-                ..Default::default()
+                    ..Default::default()
+                })),
             }),
-            completed: Some(TargetComplete { success }),
+            payload: Some(Payload::Completed(TargetComplete {
+                success,
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
@@ -166,12 +176,15 @@ mod tests {
         stream.extend(event(target("//pkg:bad", false)));
         stream.extend(event(BuildEvent {
             id: Some(BuildEventId {
-                test_summary: Some(Label {
+                id: Some(Id::TestSummary(TestSummaryId {
                     label: "//pkg:test".into(),
-                }),
-                ..Default::default()
+                    ..Default::default()
+                })),
             }),
-            test_summary: Some(TestSummary { overall_status: 4 }),
+            payload: Some(Payload::TestSummary(TestSummary {
+                overall_status: 4,
+                ..Default::default()
+            })),
             ..Default::default()
         }));
         let parsed = parse(stream.as_slice());
@@ -270,12 +283,12 @@ mod tests {
         let parsed = parse(
             event(BuildEvent {
                 id: Some(BuildEventId {
-                    target_configured: Some(Label {
+                    id: Some(Id::TargetConfigured(TargetConfiguredId {
                         label: "//dep:x".into(),
-                    }),
-                    ..Default::default()
+                        ..Default::default()
+                    })),
                 }),
-                aborted: Some(Aborted::default()),
+                payload: Some(Payload::Aborted(Aborted::default())),
                 ..Default::default()
             })
             .as_slice(),
