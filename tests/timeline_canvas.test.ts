@@ -17,21 +17,21 @@ const THEME: TimelineTheme = {
 // This boundary supports only the canvas operations the renderer uses. Unknown
 // methods fail instead of silently succeeding, as they would with a Proxy.
 function recordingCanvas() {
-  const outlines: Array<Array<number>> = [];
-  const fills: Array<{ bounds: number[]; clips: Array<Array<number>> }> = [];
-  const strokedLines: Array<Array<number>> = [];
+  const outlines: number[][] = [];
+  const fills: Array<{ bounds: number[]; clips: number[][] }> = [];
+  const strokedLines: number[][] = [];
   const strokes: Array<{
-    lines: Array<Array<number>>;
-    clips: Array<Array<number>>;
+    lines: number[][];
+    clips: number[][];
   }> = [];
-  let path: Array<Array<number>> = [];
+  let path: number[][] = [];
   let rectangle: number[] | undefined;
-  let clips: Array<Array<number>> = [];
-  const savedClips: Array<Array<Array<number>>> = [];
+  let clips: number[][] = [];
+  const savedClips: number[][][] = [];
   const strokedArcs: Array<{ x: number; y: number; radius: number }> = [];
   const filledArcs: typeof strokedArcs = [];
   let pathArcs: typeof strokedArcs = [];
-  const lines: Array<Array<number>> = [];
+  const lines: number[][] = [];
   let position = [0, 0];
   const canvas = {
     fillStyle: "",
