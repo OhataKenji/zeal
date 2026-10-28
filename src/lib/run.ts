@@ -1,10 +1,12 @@
 import type { RunRecord, Section } from "./types.ts";
 
-export type RunStatus = {
+/** Display status and label for one run record. */
+export interface RunStatus {
   kind: "succeeded" | "failed" | "running" | "stopping" | "unknown";
   label: string;
-};
+}
 
+/** Resolves a run's result while preserving an unknown state for partial data. */
 export function runStatus(
   record: RunRecord | undefined,
   running: string | null,
@@ -26,10 +28,12 @@ export function runStatus(
   return { kind: "unknown", label: "? outcome unknown" };
 }
 
+/** Returns section data for successful or incomplete reads. */
 export function sectionData<T>(section: Section<T> | undefined): T | null {
   return section && "data" in section ? section.data : null;
 }
 
+/** Summarizes the status of a run detail section. */
 export function sectionMessage(section: Section<unknown>): string {
   switch (section.status) {
     case "ok":

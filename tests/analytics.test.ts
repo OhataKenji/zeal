@@ -34,7 +34,7 @@ function harness() {
     },
   };
 }
-const result: DailyAnalytics = {
+const RESULT: DailyAnalytics = {
   filter: { start: "2026-03-01", end: "2026-03-30", cmd: null, outcome: null, target: null },
   today: "2026-03-30",
   days: [
@@ -52,42 +52,44 @@ const result: DailyAnalytics = {
   ],
   targets: [],
 };
-const day = (count: number, extra: Partial<DailyAnalytics["days"][number]> = {}) => ({
-  day: "2026-03-30",
-  count,
-  timed: count,
-  ok: count,
-  failed: 0,
-  interrupted: 0,
-  totalMs: 0,
-  p50Ms: 0,
-  p95Ms: 0,
-  ...extra,
-});
+function day(count: number, extra: Partial<DailyAnalytics["days"][number]> = {}) {
+  return {
+    day: "2026-03-30",
+    count,
+    timed: count,
+    ok: count,
+    failed: 0,
+    interrupted: 0,
+    totalMs: 0,
+    p50Ms: 0,
+    p95Ms: 0,
+    ...extra,
+  };
+}
 test("default request uses core calendar and refresh retains all filters", async () => {
   const h = harness();
   const initial = h.model.load();
   assert.deepEqual(h.calls[0].args, {
     filter: { start: null, end: null, cmd: null, outcome: null, target: null },
   });
-  h.calls[0].resolve(result);
+  h.calls[0].resolve(RESULT);
   await initial;
   const filter = { ...h.view.filter, cmd: "test" as const, outcome: "failed" as const };
   const changed = h.model.load(filter);
   assert.deepEqual(h.calls[1].args, { filter });
-  h.calls[1].resolve({ ...result, filter });
+  h.calls[1].resolve({ ...RESULT, filter });
   await changed;
   const refreshed = h.model.load();
   assert.deepEqual(h.calls[2].args, { filter });
-  h.calls[2].resolve({ ...result, filter });
+  h.calls[2].resolve({ ...RESULT, filter });
   await refreshed;
   assert.deepEqual(h.view.filter, filter);
 });
 test("late filters, errors and disposed workspace requests cannot replace the latest view", async () => {
   const h = harness();
   const old = h.model.load();
-  const latest = h.model.load({ ...result.filter, cmd: "test" });
-  h.calls[1].resolve({ ...result, days: [day(9)] });
+  const latest = h.model.load({ ...RESULT.filter, cmd: "test" });
+  h.calls[1].resolve({ ...RESULT, days: [day(9)] });
   await latest;
   h.calls[0].reject(new Error("stale failure"));
   await old;
@@ -95,7 +97,7 @@ test("late filters, errors and disposed workspace requests cannot replace the la
   assert.equal(h.view.error, null);
   const disposed = h.model.load();
   h.model.dispose();
-  h.calls[2].resolve(result);
+  h.calls[2].resolve(RESULT);
   await disposed;
   // The disposed response never lands; the last applied data stays put.
   assert.equal(h.view.data?.days[0].count, 9);
@@ -103,15 +105,15 @@ test("late filters, errors and disposed workspace requests cannot replace the la
 test("reloading keeps the previous charts until the response lands", async () => {
   const h = harness();
   const initial = h.model.load();
-  h.calls[0].resolve(result);
+  h.calls[0].resolve(RESULT);
   await initial;
-  const reloading = h.model.load({ ...result.filter, cmd: "test" });
+  const reloading = h.model.load({ ...RESULT.filter, cmd: "test" });
   assert.equal(h.view.loading, true);
   assert.equal(h.view.data?.days[0].count, 2);
   h.calls[1].reject(new Error("database busy"));
   await reloading;
   assert.equal(h.view.data, null);
-  assert.match(h.view.error!, /busy/);
+  assert.match(h.view.error ?? "", /busy/);
 });
 test("fmtMs carries rounded seconds into the larger unit", () => {
   assert.equal(fmtMs(999), "999ms");
@@ -127,14 +129,14 @@ test("segments splits a series at days without durations", () => {
 });
 test("errors remove stale data and retry preserves requested conditions", async () => {
   const h = harness();
-  const failed = h.model.load(result.filter);
+  const failed = h.model.load(RESULT.filter);
   h.calls[0].reject(new Error("database busy"));
   await failed;
-  assert.match(h.view.error!, /busy/);
+  assert.match(h.view.error ?? "", /busy/);
   assert.equal(h.view.loading, false);
   const retry = h.model.load();
   assert.deepEqual(h.calls[1].args, h.calls[0].args);
-  h.calls[1].resolve(result);
+  h.calls[1].resolve(RESULT);
   await retry;
   assert.equal(h.view.error, null);
   assert.equal(h.view.data?.days[0].count, 2);

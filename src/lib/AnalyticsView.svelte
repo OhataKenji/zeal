@@ -63,6 +63,7 @@
         value={view.filter.cmd ?? ""}
         onchange={(e) =>
           filter({
+            // The current target is this view's command selector.
             cmd: (e.currentTarget.value as AnalyticsFilter["cmd"]) || null,
           })}
       >
@@ -77,6 +78,7 @@
         value={view.filter.outcome ?? ""}
         onchange={(e) =>
           filter({
+            // The current target is this view's outcome selector.
             outcome:
               (e.currentTarget.value as AnalyticsFilter["outcome"]) || null,
           })}

@@ -5,6 +5,7 @@ import { createSession, emptyView } from "./session";
 // Raw profiles avoid deep proxying. The session replaces the view; timeline
 // geometry is derived separately from the original event fields.
 let view = $state.raw(emptyView());
+/** Reactive application state shared by the mounted Svelte views. */
 export const app = {
   get view() {
     return view;
@@ -27,8 +28,14 @@ function newSession() {
   );
 }
 
-export let session = newSession();
+let session = newSession();
 
+/** Returns the current IPC session used by application actions. */
+export function getSession() {
+  return session;
+}
+
+/** Replaces the session and starts event listening plus run-list refreshes. */
 export function connect() {
   session.dispose();
   view = emptyView();
@@ -42,9 +49,17 @@ export function connect() {
   };
 }
 
-export const openWorkspace = (path: string) => session.openWorkspace(path);
-export const refresh = () => session.refresh();
+/** Opens a workspace through the current session. */
+export function openWorkspace(path: string) {
+  return session.openWorkspace(path);
+}
 
+/** Requests a workspace refresh through the current session. */
+export function refresh() {
+  return session.refresh();
+}
+
+/** Opens a target location using the operating system's configured editor. */
 export function openLocation(path: string): Promise<void> {
   return invoke("open_location", { path });
 }

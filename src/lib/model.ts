@@ -1,5 +1,6 @@
 import type { FileEntry, Snapshot, Target } from "./types";
 
+/** Splits a Bazel label into package and target name. */
 export function splitLabel(label: string): { pkg: string; name: string } {
   const i = label.indexOf("//");
   const rest = i >= 0 ? label.slice(i + 2) : label;
@@ -7,18 +8,19 @@ export function splitLabel(label: string): { pkg: string; name: string } {
   return c >= 0 ? { pkg: rest.slice(0, c), name: rest.slice(c + 1) } : { pkg: rest, name: rest };
 }
 
-/** `:name` when the label is in `curPkg`, else the full label. */
+/** Uses `:name` for the current package and the full label elsewhere. */
 export function displayLabel(label: string, curPkg: string): string {
   if (!label.startsWith("//")) return label;
   const { pkg, name } = splitLabel(label);
   return pkg === curPkg ? `:${name}` : label;
 }
 
-/** A file path relative to `pkg` when it lives inside it. */
+/** Removes the package prefix when the file path lies inside that package. */
 export function displayPath(path: string, pkg: string): string {
   return pkg !== "" && path.startsWith(pkg + "/") ? path.slice(pkg.length + 1) : path;
 }
 
+/** Returns the final slash-delimited segment of a path. */
 export function basename(path: string): string {
   return path.split("/").pop() ?? path;
 }
@@ -29,6 +31,7 @@ export function basename(path: string): string {
 // The directory hierarchy of packages is the skeleton, with rules inside each
 // package. Files belong in the selected target's attributes, not in this tree.
 
+/** Directory node used to group targets by Bazel package. */
 export interface DirNode {
   path: string;
   name: string;
@@ -36,6 +39,7 @@ export interface DirNode {
   rules: Target[];
 }
 
+/** Builds the package tree from target package paths. */
 export function buildTree(snap: Snapshot): DirNode {
   const nodes = new Map<string, DirNode>();
   const mk = (path: string): DirNode => ({
@@ -56,7 +60,9 @@ export function buildTree(snap: Snapshot): DirNode {
     return n;
   };
 
-  for (const t of snap.targets) ensure(t.pkg).rules.push(t);
+  for (const target of snap.targets) {
+    ensure(target.pkg).rules.push(target);
+  }
 
   const sortNode = (n: DirNode): void => {
     n.dirs.sort((a, b) => a.name.localeCompare(b.name));
@@ -67,6 +73,7 @@ export function buildTree(snap: Snapshot): DirNode {
   return root;
 }
 
+/** A visible directory or target row in the package tree. */
 export interface Row {
   key: string;
   depth: number;
@@ -80,6 +87,7 @@ export interface Row {
   ruleClass?: string;
 }
 
+/** Flattens expanded directories into rows in display order. */
 export function flatten(root: DirNode, expanded: Set<string>): Row[] {
   const rows: Row[] = [];
   const walk = (n: DirNode, depth: number) => {
@@ -110,21 +118,27 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
   return rows;
 }
 
-/** All ancestor directory paths of a package (for expanding on selection). */
+/** Returns package ancestors from the root through the selected package. */
 export function ancestorsOf(pkg: string): string[] {
   if (pkg === "") return [];
   const parts = pkg.split("/");
-  return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
+  const ancestors: string[] = [];
+  for (let index = 0; index < parts.length; index++) {
+    ancestors.push(parts.slice(0, index + 1).join("/"));
+  }
+  return ancestors;
 }
 
 // ---------------------------------------------------------------------------
 // The four relationship lines
 
+/** Targets and files that depend on the selected target. */
 export interface UsedBy {
   label: string;
   attrs: string[];
 }
 
+/** Direct dependency, data, and reverse-usage relationships for a target. */
 export interface Relations {
   target: Target;
   deps: string[];
@@ -134,6 +148,7 @@ export interface Relations {
   outputs: FileEntry[];
 }
 
+/** Returns direct target relationships, or null if the label is unknown. */
 export function relations(snap: Snapshot, label: string): Relations | null {
   const target = snap.targets.find((t) => t.label === label);
   if (!target) return null;
@@ -143,8 +158,11 @@ export function relations(snap: Snapshot, label: string): Relations | null {
   const usedBy = new Map<string, Set<string>>();
   for (const e of snap.edges) {
     if (e.from === label) {
-      if (e.attr === "deps") deps.add(e.to);
-      else if (e.attr === "data") data.add(e.to);
+      if (e.attr === "deps") {
+        deps.add(e.to);
+      } else if (e.attr === "data") {
+        data.add(e.to);
+      }
     }
     if (e.to === label) {
       let attrs = usedBy.get(e.from);

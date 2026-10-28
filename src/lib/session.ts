@@ -1,11 +1,13 @@
 import { targetError } from "./target.ts";
 import type { AppState, Profile, RunCmd, RunDetail, RunRecord, Section } from "./types.ts";
 
+/** IPC boundary used by a session to call the core and subscribe to events. */
 export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen<T>(event: string, callback: (payload: T) => void): Promise<() => void>;
 }
 
+/** UI state for one workspace and its selected run. */
 export interface SessionView {
   console: RunRecord | null;
   consoleOpen: boolean;
@@ -26,6 +28,7 @@ export interface SessionView {
   profileError: string | null;
 }
 
+/** Creates the empty state shown before a workspace has loaded. */
 export function emptyView(): SessionView {
   return {
     console: null,
@@ -48,8 +51,10 @@ export function emptyView(): SessionView {
   };
 }
 
-// Manual input does not depend on a snapshot: after a failed ingestion the
-// composer stays usable once ingestion is idle.
+/**
+ * Returns whether manual target input can start now. A loaded snapshot is not
+ * required, so the composer remains usable after ingestion errors settle.
+ */
 export function canSend(view: SessionView, target: string): boolean {
   return !!(
     view.ready &&
@@ -63,13 +68,18 @@ export function canSend(view: SessionView, target: string): boolean {
   );
 }
 
-// Core owns stop and may release an unconfirmed run with an explicit note.
+/**
+ * Returns whether the core can stop an active run that is not already stopping.
+ * Core remains responsible for releasing an unconfirmed run with a note.
+ */
 export function canStop(view: SessionView): boolean {
   return !!(view.ready && view.state?.running && !view.state.stopping);
 }
 
-// One session owns request generations and subscriptions. Core remains the
-// owner of runs; this is only the current view.
+/**
+ * Creates a workspace session that rejects stale requests. Call `dispose()`
+ * to invalidate pending responses and remove its event subscription.
+ */
 export function createSession(transport: Transport, changed: (view: SessionView) => void) {
   let view = emptyView();
   let disposed = false;
@@ -106,8 +116,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       // `runs` keeps the live record: its row is the way back to the Console.
       const runs = await transport.invoke<RunRecord[]>("list_runs");
       if (generation === listGeneration) {
-        if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError)
+        if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
           update({ runs, runsError: null });
+        }
       }
     } catch (error) {
       if (generation === listGeneration) {
@@ -121,8 +132,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   async function loadDetail() {
     const id = view.selectedRun;
     // Saved observations are read after the active run ends.
-    if (!id || !view.ready || view.starting || view.detailLoading || id === view.state?.running)
+    if (!id || !view.ready || view.starting || view.detailLoading || id === view.state?.running) {
       return;
+    }
     const generation = ++detailGeneration;
     update({ detailLoading: true, detailError: null });
     try {
@@ -139,8 +151,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   async function loadProfile() {
     const id = view.selectedRun;
-    if (!id || !view.ready || view.starting || view.profileLoading || id === view.state?.running)
+    if (!id || !view.ready || view.starting || view.profileLoading || id === view.state?.running) {
       return;
+    }
     const generation = ++profileGeneration;
     update({ profileLoading: true, profileError: null });
     try {
@@ -332,8 +345,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.opening ||
       view.state?.running ||
       view.state?.ingest === "running"
-    )
+    ) {
       return;
+    }
     try {
       await transport.invoke("refresh");
     } catch (error) {

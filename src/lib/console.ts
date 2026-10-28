@@ -1,13 +1,17 @@
 import type { Transport } from "./session.ts";
 
+/** Bytes read from the core's durable console stream at a requested offset. */
 export interface ConsoleOutput {
   data: number[];
   offset: number;
   done: boolean;
 }
 
-// One mounted terminal owns its offset and input queue. Reopening replays the
-// durable byte stream; it never starts or stops a process.
+/**
+ * Creates a terminal stream reader and bounded input queue for one run.
+ * Polling advances from the saved offset; a zero-length write waits for the
+ * next poll to retry the same queued bytes.
+ */
 export function createConsole(
   id: string,
   transport: Pick<Transport, "invoke">,

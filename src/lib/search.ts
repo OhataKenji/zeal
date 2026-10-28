@@ -1,6 +1,7 @@
 import fuzzysort, { type SnapshotKey } from "fuzzysort";
 import type { Target } from "./types.ts";
 
+/** Candidate and fuzzy-match ranges for one target label. */
 export interface Match {
   target: Target;
   /** Highlight ranges into `target.label`, inclusive [start, end] pairs. */
@@ -25,7 +26,7 @@ export function search(index: SnapshotKey<Target>, query: string, limit = 20): M
   if (query.trim() === "" || limit <= 0) return [];
   return fuzzysort.go(query, index, { limit, threshold: 0 }).map((result) => ({
     target: result.obj,
-    indices: result.indexes.map((position) => [position, position] as const),
+    indices: result.indexes.map((position): readonly [number, number] => [position, position]),
   }));
 }
 
@@ -36,20 +37,26 @@ export function search(index: SnapshotKey<Target>, query: string, limit = 20): M
 export function segments(
   text: string,
   indices: readonly (readonly [number, number])[],
-): { text: string; hit: boolean }[] {
+): Array<{ text: string; hit: boolean }> {
   const ranges = indices
-    .map(([start, end]) => [Math.max(0, start), Math.min(text.length - 1, end)] as const)
+    .map(([start, end]): readonly [number, number] => [
+      Math.max(0, start),
+      Math.min(text.length - 1, end),
+    ])
     .filter(([start, end]) => start <= end)
     .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 
-  const merged: [number, number][] = [];
+  const merged: Array<[number, number]> = [];
   for (const [start, end] of ranges) {
     const last = merged.at(-1);
-    if (last && start <= last[1] + 1) last[1] = Math.max(last[1], end);
-    else merged.push([start, end]);
+    if (last && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      merged.push([start, end]);
+    }
   }
 
-  const runs: { text: string; hit: boolean }[] = [];
+  const runs: Array<{ text: string; hit: boolean }> = [];
   let at = 0;
   for (const [start, end] of merged) {
     if (start > at) runs.push({ text: text.slice(at, start), hit: false });
@@ -60,22 +67,20 @@ export function segments(
   return runs;
 }
 
-/** Selection stays inside the list, and an empty list has one place to be. */
+/** Clamps a selected index within the available rows; an empty list returns 0. */
 export function moveIndex(index: number, delta: number, length: number): number {
   if (length === 0) return 0;
   return Math.min(Math.max(index + delta, 0), length - 1);
 }
 
+/** Keyboard actions returned to the dropdown for its current match list. */
 export type KeyAction =
   | { kind: "move"; index: number }
   | { kind: "pick"; value: string }
   | { kind: "close" }
   | { kind: "none" };
 
-/**
- * Arrows move the selection and Enter picks the highlighted row. Running a
- * label or pattern is a separate action on the Send button.
- */
+/** Maps arrows, Enter, and Escape to dropdown actions; it never starts a run. */
 export function keyAction(
   state: { open: boolean; index: number },
   key: string,
@@ -105,12 +110,15 @@ export function keyAction(
   }
 }
 
+/** Bazel target patterns shown as examples below the search results. */
 export const PATTERN_HINTS: readonly string[] = ["//...", ":all", ":*"];
 
 // The input's ARIA attributes and the dropdown markup are one contract split
 // across two components, so both ids are built here.
+/** Stable target listbox ID used by the search input's ARIA relationship. */
 export const LIST_ID = "qo-list";
 
+/** Returns a DOM ID for the search option at the given result index. */
 export function optionId(index: number): string {
   return `qo-opt-${index}`;
 }

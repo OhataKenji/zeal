@@ -1,8 +1,9 @@
-// WebKit emits cumulative gesture scales; Chromium/Firefox emit Ctrl+wheel.
+/** Installs browser pinch and Ctrl+wheel zoom handlers and returns cleanup. */
 export function pinchZoom(node: EventTarget, zoom: (factor: number, clientX: number) => void) {
   let gestureScale: number | null = null;
   const handlers: Record<string, EventListener> = {
     wheel(event) {
+      // Listener registration below binds this callback to the wheel event.
       const wheel = event as WheelEvent;
       if (!wheel.ctrlKey) return;
       event.preventDefault();
@@ -16,6 +17,7 @@ export function pinchZoom(node: EventTarget, zoom: (factor: number, clientX: num
     },
     gesturechange(event) {
       event.preventDefault();
+      // WebKit exposes these fields on its non-standard gesture event.
       const { scale, clientX } = event as Event & { scale: number; clientX: number };
       if (gestureScale === null || !Number.isFinite(scale) || scale <= 0) return;
       zoom(scale / gestureScale, clientX);
@@ -26,12 +28,14 @@ export function pinchZoom(node: EventTarget, zoom: (factor: number, clientX: num
       gestureScale = null;
     },
   };
-  for (const [name, handler] of Object.entries(handlers))
+  for (const [name, handler] of Object.entries(handlers)) {
     node.addEventListener(name, handler, { passive: false });
+  }
   return {
     destroy() {
-      for (const [name, handler] of Object.entries(handlers))
+      for (const [name, handler] of Object.entries(handlers)) {
         node.removeEventListener(name, handler);
+      }
     },
   };
 }

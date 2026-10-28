@@ -1,8 +1,8 @@
 import Anser from "anser";
-import { terminalColors } from "./terminal-style.ts";
+import { TERMINAL_COLORS } from "./terminal_style.ts";
 
-const colors: Record<string, string> = Object.fromEntries(
-  Object.entries(terminalColors).map(([name, value]) => [
+const ANSI_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(TERMINAL_COLORS).map(([name, value]) => [
     `ansi-${name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
     value,
   ]),
@@ -10,7 +10,7 @@ const colors: Record<string, string> = Object.fromEntries(
 
 function color(name: string, truecolor: string): string | undefined {
   if (!name) return;
-  if (colors[name]) return colors[name];
+  if (ANSI_COLORS[name]) return ANSI_COLORS[name];
   if (name === "ansi-truecolor") return `rgb(${truecolor})`;
   const index = Number(name.match(/^ansi-palette-(\d+)$/)?.[1]);
   if (index >= 232 && index <= 255) {
@@ -25,7 +25,7 @@ function color(name: string, truecolor: string): string | undefined {
 }
 
 /** Parse styles only. Content stays text so log output can never become HTML. */
-export function logSpans(log: string): { text: string; style: string }[] {
+export function logSpans(log: string): Array<{ text: string; style: string }> {
   return Anser.ansiToJson(log, { remove_empty: true, use_classes: true }).map((entry) => {
     const styles: string[] = [];
     const fg = color(entry.fg, entry.fg_truecolor);

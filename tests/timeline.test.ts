@@ -499,7 +499,8 @@ test("revealing a numeric counter resolves its displayed series and original eve
     ],
   });
   const tracks = visibleTracks(layout.lanes, new Set([1]));
-  const position = eventPosition(tracks, 1, 1)!;
+  const position = eventPosition(tracks, 1, 1);
+  assert.ok(position);
   const counter = layout.lanes[0].counters[1];
   assert.equal(position.track, tracks[1]);
   assert.equal(position.y, tracks[1].top + counterPointY(counter, 2));
@@ -537,13 +538,17 @@ test("event colors use cname before name and stay stable", () => {
 });
 
 test("large trace retains all threads and events without a rendering limit", () => {
+  const threadIds = Array.from({ length: 100 }).keys();
   const profile: Profile = {
     phases: [],
-    lanes: Array.from({ length: 100 }, (_, tid) => ({
-      tid,
-      name: "worker",
-      events: Array.from({ length: 500 }, (_, ts) => ({ ph: "X", ts, dur: 2 })),
-    })),
+    lanes: Array.from(threadIds, (tid) => {
+      const eventTimestamps = Array.from({ length: 500 }).keys();
+      return {
+        tid,
+        name: "worker",
+        events: Array.from(eventTimestamps, (ts) => ({ ph: "X", ts, dur: 2 })),
+      };
+    }),
   };
   const result = layoutProfile(profile);
   assert.equal(result.lanes.length, 100);

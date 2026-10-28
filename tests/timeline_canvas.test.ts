@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { drawRuler, drawTimeline, type TimelineTheme } from "../src/lib/timeline-canvas.ts";
+import { drawRuler, drawTimeline, type TimelineTheme } from "../src/lib/timeline_canvas.ts";
 import { layoutProfile, visibleTracks } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
-const theme: TimelineTheme = {
+const THEME: TimelineTheme = {
   background: "#fff",
   foreground: "#222",
   muted: "#f4f4f4",
@@ -17,18 +17,21 @@ const theme: TimelineTheme = {
 // This boundary supports only the canvas operations the renderer uses. Unknown
 // methods fail instead of silently succeeding, as they would with a Proxy.
 function recordingCanvas() {
-  const outlines: number[][] = [];
-  const fills: { bounds: number[]; clips: number[][] }[] = [];
-  const strokedLines: number[][] = [];
-  const strokes: { lines: number[][]; clips: number[][] }[] = [];
-  let path: number[][] = [];
+  const outlines: Array<Array<number>> = [];
+  const fills: Array<{ bounds: number[]; clips: Array<Array<number>> }> = [];
+  const strokedLines: Array<Array<number>> = [];
+  const strokes: Array<{
+    lines: Array<Array<number>>;
+    clips: Array<Array<number>>;
+  }> = [];
+  let path: Array<Array<number>> = [];
   let rectangle: number[] | undefined;
-  let clips: number[][] = [];
-  const savedClips: number[][][] = [];
-  const strokedArcs: { x: number; y: number; radius: number }[] = [];
+  let clips: Array<Array<number>> = [];
+  const savedClips: Array<Array<Array<number>>> = [];
+  const strokedArcs: Array<{ x: number; y: number; radius: number }> = [];
   const filledArcs: typeof strokedArcs = [];
   let pathArcs: typeof strokedArcs = [];
-  const lines: number[][] = [];
+  const lines: Array<Array<number>> = [];
   let position = [0, 0];
   const canvas = {
     fillStyle: "",
@@ -38,7 +41,9 @@ function recordingCanvas() {
       savedClips.push(clips);
     },
     restore() {
-      clips = savedClips.pop()!;
+      const previousClips = savedClips.pop();
+      assert.ok(previousClips);
+      clips = previousClips;
     },
     beginPath() {
       path = [];
@@ -82,6 +87,7 @@ function recordingCanvas() {
     },
   };
   return {
+    // This test double implements only the canvas methods exercised by drawTimeline.
     context: canvas as unknown as CanvasRenderingContext2D,
     outlines,
     strokedArcs,
@@ -112,7 +118,7 @@ function render(
     range: { start: 0, end: 100 },
     ticks: [],
     selection: null,
-    theme,
+    theme: THEME,
     ...viewport,
     tracks: visibleTracks(layout.lanes, new Set(collapsed)),
   });
@@ -287,7 +293,7 @@ test("ruler ticks and timeline grid lines share the same horizontal positions", 
     gutter: 100,
     range: { start: 20, end: 80 },
     ticks: [20, 50, 80],
-    theme,
+    theme: THEME,
   };
   const ruler = recordingCanvas();
   drawRuler(ruler.context, axis);

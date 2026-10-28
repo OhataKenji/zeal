@@ -11,6 +11,7 @@ import {
   type TimelineTrack,
 } from "./timeline.ts";
 
+/** Canvas rectangle used to map pointer input back to a trace event. */
 export interface EventHit {
   x: number;
   y: number;
@@ -20,6 +21,7 @@ export interface EventHit {
   index: number;
 }
 
+/** Palette used to draw the timeline without depending on application CSS. */
 export interface TimelineTheme {
   background: string;
   foreground: string;
@@ -45,6 +47,7 @@ interface TimelineFrame extends TimelineAxis {
   selection: { tid: number; index: number } | null;
 }
 
+/** Draws ruler ticks and labels in the fixed-height canvas header. */
 export function drawRuler(context: CanvasRenderingContext2D, frame: TimelineAxis) {
   const { width, gutter, range, ticks, theme } = frame;
   const plotWidth = Math.max(1, width - gutter);
@@ -68,6 +71,10 @@ export function drawRuler(context: CanvasRenderingContext2D, frame: TimelineAxis
   context.restore();
 }
 
+/**
+ * Draws visible profile tracks. `scrollTop` is subtracted from row positions;
+ * the label gutter stays fixed while plots use the shared time transform.
+ */
 export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineFrame): EventHit[] {
   const { width, height, gutter, range, ticks, scrollTop, tracks, theme } = frame;
   const hits: EventHit[] = [];
@@ -102,8 +109,11 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     context.beginPath();
     context.rect(gutter, contentTop, Math.max(1, width - gutter), contentHeight);
     context.clip();
-    if (track.kind === "events") drawEvents(context, track, trackTop, frame, hits);
-    else drawCounterSeries(context, track, trackTop, frame, hits);
+    if (track.kind === "events") {
+      drawEvents(context, track, trackTop, frame, hits);
+    } else {
+      drawCounterSeries(context, track, trackTop, frame, hits);
+    }
     context.restore();
     context.fillStyle = theme.sidebar;
     context.fillRect(0, contentTop, gutter, contentHeight);
@@ -130,24 +140,35 @@ function drawEvents(
     lane.counters.flatMap((counter) => counter.points.map((point) => point.index)),
   );
   for (const event of lane.events) {
-    if (event.start === null || event.end! < range.start || event.start > range.end) continue;
+    if (!hasEventTimes(event)) {
+      continue;
+    }
+    if (event.end < range.start || event.start > range.end) {
+      continue;
+    }
     // Numeric counter events are drawn on their series; raw counters keep a mark.
     if (event.kind === "counter" && plottedCounters.has(event.index)) continue;
     hits.push(drawEvent(context, event, lane.tid, trackTop, frame));
   }
 }
 
+function hasEventTimes(
+  event: EventGeometry,
+): event is EventGeometry & { start: number; end: number } {
+  return event.start !== null && event.end !== null;
+}
+
 function drawEvent(
   context: CanvasRenderingContext2D,
-  event: EventGeometry,
+  event: EventGeometry & { start: number; end: number },
   tid: number,
   trackTop: number,
   frame: TimelineFrame,
 ): EventHit {
   const { width, gutter, range, selection, theme } = frame;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
-  const eventLeft = Math.max(gutter, timeX(event.start!));
-  const eventWidth = Math.max(1, Math.min(width, timeX(event.end!)) - eventLeft);
+  const eventLeft = Math.max(gutter, timeX(event.start));
+  const eventWidth = Math.max(1, Math.min(width, timeX(event.end)) - eventLeft);
   const eventTop = trackTop + LANE_HEADER + event.row * ROW_HEIGHT;
   const selected = selection?.tid === tid && selection.index === event.index;
   context.fillStyle = selected ? theme.foreground : eventColor(event.event);
@@ -203,8 +224,11 @@ function drawCounterSeries(
   context.lineWidth = 1.5;
   context.beginPath();
   for (const [pointIndex, point] of counter.points.entries()) {
-    if (pointIndex === 0) context.moveTo(timeX(point.time), valueY(point.value));
-    else context.lineTo(timeX(point.time), valueY(point.value));
+    if (pointIndex === 0) {
+      context.moveTo(timeX(point.time), valueY(point.value));
+    } else {
+      context.lineTo(timeX(point.time), valueY(point.value));
+    }
   }
   context.stroke();
   for (const point of counter.points) {
