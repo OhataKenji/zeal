@@ -87,6 +87,21 @@ test("incomplete results retain their data and explain both subsections", () => 
   assert.match(html, /Completed/);
 });
 
+test("empty incomplete results retain their diagnostic and zero counts", () => {
+  for (const section of subsections(
+    targets({
+      status: "incomplete",
+      data: EMPTY_BEP,
+      note: "stream ended early",
+    }),
+  )) {
+    assert.match(section, /<span>0<\/span>/);
+    assert.match(section, /incomplete — stream ended early/);
+    assert.match(section, /No results recorded\./);
+    assert.doesNotMatch(section, /missing/);
+  }
+});
+
 for (const status of ["parse_error", "read_error", "not_available"] as const) {
   test(`${status} stays labeled without being replaced by a missing message`, () => {
     for (const section of subsections(targets({ status, note: "reason" }))) {
