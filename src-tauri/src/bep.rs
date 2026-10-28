@@ -1,12 +1,14 @@
 //! Bounded parse of Bazel's length-delimited protobuf BEP file.
 //!
-//! Only target completion, aborted configuration, and test summary events
-//! contribute to the existing display model. The source file remains intact,
-//! including fields this projection does not know about.
+//! Target and test results, parsed options, and reported command lines form
+//! the display model. The source file remains intact, including fields this
+//! projection does not know about.
 
 use crate::protocol::bep::BuildEvent;
 use crate::protocol::bep::build_event::Payload;
 use crate::protocol::bep::build_event_id::Id;
+use crate::protocol::generated::command_line::CommandLine;
+use crate::protocol::generated::command_line::command_line_section::SectionType;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -20,7 +22,63 @@ pub struct Bep {
     pub tests: Vec<TestResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<BuildOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_command_line: Option<Vec<CommandLinePart>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_command_line: Option<Vec<CommandLinePart>>,
     pub truncated: bool,
+}
+
+/// Display parts retain option spelling separately from the option value.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum CommandLinePart {
+    Chunk {
+        value: String,
+    },
+    Option {
+        combined_form: String,
+        option_value: String,
+    },
+}
+
+/// Project Bazel's reported original or canonical command line in section order.
+pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
+    let destination = match command_line.command_line_label.as_str() {
+        "original" => &mut bep.original_command_line,
+        "canonical" => &mut bep.canonical_command_line,
+        _ => return,
+    };
+    let mut parts = Vec::new();
+    for section in &command_line.sections {
+        match &section.section_type {
+            Some(SectionType::ChunkList(chunks)) => {
+                // Bazel reports residue separately from its options. A dash
+                // argument needs this boundary when rendered as a command.
+                if section.section_label == "residual"
+                    && chunks.chunk.first().is_some_and(|chunk| chunk != "--")
+                    && chunks.chunk.iter().any(|chunk| chunk.starts_with('-'))
+                {
+                    parts.push(CommandLinePart::Chunk { value: "--".into() });
+                }
+                parts.extend(chunks.chunk.iter().map(|value| CommandLinePart::Chunk {
+                    value: value.clone(),
+                }));
+            }
+            Some(SectionType::OptionList(options)) => {
+                parts.extend(options.option.iter().map(|option| CommandLinePart::Option {
+                    combined_form: option.combined_form.clone(),
+                    option_value: option.option_value.clone(),
+                }));
+            }
+            None => {}
+        }
+    }
+    *destination = Some(parts);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -117,6 +175,9 @@ pub(crate) fn test_status(status: i32) -> &'static str {
 }
 
 fn project(event: BuildEvent, bep: &mut Bep) {
+    if let Some(Payload::StructuredCommandLine(command_line)) = &event.payload {
+        project_command_line(command_line, bep);
+    }
     if let Some(Payload::OptionsParsed(options)) = &event.payload {
         bep.options = Some(BuildOptions {
             startup_options: options.startup_options.clone(),
@@ -159,6 +220,9 @@ mod tests {
         Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
     };
     use crate::protocol::bep::{Aborted, BuildEventId, TargetComplete, TestSummary};
+    use crate::protocol::generated::command_line::{
+        ChunkList, CommandLineSection, Option as CommandLineOption, OptionList,
+    };
     use prost::Message;
 
     fn event(event: BuildEvent) -> Vec<u8> {
@@ -280,6 +344,188 @@ mod tests {
         let parsed: Bep =
             serde_json::from_str(r#"{"targets":[],"tests":[],"truncated":false}"#).unwrap();
         assert_eq!(parsed.options, None);
+        assert_eq!(parsed.original_command_line, None);
+        assert_eq!(parsed.canonical_command_line, None);
+    }
+
+    fn command_line(label: &str, sections: Vec<CommandLineSection>) -> BuildEvent {
+        BuildEvent {
+            payload: Some(Payload::StructuredCommandLine(CommandLine {
+                command_line_label: label.into(),
+                sections,
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn chunks(label: &str, values: &[&str]) -> CommandLineSection {
+        CommandLineSection {
+            section_label: label.into(),
+            section_type: Some(SectionType::ChunkList(ChunkList {
+                chunk: values.iter().map(|value| (*value).into()).collect(),
+            })),
+        }
+    }
+
+    #[test]
+    fn structured_command_lines_retain_section_order_option_spelling_and_repeats() {
+        let mut stream = event(command_line(
+            "original",
+            vec![
+                chunks("executable", &["bazel"]),
+                chunks("startup options", &["--batch"]),
+                chunks("command", &["test"]),
+                CommandLineSection {
+                    section_label: "command options".into(),
+                    section_type: Some(SectionType::OptionList(OptionList {
+                        option: vec![
+                            CommandLineOption {
+                                combined_form: "--define=a=b c".into(),
+                                option_value: "a=b c".into(),
+                                ..Default::default()
+                            },
+                            CommandLineOption {
+                                combined_form: "--define d=e".into(),
+                                option_value: "d=e".into(),
+                                ..Default::default()
+                            },
+                        ],
+                    })),
+                },
+                CommandLineSection::default(),
+                chunks("residual", &["//pkg:test", ""]),
+            ],
+        ));
+        stream.extend(event(command_line(
+            "canonical",
+            vec![chunks("executable", &["bazel", "test", "//pkg:test"])],
+        )));
+        stream.extend(event(command_line("tool", vec![])));
+        let parsed = parse(stream.as_slice());
+        assert_eq!(
+            parsed.original_command_line,
+            Some(vec![
+                CommandLinePart::Chunk {
+                    value: "bazel".into()
+                },
+                CommandLinePart::Chunk {
+                    value: "--batch".into()
+                },
+                CommandLinePart::Chunk {
+                    value: "test".into()
+                },
+                CommandLinePart::Option {
+                    combined_form: "--define=a=b c".into(),
+                    option_value: "a=b c".into(),
+                },
+                CommandLinePart::Option {
+                    combined_form: "--define d=e".into(),
+                    option_value: "d=e".into(),
+                },
+                CommandLinePart::Chunk {
+                    value: "//pkg:test".into()
+                },
+                CommandLinePart::Chunk { value: "".into() },
+            ])
+        );
+        assert_eq!(
+            parsed.canonical_command_line,
+            Some(vec![
+                CommandLinePart::Chunk {
+                    value: "bazel".into()
+                },
+                CommandLinePart::Chunk {
+                    value: "test".into()
+                },
+                CommandLinePart::Chunk {
+                    value: "//pkg:test".into()
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn structured_command_line_missing_empty_and_unknown_are_distinct() {
+        let empty = parse(event(command_line("original", vec![])).as_slice());
+        assert_eq!(empty.original_command_line, Some(vec![]));
+        assert_eq!(empty.canonical_command_line, None);
+        let unknown = parse(event(command_line("tool", vec![])).as_slice());
+        assert_eq!(unknown.original_command_line, None);
+        assert_eq!(unknown.canonical_command_line, None);
+    }
+
+    #[test]
+    fn dash_residue_has_one_option_boundary() {
+        let parsed = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks("command", &["run"]),
+                    chunks("residual", &["//pkg:tool", "--help"]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.original_command_line,
+            Some(vec![
+                CommandLinePart::Chunk {
+                    value: "run".into()
+                },
+                CommandLinePart::Chunk { value: "--".into() },
+                CommandLinePart::Chunk {
+                    value: "//pkg:tool".into()
+                },
+                CommandLinePart::Chunk {
+                    value: "--help".into()
+                },
+            ])
+        );
+        let explicit = parse(
+            event(command_line(
+                "original",
+                vec![chunks("residual", &["--", "--help"])],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(
+            explicit.original_command_line,
+            Some(vec![
+                CommandLinePart::Chunk { value: "--".into() },
+                CommandLinePart::Chunk {
+                    value: "--help".into()
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn command_line_json_uses_the_frontend_part_contract() {
+        let parsed = parse(
+            event(command_line(
+                "canonical",
+                vec![CommandLineSection {
+                    section_label: "command options".into(),
+                    section_type: Some(SectionType::OptionList(OptionList {
+                        option: vec![CommandLineOption {
+                            combined_form: "--jobs=8".into(),
+                            option_value: "8".into(),
+                            ..Default::default()
+                        }],
+                    })),
+                }],
+            ))
+            .as_slice(),
+        );
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            json["canonicalCommandLine"],
+            serde_json::json!([
+                {"kind": "option", "combinedForm": "--jobs=8", "optionValue": "8"}
+            ])
+        );
+        assert!(json.get("originalCommandLine").is_none());
+        assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
     }
 
     #[test]

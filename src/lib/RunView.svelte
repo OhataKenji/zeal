@@ -5,7 +5,7 @@
   import LogPanel from "./run/LogPanel.svelte";
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
-  import { formatOptions } from "./run/options";
+  import { formatCommandLine, formatOptions } from "./run/options";
 
   let { view, reload, reloadProfile }: {
     view: SessionView;
@@ -141,6 +141,23 @@
                     {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
                   </dd>{/if}
               </dl>
+              <h3 class="run-arguments-heading">Command lines</h3>
+              <section class="run-command-block">
+                <h4>Original command line</h4>
+                {#if bep?.originalCommandLine !== undefined}
+                  <code class="run-command-code">{formatCommandLine(bep.originalCommandLine) || "No command-line arguments."}</code>
+                {:else}
+                  <p class="panel-empty">Original command line was not recorded in the build events.</p>
+                {/if}
+              </section>
+              <section class="run-command-block">
+                <h4>Canonical command line</h4>
+                {#if bep?.canonicalCommandLine !== undefined}
+                  <code class="run-command-code">{formatCommandLine(bep.canonicalCommandLine) || "No command-line arguments."}</code>
+                {:else}
+                  <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
+                {/if}
+              </section>
               <h3 class="run-arguments-heading">Bazel arguments</h3>
               {#if bep?.options}
                 <div class="run-command-options">

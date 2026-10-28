@@ -315,6 +315,40 @@ export function installPreview() {
                 tests: [],
                 ...(record.id === records[0]?.id
                   ? {
+                      originalCommandLine: [
+                        { kind: "chunk", value: "bazel" },
+                        {
+                          kind: "option",
+                          combinedForm: "--output_user_root=/tmp/zeal-preview-root",
+                          optionValue: "/tmp/zeal-preview-root",
+                        },
+                        { kind: "chunk", value: record.cmd },
+                        { kind: "option", combinedForm: "--config=dev", optionValue: "dev" },
+                        {
+                          kind: "option",
+                          combinedForm: "--define=message=hello world",
+                          optionValue: "message=hello world",
+                        },
+                        { kind: "chunk", value: record.target },
+                      ],
+                      canonicalCommandLine: [
+                        { kind: "chunk", value: "bazel" },
+                        {
+                          kind: "option",
+                          combinedForm: "--output_user_root=/tmp/zeal-preview-root",
+                          optionValue: "/tmp/zeal-preview-root",
+                        },
+                        { kind: "option", combinedForm: "--batch", optionValue: "true" },
+                        { kind: "chunk", value: record.cmd },
+                        { kind: "option", combinedForm: "--jobs=8", optionValue: "8" },
+                        { kind: "option", combinedForm: "--keep_going", optionValue: "true" },
+                        {
+                          kind: "option",
+                          combinedForm: "--define=message=hello world",
+                          optionValue: "message=hello world",
+                        },
+                        { kind: "chunk", value: record.target },
+                      ],
                       options: {
                         startupOptions: ["--output_user_root=/tmp/zeal-preview-root", "--batch"],
                         explicitStartupOptions: ["--output_user_root=/tmp/zeal-preview-root"],

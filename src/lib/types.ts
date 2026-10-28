@@ -87,6 +87,8 @@ export type Section<T> =
 export interface Bep {
   targets: Array<{ label: string; ok: boolean }>;
   tests: Array<{ label: string; status: string }>;
+  originalCommandLine?: CommandLinePart[];
+  canonicalCommandLine?: CommandLinePart[];
   options?: {
     startupOptions: string[];
     explicitStartupOptions: string[];
@@ -95,6 +97,11 @@ export interface Bep {
   };
   truncated: boolean;
 }
+
+/** A recorded argument chunk or option whose displayed form may contain a separator. */
+export type CommandLinePart =
+  | { kind: "chunk"; value: string }
+  | { kind: "option"; combinedForm: string; optionValue: string };
 
 /** Raw trace events stay intact; timeline geometry is a separate projection. */
 export type TraceEvent = Record<string, unknown>;
