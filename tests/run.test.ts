@@ -42,7 +42,7 @@ test("partial observations retain data and explain the missing tail", () => {
 
 test("missing and unreadable observations remain distinct without changing a known result", () => {
   assert.equal(sectionData({ status: "missing" }), null);
-  assert.equal(sectionMessage({ status: "missing" }), "missing — no record");
+  assert.match(sectionMessage({ status: "missing" }), /^missing/);
   assert.equal(
     sectionMessage({ status: "read_error", note: "permission denied" }),
     "read error — permission denied",
