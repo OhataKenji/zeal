@@ -340,7 +340,7 @@ fn directory(data: &Path, ws: &Path, run_id: &str) -> Result<Dir, StoreError> {
     Ok(store.runs(&ws_id, false)?.child(&run_id, false)?)
 }
 pub fn artifact(data: &Path, ws: &Path, run_id: &str, name: &str) -> io::Result<File> {
-    if !["log.txt", "bep.json", "profile.gz"].contains(&name) {
+    if !["log.txt", "bep.binpb", "profile.gz"].contains(&name) {
         return Err(fail(ErrorKind::Invalid).into());
     }
     directory(data, ws, run_id)?
@@ -369,7 +369,7 @@ pub fn abort_create(data: &Path, ws: &Path, run_id: &str) -> Result<(), StoreErr
     }
     match runs.child(&run_id, false) {
         Ok(dir) => {
-            for name in ["log.txt", "bep.json", "profile.gz"] {
+            for name in ["log.txt", "bep.binpb", "profile.gz"] {
                 if dir.exists(name)? {
                     dir.remove_file(name)?;
                 }

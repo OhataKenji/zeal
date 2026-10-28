@@ -50,7 +50,7 @@ flowchart LR
     SEND["Send: build / test"] --> SPAWN["bazel + 観測 flag"]
     SPAWN -->|"直接追記"| LOG["log.txt"]
     LOG -->|"client 終了後に読む"| VIEW
-    SPAWN -->|"完了"| FILES["run.json / bep.json / profile.gz"]
+    SPAWN -->|"完了"| FILES["run.json / bep.binpb / profile.gz"]
     FILES -->|"詳細を開くたびに parse"| VIEW["結果 / timing / phase の帯"]
 ```
 
@@ -63,11 +63,11 @@ M2 では snapshot の query 中か run 中なら Send を disabled にし、実
 
 - `run.json`：Zeal が書く id、workspace、cmd、target、開始時刻、終了時刻、exit code
 - `log.txt`：子プロセスが直接追記する stdout/stderr の記録
-- `bep.json` と `profile.gz`：Bazel が書く生の成果物。Zeal は書き換えない
+- `bep.binpb` と `profile.gz`：Bazel が書く生の成果物。Zeal は書き換えない
 
 起動時には次の flag を付ける。
 
-- `--build_event_json_file=<dir>/bep.json`
+- `--build_event_binary_file=<dir>/bep.binpb`
 - `--profile=<dir>/profile.gz`
 - `--experimental_profile_include_primary_output`
 - `--noslim_profile`
@@ -88,7 +88,8 @@ BEP の tail とログイベントの配信は行わない。
 ### 表示時の parse
 
 `get_run` のたびに BEP と profile を読み、結果を保存せず返す。
-BEP は行単位で parse し、末尾が欠けた場合も受理できた結果を使う。
+BEP は length-delimited protobuf event として parse し、末尾の frame が欠けた場合も受理できた結果を使う。
+frame は 16 MiB まで読み、長さ prefix の overflow や不正 protobuf も incomplete とする。
 profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error とする。
 
 各成果物の状態(ok / incomplete / missing / parse error)は parse 時に決める。
