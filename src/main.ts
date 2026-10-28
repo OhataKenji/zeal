@@ -9,4 +9,4 @@ if (import.meta.env.DEV && !isTauri() && new URLSearchParams(location.search).ha
 }
 
 // The entry HTML always includes the mount element.
-mount(App, { target: document.getElementById("app")! });
+mount(App, { target: document.getElementById("app-root")! });

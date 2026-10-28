@@ -20,7 +20,7 @@
   });
 </script>
 
-<div class="qo" id={LIST_ID} role="listbox">
+<div class="search-dropdown" id={LIST_ID} role="listbox">
   {#if matches.length === 0}
     <div class="match dim">No matching targets</div>
   {:else}
@@ -29,7 +29,7 @@
         bind:this={rows[i]}
         type="button"
         class="match"
-        class:sel={i === index}
+        class:selected={i === index}
         id={optionId(i)}
         role="option"
         aria-selected={i === index}

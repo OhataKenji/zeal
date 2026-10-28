@@ -192,7 +192,7 @@
         {:else if state.ingest === "running"}
           <p class="dim">Loading targets…</p>
         {:else if state.lastError}
-          <p class="err">{state.lastError.summary}</p>
+          <p class="error">{state.lastError.summary}</p>
           <button type="button" class="button" onclick={refresh}>retry</button>
         {:else}
           <p class="dim">—</p>
@@ -240,7 +240,7 @@
                 class="run-row"
                 title={`${run.cmd} ${run.target} — ${status.label}`}
                 aria-label={`${run.cmd} ${run.target}: ${status.label}`}
-                class:sel={active}
+                class:selected={active}
                 aria-current={active ? "true" : undefined}
                 onclick={() =>
                   run.id === state.running
@@ -263,7 +263,7 @@
             </li>
           {/each}
         </ul>
-        {#if app.view.runsError}<p class="err">{app.view.runsError}</p>
+        {#if app.view.runsError}<p class="error">{app.view.runsError}</p>
           <button type="button" class="button" onclick={getSession().loadRuns}
             >retry</button
           >
@@ -321,7 +321,7 @@
     {:else if snap}
       <p class="dim">Select a target in the tree</p>
     {:else if state.ingest !== "running" && state.lastError}
-      <p class="err">Failed to load targets: {state.lastError.summary}</p>
+      <p class="error">Failed to load targets: {state.lastError.summary}</p>
       <button type="button" class="button" onclick={refresh}>retry</button>
     {/if}
     {/if}
@@ -406,12 +406,12 @@
       <span class="label" role="status">Waiting for target data</span>
     {/if}
   </div>
-  {#if app.view.error}<p class="app-error err" role="alert">
+  {#if app.view.error}<p class="app-error error" role="alert">
       {app.view.error}
     </p>{/if}
   {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
   {#if st?.besError}<p class="app-error warn" role="status">BES receiver: {st.besError}</p>{/if}
-  {#if inputError}<p class="app-error err" role="status">{inputError}</p>{/if}
+  {#if inputError}<p class="app-error error" role="status">{inputError}</p>{/if}
 
   {#if st === null}
     <div class="content dim">loading…</div>
@@ -422,7 +422,7 @@
         onclose={st.workspace ? () => (switchingWs = false) : undefined}
       />
       {#if st.workspace && st.bazel === null}
-        <p class="err">bazelisk / bazel not found on PATH</p>
+        <p class="error">bazelisk / bazel not found on PATH</p>
       {/if}
     </div>
   {:else}

@@ -24,12 +24,14 @@
 * {
   box-sizing: border-box;
 }
+
 body {
   margin: 0;
   font: 13px var(--font-sans);
   color: var(--foreground);
   background: var(--background);
 }
+
 button,
 input,
 select,
@@ -37,22 +39,27 @@ textarea {
   font: inherit;
   color: inherit;
 }
+
 button {
   cursor: pointer;
 }
+
 button:disabled {
   cursor: default;
   opacity: 0.5;
 }
+
 :where(button, input, select, textarea, canvas, summary):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
-ul.list {
+
+.list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -67,25 +74,31 @@ ul.list {
   font-weight: 500;
   white-space: nowrap;
 }
+
 .button:hover:not(:disabled) {
   background: var(--muted);
 }
+
 .button-primary {
   background: var(--primary);
   color: var(--background);
   border-color: var(--primary);
 }
+
 .button-primary:hover:not(:disabled) {
   background: #444;
 }
+
 .button-ghost {
   background: transparent;
   border-color: transparent;
 }
+
 .icon-button {
   width: 32px;
   padding: 0;
 }
+
 .input {
   width: 100%;
   min-width: 0;
@@ -95,9 +108,11 @@ ul.list {
   border-radius: var(--radius-md);
   background: var(--background);
 }
+
 .workspace-path {
   font-family: var(--mono);
 }
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -106,13 +121,14 @@ ul.list {
   font: 11px/1.5 var(--mono);
   white-space: nowrap;
 }
+
 .tab-button[aria-selected="true"] {
   background: var(--background);
   font-weight: 600;
   box-shadow: 0 1px 3px #00000014;
 }
 
-#app {
+.app-root {
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -212,7 +228,7 @@ ul.list {
   border: 0;
 }
 
-ul.list li {
+.list li {
   padding: 3px 0;
   display: flex;
   gap: 8px;
@@ -241,7 +257,7 @@ ul.list li {
   display: flex;
 }
 
-.composer-search .qo {
+.composer-search .search-dropdown {
   position: absolute;
   top: calc(100% + 10px);
   left: 0;
@@ -251,7 +267,7 @@ ul.list li {
   overflow: auto;
 }
 
-.qo {
+.search-dropdown {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--background);
@@ -259,7 +275,7 @@ ul.list li {
   font-family: var(--mono);
 }
 
-.qo .match {
+.search-dropdown .match {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -277,26 +293,26 @@ ul.list li {
   cursor: pointer;
 }
 
-.qo .match.sel {
+.search-dropdown .match.selected {
   background: var(--accent);
 }
 
-.qo .match .hit {
+.search-dropdown .match .hit {
   text-decoration: underline;
   font-weight: 700;
 }
 
-.qo .match.dim {
+.search-dropdown .match.dim {
   color: var(--muted-foreground);
 }
 
-.qo .foot {
+.search-dropdown .foot {
   padding: 5px 10px;
   font-size: 11px;
   color: var(--muted-foreground);
 }
 
-.qo .foot code {
+.search-dropdown .foot code {
   margin-right: 8px;
   font: inherit;
 }
@@ -310,7 +326,7 @@ ul.list li {
   color: var(--muted-foreground);
 }
 
-.err {
+.error {
   color: var(--destructive);
 }
 
@@ -360,14 +376,14 @@ ul.list li {
   background: var(--accent);
 }
 
-.tree .row.sel {
+.tree .row.selected {
   font-weight: 600;
   background: var(--accent);
   color: var(--foreground);
   box-shadow: inset 2px 0 var(--primary);
 }
 
-.rel,
+.relations,
 .run-details {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
@@ -376,14 +392,14 @@ ul.list li {
   margin: 0;
 }
 
-.rel dt,
+.relations dt,
 .run-details dt {
   color: var(--muted-foreground);
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
 }
 
-.rel dd,
+.relations dd,
 .run-details dd {
   margin: 0;
   padding: 10px 0;
@@ -521,7 +537,7 @@ ul.list li {
     sans-serif;
 }
 
-.run-row.sel {
+.run-row.selected {
   background: var(--accent);
   box-shadow: inset 2px 0 var(--primary);
   font-weight: 650;
@@ -666,9 +682,11 @@ ul.list li {
   height: 100%;
   min-height: 0;
 }
+
 .console-container[hidden] {
   display: none;
 }
+
 .panel-heading {
   flex: 0 0 auto;
   font-size: 13px;
@@ -719,6 +737,7 @@ ul.list li {
 
 .trace-axis canvas {
   display: block;
+  height: 26px;
 }
 
 .trace-axis canvas,
@@ -1037,7 +1056,7 @@ button {
   color: var(--muted-foreground);
 }
 
-.rel dt small {
+.relations dt small {
   display: block;
   font: 10px var(--mono);
   color: var(--muted-foreground);
@@ -1191,7 +1210,7 @@ button.chip:hover {
     flex-wrap: wrap;
   }
 
-  .rel {
+  .relations {
     grid-template-columns: 52px minmax(0, 1fr);
     gap: 0 12px;
   }

@@ -142,7 +142,7 @@
       /></label
     >
   </div>
-  <dl class="rel">
+  <dl class="relations">
     <dt>srcs</dt>
     <dd>{@render files(sources, "srcs", target.pkg)}</dd>
     {#if otherInputs.length}<dt>inputs</dt>

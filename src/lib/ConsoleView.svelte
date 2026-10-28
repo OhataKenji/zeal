@@ -66,7 +66,7 @@
 
 <section class="run-page console-page">
   <RunHeader {record} {status} />
-  {#if error}<p class="run-notice err" role="alert">{error}</p>{/if}
+  {#if error}<p class="run-notice error" role="alert">{error}</p>{/if}
   <div class="run-panel">
     <div class="panel-heading console-log-spacer" aria-hidden="true">Logs</div>
     <div class="console-terminal" bind:this={host}></div>
@@ -74,7 +74,18 @@
 </section>
 
 <style>
-  .console-page { height: 100%; }
-  .console-log-spacer { visibility: hidden; }
-  .console-terminal { flex: 1; min-height: 0; overflow: hidden; }
+
+  .console-page {
+    height: 100%;
+  }
+
+  .console-log-spacer {
+    visibility: hidden;
+  }
+
+  .console-terminal {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
 </style>

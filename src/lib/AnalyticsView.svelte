@@ -103,7 +103,7 @@
     >
   </div>
   {#if view.loading}<p role="status">Loading…</p>{/if}
-  {#if view.error}<p class="err" role="alert">
+  {#if view.error}<p class="error" role="alert">
       Unable to load analytics: {view.error}
     </p>{/if}
   {#if data}
@@ -324,11 +324,13 @@
 </section>
 
 <style>
+
   .analytics {
     min-width: 0;
     padding: 28px;
     overflow: auto;
   }
+
   .analytics h1 {
     margin: 0 0 24px;
     font-size: 22px;
@@ -338,17 +340,20 @@
     gap: 12px;
     flex-wrap: wrap;
   }
+
   .analytics-card {
     background: var(--muted);
     border-radius: var(--radius-lg);
     padding: 22px;
     margin-top: 20px;
   }
+
   .analytics-card h2 {
     margin: 0;
     font-size: 13px;
     font-weight: 600;
   }
+
   .filters input,
   .filters select {
     background: var(--muted);
@@ -358,43 +363,55 @@
     color: var(--foreground);
     font: inherit;
   }
+
   .filters {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
   }
+
   .filters label {
     display: flex;
     gap: 4px;
     align-items: center;
   }
+
   .chart-scroll {
     overflow-x: auto;
   }
+
   svg {
     height: 240px;
     display: block;
   }
+
   svg line {
     stroke: var(--border);
   }
+
   svg text {
     fill: var(--foreground);
     font-size: 11px;
   }
+
   /* Shares the timeline trace palette (timeline.ts eventColors). */
+
   rect {
     fill: #99d4c6;
   }
+
   .bar-ok {
     fill: #a7d6a9;
   }
+
   .bar-failed {
     fill: #ffdda6;
   }
+
   .bar-interrupted {
     fill: #c5afd4;
   }
+
   .legend {
     display: flex;
     gap: 14px;
@@ -402,63 +419,77 @@
     font-size: 11px;
     color: var(--muted-foreground);
   }
+
   .legend span {
     display: inline-flex;
     gap: 4px;
     align-items: center;
   }
+
   .sw {
     display: inline-block;
     width: 8px;
     height: 8px;
     border-radius: 2px;
   }
+
   .line-p50 {
     fill: none;
     stroke: #80c784;
     stroke-width: 2;
   }
+
   .line-p95 {
     fill: none;
     stroke: #c5afd4;
     stroke-width: 1.5;
     stroke-dasharray: 4 3;
   }
+
   .dot-p50 {
     fill: #80c784;
   }
+
   .dot-p95 {
     fill: #c5afd4;
   }
+
   .sw-p50 {
     background: #80c784;
   }
+
   .sw-p95 {
     background: #c5afd4;
   }
+
   .targets {
     width: 100%;
     margin-top: 10px;
     border-collapse: collapse;
   }
+
   .targets th,
   .targets td {
     padding: 4px 8px;
     font-size: 12px;
     text-align: right;
   }
+
   .targets th:first-child,
   .targets td:first-child {
     text-align: left;
   }
+
   .targets thead th {
     color: var(--muted-foreground);
     font-weight: 500;
     border-bottom: 1px solid var(--border);
   }
+
   .targets tr.active td {
     background: var(--accent);
   }
+
   .target-link {
     background: none;
     border: none;
@@ -469,6 +500,7 @@
     cursor: pointer;
     text-align: left;
   }
+
   .target-link:hover {
     text-decoration: underline;
   }

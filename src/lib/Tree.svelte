@@ -55,7 +55,7 @@
       <button
         title={r.label ?? r.text}
         class="row"
-        class:sel={r.label === selected}
+        class:selected={r.label === selected}
         class:test={r.ruleClass?.endsWith("_test")}
         aria-current={r.label === selected ? "true" : undefined}
         style:padding-left="{r.depth * 12 + 2}px"

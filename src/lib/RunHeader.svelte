@@ -23,5 +23,8 @@
 </div>
 
 <style>
-  h1 .badge { margin-left: 8px; }
+
+  h1 .badge {
+    margin-left: 8px;
+  }
 </style>

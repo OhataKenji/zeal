@@ -10,9 +10,11 @@
         --note: #777;
         --bg: #f4f4f4;
       }
+
       * {
         box-sizing: border-box;
       }
+
       body {
         font-family: Menlo, Consolas, monospace;
         font-size: 13px;
@@ -21,16 +23,19 @@
         margin: 0;
         padding: 24px;
       }
+
       h1 {
         font-size: 20px;
         margin: 0 0 4px;
       }
+
       h2 {
         font-size: 14px;
         margin: 0 0 10px;
         color: var(--note);
         font-weight: normal;
       }
+
       h3 {
         font-size: 12px;
         margin: 0 0 6px;
@@ -38,19 +43,23 @@
         text-transform: uppercase;
         letter-spacing: 0.05em;
       }
+
       .page {
         max-width: 1100px;
         margin: 0 auto 48px;
       }
+
       .sub {
         color: var(--note);
         font-size: 12px;
         margin-bottom: 12px;
       }
+
       .label {
         font-size: 11px;
         color: var(--note);
       }
+
       .dim {
         color: var(--note);
       }
@@ -61,6 +70,7 @@
         padding: 10px 16px;
         font-size: 12px;
       }
+
       .toc a {
         color: var(--ink);
         margin-right: 14px;
@@ -71,27 +81,36 @@
         background: #fff;
         padding: 16px;
       }
-      table.basis-t {
+
+      .basis-table-primary-column {
+        width: 10em;
+      }
+
+      .basis-table {
         border-collapse: collapse;
         width: 100%;
       }
-      table.basis-t td,
-      table.basis-t th {
+
+      .basis-table td,
+      .basis-table th {
         border: 1px solid var(--line);
         padding: 6px 8px;
         text-align: left;
         vertical-align: top;
         font-weight: normal;
       }
-      table.basis-t th {
+
+      .basis-table th {
         background: #eee;
       }
 
       /* window = toolbar + sidebar + content（chrome は script が生成） */
+
       .win {
         border: 2px solid var(--ink);
         background: #fff;
       }
+
       .toolbar {
         border-bottom: 1px solid var(--ink);
         padding: 6px 12px;
@@ -100,15 +119,18 @@
         gap: 10px;
         align-items: center;
       }
+
       .win-body {
         display: flex;
       }
+
       .sidebar {
         width: 280px;
         border-right: 2px solid var(--ink);
         padding: 8px;
         flex-shrink: 0;
       }
+
       .content {
         flex: 1;
         min-width: 0;
@@ -121,12 +143,14 @@
         background: #fff;
         font-size: 12px;
       }
+
       .select {
         border: 1px solid var(--ink);
         padding: 5px 8px;
         background: #fff;
         font-size: 12px;
       }
+
       .btn {
         display: inline-block;
         border: 1px solid var(--ink);
@@ -135,10 +159,12 @@
         font-size: 12px;
         white-space: nowrap;
       }
+
       .btn.primary {
         background: var(--ink);
         color: #fff;
       }
+
       .badge {
         display: inline-block;
         border: 1px solid var(--ink);
@@ -149,36 +175,45 @@
         white-space: nowrap;
       }
 
-      ul.list {
+      .list {
         list-style: none;
         margin: 0;
         padding: 0;
       }
-      ul.list li {
+
+      .list li {
         padding: 4px 0;
         border-bottom: 1px dotted #ccc;
         display: flex;
         justify-content: space-between;
         gap: 8px;
       }
-      ul.list li:last-child {
+
+      .list li:last-child {
         border-bottom: none;
       }
-      ul.list li.sel {
+
+      .list li.selected {
         font-weight: bold;
       }
+
       .tree {
         line-height: 1.7;
         font-size: 12px;
       }
 
-      .rel {
+      .tree-compact {
+        font-size: 11px;
+      }
+
+      .relations {
         display: grid;
         grid-template-columns: 5em 1fr;
         gap: 4px 10px;
         font-size: 12px;
       }
-      .rel dt {
+
+      .relations dt {
         color: var(--note);
       }
 
@@ -189,36 +224,81 @@
         font-size: 11px;
         line-height: 1.6;
       }
+
       .log .ok {
         color: #9d9;
       }
+
       .box {
         border: 1px dashed var(--line);
       }
 
+      .empty-state {
+        color: var(--note);
+        padding: 26px;
+        text-align: center;
+      }
+
+      .target-summary {
+        font-size: 15px;
+        margin-bottom: 12px;
+      }
+
+      .spaced-heading {
+        margin-top: 16px;
+      }
+
+      .sidebar-heading {
+        margin-top: 14px;
+      }
+
+      .analytics-filters {
+        display: flex;
+        gap: 6px;
+      }
+
+      .fill-space {
+        flex: 1;
+      }
+
+      .search-toolbar {
+        border: 1px solid var(--ink);
+        border-bottom: none;
+      }
+
       /* find の dropdown */
-      .qo {
+
+      .search-dropdown {
         border: 2px solid var(--ink);
         background: #fff;
       }
-      .qo .match {
+
+      .search-results-attached {
+        border-top: none;
+      }
+
+      .search-dropdown .match {
         padding: 5px 10px;
         display: flex;
         justify-content: space-between;
         gap: 8px;
         border-bottom: 1px dotted #eee;
       }
-      .qo .match.sel {
+
+      .search-dropdown .match.selected {
         background: #eee;
       }
-      .qo .match b {
+
+      .search-dropdown .match b {
         text-decoration: underline;
       }
-      .qo .foot {
+
+      .search-dropdown .foot {
         padding: 5px 10px;
       }
 
       /* analytics */
+
       .chart {
         display: flex;
         align-items: flex-end;
@@ -228,57 +308,68 @@
         border-bottom: 1px solid var(--ink);
         padding: 0 4px;
       }
+
       .chart i {
         width: 11px;
         background: var(--line);
         display: block;
       }
-      .chart i.hl {
+
+      .chart i.highlighted {
         background: var(--ink);
       }
 
       /* timing フレームチャート */
-      .tl {
+
+      .timeline {
         border: 1px solid var(--ink);
         background: #fff;
         padding: 8px 8px 10px;
         position: relative;
       }
-      .tlaxis {
+
+      .timeline-axis {
         font-size: 10px;
         color: var(--note);
         letter-spacing: 2px;
         margin: 0 0 4px 62px;
       }
-      .tlrow {
+
+      .timeline-row {
         display: flex;
         align-items: center;
         height: 15px;
       }
-      .tlrow .n {
+
+      .timeline-row .thread-name {
         width: 58px;
         font-size: 10px;
         color: var(--note);
         flex-shrink: 0;
       }
-      .tlrow .tr {
+
+      .timeline-row .timeline-track {
         flex: 1;
         position: relative;
         height: 13px;
         border-bottom: 1px dotted #eee;
       }
-      .tr i {
+
+      .timeline-track i {
         position: absolute;
         top: 0;
         bottom: 0;
         background: #c9c9c9;
       }
-      .tr i.d {
+
+      .timeline-track i.dependency {
         background: #999;
       }
-      .tr i.e {
+
+      .timeline-track i.error {
         background: var(--ink);
       }
+
       .tip {
         position: absolute;
         right: 14px;
@@ -289,6 +380,10 @@
         font-size: 11px;
         box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.12);
       }
+
+      .timeline-legend {
+        margin-top: 6px;
+      }
     </style>
   </head>
   <body>
@@ -298,20 +393,20 @@
         window 1種・content 3状態（target / run / analytics）・実行入口は composer だけ。
       </div>
       <div class="toc">
-        <a href="#core">コア</a>
-        <a href="#s1">target</a>
-        <a href="#s2">run（実行中）</a>
-        <a href="#s2b">run（完了）</a>
-        <a href="#s3">analytics</a>
-        <a href="#qo">find</a>
+        <a href="#section-core">コア</a>
+        <a href="#section-target">target</a>
+        <a href="#section-running">run（実行中）</a>
+        <a href="#section-completed">run（完了）</a>
+        <a href="#section-analytics">analytics</a>
+        <a href="#section-find">find</a>
       </div>
     </div>
 
-    <div class="page" id="core">
+    <div class="page" id="section-core">
       <div class="basis">
-        <table class="basis-t">
+        <table class="basis-table">
           <tr>
-            <th style="width: 10em">残ったもの</th>
+            <th class="basis-table-primary-column">残ったもの</th>
             <th>役割</th>
           </tr>
           <tr>
@@ -343,14 +438,14 @@
     </div>
 
     <!-- data-* で chrome を指定するだけ。中身は content の差分 -->
-    <div class="page" id="s1">
+    <div class="page" id="section-target">
       <h2>target</h2>
       <div class="win" data-target="//app/lib:parser" data-side="tree" data-sel="">
-        <div style="font-size: 15px; margin-bottom: 12px">
+        <div class="target-summary">
           <strong>//app/lib:parser</strong>
           <span class="badge">java_library</span>
         </div>
-        <dl class="rel">
+        <dl class="relations">
           <dt>deps →</dt>
           <dd>:parser_proto · @maven//:guava</dd>
           <dt>data →</dt>
@@ -366,78 +461,82 @@
       </div>
     </div>
 
-    <div class="page" id="s2">
+    <div class="page" id="section-running">
       <h2>run（実行中）</h2>
       <div class="win" data-target="//app:server" data-stop data-side="min" data-sel="r1">
         <h3>timing</h3>
-        <div class="box" style="text-align: center; padding: 26px; color: var(--note)">
-          not available
-        </div>
-        <h3 style="margin-top: 16px">log</h3>
+        <div class="box empty-state">not available</div>
+        <h3 class="spaced-heading">log</h3>
         <div class="log">[34 / 120] JavaCompile libserver.jar … <span class="ok">ok</span></div>
       </div>
     </div>
 
-    <div class="page" id="s2b">
+    <div class="page" id="section-completed">
       <h2>run（完了）</h2>
       <div class="win" data-target="//app:server" data-side="min" data-sel="r2">
         <h3>timing</h3>
-        <div class="tl">
-          <div class="tlaxis">0s　　2s　　4s　　6s　　8s</div>
-          <div class="tlrow">
-            <span class="n">exec-0</span>
-            <div class="tr">
-              <i style="left: 0%; width: 18%"></i><i class="d" style="left: 20%; width: 26%"></i
-              ><i style="left: 48%; width: 10%"></i><i class="d" style="left: 60%; width: 30%"></i>
+        <div class="timeline">
+          <div class="timeline-axis">0s　　2s　　4s　　6s　　8s</div>
+          <div class="timeline-row">
+            <span class="thread-name">exec-0</span>
+            <div class="timeline-track">
+              <i style="left: 0; width: 18%"></i
+              ><i class="dependency" style="left: 20%; width: 26%"></i
+              ><i style="left: 48%; width: 10%"></i
+              ><i class="dependency" style="left: 60%; width: 30%"></i>
             </div>
           </div>
-          <div class="tlrow">
-            <span class="n">exec-1</span>
-            <div class="tr">
-              <i class="d" style="left: 2%; width: 12%"></i><i style="left: 16%; width: 34%"></i
-              ><i class="e" style="left: 52%; width: 22%"></i><i style="left: 78%; width: 14%"></i>
+          <div class="timeline-row">
+            <span class="thread-name">exec-1</span>
+            <div class="timeline-track">
+              <i class="dependency" style="left: 2%; width: 12%"></i
+              ><i style="left: 16%; width: 34%"></i
+              ><i class="error" style="left: 52%; width: 22%"></i
+              ><i style="left: 78%; width: 14%"></i>
             </div>
           </div>
-          <div class="tlrow">
-            <span class="n">exec-2</span>
-            <div class="tr">
-              <i style="left: 0%; width: 40%"></i><i class="d" style="left: 44%; width: 18%"></i
-              ><i style="left: 66%; width: 8%"></i><i class="d" style="left: 78%; width: 20%"></i>
+          <div class="timeline-row">
+            <span class="thread-name">exec-2</span>
+            <div class="timeline-track">
+              <i style="left: 0; width: 40%"></i
+              ><i class="dependency" style="left: 44%; width: 18%"></i
+              ><i style="left: 66%; width: 8%"></i
+              ><i class="dependency" style="left: 78%; width: 20%"></i>
             </div>
           </div>
-          <div class="tlrow">
-            <span class="n">exec-3</span>
-            <div class="tr">
-              <i class="d" style="left: 6%; width: 20%"></i><i style="left: 30%; width: 46%"></i
-              ><i style="left: 80%; width: 10%"></i>
+          <div class="timeline-row">
+            <span class="thread-name">exec-3</span>
+            <div class="timeline-track">
+              <i class="dependency" style="left: 6%; width: 20%"></i
+              ><i style="left: 30%; width: 46%"></i><i style="left: 80%; width: 10%"></i>
             </div>
           </div>
           <div class="tip">JavaCompile //app:server · 2.3s</div>
         </div>
-        <h3 style="margin-top: 16px">log</h3>
+        <h3 class="spaced-heading">log</h3>
         <div class="log">[120 / 120] done. <span class="ok">9.4s</span></div>
       </div>
     </div>
 
-    <div class="page" id="s3">
+    <div class="page" id="section-analytics">
       <h2>analytics</h2>
       <div class="win" data-target="//app/..." data-side="min" data-sel="a">
-        <div style="display: flex; gap: 6px">
+        <div class="analytics-filters">
           <span class="select">30日 ▾</span>
           <span class="select">cmd ▾</span>
           <span class="select">結果 ▾</span>
         </div>
-        <h3 style="margin-top: 16px">build の数</h3>
+        <h3 class="spaced-heading">build の数</h3>
         <div class="chart">
           <i style="height: 52%"></i><i style="height: 48%"></i><i style="height: 20%"></i
           ><i style="height: 31%"></i><i style="height: 44%"></i><i style="height: 40%"></i
           ><i style="height: 12%"></i><i style="height: 10%"></i><i style="height: 55%"></i
-          ><i class="hl" style="height: 58%"></i><i style="height: 50%"></i
+          ><i class="highlighted" style="height: 58%"></i><i style="height: 50%"></i
           ><i style="height: 46%"></i><i style="height: 18%"></i><i style="height: 15%"></i
           ><i style="height: 56%"></i><i style="height: 60%"></i><i style="height: 49%"></i
           ><i style="height: 26%"></i><i style="height: 22%"></i><i style="height: 38%"></i>
         </div>
-        <h3 style="margin-top: 16px">時間のかかった target</h3>
+        <h3 class="spaced-heading">時間のかかった target</h3>
         <ul class="list">
           <li><span>//app:server</span><span>96s ↑</span></li>
           <li><span>//app/lib:parser</span><span>12s</span></li>
@@ -445,15 +544,15 @@
       </div>
     </div>
 
-    <div class="page" id="qo">
+    <div class="page" id="section-find">
       <h2>target 欄（入力中）</h2>
-      <div class="toolbar" style="border: 1px solid var(--ink); border-bottom: none">
+      <div class="toolbar search-toolbar">
         <span class="select">build ▾</span>
-        <span class="input" style="flex: 1">psr▌</span>
+        <span class="input fill-space">psr▌</span>
         <span class="btn primary">Send</span>
       </div>
-      <div class="qo" style="border-top: none">
-        <div class="match sel">
+      <div class="search-dropdown search-results-attached">
+        <div class="match selected">
           <span>//app/lib:<b>p</b>a<b>r</b><b>s</b>er</span><span class="label">java_library</span>
         </div>
         <div class="match">
@@ -494,20 +593,20 @@
 
       const sidebar = (side, sel) => `
   <h3>targets</h3>
-  <div class="tree ${side === "min" ? "dim" : ""}" ${side === "min" ? 'style="font-size:11px;"' : ""}>${side === "min" ? "…" : TREE}</div>
-  <h3 style="margin-top:14px;">runs</h3>
+  <div class="tree ${side === "min" ? "tree-compact dim" : ""}">${side === "min" ? "…" : TREE}</div>
+  <h3 class="sidebar-heading">runs</h3>
   <ul class="list">
-    <li${"a" === sel ? ' class="sel"' : ""}><span>▤ analytics</span></li>
+    <li${"a" === sel ? ' class="selected"' : ""}><span>▤ analytics</span></li>
     ${RUNS.map(
       ([icon, t, id, time]) =>
-        `<li${id === sel ? ' class="sel"' : ""}><span>${icon} ${t}</span>${time ? `<span class="label">${time}</span>` : ""}</li>`,
+        `<li${id === sel ? ' class="selected"' : ""}><span>${icon} ${t}</span>${time ? `<span class="label">${time}</span>` : ""}</li>`,
     ).join("")}
   </ul>`;
 
       const toolbar = (target, stop) => `
   <strong>Zeal</strong><span class="label">~/repo</span>
   <span class="select">build ▾</span>
-  <span class="input" style="flex:1;">${target}</span>
+  <span class="input fill-space">${target}</span>
   ${stop ? '<span class="btn primary">■</span>' : '<span class="btn primary">Send</span>'}`;
 
       document.querySelectorAll(".win").forEach((w) => {
@@ -520,7 +619,7 @@
     </div>`;
         w.insertAdjacentHTML(
           "afterend",
-          `<div class="label" style="margin-top:6px;">legends: ● running · ✓ ok · ✗ failed · ■ interrupted · ○ no detail</div>`,
+          `<div class="label timeline-legend">legends: ● running · ✓ ok · ✗ failed · ■ interrupted · ○ no detail</div>`,
         );
       });
     </script>
