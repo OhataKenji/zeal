@@ -1,11 +1,10 @@
 //! Unix PTY ownership and durable output. A Console view never owns the child.
-// SAFETY: PTY setup and child session configuration require libc calls that
-// safe standard-library APIs do not expose. Successful raw descriptors are
-// converted to `File` exactly once, which then owns them through RAII.
 use crate::state::Core;
+use rustix::event::{self, PollFd, PollFlags, Timespec};
+use rustix::fs::{self, OFlags};
+use rustix::termios::{self, Winsize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command};
@@ -38,23 +37,19 @@ impl Control {
                 "invalid terminal size",
             ));
         }
-        let size = libc::winsize {
+        let size = Winsize {
             ws_row: rows,
             ws_col: cols,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        // SAFETY: ioctl reads the initialized winsize; this file owns the PTY.
-        if unsafe { libc::ioctl(self.0.as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        Ok(termios::tcsetwinsize(&self.0, size)?)
     }
 
     pub fn foreground_group(&self) -> Option<i32> {
-        // SAFETY: tcgetpgrp only inspects this PTY's foreground process group.
-        let group = unsafe { libc::tcgetpgrp(self.0.as_raw_fd()) };
-        (group > 0).then_some(group)
+        termios::tcgetpgrp(&self.0)
+            .ok()
+            .map(|group| group.as_raw_pid())
     }
 }
 
@@ -88,46 +83,19 @@ impl Drop for Capture {
 #[tracing::instrument(target = "zeal::operations", name = "bazel.spawn", skip_all)]
 pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, Capture)> {
     let mut log = OpenOptions::new().append(true).open(dir.join("log.txt"))?;
-    let mut master = -1;
-    let mut slave = -1;
-    let mut size = libc::winsize {
+    let size = Winsize {
         ws_row: 24,
         ws_col: 80,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    // SAFETY: output descriptors and winsize are valid; no name buffer is used.
-    if unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &raw mut size,
-        )
-    } < 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: openpty returned two new, owned descriptors.
-    let master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-    for file in [&master, &slave] {
-        // SAFETY: fcntl changes descriptor flags only.
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
+    // Both descriptors are owned and close-on-exec, including on error paths.
+    let pty = rustix_openpty::openpty(None, Some(&size))?;
+    let master = File::from(pty.controller);
+    let slave = File::from(pty.user);
     // The shared master description is nonblocking for both capture and input.
-    // SAFETY: `master` remains an owned, live descriptor; F_GETFL reads flags.
-    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `master` remains live and F_SETFL receives an integer flag value.
-    if unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let flags = fs::fcntl_getfl(&master)?;
+    fs::fcntl_setfl(&master, flags | OFlags::NONBLOCK)?;
     let mut reader = master.try_clone()?;
     command
         .stdin(slave.try_clone()?)
@@ -135,8 +103,12 @@ pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, C
         .stderr(slave)
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor");
-    // SAFETY: the child hook calls only async-signal-safe syscalls. Stdio has
-    // already been duplicated to 0/1/2 by Command when this hook runs.
+    // A controlling terminal must be set in the child, after fork and before
+    // exec. Command has no safe hook for this; process_group alone cannot
+    // create a session or acquire its controlling terminal.
+    // SAFETY: the hook uses only async-signal-safe syscalls and errno retrieval,
+    // with no allocation or locks. Command has already duplicated stdio to
+    // 0/1/2, so fd 0 is the live slave. All state changes affect only the child.
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() < 0
@@ -175,15 +147,12 @@ pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, C
                             if draining.is_some() {
                                 break;
                             }
-                            let mut fd = libc::pollfd {
-                                fd: reader.as_raw_fd(),
-                                events: libc::POLLIN,
-                                revents: 0,
+                            let mut fds = [PollFd::new(&reader, PollFlags::IN)];
+                            let timeout = Timespec {
+                                tv_sec: 0,
+                                tv_nsec: 20_000_000,
                             };
-                            // SAFETY: poll receives one initialized descriptor and a bounded timeout.
-                            unsafe {
-                                libc::poll(&mut fd, 1, 20);
-                            }
+                            let _ = event::poll(&mut fds, Some(&timeout));
                         }
                         // Linux reports EIO when the slave closes; macOS returns EOF.
                         Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
@@ -325,6 +294,43 @@ mod tests {
             let _ = self.capture.finish();
             let _ = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn unattached_terminal_has_no_foreground_group() {
+        let pty = rustix_openpty::openpty(None, None).unwrap();
+        let control = Control(File::from(pty.controller));
+        assert_eq!(control.foreground_group(), None);
+    }
+
+    #[test]
+    fn foreground_group_is_cleared_when_session_leader_exits() {
+        let mut f = Fixture::new("printf 'ready>'; read value; exit 0");
+        f.wait_for("ready>");
+        assert_eq!(
+            f.core
+                .state
+                .lock()
+                .unwrap()
+                .run_terminal
+                .as_ref()
+                .unwrap()
+                .foreground_group(),
+            Some(f.child.id() as i32)
+        );
+        f.send(b"done\r");
+        assert_eq!(f.finish(), 0);
+        assert_eq!(
+            f.core
+                .state
+                .lock()
+                .unwrap()
+                .run_terminal
+                .as_ref()
+                .unwrap()
+                .foreground_group(),
+            None
+        );
     }
 
     #[test]

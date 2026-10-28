@@ -1,12 +1,10 @@
 //! File access beneath an owned directory. Every child is opened relative to a
 //! directory FD, without following links; special files never reach a reader.
-// SAFETY: This module uses Unix *at syscalls because Rust's path APIs do not
-// provide race-free, symlink-resistant traversal relative to an open directory
-// descriptor. Returned descriptors are validated and converted to `File` once.
+//! rustix borrows directory descriptors and returns owned file descriptors.
+use rustix::fs::{self as rustix_fs, AtFlags, Mode, OFlags};
 use std::ffi::{CString, OsStr};
 use std::fs::{self, File};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -32,8 +30,7 @@ fn name(value: &OsStr) -> io::Result<CString> {
 fn owned(file: &File, directory: bool) -> io::Result<()> {
     let meta = file.metadata()?;
     // The same FD is used for checking and reading, including FIFO rejection.
-    // SAFETY: geteuid takes no arguments and reads the effective user ID.
-    if meta.uid() != unsafe { libc::geteuid() }
+    if meta.uid() != rustix::process::geteuid().as_raw()
         || (directory && !meta.is_dir())
         || (!directory && (!meta.is_file() || meta.nlink() != 1))
     {
@@ -95,35 +92,22 @@ impl Dir {
         exclusive: bool,
     ) -> io::Result<Self> {
         let name = name(child)?;
-        if create {
-            // SAFETY: `parent` is a live directory descriptor and `name` is a
-            // NUL-terminated child name from `CString`.
-            let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
-            if result != 0 {
-                let error = io::Error::last_os_error();
-                if exclusive || error.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(error);
-                }
-            }
+        if create
+            && let Err(error) = rustix_fs::mkdirat(parent, &name, Mode::from_raw_mode(0o700))
+            && (exclusive || error != rustix::io::Errno::EXIST)
+        {
+            return Err(error.into());
         }
-        // SAFETY: `parent` is a live directory descriptor and `name` is a
-        // NUL-terminated child name. `openat` returns a new descriptor on success.
-        let raw = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY
-                    | libc::O_DIRECTORY
-                    | libc::O_NOFOLLOW
-                    | libc::O_CLOEXEC
-                    | libc::O_NONBLOCK,
-            )
-        };
-        if raw < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `raw` is the newly owned descriptor returned by openat.
-        let fd = unsafe { File::from_raw_fd(raw) };
+        let fd = File::from(rustix_fs::openat(
+            parent,
+            &name,
+            OFlags::RDONLY
+                | OFlags::DIRECTORY
+                | OFlags::NOFOLLOW
+                | OFlags::CLOEXEC
+                | OFlags::NONBLOCK,
+            Mode::empty(),
+        )?);
         owned(&fd, true)?;
         fd.set_permissions(fs::Permissions::from_mode(0o700))?;
         if create {
@@ -159,22 +143,20 @@ impl Dir {
     }
     fn open_file(&self, child: &str, create: bool, private: bool) -> io::Result<File> {
         let child = name(OsStr::new(child))?;
-        let flags = libc::O_NOFOLLOW
-            | libc::O_CLOEXEC
-            | libc::O_NONBLOCK
+        let flags = OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | OFlags::NONBLOCK
             | if create {
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL
             } else {
-                libc::O_RDONLY
+                OFlags::RDONLY
             };
-        // SAFETY: `self.fd` is a live directory descriptor and `child` is a
-        // NUL-terminated name. `openat` returns a new descriptor on success.
-        let raw = unsafe { libc::openat(self.fd.as_raw_fd(), child.as_ptr(), flags, 0o600) };
-        if raw < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `raw` is the newly owned descriptor returned by openat.
-        let file = unsafe { File::from_raw_fd(raw) };
+        let file = File::from(rustix_fs::openat(
+            &self.fd,
+            &child,
+            flags,
+            Mode::from_raw_mode(0o600),
+        )?);
         owned(&file, false)?;
         // Do not change permissions on existing artifacts. Refuse unsafe files.
         if private && file.metadata()?.mode() & 0o077 != 0 {
@@ -188,43 +170,99 @@ impl Dir {
 
     pub(super) fn exists(&self, child: &str) -> io::Result<bool> {
         let child = name(OsStr::new(child))?;
-        // SAFETY: `libc::stat` is a C output struct whose fields are integer
-        // data; its all-zero bit pattern is valid before fstatat writes it.
-        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-        // SAFETY: `self.fd` is live, `child` is NUL-terminated, and `stat` points
-        // to writable storage for the duration of the call.
-        if unsafe {
-            libc::fstatat(
-                self.fd.as_raw_fd(),
-                child.as_ptr(),
-                &mut stat,
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        } == 0
-        {
-            Ok(true)
-        } else {
-            let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::NotFound {
-                Ok(false)
-            } else {
-                Err(err)
-            }
+        match rustix_fs::statat(&self.fd, &child, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => Ok(true),
+            Err(rustix::io::Errno::NOENT) => Ok(false),
+            Err(error) => Err(io::Error::from(error)),
         }
     }
     pub(super) fn remove_file(&self, child: &str) -> io::Result<()> {
-        self.remove(child, 0)
+        self.remove(child, AtFlags::empty())
     }
     pub(super) fn remove_dir(&self, child: &str) -> io::Result<()> {
-        self.remove(child, libc::AT_REMOVEDIR)
+        self.remove(child, AtFlags::REMOVEDIR)
     }
-    fn remove(&self, child: &str, flag: i32) -> io::Result<()> {
+    fn remove(&self, child: &str, flags: AtFlags) -> io::Result<()> {
         let child = name(OsStr::new(child))?;
-        // SAFETY: `self.fd` is a live directory descriptor and `child` is a
-        // NUL-terminated name.
-        if unsafe { libc::unlinkat(self.fd.as_raw_fd(), child.as_ptr(), flag) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        rustix_fs::unlinkat(&self.fd, &child, flags)?;
         self.sync()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    struct Fixture {
+        root: PathBuf,
+        dir: Dir,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("zeal-securefs-{}", uuid::Uuid::new_v4()));
+            let dir = Dir::root(&root).unwrap();
+            Self { root, dir }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn rejects_symlinked_directory_and_file_and_detects_dangling_link() {
+        let fixture = Fixture::new();
+        fs::create_dir(fixture.root.join("real-dir")).unwrap();
+        fs::write(fixture.root.join("secret"), b"secret").unwrap();
+        symlink("real-dir", fixture.root.join("linked-dir")).unwrap();
+        symlink("secret", fixture.root.join("linked-file")).unwrap();
+        symlink("missing", fixture.root.join("dangling")).unwrap();
+
+        assert!(fixture.dir.child("linked-dir", false).is_err());
+        assert!(fixture.dir.artifact("linked-file").is_err());
+        assert!(fixture.dir.exists("dangling").unwrap());
+        assert!(!fixture.dir.exists("missing").unwrap());
+    }
+
+    #[test]
+    fn rejects_traversal_hard_links_and_fifo_files() {
+        let fixture = Fixture::new();
+        assert!(fixture.dir.child("../outside", false).is_err());
+        assert!(fixture.dir.file("nested/name", false).is_err());
+
+        drop(fixture.dir.file("one-link", true).unwrap());
+        fs::hard_link(
+            fixture.root.join("one-link"),
+            fixture.root.join("two-links"),
+        )
+        .unwrap();
+        assert!(fixture.dir.artifact("one-link").is_err());
+        assert!(fixture.dir.artifact("two-links").is_err());
+
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(fixture.root.join("pipe"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(fixture.dir.file("pipe", false).is_err());
+    }
+
+    #[test]
+    fn removes_file_and_directory_entries() {
+        let fixture = Fixture::new();
+        let child_dir = fixture.dir.create_child("child").unwrap();
+        drop(child_dir);
+        fixture.dir.remove_dir("child").unwrap();
+
+        drop(fixture.dir.file("file", true).unwrap());
+        fixture.dir.remove_file("file").unwrap();
+        assert!(!fixture.dir.exists("child").unwrap());
+        assert!(!fixture.dir.exists("file").unwrap());
     }
 }
