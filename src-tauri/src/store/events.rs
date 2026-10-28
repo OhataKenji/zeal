@@ -75,6 +75,14 @@ impl Observation {
             self.log.push_str(&progress.stdout);
             trim_log(&mut self.log);
         }
+        if let Some(Payload::OptionsParsed(options)) = &event.payload {
+            self.bep.options = Some(crate::bep::BuildOptions {
+                startup_options: options.startup_options.clone(),
+                explicit_startup_options: options.explicit_startup_options.clone(),
+                cmd_line: options.cmd_line.clone(),
+                explicit_cmd_line: options.explicit_cmd_line.clone(),
+            });
+        }
         match (
             event.id.as_ref().and_then(|id| id.id.as_ref()),
             event.payload.as_ref(),
@@ -408,6 +416,34 @@ mod tests {
         );
         start.sequence_number = 3;
         assert_eq!(save(&f.data, &start).unwrap_err().kind, ErrorKind::Conflict);
+    }
+
+    #[test]
+    fn bes_options_parsed_projection_survives_saved_history() {
+        let f = Fixture::new();
+        save(&f.data, &f.start()).unwrap();
+        let options = payload(Payload::OptionsParsed(bep::OptionsParsed {
+            startup_options: vec!["--batch".into()],
+            explicit_startup_options: vec![],
+            cmd_line: vec!["--jobs=8".into(), "--color=yes".into()],
+            explicit_cmd_line: vec!["--jobs=8".into()],
+            ..Default::default()
+        }));
+        save(&f.data, &f.event(2, options)).unwrap();
+        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
+        assert_eq!(
+            observed.bep.options,
+            Some(crate::bep::BuildOptions {
+                startup_options: vec!["--batch".into()],
+                explicit_startup_options: vec![],
+                cmd_line: vec!["--jobs=8".into(), "--color=yes".into()],
+                explicit_cmd_line: vec!["--jobs=8".into()],
+            })
+        );
+        assert_eq!(
+            get(&f.data, &f.ws, &f.id).unwrap().unwrap().bep.options,
+            observed.bep.options
+        );
     }
 
     #[test]
