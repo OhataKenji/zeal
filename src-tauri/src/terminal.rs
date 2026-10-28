@@ -297,6 +297,43 @@ mod tests {
     }
 
     #[test]
+    fn unattached_terminal_has_no_foreground_group() {
+        let pty = rustix_openpty::openpty(None, None).unwrap();
+        let control = Control(File::from(pty.controller));
+        assert_eq!(control.foreground_group(), None);
+    }
+
+    #[test]
+    fn foreground_group_is_cleared_when_session_leader_exits() {
+        let mut f = Fixture::new("printf 'ready>'; read value; exit 0");
+        f.wait_for("ready>");
+        assert_eq!(
+            f.core
+                .state
+                .lock()
+                .unwrap()
+                .run_terminal
+                .as_ref()
+                .unwrap()
+                .foreground_group(),
+            Some(f.child.id() as i32)
+        );
+        f.send(b"done\r");
+        assert_eq!(f.finish(), 0);
+        assert_eq!(
+            f.core
+                .state
+                .lock()
+                .unwrap()
+                .run_terminal
+                .as_ref()
+                .unwrap()
+                .foreground_group(),
+            None
+        );
+    }
+
+    #[test]
     fn interactive_process_has_a_controlling_terminal_and_resizes() {
         let mut f = Fixture::new(
             "test -t 0 && test -t 1 && test -t 2 || exit 9; printf 'ready>'; read value; stty size; printf 'answer=%s\\n' $((value * 2))",
