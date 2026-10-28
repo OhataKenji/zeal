@@ -1,7 +1,7 @@
 //! Durable observations, independent of process ownership. Acknowledgements
 //! follow the transaction containing both original events and their projection.
 use super::{ErrorKind, RunRecord, Store, StoreError, fail};
-use crate::bep::{Bep, TargetResult, TestResult};
+use crate::bep::Bep;
 use crate::protocol::{bep, bes};
 use bep::{build_event::Payload, build_event_id::Id};
 use prost::Message;
@@ -53,7 +53,7 @@ impl Observation {
 
     /// Pure projection. The saved event bytes retain fields not shown by this UI.
     #[allow(deprecated)] // Fall back to legacy millisecond timestamps when needed.
-    fn apply(&mut self, event: &bep::BuildEvent) {
+    fn apply(&mut self, mut event: bep::BuildEvent) {
         if let Some(Payload::Started(started)) = &event.payload {
             self.workspace = started.workspace_directory.clone();
             self.cmd = started.command.clone();
@@ -75,38 +75,6 @@ impl Observation {
             self.log.push_str(&progress.stdout);
             trim_log(&mut self.log);
         }
-        if let Some(Payload::OptionsParsed(options)) = &event.payload {
-            self.bep.options = Some(crate::bep::BuildOptions {
-                startup_options: options.startup_options.clone(),
-                explicit_startup_options: options.explicit_startup_options.clone(),
-                cmd_line: options.cmd_line.clone(),
-                explicit_cmd_line: options.explicit_cmd_line.clone(),
-            });
-        }
-        match (
-            event.id.as_ref().and_then(|id| id.id.as_ref()),
-            event.payload.as_ref(),
-        ) {
-            (Some(Id::TargetCompleted(id)), Some(Payload::Completed(result))) => {
-                self.bep.targets.push(TargetResult {
-                    label: id.label.clone(),
-                    ok: result.success,
-                });
-            }
-            (Some(Id::TargetConfigured(id)), Some(Payload::Aborted(_))) => {
-                self.bep.targets.push(TargetResult {
-                    label: id.label.clone(),
-                    ok: false,
-                });
-            }
-            (Some(Id::TestSummary(id)), Some(Payload::TestSummary(summary))) => {
-                self.bep.tests.push(TestResult {
-                    label: id.label.clone(),
-                    status: crate::bep::test_status(summary.overall_status).to_string(),
-                });
-            }
-            _ => {}
-        }
         if let Some(Payload::Finished(finished)) = &event.payload {
             self.finished_at = Some(millis(
                 finished.finish_time.as_ref(),
@@ -114,6 +82,7 @@ impl Observation {
             ));
             self.exit_code = finished.exit_code.as_ref().map(|exit| exit.code);
         }
+        self.bep.apply_event(event.id.take(), event.payload.take());
         self.complete |= event.last_message;
     }
 }
@@ -260,7 +229,7 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
         // the observation becomes workspace-visible once BuildStarted arrives.
         let targets = observation.bep.targets.len();
         let tests = observation.bep.tests.len();
-        observation.apply(&event);
+        observation.apply(event);
         if observation.target.len() > 64 * 1024 {
             return Err(fail(ErrorKind::Invalid));
         }
@@ -321,7 +290,7 @@ mod tests {
     use super::*;
     use bep::{
         build_event::Payload,
-        build_event_id::{Id, PatternExpandedId, TargetCompletedId},
+        build_event_id::{Id, PatternExpandedId, TargetCompletedId, TestSummaryId},
         build_finished::ExitCode,
     };
     use std::{fs, path::PathBuf};
@@ -419,30 +388,57 @@ mod tests {
     }
 
     #[test]
-    fn bes_options_parsed_projection_survives_saved_history() {
+    fn bes_and_file_paths_share_bep_projection_and_saved_history() {
         let f = Fixture::new();
         save(&f.data, &f.start()).unwrap();
-        let options = payload(Payload::OptionsParsed(bep::OptionsParsed {
-            startup_options: vec!["--batch".into()],
-            explicit_startup_options: vec![],
-            cmd_line: vec!["--jobs=8".into(), "--color=yes".into()],
-            explicit_cmd_line: vec!["--jobs=8".into()],
-            ..Default::default()
-        }));
-        save(&f.data, &f.event(2, options)).unwrap();
-        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(
-            observed.bep.options,
-            Some(crate::bep::BuildOptions {
+        let events = [
+            payload(Payload::OptionsParsed(bep::OptionsParsed {
                 startup_options: vec!["--batch".into()],
                 explicit_startup_options: vec![],
                 cmd_line: vec!["--jobs=8".into(), "--color=yes".into()],
                 explicit_cmd_line: vec!["--jobs=8".into()],
-            })
-        );
+                ..Default::default()
+            })),
+            bep::BuildEvent {
+                id: Some(bep::BuildEventId {
+                    id: Some(Id::TargetCompleted(TargetCompletedId {
+                        label: "//pkg:target".into(),
+                        ..Default::default()
+                    })),
+                }),
+                payload: Some(Payload::Completed(bep::TargetComplete {
+                    success: true,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            bep::BuildEvent {
+                id: Some(bep::BuildEventId {
+                    id: Some(Id::TestSummary(TestSummaryId {
+                        label: "//pkg:test".into(),
+                        ..Default::default()
+                    })),
+                }),
+                payload: Some(Payload::TestSummary(bep::TestSummary {
+                    overall_status: 1,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        ];
+        let mut file_stream = Vec::new();
+        for (index, event) in events.into_iter().enumerate() {
+            event.encode_length_delimited(&mut file_stream).unwrap();
+            save(&f.data, &f.event(index as i64 + 2, event)).unwrap();
+        }
+        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
+        assert_eq!(observed.bep, crate::bep::parse(file_stream.as_slice()));
+        assert_eq!(observed.bep.options.as_ref().unwrap().cmd_line.len(), 2);
+        assert_eq!(observed.bep.targets[0].label, "//pkg:target");
+        assert_eq!(observed.bep.tests[0].label, "//pkg:test");
         assert_eq!(
-            get(&f.data, &f.ws, &f.id).unwrap().unwrap().bep.options,
-            observed.bep.options
+            get(&f.data, &f.ws, &f.id).unwrap().unwrap().bep,
+            observed.bep
         );
     }
 
@@ -516,6 +512,44 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             3
+        );
+    }
+
+    #[test]
+    fn oversized_generated_policy_fails_with_capacity() {
+        use crate::protocol::generated::blaze::invocation_policy as policy;
+
+        let f = Fixture::new();
+        save(&f.data, &f.start()).unwrap();
+        let options = bep::OptionsParsed {
+            invocation_policy: Some(policy::InvocationPolicy {
+                flag_policies: vec![policy::FlagPolicy {
+                    flag_name: Some("define".into()),
+                    operation: Some(policy::flag_policy::Operation::SetValue(policy::SetValue {
+                        flag_value: vec!["x".repeat(SUMMARY_LIMIT + 64)],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let event = f.event(2, payload(Payload::OptionsParsed(options)));
+
+        assert_eq!(save(&f.data, &event).unwrap_err().kind, ErrorKind::Capacity);
+        assert_eq!(
+            get(&f.data, &f.ws, &f.id).unwrap().unwrap().bep.options,
+            None
+        );
+        let store = Store::open(&f.data).unwrap();
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM build_event", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
         );
     }
 

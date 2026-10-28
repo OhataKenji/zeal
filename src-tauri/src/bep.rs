@@ -4,7 +4,9 @@
 //! contribute to the existing display model. The source file remains intact,
 //! including fields this projection does not know about.
 
-use crate::protocol::bep::{BuildEvent, build_event::Payload, build_event_id::Id};
+use crate::protocol::bep::{
+    BuildEvent, BuildEventId, OptionsParsed, build_event::Payload, build_event_id::Id,
+};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -17,17 +19,8 @@ pub struct Bep {
     pub targets: Vec<TargetResult>,
     pub tests: Vec<TestResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<BuildOptions>,
+    pub options: Option<OptionsParsed>,
     pub truncated: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BuildOptions {
-    pub startup_options: Vec<String>,
-    pub explicit_startup_options: Vec<String>,
-    pub cmd_line: Vec<String>,
-    pub explicit_cmd_line: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -74,7 +67,7 @@ pub fn parse<R: Read>(mut input: R) -> Bep {
             bep.truncated = true;
             break;
         };
-        project(event, &mut bep);
+        bep.apply_event(event.id, event.payload);
     }
     bep
 }
@@ -114,38 +107,30 @@ pub(crate) fn test_status(status: i32) -> &'static str {
     }
 }
 
-fn project(event: BuildEvent, bep: &mut Bep) {
-    if let Some(Payload::OptionsParsed(options)) = &event.payload {
-        bep.options = Some(BuildOptions {
-            startup_options: options.startup_options.clone(),
-            explicit_startup_options: options.explicit_startup_options.clone(),
-            cmd_line: options.cmd_line.clone(),
-            explicit_cmd_line: options.explicit_cmd_line.clone(),
-        });
-    }
-    let Some(id) = event.id.and_then(|id| id.id) else {
-        return;
-    };
-    match (id, event.payload) {
-        (Id::TargetCompleted(id), Some(Payload::Completed(result))) => {
-            bep.targets.push(TargetResult {
-                label: id.label,
-                ok: result.success,
-            });
+impl Bep {
+    pub(crate) fn apply_event(&mut self, id: Option<BuildEventId>, payload: Option<Payload>) {
+        match (id.and_then(|id| id.id), payload) {
+            (_, Some(Payload::OptionsParsed(options))) => self.options = Some(options),
+            (Some(Id::TargetCompleted(id)), Some(Payload::Completed(result))) => {
+                self.targets.push(TargetResult {
+                    label: id.label,
+                    ok: result.success,
+                });
+            }
+            (Some(Id::TargetConfigured(id)), Some(Payload::Aborted(_))) => {
+                self.targets.push(TargetResult {
+                    label: id.label,
+                    ok: false,
+                });
+            }
+            (Some(Id::TestSummary(id)), Some(Payload::TestSummary(summary))) => {
+                self.tests.push(TestResult {
+                    label: id.label,
+                    status: test_status(summary.overall_status).to_string(),
+                });
+            }
+            _ => {}
         }
-        (Id::TargetConfigured(id), Some(Payload::Aborted(_))) => {
-            bep.targets.push(TargetResult {
-                label: id.label,
-                ok: false,
-            });
-        }
-        (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
-            bep.tests.push(TestResult {
-                label: id.label,
-                status: test_status(summary.overall_status).to_string(),
-            });
-        }
-        _ => {}
     }
 }
 
@@ -249,14 +234,12 @@ mod tests {
         );
         assert_eq!(
             parsed.options,
-            Some(BuildOptions {
-                startup_options: vec!["--batch", "--output_base=/tmp/base"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
+            Some(crate::protocol::bep::OptionsParsed {
+                startup_options: vec!["--batch".into(), "--output_base=/tmp/base".into()],
                 explicit_startup_options: vec!["--batch".into()],
                 cmd_line: vec!["--color=yes".into(), "--jobs=8".into()],
                 explicit_cmd_line: vec!["--jobs=8".into()],
+                ..Default::default()
             })
         );
         assert_eq!(parse(event(BuildEvent::default()).as_slice()).options, None);
@@ -269,7 +252,7 @@ mod tests {
                 .as_slice()
             )
             .options,
-            Some(BuildOptions::default())
+            Some(crate::protocol::bep::OptionsParsed::default())
         );
     }
 
@@ -278,6 +261,61 @@ mod tests {
         let parsed: Bep =
             serde_json::from_str(r#"{"targets":[],"tests":[],"truncated":false}"#).unwrap();
         assert_eq!(parsed.options, None);
+    }
+
+    #[test]
+    fn generated_options_serde_roundtrips_policy_and_reads_old_summaries() {
+        use crate::protocol::generated::blaze::invocation_policy as policy;
+
+        let options = crate::protocol::bep::OptionsParsed {
+            startup_options: vec!["--batch".into()],
+            explicit_startup_options: vec![],
+            cmd_line: vec!["--jobs=8".into()],
+            explicit_cmd_line: vec!["--jobs=8".into()],
+            invocation_policy: Some(policy::InvocationPolicy {
+                flag_policies: vec![policy::FlagPolicy {
+                    flag_name: Some("jobs".into()),
+                    operation: Some(policy::flag_policy::Operation::SetValue(policy::SetValue {
+                        flag_value: vec!["8".into()],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            tool_tag: "custom-tool".into(),
+        };
+        let summary = Bep {
+            options: Some(options.clone()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&summary).unwrap();
+        assert_eq!(value["options"]["toolTag"], "custom-tool");
+        assert_eq!(
+            value["options"]["invocationPolicy"]["flagPolicies"][0]["operation"]["setValue"]["flagValue"],
+            serde_json::json!(["8"])
+        );
+        assert_eq!(
+            serde_json::from_value::<Bep>(value).unwrap().options,
+            Some(options)
+        );
+
+        let old_summary: Bep = serde_json::from_value(serde_json::json!({
+            "targets": [],
+            "tests": [],
+            "options": {
+                "startupOptions": ["--batch"],
+                "explicitStartupOptions": [],
+                "cmdLine": ["--jobs=8"],
+                "explicitCmdLine": ["--jobs=8"]
+            },
+            "truncated": false
+        }))
+        .unwrap();
+        let old_options = old_summary.options.unwrap();
+        assert_eq!(old_options.cmd_line, ["--jobs=8"]);
+        assert!(old_options.invocation_policy.is_none());
+        assert!(old_options.tool_tag.is_empty());
     }
 
     #[test]
