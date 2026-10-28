@@ -297,6 +297,30 @@ export function installPreview() {
               data: {
                 targets: [{ label: record.target, ok: record.exitCode === 0 }],
                 tests: [],
+                ...(record.id === records[0]?.id
+                  ? {
+                      options: {
+                        startupOptions: ["--output_user_root=/tmp/zeal-preview-root", "--batch"],
+                        explicitStartupOptions: ["--output_user_root=/tmp/zeal-preview-root"],
+                        cmdLine: [
+                          "--color=yes",
+                          "--jobs=8",
+                          "--define=message=hello world",
+                          "--keep_going",
+                          "--test_output=errors",
+                          "--copt=-DNAME=preview value",
+                          "--remote_cache=grpc://cache.example.invalid",
+                        ],
+                        explicitCmdLine: [
+                          "--define=message=hello world",
+                          "--jobs=8",
+                          "--keep_going",
+                          "--test_output=errors",
+                          "--copt=-DNAME=preview value",
+                        ],
+                      },
+                    }
+                  : {}),
                 truncated: false,
               },
             },

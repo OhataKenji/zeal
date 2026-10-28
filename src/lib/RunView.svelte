@@ -5,6 +5,7 @@
   import LogPanel from "./run/LogPanel.svelte";
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
+  import { formatOptions } from "./run/options";
 
   let { view, reload, reloadProfile }: {
     view: SessionView;
@@ -18,6 +19,7 @@
   );
   const running = $derived(view.state?.running === selectedRun);
   const profile = $derived(sectionData(view.profile ?? undefined));
+  const bep = $derived(sectionData(view.detail?.bep));
   const status = $derived(
     runStatus(record, view.state?.running ?? null, view.state?.stopping),
   );
@@ -139,6 +141,38 @@
                     {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
                   </dd>{/if}
               </dl>
+              <h3 class="run-arguments-heading">Bazel arguments</h3>
+              {#if bep?.options}
+                <div class="run-command-options">
+                  <section class="run-command-block">
+                    <h4>Explicit command options</h4>
+                    <code class="run-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
+                  </section>
+                  <section class="run-command-block">
+                    <h4>Effective command options</h4>
+                    <code class="run-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
+                  </section>
+                  {#if bep.options.explicitStartupOptions.length || bep.options.startupOptions.length}
+                    <details class="run-startup-options">
+                      <summary>Startup options</summary>
+                      {#if bep.options.explicitStartupOptions.length}
+                        <section class="run-command-block">
+                          <h4>Explicit startup options</h4>
+                          <code class="run-command-code">{formatOptions(bep.options.explicitStartupOptions)}</code>
+                        </section>
+                      {/if}
+                      {#if bep.options.startupOptions.length}
+                        <section class="run-command-block">
+                          <h4>Effective startup options</h4>
+                          <code class="run-command-code">{formatOptions(bep.options.startupOptions)}</code>
+                        </section>
+                      {/if}
+                    </details>
+                  {/if}
+                </div>
+              {:else}
+                <p class="panel-empty">Arguments were not recorded in the build events.</p>
+              {/if}
             {/if}
           {:else}
             <h2 class="panel-heading">Timing</h2>
