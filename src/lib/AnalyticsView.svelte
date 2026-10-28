@@ -101,7 +101,7 @@
     >
   </div>
   {#if view.loading}<p role="status">Loading…</p>{/if}
-  {#if view.error}<p class="err" role="alert">
+  {#if view.error}<p class="error" role="alert">
       Unable to load analytics: {view.error}
     </p>{/if}
   {#if data}

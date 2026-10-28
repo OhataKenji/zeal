@@ -50,4 +50,4 @@
     <button class="button" type="button" onclick={onclose}>cancel</button>
   {/if}
 </form>
-{#if error}<p class="err">{error}</p>{/if}
+{#if error}<p class="error">{error}</p>{/if}

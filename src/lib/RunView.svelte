@@ -86,7 +86,7 @@
   </RunHeader>
 
   {#if view.detailError}
-    <div class="run-notice err">
+    <div class="run-notice error">
       Could not load run details: {view.detailError}
       <button type="button" class="button" onclick={reload}>Retry</button>
     </div>
@@ -182,7 +182,7 @@
             {:else if view.profileLoading}<p class="panel-empty" role="status">
                 Loading profile…
               </p>
-            {:else if view.profileError}<div class="run-notice err">
+            {:else if view.profileError}<div class="run-notice error">
                 Could not load timing data: {view.profileError}
                 <button type="button" class="button" onclick={reloadProfile}>Retry</button>
               </div>

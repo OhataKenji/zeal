@@ -9,7 +9,7 @@ if (import.meta.env.DEV && !isTauri() && new URLSearchParams(location.search).ha
 }
 
 const app = mount(App, {
-  target: document.getElementById("app")!,
+  target: document.getElementById("app-root")!,
 });
 
 export default app;

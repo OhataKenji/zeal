@@ -66,7 +66,7 @@
 
 <section class="run-page console-page">
   <RunHeader {record} {status} />
-  {#if error}<p class="run-notice err" role="alert">{error}</p>{/if}
+  {#if error}<p class="run-notice error" role="alert">{error}</p>{/if}
   <div class="run-panel">
     <div class="panel-heading console-log-spacer" aria-hidden="true">Logs</div>
     <div class="console-terminal" bind:this={host}></div>

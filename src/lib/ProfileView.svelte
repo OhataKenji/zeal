@@ -336,7 +336,6 @@
       <canvas
         bind:this={ruler}
         style:width="{width}px"
-        style:height="26px"
         aria-label="Timeline time ruler"
       ></canvas>
     </div>
