@@ -8,6 +8,7 @@
 
 use crate::state::{Core, CoreState};
 use crate::store::{self, RunRecord};
+use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
 use std::io;
@@ -152,7 +153,7 @@ pub fn start(
                 if status.is_none() && capture.failed() {
                     // The child is still owned and unreaped. Stop it if output
                     // can no longer be captured instead of leaving it blocked.
-                    let _ = signal_group(child.id() as i32, libc::SIGKILL);
+                    let _ = signal_group(child.id() as i32, Signal::KILL);
                 }
                 Ok(status.map(|status| status.code().unwrap_or(-1)))
             },
@@ -199,7 +200,7 @@ fn begin_stop(st: &mut CoreState) {
     st.run_stop_started = Some(Instant::now());
     st.run_note = None;
     if let Some(pgid) = st.run_pgid
-        && let Err(e) = signal_run(st, pgid, libc::SIGINT)
+        && let Err(e) = signal_run(st, pgid, Signal::INT)
     {
         log::warn!("SIGINT to run group failed: {e}");
     }
@@ -237,7 +238,7 @@ fn observe_process(
         if let Some(started) = st.run_stop_started {
             if started.elapsed() >= grace && !killed {
                 if let Some(pgid) = st.run_pgid
-                    && let Err(e) = signal_run(&st, pgid, libc::SIGKILL)
+                    && let Err(e) = signal_run(&st, pgid, Signal::KILL)
                 {
                     log::warn!("SIGKILL to run group failed: {e}");
                 }
@@ -310,7 +311,7 @@ pub fn exit_stop(core: &Core) {
         }
         if Instant::now() >= deadline {
             if let Some(pgid) = st.run_pgid
-                && let Err(e) = signal_run(&st, pgid, libc::SIGKILL)
+                && let Err(e) = signal_run(&st, pgid, Signal::KILL)
             {
                 log::warn!("SIGKILL to run group failed: {e}");
             }
@@ -372,17 +373,24 @@ fn clear_run(st: &mut CoreState) {
     st.run_stop_started = None;
 }
 
-/// Signal a whole process group: `pgid` is the run's pid (`process_group(0)`
-/// above), and a negative pid addresses its group.
-fn signal_group(pgid: i32, signal: i32) -> std::io::Result<()> {
-    // SAFETY: kill(2) only delivers a signal; it touches no memory.
-    if unsafe { libc::kill(-pgid, signal) } == -1 {
-        return Err(std::io::Error::last_os_error());
+/// A run's process group must not address the caller's group (0) or all
+/// signalable processes (1 when negated by kill_process_group).
+fn process_group(pgid: i32) -> io::Result<Pid> {
+    if pgid <= 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid run process group",
+        ));
     }
-    Ok(())
+    Ok(Pid::from_raw(pgid).expect("run process group is positive"))
 }
 
-fn signal_run(st: &CoreState, pgid: i32, signal: i32) -> io::Result<()> {
+/// Signal the run's session group, or its terminal's foreground job group.
+fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
+    Ok(process::kill_process_group(process_group(pgid)?, signal)?)
+}
+
+fn signal_run(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()> {
     if let Some(foreground) = st
         .run_terminal
         .as_ref()
@@ -660,17 +668,35 @@ mod tests {
 
     impl Drop for GroupGuard {
         fn drop(&mut self) {
-            let _ = signal_group(self.0, libc::SIGKILL);
+            let _ = signal_group(self.0, Signal::KILL);
         }
     }
 
-    /// Signal 0 probes the group through the one helper that may: only `ESRCH`
-    /// means it is empty.
+    /// Probe without delivering a signal: only ESRCH means the group is empty.
     fn group_alive(pgid: i32) -> bool {
-        match signal_group(pgid, 0) {
-            Ok(()) => true,
-            Err(e) => e.raw_os_error() != Some(libc::ESRCH),
-        }
+        process::test_kill_process_group(process_group(pgid).unwrap())
+            != Err(rustix::io::Errno::SRCH)
+    }
+
+    #[test]
+    fn run_process_groups_exclude_broadcast_and_invalid_ids() {
+        assert_eq!(
+            process_group(0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            process_group(1).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            process_group(-1).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            process_group(i32::MIN).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(process_group(42).unwrap().as_raw_pid(), 42);
     }
 
     #[test]
@@ -699,7 +725,7 @@ mod tests {
             let _ = tx.send(());
             status
         });
-        signal_group(pgid, libc::SIGINT).unwrap();
+        signal_group(pgid, Signal::INT).unwrap();
         rx.recv_timeout(Duration::from_secs(10))
             .expect("child did not exit after SIGINT");
         let status = waiter.join().unwrap().unwrap();
@@ -709,7 +735,7 @@ mod tests {
         // (POSIX async list), so the group is not necessarily empty yet: kill
         // it, exactly as `stop` does after the grace, and then require every
         // member to be gone. The group may be empty already.
-        let _ = signal_group(pgid, libc::SIGKILL);
+        let _ = signal_group(pgid, Signal::KILL);
         let deadline = Instant::now() + Duration::from_secs(10);
         while group_alive(pgid) {
             assert!(Instant::now() < deadline, "group {pgid} still has members");
