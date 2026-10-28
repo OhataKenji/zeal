@@ -6,23 +6,26 @@
   const bep = $derived(sectionData(section));
 </script>
 
-{#snippet results(bep: Bep)}
-  {#if bep.targets.length === 0 && bep.tests.length === 0}<p class="panel-empty">No target or test results were recorded.</p>{/if}
+<h2 class="panel-heading">Targets {#if bep}<span>{bep.targets.length}</span>{/if}</h2>
+{#if section && section.status !== "ok"}<p class="run-notice">{sectionMessage(section)}</p>{/if}
+{#if bep}
   {#if bep.targets.length}
-    <h2 class="panel-heading">Targets <span>{bep.targets.length}</span></h2>
     <ul class="result-list">
       {#each bep.targets as target}<li><span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span><code>{target.label}</code><span>{target.ok ? "Completed" : "Failed"}</span></li>{/each}
     </ul>
+  {:else}
+    <p class="panel-empty">No results recorded.</p>
   {/if}
+{/if}
+
+<h2 class="panel-heading">Tests {#if bep}<span>{bep.tests.length}</span>{/if}</h2>
+{#if section && section.status !== "ok"}<p class="run-notice">{sectionMessage(section)}</p>{/if}
+{#if bep}
   {#if bep.tests.length}
-    <h2 class="panel-heading">Tests <span>{bep.tests.length}</span></h2>
     <ul class="result-list">
       {#each bep.tests as test}<li><code>{test.label}</code><span>{test.status}</span></li>{/each}
     </ul>
+  {:else}
+    <p class="panel-empty">No results recorded.</p>
   {/if}
-{/snippet}
-
-{#if section}
-  {#if section.status !== "ok"}<p class="run-notice">{sectionMessage(section)}</p>{/if}
-  {#if bep}{@render results(bep)}{/if}
 {/if}

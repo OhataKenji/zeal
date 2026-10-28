@@ -170,8 +170,10 @@
                     </details>
                   {/if}
                 </div>
-              {:else}
-                <p class="panel-empty">Arguments were not recorded in the build events.</p>
+              {:else if view.detailLoading}
+                <p class="panel-empty">Loading arguments…</p>
+              {:else if view.detail}
+                <p class="run-notice">{sectionMessage(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)}</p>
               {/if}
             {/if}
           {:else}
