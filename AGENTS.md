@@ -1,5 +1,7 @@
 # AGENTS.md
 
+see README.md
+
 ## Workflow
 
 - Before editing or reviewing code, read and follow
