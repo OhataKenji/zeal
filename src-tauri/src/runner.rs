@@ -102,7 +102,7 @@ pub fn start(
 ) -> Result<RunRecord, String> {
     validate_cmd(cmd)?;
     validate_target(target)?;
-    let mut st = core.state.lock().unwrap();
+    let mut st = core.state.lock().expect("application state lock poisoned");
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
@@ -127,7 +127,7 @@ pub fn start(
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
-    st.run = Some(rec.id.clone());
+    st.run = Some(rec.id.clone().into());
     st.run_terminal = Some(terminal);
     st.run_pgid = Some(child.id() as i32);
     st.run_stopping = false;
@@ -166,7 +166,7 @@ pub fn start(
             Ok(code) => store::finish(&data, &ws, &id, *code).map(|_| ()),
             Err(_) => Ok(()),
         };
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         if apply_reap(&mut st, &id, &exit)
             && let Err(e) = saved
         {
@@ -184,7 +184,7 @@ pub fn start(
 /// (2 s) later, the slot released with the note. Does nothing when no run is
 /// held or a stop is already in flight, so the slot is never held by a stop.
 pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
-    begin_stop(&mut core.state.lock().unwrap());
+    begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
     core.emit(&app);
     Ok(())
 }
@@ -217,7 +217,7 @@ fn observe_process(
 ) -> io::Result<i32> {
     let mut killed = false;
     loop {
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         if !still_held(&st, id) {
             return Err(io::Error::other("run no longer owned"));
         }
@@ -286,7 +286,7 @@ impl<F: Fn()> Drop for RunSlot<'_, F> {
 /// nothing left to signal; wait for its in-progress save to release the slot.
 pub fn exit_stop(core: &Core) {
     let id = {
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         begin_stop(&mut st);
         st.run.clone()
     };
@@ -295,7 +295,7 @@ pub fn exit_stop(core: &Core) {
     };
     let deadline = Instant::now() + EXIT_GRACE;
     loop {
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         if !still_held(&st, &id) {
             return;
         }
@@ -576,7 +576,7 @@ mod tests {
     fn give_up_releases_the_run_and_says_the_exit_is_unknown() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("abc".to_string());
+        st.run = Some("abc".into());
         st.run_pgid = Some(42);
         st.run_stopping = true;
         st.run_note = Some("old".to_string());
@@ -595,7 +595,7 @@ mod tests {
     fn give_up_never_touches_a_successor_run() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("def".to_string());
+        st.run = Some("def".into());
         st.run_pgid = Some(7);
         st.run_note = Some("old".to_string());
 
@@ -612,7 +612,7 @@ mod tests {
     fn apply_reap_clears_the_run_it_still_holds() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("abc".to_string());
+        st.run = Some("abc".into());
         st.run_pgid = Some(42);
         st.run_stopping = true;
         st.run_note = Some("old".to_string());
@@ -623,7 +623,7 @@ mod tests {
         assert!(!st.run_stopping);
         assert_eq!(st.run_note, None, "a recorded exit clears the note");
 
-        st.run = Some("abc".to_string());
+        st.run = Some("abc".into());
         st.run_pgid = Some(42);
         let why = std::io::Error::from_raw_os_error(libc::EINTR);
         assert!(apply_reap(&mut st, "abc", &Err(why)));
@@ -639,7 +639,7 @@ mod tests {
     fn apply_reap_after_give_up_writes_nothing() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("abc".to_string());
+        st.run = Some("abc".into());
         st.run_pgid = Some(42);
         st.run_stopping = true;
         assert!(give_up(&mut st, "abc"));
@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(st.run, None);
         assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED), "untouched");
 
-        st.run = Some("def".to_string());
+        st.run = Some("def".into());
         st.run_pgid = Some(7);
         assert!(!apply_reap(&mut st, "abc", &Ok(0)));
         assert_eq!(st.run.as_deref(), Some("def"));
@@ -745,7 +745,7 @@ mod tests {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("abc".to_string());
+            st.run = Some("abc".into());
             st.run_pgid = Some(pgid);
         }
 

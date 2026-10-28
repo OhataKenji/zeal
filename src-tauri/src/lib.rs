@@ -14,7 +14,7 @@ mod terminal;
 mod workspace;
 mod xml;
 
-use ingest::{RunDetail, Section, run_detail, run_profile};
+use ingest::{RunDetail, Section};
 use profile::Profile;
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn open_workspace(
     }
     let bazel = workspace::resolve_bazel();
     {
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         // Keep the busy check and workspace assignment atomic with start
         // and query. Filesystem validation above holds no shared state.
         if st.run.is_some() || st.ingest_running {
@@ -116,7 +116,7 @@ async fn read_console(
     offset: u64,
 ) -> Result<console::Output, String> {
     let (ws, running) = {
-        let st = core.state.lock().unwrap();
+        let st = core.state.lock().expect("application state lock poisoned");
         (
             st.workspace.clone().ok_or("no workspace")?,
             st.run.as_deref() == Some(&id),
@@ -134,7 +134,13 @@ async fn read_console(
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "runs.list", skip_all)]
 fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
-    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+    let Some(ws) = core
+        .state
+        .lock()
+        .expect("application state lock poisoned")
+        .workspace
+        .clone()
+    else {
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -151,7 +157,7 @@ async fn get_analytics(
     let ws = core
         .state
         .lock()
-        .unwrap()
+        .expect("application state lock poisoned")
         .workspace
         .clone()
         .ok_or_else(|| "no workspace".to_string())?;
@@ -194,14 +200,20 @@ async fn get_run(
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid run id".to_string())?
         .to_string();
-    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+    let Some(ws) = core
+        .state
+        .lock()
+        .expect("application state lock poisoned")
+        .workspace
+        .clone()
+    else {
         return Err("no workspace".to_string());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "run detail worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+        ingest::run_detail(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "run detail worker failed".to_string())?
@@ -219,14 +231,20 @@ async fn get_run_profile(
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid run id".to_string())?
         .to_string();
-    let Some(ws) = core.state.lock().unwrap().workspace.clone() else {
+    let Some(ws) = core
+        .state
+        .lock()
+        .expect("application state lock poisoned")
+        .workspace
+        .clone()
+    else {
         return Err("no workspace".to_string());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        run_profile(&data, &ws, &id).map_err(|e| e.to_string())
+        ingest::run_profile(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "profile worker failed".to_string())?
@@ -287,7 +305,11 @@ pub fn run() {
                 }
                 .await;
                 if let Err(error) = result {
-                    receiver_core.state.lock().unwrap().bes_error = Some(error);
+                    receiver_core
+                        .state
+                        .lock()
+                        .expect("application state lock poisoned")
+                        .bes_error = Some(error);
                     receiver_core.emit(&handle);
                 }
             });
@@ -296,7 +318,7 @@ pub fn run() {
                 && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))
             {
                 {
-                    let mut st = core.state.lock().unwrap();
+                    let mut st = core.state.lock().expect("application state lock poisoned");
                     store::analytics::refresh_timezone();
                     st.workspace = Some(ws);
                     st.bazel = workspace::resolve_bazel();

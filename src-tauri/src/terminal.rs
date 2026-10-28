@@ -1,21 +1,18 @@
 //! Unix PTY ownership and durable output. A Console view never owns the child.
+// SAFETY: PTY setup and child session configuration require libc calls that
+// safe standard-library APIs do not expose. Successful raw descriptors are
+// converted to `File` exactly once, which then owns them through RAII.
 use crate::state::Core;
-use std::{
-    fs::{File, OpenOptions},
-    io::{self, Read, Write},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::process::CommandExt,
-    },
-    path::Path,
-    process::{Child, Command},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
-};
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Child, Command};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 pub struct Control(File);
 
@@ -68,6 +65,7 @@ pub struct Capture {
 }
 
 impl Capture {
+    #[must_use]
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }
@@ -121,10 +119,13 @@ pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, C
         }
     }
     // The shared master description is nonblocking for both capture and input.
+    // SAFETY: `master` remains an owned, live descriptor; F_GETFL reads flags.
     let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0
-        || unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
-    {
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `master` remains live and F_SETFL receives an integer flag value.
+    if unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
     let mut reader = master.try_clone()?;
@@ -216,7 +217,7 @@ pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
     if bytes.len() > 64 * 1024 {
         return Err("terminal input chunk is too large".into());
     }
-    let mut st = core.state.lock().unwrap();
+    let mut st = core.state.lock().expect("application state lock poisoned");
     if st.run.as_deref() != Some(id) || st.run_pgid.is_none() || st.run_stopping {
         return Err("terminal is no longer running".into());
     }
@@ -228,7 +229,7 @@ pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
 }
 
 pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-    let st = core.state.lock().unwrap();
+    let st = core.state.lock().expect("application state lock poisoned");
     if st.run.as_deref() != Some(id) || st.run_pgid.is_none() {
         return Ok(());
     }
@@ -264,7 +265,7 @@ mod tests {
             let core = Core::new();
             {
                 let mut st = core.state.lock().unwrap();
-                st.run = Some(record.id.clone());
+                st.run = Some(record.id.clone().into());
                 st.run_pgid = Some(child.id() as i32);
                 st.run_terminal = Some(control);
             }

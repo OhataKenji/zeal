@@ -1,9 +1,13 @@
 import type { Profile, TraceEvent } from "./types.ts";
 
+/** Height of one event row in canvas coordinates. */
 export const ROW_HEIGHT = 18;
+/** Height of a thread label and event-row header. */
 export const LANE_HEADER = 20;
+/** Height of one counter row in canvas coordinates. */
 export const COUNTER_HEIGHT = 42;
 
+/** Row geometry for one trace event after parsing its timestamps. */
 export interface EventGeometry {
   index: number;
   event: TraceEvent;
@@ -13,14 +17,16 @@ export interface EventGeometry {
   kind: "span" | "mark" | "counter";
 }
 
+/** Numeric values sampled from one trace counter field. */
 export interface CounterSeries {
   name: string;
   field: string;
-  points: { time: number; value: number; index: number }[];
+  points: Array<{ time: number; value: number; index: number }>;
   min: number;
   max: number;
 }
 
+/** Event and counter rows for one thread in a profile. */
 export interface LaneGeometry {
   tid: number;
   name: string;
@@ -30,18 +36,24 @@ export interface LaneGeometry {
   counters: CounterSeries[];
 }
 
+/** Full profile layout before viewport filtering or canvas drawing. */
 export interface Timeline {
   start: number;
   end: number;
   lanes: LaneGeometry[];
 }
 
-export type TimelineTrack = {
+interface TimelineTrackBase {
   lane: LaneGeometry;
   top: number;
   height: number;
-} & ({ kind: "events"; collapsed: boolean } | { kind: "counter"; counter: CounterSeries });
+}
 
+/** A visible timeline row: either the thread's events or one counter series. */
+export type TimelineTrack = TimelineTrackBase &
+  ({ kind: "events"; collapsed: boolean } | { kind: "counter"; counter: CounterSeries });
+
+/** Maps a counter value into the vertical range reserved for a counter row. */
 export function counterPointY(counter: CounterSeries, value: number): number {
   return (
     COUNTER_HEIGHT -
@@ -52,6 +64,7 @@ export function counterPointY(counter: CounterSeries, value: number): number {
 
 // A raw event may contribute to several counter series. Reveal its first plotted
 // series; counters without numeric samples stay on their original event track.
+/** Finds the visible row and canvas Y coordinate for a trace event. */
 export function eventPosition(tracks: TimelineTrack[], tid: number, eventIndex: number) {
   for (const track of tracks) {
     if (track.lane.tid !== tid || track.kind !== "counter") continue;
@@ -67,17 +80,19 @@ export function eventPosition(tracks: TimelineTrack[], tid: number, eventIndex: 
   return { track, y: track.top + LANE_HEADER + event.row * ROW_HEIGHT + ROW_HEIGHT / 2 };
 }
 
+/** Narrows arbitrary trace values to finite numbers. */
 export function numeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** Supplies a readable label when a trace event has no string name. */
 export function eventName(event: TraceEvent): string {
   return typeof event.name === "string" ? event.name : "(unnamed event)";
 }
 
 // Keep trace-provided color groups without reproducing another viewer's palette.
-// AnalyticsView.svelte copies these hexes; terminal-style.ts derives ANSI hues.
-const eventColors = [
+// AnalyticsView.svelte copies these hexes; terminal_style.ts derives ANSI hues.
+const EVENT_COLORS = [
   "#a7d6a9",
   "#b2dfdb",
   "#80c784",
@@ -88,23 +103,32 @@ const eventColors = [
   "#b5dca8",
 ];
 
+/** Assigns a stable palette color from the trace's color group or event name. */
 export function eventColor(event: TraceEvent): string {
   const key = typeof event.cname === "string" ? event.cname : eventName(event);
   let hash = 2166136261;
-  for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  return eventColors[(hash >>> 0) % eventColors.length];
+  for (const char of key) {
+    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  }
+  return EVENT_COLORS[(hash >>> 0) % EVENT_COLORS.length];
 }
 
 // Use the shallowest free row. Sorting only the geometry keeps raw file order.
+function hasSpanTimes(
+  event: EventGeometry,
+): event is EventGeometry & { start: number; end: number } {
+  return event.kind === "span" && event.start !== null && event.end !== null;
+}
+
 function stackSpans(events: EventGeometry[]): number {
   const rowEnds: number[] = [];
   for (const span of events
-    .filter((e) => e.kind === "span" && e.start !== null)
-    .sort((a, b) => a.start! - b.start! || b.end! - a.end! || a.index - b.index)) {
-    const free = rowEnds.findIndex((end) => end <= span.start!);
+    .filter(hasSpanTimes)
+    .sort((a, b) => a.start - b.start || b.end - a.end || a.index - b.index)) {
+    const free = rowEnds.findIndex((end) => end <= span.start);
     const row = free < 0 ? rowEnds.length : free;
     span.row = row;
-    rowEnds[row] = span.end!;
+    rowEnds[row] = span.end;
   }
   return Math.max(rowEnds.length, 1);
 }
@@ -118,15 +142,16 @@ function eventGeometry(event: TraceEvent, index: number): EventGeometry {
       : event.ph === "X" && duration !== null && duration >= 0
         ? "span"
         : "mark";
-  const finish = time === null ? null : time + (kind === "span" ? duration! : 0);
+  const finish = time === null ? null : time + (kind === "span" ? (duration ?? 0) : 0);
   return { index, event, start: time, end: finish, row: 0, kind };
 }
 
 function counterSeries(events: EventGeometry[]): CounterSeries[] {
   const series = new Map<string, CounterSeries>();
   for (const { event, index, start, kind } of events) {
-    if (kind !== "counter" || start === null || !event.args || typeof event.args !== "object")
+    if (kind !== "counter" || start === null || !event.args || typeof event.args !== "object") {
       continue;
+    }
     for (const [field, raw] of Object.entries(event.args)) {
       const value = numeric(raw);
       if (value === null) continue;
@@ -144,6 +169,7 @@ function counterSeries(events: EventGeometry[]): CounterSeries[] {
   return [...series.values()];
 }
 
+/** Adds event timing and counter geometry while preserving each lane's event order. */
 export function layoutProfile(profile: Profile): Timeline {
   const lanes = profile.lanes.map((lane) => {
     const events = lane.events.map(eventGeometry);
@@ -173,6 +199,7 @@ export function layoutProfile(profile: Profile): Timeline {
   return { start, end, lanes };
 }
 
+/** Formats trace microseconds using seconds, milliseconds, or microseconds. */
 export function formatTime(microseconds: number): string {
   const magnitude = Math.abs(microseconds);
   if (magnitude >= 1_000_000) return `${Number((microseconds / 1_000_000).toFixed(3))}s`;
@@ -180,17 +207,20 @@ export function formatTime(microseconds: number): string {
   return `${Number(microseconds.toFixed(2))}µs`;
 }
 
+/** Start and end of a timeline viewport, in trace microseconds. */
 export interface TimeRange {
   start: number;
   end: number;
 }
 
+/** Formats a ruler tick using a unit suitable for the full visible range. */
 export function formatRulerTime(time: number, range: TimeRange): string {
   const span = range.end - range.start;
   const divisor = span >= 1_000_000 ? 1_000_000 : span >= 1_000 ? 1_000 : 1;
   return `${Number((time / divisor).toFixed(3))}${divisor === 1_000_000 ? "s" : divisor === 1_000 ? "ms" : "µs"}`;
 }
 
+/** Formats a counter value with a compact SI suffix when needed. */
 export function formatCounter(value: number): string {
   const magnitude = Math.abs(value);
   return magnitude >= 1_000_000 || (magnitude > 0 && magnitude < 0.001)
@@ -198,14 +228,17 @@ export function formatCounter(value: number): string {
     : String(Number(value.toPrecision(4)));
 }
 
+/** Projects trace time to canvas X, reserving the left gutter for labels. */
 export function timeToX(time: number, range: TimeRange, width: number, gutter: number): number {
   return gutter + ((time - range.start) / (range.end - range.start)) * Math.max(1, width - gutter);
 }
 
+/** Converts canvas X back to trace time using the same gutter and range. */
 export function xToTime(x: number, range: TimeRange, width: number, gutter: number): number {
   return range.start + ((x - gutter) / Math.max(1, width - gutter)) * (range.end - range.start);
 }
 
+/** Clamps a viewport to its domain while preserving its width when possible. */
 export function clampRange(range: TimeRange, domain: TimeRange): TimeRange {
   const total = domain.end - domain.start;
   const span = Math.max(Math.min(total, 1), Math.min(total, range.end - range.start));
@@ -213,6 +246,7 @@ export function clampRange(range: TimeRange, domain: TimeRange): TimeRange {
   return { start, end: start + span };
 }
 
+/** Zooms around a normalized anchor and clamps the result to the domain. */
 export function zoomRange(
   range: TimeRange,
   domain: TimeRange,
@@ -224,10 +258,12 @@ export function zoomRange(
   return clampRange({ start: point - span * anchor, end: point + span * (1 - anchor) }, domain);
 }
 
+/** Pans a viewport by a time delta, clamped to the profile domain. */
 export function panRange(range: TimeRange, domain: TimeRange, delta: number): TimeRange {
   return clampRange({ start: range.start + delta, end: range.end + delta }, domain);
 }
 
+/** Returns the thumb width and left offset for a horizontal timeline range. */
 export function scrollbarGeometry(range: TimeRange, domain: TimeRange, viewportWidth: number) {
   const span = range.end - range.start;
   const total = domain.end - domain.start;
@@ -241,6 +277,7 @@ export function scrollbarGeometry(range: TimeRange, domain: TimeRange, viewportW
   return { width, left };
 }
 
+/** Places a viewport at a normalized scrollbar position within the domain. */
 export function scrollRange(range: TimeRange, domain: TimeRange, position: number): TimeRange {
   const span = range.end - range.start;
   const start =
@@ -248,10 +285,11 @@ export function scrollRange(range: TimeRange, domain: TimeRange, position: numbe
   return { start, end: start + span };
 }
 
+/** Generates bounded, strictly increasing ruler ticks for the visible range. */
 export function timeTicks(range: TimeRange, width: number): number[] {
   const target = (range.end - range.start) / Math.max(1, width / 90);
   const base = 10 ** Math.floor(Math.log10(target));
-  const step = [1, 2, 5, 10].find((factor) => factor * base >= target)! * base;
+  const step = ([1, 2, 5, 10].find((factor) => factor * base >= target) ?? 10) * base;
   const ticks: number[] = [];
   const first = Math.ceil(range.start / step) * step;
   // Absolute timestamps may exceed integer precision at a narrow zoom. An
@@ -261,15 +299,16 @@ export function timeTicks(range: TimeRange, width: number): number[] {
   for (let offset = 0; offset < limit; offset++) {
     const time = first + offset * step;
     if (time > range.end) break;
-    if (time >= range.start && (!ticks.length || time > ticks[ticks.length - 1]))
+    if (time >= range.start && (!ticks.length || time > ticks[ticks.length - 1])) {
       ticks.push(time || 0);
+    }
   }
   return ticks;
 }
 
 // Bazel counter names in the reference viewer's information order. The labels
 // and original fields remain unchanged; unlisted metrics follow by name/field.
-const counterOrder = [
+const COUNTER_ORDER = [
   "action count",
   "action count (local)",
   "CPU usage (Bazel)",
@@ -287,17 +326,21 @@ function compareCounterTracks(
 ): number {
   const left = a.counter;
   const right = b.counter;
-  const leftOrder = counterOrder.indexOf(left.name);
-  const rightOrder = counterOrder.indexOf(right.name);
+  const leftOrder = COUNTER_ORDER.indexOf(left.name);
+  const rightOrder = COUNTER_ORDER.indexOf(right.name);
   return (
-    (leftOrder < 0 ? counterOrder.length : leftOrder) -
-      (rightOrder < 0 ? counterOrder.length : rightOrder) ||
+    (leftOrder < 0 ? COUNTER_ORDER.length : leftOrder) -
+      (rightOrder < 0 ? COUNTER_ORDER.length : rightOrder) ||
     left.name.localeCompare(right.name) ||
     left.field.localeCompare(right.field) ||
     a.lane.tid - b.lane.tid
   );
 }
 
+/**
+ * Projects a profile into event and counter rows visible to the current view.
+ * Collapsed threads keep their headers; counters get independent rows.
+ */
 export function visibleTracks(
   lanes: LaneGeometry[],
   collapsed: ReadonlySet<number>,

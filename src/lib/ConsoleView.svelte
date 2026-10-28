@@ -6,7 +6,7 @@
   import "@xterm/xterm/css/xterm.css";
   import type { RunRecord } from "./types";
   import { createConsole } from "./console";
-  import { terminalFont, terminalTheme } from "./terminal-style";
+  import { TERMINAL_FONT, TERMINAL_THEME } from "./terminal_style";
   import RunHeader from "./RunHeader.svelte";
   import { runStatus } from "./run";
 
@@ -29,7 +29,7 @@
 
   onMount(() => {
     const term = new Terminal({
-      ...terminalFont, theme: terminalTheme,
+      ...TERMINAL_FONT, theme: TERMINAL_THEME,
       convertEol: false, cursorBlink: true, drawBoldTextInBrightColors: false,
       scrollback: 5000, disableStdin: !running,
     });

@@ -1,5 +1,6 @@
 import type { Transport } from "./session.ts";
 
+/** Date and optional run filters sent to the core analytics query. */
 export interface AnalyticsFilter {
   start: string | null;
   end: string | null;
@@ -8,10 +9,11 @@ export interface AnalyticsFilter {
   outcome: "ok" | "failed" | "interrupted" | null;
   target: string | null;
 }
+/** Daily and per-target aggregates returned by the core. */
 export interface DailyAnalytics {
   filter: AnalyticsFilter;
   today: string;
-  days: {
+  days: Array<{
     day: string;
     count: number;
     timed: number;
@@ -21,21 +23,23 @@ export interface DailyAnalytics {
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
-  }[];
-  targets: {
+  }>;
+  targets: Array<{
     target: string;
     runs: number;
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
-  }[];
+  }>;
 }
+/** Query state shown by the analytics view. */
 export interface AnalyticsView {
   filter: AnalyticsFilter;
   data: DailyAnalytics | null;
   loading: boolean;
   error: string | null;
 }
+/** Creates the empty state before the first analytics query. */
 export function emptyAnalytics(): AnalyticsView {
   return {
     filter: { start: null, end: null, cmd: null, outcome: null, target: null },
@@ -45,8 +49,10 @@ export function emptyAnalytics(): AnalyticsView {
   };
 }
 
-// Lifetime is one workspace view. A request generation rejects late responses;
-// disposal protects workspace switches.
+/**
+ * Creates a workspace-scoped analytics query. New requests supersede older
+ * responses, and disposal ignores any response from the previous workspace.
+ */
 export function createAnalytics(
   transport: Pick<Transport, "invoke">,
   changed: (view: AnalyticsView) => void,
@@ -79,7 +85,7 @@ export function createAnalytics(
   };
 }
 
-// Compact duration formatting for chart axes, tooltips and the table.
+/** Formats milliseconds for chart labels, tooltips, and the results table. */
 export function fmtMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const s = ms / 1000;
@@ -93,10 +99,11 @@ export function fmtMs(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-// Polyline point lists for the 55..width-15 / 20..200 chart area. `null`
-// values split the series into separate segments instead of dropping to
-// the baseline.
-export function segments(values: (number | null)[], maxValue: number, step: number): string[] {
+/**
+ * Projects samples into SVG polyline segments for the chart's fixed plot box.
+ * Null samples split lines instead of joining across missing data.
+ */
+export function segments(values: Array<number | null>, maxValue: number, step: number): string[] {
   const out: string[] = [];
   let run: string[] = [];
   values.forEach((value, i) => {

@@ -2,7 +2,7 @@
   import type { Section } from "../types";
   import { sectionData, sectionMessage } from "../run";
   import { logSpans } from "../log";
-  import { terminalTextStyle } from "../terminal-style";
+  import { TERMINAL_TEXT_STYLE } from "../terminal_style";
 
   let { section, loading }: {
     section: Section<string> | undefined;
@@ -18,7 +18,7 @@
 {/if}
 {#if log !== null}
   <div class="log-panel">
-    <div class="run-log" style={terminalTextStyle} aria-label="Build stdout and stderr" role="textbox" aria-readonly="true" aria-multiline="true" tabindex="0"
+    <div class="run-log" style={TERMINAL_TEXT_STYLE} aria-label="Build stdout and stderr" role="textbox" aria-readonly="true" aria-multiline="true" tabindex="0"
     >{#each spans as span}<span style={span.style}>{span.text}</span>{/each}</div>
   </div>
 {:else if loading}<p class="panel-empty">Loading build log…</p>{/if}

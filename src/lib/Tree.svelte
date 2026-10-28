@@ -19,8 +19,11 @@
   const rows = $derived(flatten(root, expanded));
 
   function toggle(dirPath: string) {
-    if (expanded.has(dirPath)) expanded.delete(dirPath);
-    else expanded.add(dirPath);
+    if (expanded.has(dirPath)) {
+      expanded.delete(dirPath);
+    } else {
+      expanded.add(dirPath);
+    }
   }
 
   // A selection made anywhere reveals the target's package in the tree.
@@ -28,7 +31,9 @@
     // Re-picking the same target must reveal it after a manual collapse.
     void revealRequest;
     if (selected) {
-      for (const p of ancestorsOf(splitLabel(selected).pkg)) expanded.add(p);
+      for (const p of ancestorsOf(splitLabel(selected).pkg)) {
+        expanded.add(p);
+      }
     }
   });
 </script>

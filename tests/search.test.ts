@@ -12,7 +12,7 @@ import {
 } from "../src/lib/search.ts";
 import type { Snapshot } from "../src/lib/types.ts";
 
-const snap: Snapshot = {
+const SNAPSHOT: Snapshot = {
   meta: { fetchedAt: 1, status: "ok" },
   targets: [
     {
@@ -49,11 +49,11 @@ const snap: Snapshot = {
 
 // The index belongs to whoever holds the candidates: built once here, searched
 // by every case below.
-const index = createIndex(snap.targets);
+const SEARCH_INDEX = createIndex(SNAPSHOT.targets);
 
-const greeter = "//examples/cpp/helloworld:greeter_client";
-const greeterIndex = createIndex(
-  [greeter, "//other/cpp/helloworld:greeter_client"].map((label) => ({
+const GREETER = "//examples/cpp/helloworld:greeter_client";
+const GREETER_INDEX = createIndex(
+  [GREETER, "//other/cpp/helloworld:greeter_client"].map((label) => ({
     label,
     pkg: label.slice(2).split(":")[0],
     name: "greeter_client",
@@ -72,14 +72,14 @@ for (const query of [
 ]) {
   test(`target search matches all fragments in ${JSON.stringify(query)}`, () => {
     assert.deepEqual(
-      search(greeterIndex, query).map((match) => match.target.label),
-      [greeter],
+      search(GREETER_INDEX, query).map((match) => match.target.label),
+      [GREETER],
     );
   });
 }
 
 test("subsequence matches retain the matching characters", () => {
-  const match = search(greeterIndex, "examplehellow")[0];
+  const match = search(GREETER_INDEX, "examplehellow")[0];
   assert.ok(match);
   assert.equal(
     segments(match.target.label, match.indices)
@@ -91,29 +91,29 @@ test("subsequence matches retain the matching characters", () => {
 });
 
 test("search results retain the target and its rule class", () => {
-  const match = search(index, "app/lib:parser").find(
+  const match = search(SEARCH_INDEX, "app/lib:parser").find(
     (match) => match.target.label === "//app/lib:parser",
   );
   assert.ok(match);
-  assert.deepEqual(match.target, snap.targets[0]);
+  assert.deepEqual(match.target, SNAPSHOT.targets[0]);
 });
 
 test("file paths are not search candidates", () => {
-  assert.deepEqual(search(index, "Lexer.java"), []);
-  assert.deepEqual(search(index, "Parser.java"), []);
-  assert.deepEqual(search(index, "parser.jar"), []);
+  assert.deepEqual(search(SEARCH_INDEX, "Lexer.java"), []);
+  assert.deepEqual(search(SEARCH_INDEX, "Parser.java"), []);
+  assert.deepEqual(search(SEARCH_INDEX, "parser.jar"), []);
 });
 
 test("later searches do not change earlier results", () => {
-  const first = search(greeterIndex, "example");
+  const first = search(GREETER_INDEX, "example");
   const saved = structuredClone(first);
-  search(greeterIndex, "greeter");
+  search(GREETER_INDEX, "greeter");
   assert.deepEqual(first, saved);
-  assert.deepEqual(search(greeterIndex, "example"), saved);
+  assert.deepEqual(search(GREETER_INDEX, "example"), saved);
 });
 
 test("a query at the tail of a long label matches and highlights the tail", () => {
-  const found = search(index, "target_name");
+  const found = search(SEARCH_INDEX, "target_name");
   assert.equal(found.length > 0, true);
   const top = found[0];
   assert.equal(top.target.label, "//very/deep/package:some_long_target_name");
@@ -126,19 +126,19 @@ test("a query at the tail of a long label matches and highlights the tail", () =
 });
 
 test("an empty query searches nothing and the limit caps the rows", () => {
-  assert.deepEqual(search(index, ""), []);
-  assert.deepEqual(search(index, "   "), []);
-  assert.equal(search(index, "parser", 1).length, 1);
-  assert.equal(search(index, "parser", 2).length, 2);
-  assert.equal(search(index, "parser", 0).length, 0);
-  assert.deepEqual(search(index, "parser", -1), []);
-  assert.equal(search(index, "parser").length, 2);
+  assert.deepEqual(search(SEARCH_INDEX, ""), []);
+  assert.deepEqual(search(SEARCH_INDEX, "   "), []);
+  assert.equal(search(SEARCH_INDEX, "parser", 1).length, 1);
+  assert.equal(search(SEARCH_INDEX, "parser", 2).length, 2);
+  assert.equal(search(SEARCH_INDEX, "parser", 0).length, 0);
+  assert.deepEqual(search(SEARCH_INDEX, "parser", -1), []);
+  assert.equal(search(SEARCH_INDEX, "parser").length, 2);
 });
 
 test("an index keeps answering its own queries, and another array makes another index", () => {
-  const first = search(index, "parser");
+  const first = search(SEARCH_INDEX, "parser");
   assert.equal(first.length > 0, true);
-  assert.deepEqual(search(index, "parser"), first);
+  assert.deepEqual(search(SEARCH_INDEX, "parser"), first);
 
   // Index creation reads the target array, so a different snapshot needs a
   // different index rather than a search of the one above.
@@ -151,7 +151,7 @@ test("an index keeps answering its own queries, and another array makes another 
       location: null,
     },
   ]);
-  assert.notEqual(other, index);
+  assert.notEqual(other, SEARCH_INDEX);
   assert.deepEqual(search(other, "parser"), []);
   assert.deepEqual(
     search(other, "only_here").map((match) => match.target.label),
@@ -170,7 +170,7 @@ test("moveIndex moves and clamps inside the list", () => {
 });
 
 test("arrow keys open, move and clamp the candidate selection", () => {
-  const matches = search(index, "parser");
+  const matches = search(SEARCH_INDEX, "parser");
   assert.equal(matches.length >= 2, true);
   const last = matches.length - 1;
 
@@ -221,7 +221,7 @@ test("keyAction does nothing for arrows without matches", () => {
 });
 
 test("Enter confirms the highlighted candidate without requiring an arrow key", () => {
-  const matches = search(index, "parser");
+  const matches = search(SEARCH_INDEX, "parser");
   assert.ok(matches.length >= 2);
   assert.deepEqual(keyAction({ open: true, index: 0 }, "Enter", matches), {
     kind: "pick",
@@ -231,21 +231,23 @@ test("Enter confirms the highlighted candidate without requiring an arrow key", 
     kind: "pick",
     value: matches[1].target.label,
   });
+  const lastMatch = matches.at(-1);
+  assert.ok(lastMatch);
   assert.deepEqual(keyAction({ open: true, index: 99 }, "Enter", matches), {
     kind: "pick",
-    value: matches.at(-1)!.target.label,
+    value: lastMatch.target.label,
   });
 });
 
 test("Enter cannot execute after confirmation, after Escape or without candidates", () => {
-  const matches = search(index, "parser");
+  const matches = search(SEARCH_INDEX, "parser");
   assert.deepEqual(keyAction({ open: false, index: 0 }, "Enter", matches), { kind: "none" });
   assert.deepEqual(keyAction({ open: true, index: 0 }, "Enter", []), { kind: "none" });
   assert.deepEqual(keyAction({ open: false, index: 0 }, "Enter", []), { kind: "none" });
 });
 
 test("patterns without matching candidates remain available for Send", () => {
-  const matches = search(index, "//app/...");
+  const matches = search(SEARCH_INDEX, "//app/...");
   assert.deepEqual(matches, []);
   assert.deepEqual(keyAction({ open: true, index: 0 }, "Enter", matches), { kind: "none" });
   // Closing suggestions leaves the typed pattern for the separate Send action.
@@ -253,7 +255,7 @@ test("patterns without matching candidates remain available for Send", () => {
 });
 
 test("Escape closes only an open dropdown and other keys do nothing", () => {
-  const matches = search(index, "parser");
+  const matches = search(SEARCH_INDEX, "parser");
   assert.deepEqual(keyAction({ open: true, index: 0 }, "Escape", matches), {
     kind: "close",
   });

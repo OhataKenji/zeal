@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// A directory is a Bazel workspace root if it has MODULE.bazel or
 /// WORKSPACE(.bazel).
+#[must_use]
 pub fn is_workspace(dir: &Path) -> bool {
     ["MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel"]
         .iter()

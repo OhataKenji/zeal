@@ -4,11 +4,14 @@
 // they are never interpreted.
 // `\p{White_Space}` rather than `\s`: JS `\s` also matches U+FEFF, which the
 // core accepts (`char::is_whitespace` is White_Space and `is_control` is Cc).
-const forbidden = /[\p{White_Space}\p{Cc}]/u;
+const FORBIDDEN_CHARACTERS = /[\p{White_Space}\p{Cc}]/u;
 
+/** Validates a single target token without trimming or splitting it. */
 export function targetError(raw: string): string | null {
   if (raw === "") return "Enter a target";
   if (raw.startsWith("-")) return 'A target cannot start with "-"';
-  if (forbidden.test(raw)) return "A target cannot contain whitespace or control characters";
+  if (FORBIDDEN_CHARACTERS.test(raw)) {
+    return "A target cannot contain whitespace or control characters";
+  }
   return null;
 }

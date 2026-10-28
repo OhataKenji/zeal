@@ -5,8 +5,8 @@ import { emit } from "@tauri-apps/api/event";
 import type { AppState, Profile, RunRecord, Snapshot, Target } from "./lib/types";
 import type { AnalyticsFilter } from "./lib/analytics";
 
-const workspace = "/demo/acme-mono";
-const now = Date.now();
+const WORKSPACE = "/demo/acme-mono";
+const NOW = Date.now();
 function target(label: string, ruleClass = "java_library"): Target {
   const [pkg, name] = label.slice(2).split(":");
   return {
@@ -14,14 +14,14 @@ function target(label: string, ruleClass = "java_library"): Target {
     pkg,
     name,
     ruleClass,
-    location: { file: `${workspace}/${pkg}/BUILD.bazel`, line: 14 },
+    location: { file: `${WORKSPACE}/${pkg}/BUILD.bazel`, line: 14 },
   };
 }
-const parser = "//app/lib:parser";
-const deps = ["parser_proto", "lexer_base", "ast_nodes", "token_stream"].map((name) =>
+const PARSER = "//app/lib:parser";
+const DEPS = ["parser_proto", "lexer_base", "ast_nodes", "token_stream"].map((name) =>
   target(`//app/lib:${name}`, name === "parser_proto" ? "proto_library" : "java_library"),
 );
-const common = [
+const COMMON = [
   "diagnostics",
   "source_location",
   "utf8_table",
@@ -31,7 +31,7 @@ const common = [
   "immutable",
   "flags",
 ].map((name) => target(`//common:${name}`));
-const users = [
+const USERS = [
   target("//app/lib:parser_test", "java_test"),
   target("//app/lib:parser_fuzz_test", "java_test"),
   target("//app/lib:parser_benchmark", "java_binary"),
@@ -44,7 +44,7 @@ const users = [
   target("//app/lsp:completion_test", "java_test"),
   target("//app/lint:rule_engine"),
 ];
-const sourceFiles = [
+const SOURCE_FILES = [
   "Parser.java",
   "Token.java",
   "Lexer.java",
@@ -68,40 +68,40 @@ const sourceFiles = [
   "SourceSpan.java",
   "Diagnostics.java",
 ];
-const snapshot: Snapshot = {
-  meta: { fetchedAt: now, status: "ok" },
+const SNAPSHOT: Snapshot = {
+  meta: { fetchedAt: NOW, status: "ok" },
   targets: [
-    target(parser),
-    ...users,
-    ...deps,
-    ...common,
+    target(PARSER),
+    ...USERS,
+    ...DEPS,
+    ...COMMON,
     target("//app:grammars", "filegroup"),
     target("//app/lib:unicode_tables", "filegroup"),
   ],
   edges: [
-    ...[...deps, ...common].map((dep) => ({ from: parser, to: dep.label, attr: "deps" })),
+    ...[...DEPS, ...COMMON].map((dep) => ({ from: PARSER, to: dep.label, attr: "deps" })),
     ...[
       "@maven//:guava",
       "@maven//:slf4j_api",
       "@protobuf//:protobuf_java",
       "@maven//:jackson_core",
       "@maven//:jackson_databind",
-    ].map((to) => ({ from: parser, to, attr: "deps" })),
-    ...users.map((user) => ({ from: user.label, to: parser, attr: "deps" })),
-    ...["hdrs", "srcs"].map((attr) => ({ from: users[0].label, to: parser, attr })),
+    ].map((to) => ({ from: PARSER, to, attr: "deps" })),
+    ...USERS.map((user) => ({ from: user.label, to: PARSER, attr: "deps" })),
+    ...["hdrs", "srcs"].map((attr) => ({ from: USERS[0].label, to: PARSER, attr })),
     ...[
       "//app:grammars",
       "//app/lib:unicode_tables",
       "//app/lib:reserved_keywords.txt",
       "//app/lib:operator_prec.json",
       "@tzdata//:zoneinfo",
-    ].map((to) => ({ from: parser, to, attr: "data" })),
+    ].map((to) => ({ from: PARSER, to, attr: "data" })),
   ],
   files: [
-    ...sourceFiles.map((name) => ({ path: `app/lib/${name}`, owner: parser, role: "srcs" })),
+    ...SOURCE_FILES.map((name) => ({ path: `app/lib/${name}`, owner: PARSER, role: "srcs" })),
     ...["libparser.jar", "libparser-src.jar"].map((name) => ({
       path: `app/lib/${name}`,
-      owner: parser,
+      owner: PARSER,
       role: "out",
     })),
   ],
@@ -109,35 +109,40 @@ const snapshot: Snapshot = {
 function dayString(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
-const previewTargets = [
+const PREVIEW_TARGETS = [
   "//app:server",
   "//app/lib:all",
   "//app/cli:zeal_cli",
   "//app/lsp:completion_test",
   "//...",
 ];
-const records: RunRecord[] = Array.from({ length: 30 }, (_, d) => {
-  const day = new Date(now);
-  day.setDate(day.getDate() - d);
-  return Array.from({ length: (d * 7 + 3) % 9 }, (_, n) => {
-    const startedAt = day.getTime() - n * 600000;
+const dayIndices = Array.from({ length: 30 }).keys();
+const records: RunRecord[] = Array.from(dayIndices, (dayIndex) => {
+  const dayDate = new Date(NOW);
+  dayDate.setDate(dayDate.getDate() - dayIndex);
+  const runCount = (dayIndex * 7 + 3) % 9;
+  const runIndices = Array.from({ length: runCount }).keys();
+  return Array.from(runIndices, (runIndex) => {
+    const startedAt = dayDate.getTime() - runIndex * 600000;
     return {
-      id: `preview-${d}-${n}`,
-      workspace,
-      cmd: n % 3 === 1 ? "test" : "build",
-      target: previewTargets[(d + n) % previewTargets.length],
+      id: `preview-${dayIndex}-${runIndex}`,
+      workspace: WORKSPACE,
+      cmd: runIndex % 3 === 1 ? "test" : "build",
+      target: PREVIEW_TARGETS[(dayIndex + runIndex) % PREVIEW_TARGETS.length],
       startedAt,
-      // n === 4 keeps an exit code but no finish time: counted, never timed.
-      ...(n === 4 ? {} : { finishedAt: startedAt + 4180 + n * 1200 + (d % 5) * 900 }),
-      exitCode: n === 2 ? 1 : n === 5 ? 8 : 0,
+      // This record has an exit code but no finish time: counted, never timed.
+      ...(runIndex === 4
+        ? {}
+        : { finishedAt: startedAt + 4180 + runIndex * 1200 + (dayIndex % 5) * 900 }),
+      exitCode: runIndex === 2 ? 1 : runIndex === 5 ? 8 : 0,
     };
   });
 }).flat();
 const state: AppState = {
-  workspace,
+  workspace: WORKSPACE,
   bazel: "8.7.0",
   ingest: "idle",
-  snapshot,
+  snapshot: SNAPSHOT,
   lastError: null,
   running: null,
   stopping: false,
@@ -145,14 +150,16 @@ const state: AppState = {
 };
 const consoleOutput = new Map<string, string>();
 const consoleInput = new Map<string, string>();
-const span = (name: string, ts: number, dur: number) => ({
-  name,
-  ts: ts * 1e6,
-  dur: dur * 1e6,
-  ph: "X",
-  cat: "action processing",
-});
-const profile: Profile = {
+function span(name: string, ts: number, dur: number) {
+  return {
+    name,
+    ts: ts * 1e6,
+    dur: dur * 1e6,
+    ph: "X",
+    cat: "action processing",
+  };
+}
+const PROFILE: Profile = {
   phases: [
     { name: "Init", startUs: 0, endUs: 300000 },
     { name: "Load", startUs: 300000, endUs: 1400000 },
@@ -216,6 +223,7 @@ const profile: Profile = {
   ],
 };
 
+/** Installs mock core IPC for the development-only browser preview. */
 export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
   if (new URLSearchParams(location.search).get("preview") === "empty") {
@@ -224,6 +232,7 @@ export function installPreview() {
   }
   mockIPC(
     (command, args) => {
+      // Tauri's mock callback provides command arguments as a key-value object.
       const payload = args as Record<string, unknown> | undefined;
       switch (command) {
         case "get_state":
@@ -245,7 +254,10 @@ export function installPreview() {
           return;
         case "write_console": {
           const id = String(payload?.id);
-          const data = payload?.data as number[];
+          const data = payload?.data;
+          if (!Array.isArray(data)) {
+            throw new Error("Preview console input must be a byte array.");
+          }
           if (state.running !== id) throw new Error("Preview process has ended");
           const text = new TextDecoder().decode(Uint8Array.from(data));
           let output = consoleOutput.get(id) ?? "";
@@ -273,7 +285,10 @@ export function installPreview() {
           consoleInput.set(id, input);
           consoleOutput.set(id, output);
           if (finish !== null) {
-            const record = records.find((run) => run.id === id)!;
+            const record = records.find((run) => run.id === id);
+            if (!record) {
+              throw new Error("Preview run was not found.");
+            }
             record.finishedAt = Date.now();
             record.exitCode = finish;
             state.running = null;
@@ -327,18 +342,20 @@ export function installPreview() {
           };
         }
         case "get_run_profile": {
-          if (!records.some((run) => run.id === payload?.id))
+          if (!records.some((run) => run.id === payload?.id)) {
             throw new Error("Preview run not found");
-          return { status: "ok", data: profile };
+          }
+          return { status: "ok", data: PROFILE };
         }
         case "get_analytics": {
+          // The app sends this command with the AnalyticsFilter shape.
           const requested = (payload?.filter ?? {}) as AnalyticsFilter;
-          const from = new Date(now);
+          const from = new Date(NOW);
           from.setDate(from.getDate() - 29);
           const filter = {
             ...requested,
             start: requested.start ?? dayString(from),
-            end: requested.end ?? dayString(new Date(now)),
+            end: requested.end ?? dayString(new Date(NOW)),
           };
           // Mirror the backend contract: reject, never silently truncate.
           // Pure proleptic-Gregorian checks — local-time Date parsing would
@@ -347,16 +364,22 @@ export function installPreview() {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
             if (!m) return null;
             const d = new Date(0);
-            d.setUTCFullYear(+m[1], +m[2] - 1, +m[3]);
-            return d.getUTCFullYear() === +m[1] &&
-              d.getUTCMonth() === +m[2] - 1 &&
-              d.getUTCDate() === +m[3]
+            const year = Number(m[1]);
+            const month = Number(m[2]);
+            const day = Number(m[3]);
+            d.setUTCFullYear(year, month - 1, day);
+            return d.getUTCFullYear() === year &&
+              d.getUTCMonth() === month - 1 &&
+              d.getUTCDate() === day
               ? d.getTime()
               : null;
           };
           const first = utcDay(filter.start);
           const last = utcDay(filter.end);
-          const spanDays = first !== null && last !== null ? (last - first) / 86400000 + 1 : NaN;
+          if (first === null || last === null) {
+            throw new Error("invalid analytics filter");
+          }
+          const spanDays = (last - first) / 86400000 + 1;
           if (
             !(spanDays >= 1 && spanDays <= 366) ||
             (filter.cmd != null && !["build", "test"].includes(filter.cmd)) ||
@@ -395,7 +418,7 @@ export function installPreview() {
           const utcString = (d: Date) =>
             `${String(d.getUTCFullYear()).padStart(4, "0")}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
           for (
-            const d = new Date(first!);
+            const d = new Date(first);
             utcString(d) <= filter.end;
             d.setUTCDate(d.getUTCDate() + 1)
           ) {
@@ -416,12 +439,21 @@ export function installPreview() {
             agg.runs += 1;
             if (duration !== null) agg.durations.push(duration);
             byTarget.set(run.target, agg);
-            if (filter.target != null && run.target !== filter.target) continue;
-            const slot = days.get(dayString(new Date(run.startedAt)))!;
+            if (filter.target != null && run.target !== filter.target) {
+              continue;
+            }
+            const slot = days.get(dayString(new Date(run.startedAt)));
+            if (!slot) {
+              throw new Error("Preview analytics day was not initialized.");
+            }
             slot.count += 1;
-            if (run.exitCode === 0) slot.ok += 1;
-            else if (run.exitCode === 8) slot.interrupted += 1;
-            else slot.failed += 1;
+            if (run.exitCode === 0) {
+              slot.ok += 1;
+            } else if (run.exitCode === 8) {
+              slot.interrupted += 1;
+            } else {
+              slot.failed += 1;
+            }
             if (duration !== null) {
               slot.timed += 1;
               slot.durations.push(duration);
@@ -429,7 +461,7 @@ export function installPreview() {
           }
           return {
             filter,
-            today: dayString(new Date(now)),
+            today: dayString(new Date(NOW)),
             days: [...days].map(([day, slot]) => {
               const sorted = [...slot.durations].sort((a, b) => a - b);
               return {
@@ -463,8 +495,8 @@ export function installPreview() {
           };
         }
         case "open_workspace":
-          state.workspace = workspace;
-          state.snapshot = snapshot;
+          state.workspace = WORKSPACE;
+          state.snapshot = SNAPSHOT;
           return structuredClone(state);
         case "refresh":
           void emit("app-state", structuredClone(state));
@@ -474,7 +506,7 @@ export function installPreview() {
         case "start_run": {
           const record: RunRecord = {
             id: `preview-${crypto.randomUUID()}`,
-            workspace,
+            workspace: WORKSPACE,
             cmd: String(payload?.cmd),
             target: String(payload?.target),
             startedAt: Date.now(),

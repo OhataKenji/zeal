@@ -51,7 +51,9 @@ test("revealing a target expands every ancestor and keeps other branches open", 
   const label = "//app/lib/deep:parser";
   assert.ok(!flatten(tree, expanded).some((row) => row.label === label));
 
-  for (const path of ancestorsOf(splitLabel(label).pkg)) expanded.add(path);
+  for (const path of ancestorsOf(splitLabel(label).pkg)) {
+    expanded.add(path);
+  }
 
   assert.deepEqual([...expanded], ["other", "app", "app/lib", "app/lib/deep"]);
   assert.ok(flatten(tree, expanded).some((row) => row.label === label));

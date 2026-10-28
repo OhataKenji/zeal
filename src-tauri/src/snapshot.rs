@@ -7,6 +7,7 @@
 //! - **meta**: fetch time and status
 
 use crate::label;
+use crate::label::LabelParts;
 use crate::xml::RawRule;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -77,6 +78,7 @@ pub struct Snapshot {
 /// classified: a label that names a known target or starts with `@`/`@@`
 /// becomes an edge; anything else is a file reference.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.build", skip_all)]
+#[must_use]
 pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
     let mut known = HashSet::new();
     let mut targets = Vec::new();
@@ -85,10 +87,10 @@ pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
         if !known.insert(lbl.clone()) {
             continue;
         }
-        let (pkg, name) = label::split(&lbl);
+        let LabelParts { package, name } = label::split(&lbl);
         targets.push(Target {
             label: lbl,
-            pkg,
+            pkg: package,
             name,
             rule_class: r.rule_class.clone(),
             location: r
