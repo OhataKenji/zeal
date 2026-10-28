@@ -157,7 +157,7 @@ async fn get_analytics(
     let ws = core
         .state
         .lock()
-        .unwrap()
+        .expect("application state lock poisoned")
         .workspace
         .clone()
         .ok_or_else(|| "no workspace".to_string())?;

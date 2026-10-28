@@ -119,7 +119,6 @@ impl Observation {
     }
 }
 
-#[must_use]
 pub fn trim_log(log: &mut String) -> bool {
     if log.len() <= LOG_LIMIT {
         return false;

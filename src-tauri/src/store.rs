@@ -7,4 +7,4 @@ pub mod events;
 mod securefs;
 
 pub use database::*;
-use database::{Store, fail};
+use database::{Store, fail, id};

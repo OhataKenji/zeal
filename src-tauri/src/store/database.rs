@@ -112,7 +112,7 @@ pub struct RunRecord {
     pub external: bool,
 }
 
-fn id(value: &str) -> Result<String, StoreError> {
+pub(super) fn id(value: &str) -> Result<String, StoreError> {
     uuid::Uuid::parse_str(value)
         .map(|value| value.to_string())
         .map_err(|_| fail(ErrorKind::Invalid))
