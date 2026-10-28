@@ -87,6 +87,8 @@ export type Section<T> =
 export interface Bep {
   targets: Array<{ label: string; ok: boolean }>;
   tests: Array<{ label: string; status: string }>;
+  originalCommandLine?: string;
+  canonicalCommandLine?: string;
   options?: {
     startupOptions: string[];
     explicitStartupOptions: string[];

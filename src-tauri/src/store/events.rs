@@ -55,6 +55,9 @@ impl Observation {
     /// Pure projection. The saved event bytes retain fields not shown by this UI.
     #[allow(deprecated)] // Fall back to legacy millisecond timestamps when needed.
     fn apply(&mut self, event: &bep::BuildEvent) {
+        if let Some(Payload::StructuredCommandLine(command_line)) = &event.payload {
+            crate::bep::project_command_line(command_line, &mut self.bep);
+        }
         if let Some(Payload::Started(started)) = &event.payload {
             self.workspace = started.workspace_directory.clone();
             self.cmd = started.command.clone();
@@ -262,6 +265,13 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
         // the observation becomes workspace-visible once BuildStarted arrives.
         let targets = observation.bep.targets.len();
         let tests = observation.bep.tests.len();
+        let command_lines =
+            matches!(event.payload, Some(Payload::StructuredCommandLine(_))).then(|| {
+                (
+                    observation.bep.original_command_line.clone(),
+                    observation.bep.canonical_command_line.clone(),
+                )
+            });
         observation.apply(&event);
         if observation.target.len() > 64 * 1024 {
             return Err(super::fail(ErrorKind::Invalid));
@@ -271,6 +281,10 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
         if summary.len() > SUMMARY_LIMIT {
             observation.bep.targets.truncate(targets);
             observation.bep.tests.truncate(tests);
+            if let Some((original, canonical)) = command_lines {
+                observation.bep.original_command_line = original;
+                observation.bep.canonical_command_line = canonical;
+            }
             observation.bep.truncated = true;
             summary =
                 serde_json::to_string(&observation).map_err(|_| super::fail(ErrorKind::Corrupt))?;
@@ -322,6 +336,8 @@ pub(super) fn list(store: &Store, ws: &Path) -> Result<Vec<RunRecord>, StoreErro
 #[allow(deprecated)]
 mod tests {
     use super::*;
+    use crate::protocol::generated::command_line::command_line_section::SectionType;
+    use crate::protocol::generated::command_line::{ChunkList, CommandLine, CommandLineSection};
     use bep::build_event::Payload;
     use bep::build_event_id::{Id, PatternExpandedId, TargetCompletedId};
     use bep::build_finished::ExitCode;
@@ -333,6 +349,16 @@ mod tests {
             payload: Some(payload),
             ..Default::default()
         }
+    }
+
+    fn command_line(label: &str, value: String) -> bep::BuildEvent {
+        payload(Payload::StructuredCommandLine(CommandLine {
+            command_line_label: label.into(),
+            sections: vec![CommandLineSection {
+                section_label: "executable".into(),
+                section_type: Some(SectionType::ChunkList(ChunkList { chunk: vec![value] })),
+            }],
+        }))
     }
 
     struct Fixture {
@@ -445,6 +471,62 @@ mod tests {
         assert_eq!(
             get(&f.data, &f.ws, &f.id).unwrap().unwrap().bep.options,
             observed.bep.options
+        );
+    }
+
+    #[test]
+    fn reported_command_lines_survive_saved_history() {
+        let f = Fixture::new();
+        save(&f.data, &f.start()).unwrap();
+        save(
+            &f.data,
+            &f.event(2, command_line("original", "bazel".into())),
+        )
+        .unwrap();
+        save(
+            &f.data,
+            &f.event(3, command_line("canonical", "blaze".into())),
+        )
+        .unwrap();
+        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
+        assert_eq!(observed.bep.original_command_line, Some("bazel".into()));
+        assert_eq!(observed.bep.canonical_command_line, Some("blaze".into()));
+        let reopened = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
+        assert_eq!(reopened.bep, observed.bep);
+    }
+
+    #[test]
+    fn oversized_command_projection_preserves_prior_commands_and_original_events() {
+        let f = Fixture::new();
+        save(&f.data, &f.start()).unwrap();
+        save(
+            &f.data,
+            &f.event(2, command_line("original", "bazel".into())),
+        )
+        .unwrap();
+        save(
+            &f.data,
+            &f.event(3, command_line("original", "x".repeat(SUMMARY_LIMIT))),
+        )
+        .unwrap();
+        save(
+            &f.data,
+            &f.event(4, command_line("canonical", "x".repeat(SUMMARY_LIMIT))),
+        )
+        .unwrap();
+        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
+        assert_eq!(observed.bep.original_command_line, Some("bazel".into()));
+        assert_eq!(observed.bep.canonical_command_line, None);
+        assert!(observed.bep.truncated);
+        assert!(serde_json::to_vec(&observed).unwrap().len() <= SUMMARY_LIMIT);
+        let store = Store::open(&f.data).unwrap();
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM build_event", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            4
         );
     }
 

@@ -315,6 +315,8 @@ export function installPreview() {
                 tests: [],
                 ...(record.id === records[0]?.id
                   ? {
+                      originalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root ${record.cmd} --config=dev --define='message=hello world' ${record.target}`,
+                      canonicalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root --batch ${record.cmd} --jobs=8 --keep_going --define='message=hello world' ${record.target}`,
                       options: {
                         startupOptions: ["--output_user_root=/tmp/zeal-preview-root", "--batch"],
                         explicitStartupOptions: ["--output_user_root=/tmp/zeal-preview-root"],

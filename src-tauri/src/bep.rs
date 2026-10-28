@@ -1,12 +1,14 @@
 //! Bounded parse of Bazel's length-delimited protobuf BEP file.
 //!
-//! Only target completion, aborted configuration, and test summary events
-//! contribute to the existing display model. The source file remains intact,
-//! including fields this projection does not know about.
+//! Target and test results, parsed options, and reported command lines form
+//! the display model. The source file remains intact, including fields this
+//! projection does not know about.
 
 use crate::protocol::bep::BuildEvent;
 use crate::protocol::bep::build_event::Payload;
 use crate::protocol::bep::build_event_id::Id;
+use crate::protocol::generated::command_line::command_line_section::SectionType;
+use crate::protocol::generated::command_line::{CommandLine, Option as CommandLineOption};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -20,7 +22,75 @@ pub struct Bep {
     pub tests: Vec<TestResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<BuildOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_command_line: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_command_line: Option<String>,
     pub truncated: bool,
+}
+
+/// Project Bazel's reported original or canonical command line in section order.
+pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
+    let destination = match command_line.command_line_label.as_str() {
+        "original" => &mut bep.original_command_line,
+        "canonical" => &mut bep.canonical_command_line,
+        _ => return,
+    };
+    let mut parts = Vec::new();
+    for section in &command_line.sections {
+        match &section.section_type {
+            Some(SectionType::ChunkList(chunks)) => {
+                // Bazel reports residue separately from its options. A dash
+                // argument needs this boundary when rendered as a command.
+                if section.section_label == "residual"
+                    && chunks.chunk.first().is_some_and(|chunk| chunk != "--")
+                    && chunks.chunk.iter().any(|chunk| chunk.starts_with('-'))
+                {
+                    parts.push("--".into());
+                }
+                parts.extend(chunks.chunk.iter().map(|value| quote_argument(value)));
+            }
+            Some(SectionType::OptionList(options)) => {
+                parts.extend(options.option.iter().map(format_option));
+            }
+            None => {}
+        }
+    }
+    *destination = Some(parts.join(" "));
+}
+
+/// Quote one shell argument while keeping ordinary labels and paths readable.
+fn quote_argument(argument: &str) -> String {
+    if !argument.is_empty()
+        && argument
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_:-,.%@/=".contains(&byte))
+    {
+        argument.to_string()
+    } else {
+        format!("'{}'", argument.replace('\'', "'\\''"))
+    }
+}
+
+fn format_option(option: &CommandLineOption) -> String {
+    if let Some(prefix) = option.combined_form.strip_suffix(&option.option_value) {
+        // Only Bazel flag names and a separator may remain unquoted. Treat an
+        // unexpected combined form as one argument instead of shell syntax.
+        let name = prefix.strip_suffix('=').or_else(|| {
+            let trimmed = prefix.trim_end_matches([' ', '\t']);
+            (trimmed.len() < prefix.len()).then_some(trimmed)
+        });
+        let name = name.and_then(|name| name.strip_prefix("--").or_else(|| name.strip_prefix('-')));
+        if name.is_some_and(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_:-,.%@/".contains(&byte))
+        }) {
+            return format!("{prefix}{}", quote_argument(&option.option_value));
+        }
+    }
+    quote_argument(&option.combined_form)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -117,6 +187,9 @@ pub(crate) fn test_status(status: i32) -> &'static str {
 }
 
 fn project(event: BuildEvent, bep: &mut Bep) {
+    if let Some(Payload::StructuredCommandLine(command_line)) = &event.payload {
+        project_command_line(command_line, bep);
+    }
     if let Some(Payload::OptionsParsed(options)) = &event.payload {
         bep.options = Some(BuildOptions {
             startup_options: options.startup_options.clone(),
@@ -159,6 +232,7 @@ mod tests {
         Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
     };
     use crate::protocol::bep::{Aborted, BuildEventId, TargetComplete, TestSummary};
+    use crate::protocol::generated::command_line::{ChunkList, CommandLineSection, OptionList};
     use prost::Message;
 
     fn event(event: BuildEvent) -> Vec<u8> {
@@ -280,6 +354,150 @@ mod tests {
         let parsed: Bep =
             serde_json::from_str(r#"{"targets":[],"tests":[],"truncated":false}"#).unwrap();
         assert_eq!(parsed.options, None);
+        assert_eq!(parsed.original_command_line, None);
+        assert_eq!(parsed.canonical_command_line, None);
+    }
+
+    fn command_line(label: &str, sections: Vec<CommandLineSection>) -> BuildEvent {
+        BuildEvent {
+            payload: Some(Payload::StructuredCommandLine(CommandLine {
+                command_line_label: label.into(),
+                sections,
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn chunks(label: &str, values: &[&str]) -> CommandLineSection {
+        CommandLineSection {
+            section_label: label.into(),
+            section_type: Some(SectionType::ChunkList(ChunkList {
+                chunk: values.iter().map(|value| (*value).into()).collect(),
+            })),
+        }
+    }
+
+    fn options(values: &[(&str, &str)]) -> CommandLineSection {
+        CommandLineSection {
+            section_label: "command options".into(),
+            section_type: Some(SectionType::OptionList(OptionList {
+                option: values
+                    .iter()
+                    .map(|(form, value)| CommandLineOption {
+                        combined_form: (*form).into(),
+                        option_value: (*value).into(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            })),
+        }
+    }
+
+    #[test]
+    fn structured_command_lines_keep_order_spelling_repeats_and_argument_boundaries() {
+        let mut stream = event(command_line(
+            "original",
+            vec![
+                chunks("executable", &["bazel"]),
+                options(&[("--batch", "true")]),
+                chunks("command", &["test"]),
+                options(&[("--define=a=b c", "a=b c"), ("--define d=e", "d=e")]),
+                CommandLineSection::default(),
+                chunks("residual", &["//pkg:test", ""]),
+            ],
+        ));
+        stream.extend(event(command_line(
+            "canonical",
+            vec![chunks("executable", &["bazel", "test", "//pkg:test"])],
+        )));
+        stream.extend(event(command_line("tool", vec![])));
+        let parsed = parse(stream.as_slice());
+        assert_eq!(
+            parsed.original_command_line.as_deref(),
+            Some("bazel --batch test --define='a=b c' --define d=e //pkg:test ''")
+        );
+        assert_eq!(
+            parsed.canonical_command_line.as_deref(),
+            Some("bazel test //pkg:test")
+        );
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["canonicalCommandLine"], "bazel test //pkg:test");
+        assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
+    }
+
+    #[test]
+    fn command_line_quoting_handles_quotes_empty_values_and_shell_syntax() {
+        let parsed = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks(
+                        "executable",
+                        &["/path with space/bazel", "//pkg:$(id);`whoami`"],
+                    ),
+                    options(&[
+                        ("--run_under echo it's ready", "echo it's ready"),
+                        ("-c\topt", "opt"),
+                        ("--define=", ""),
+                        ("--define=key=$HOME $(id)", "key=$HOME $(id)"),
+                        ("--foo=$(id)=value", "value"),
+                        ("--foo;echo value", "value"),
+                        ("--foo\nvalue", "value"),
+                        ("--foo\u{2028}value", "value"),
+                        ("--foo unusual value", "different"),
+                    ]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.original_command_line.as_deref(),
+            Some(concat!(
+                "'/path with space/bazel' '//pkg:$(id);`whoami`' ",
+                "--run_under 'echo it'\\''s ready' -c\topt --define='' ",
+                "--define='key=$HOME $(id)' '--foo=$(id)=value' '--foo;echo value' ",
+                "'--foo\nvalue' '--foo\u{2028}value' '--foo unusual value'"
+            ))
+        );
+    }
+
+    #[test]
+    fn structured_command_line_missing_empty_and_unknown_are_distinct() {
+        let empty = parse(event(command_line("original", vec![])).as_slice());
+        assert_eq!(empty.original_command_line.as_deref(), Some(""));
+        assert_eq!(empty.canonical_command_line, None);
+        let unknown = parse(event(command_line("tool", vec![])).as_slice());
+        assert_eq!(unknown.original_command_line, None);
+        assert_eq!(unknown.canonical_command_line, None);
+        let json = serde_json::to_value(unknown).unwrap();
+        assert!(json.get("originalCommandLine").is_none());
+        assert!(json.get("canonicalCommandLine").is_none());
+    }
+
+    #[test]
+    fn dash_residue_has_one_option_boundary() {
+        let parsed = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks("command", &["run"]),
+                    chunks("residual", &["//pkg:tool", "--help"]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.original_command_line.as_deref(),
+            Some("run -- //pkg:tool --help")
+        );
+        let explicit = parse(
+            event(command_line(
+                "original",
+                vec![chunks("residual", &["--", "--help"])],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(explicit.original_command_line.as_deref(), Some("-- --help"));
     }
 
     #[test]
