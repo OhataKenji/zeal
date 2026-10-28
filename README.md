@@ -36,7 +36,7 @@ Inspect a run's logs, target results, details, and per-thread timing trace from 
 
 ### Analytics Page
 
-Filter local build and test history to compare run counts, outcomes, total run time, and p50/p95 durations.
+Filter local build and test history from the GUI and recorded terminal runs to compare run counts, outcomes, total run time, and p50/p95 durations.
 
 ![Analytics Page showing date filters and daily run counts by outcome](docs/screenshots/analytics-page.jpg)
 

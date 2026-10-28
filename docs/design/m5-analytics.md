@@ -1,6 +1,6 @@
 # M5: 日次集計グラフ
 
-_Last update: 2026/10/26_ · _Status: Approved_
+_Last update: 2026/10/29_ · _Status: Approved_
 
 M4の保存済みrecordを日付ごとに集計し、件数・結果内訳・合計時間・所要時間の推移と、
 target別のランキングを表示する。新しい観測と保存状態は追加しない。
@@ -30,8 +30,9 @@ flowchart LR
 
 ## 集計ルール
 
-workspaceはM4のcanonical pathとworkspace表で照合する。
-全queryにworkspace_idとfilterのbound parameterを使い、別workspaceを混ぜない。
+workspaceはM4のcanonical pathで照合する。
+GUIのrecordはworkspace表のworkspace_id、BESのrecordはobservation.workspaceで絞る。
+workspaceとfilterはbound parameterを使い、別workspaceを混ぜない。
 
 基準は `started_at_ms`、dayはSQLの `date(started_at_ms / 1000, 'unixepoch', 'localtime')` とする。
 期間はlocal日付の開始日以上、終了日の翌日未満で絞る。
@@ -52,7 +53,13 @@ M4の開始時刻を使い、終了コードがNULLの未完了recordは除外�
 結果は保存済みexit codeから `0=ok`、`8=interrupted`、その他は `failed` とする。
 現行M4がsignal終了に保存する `-1` もfailedに含める。
 
-現行M4のGUI実行単位のrecordを集計する。BES対応とinvocation単位の収集は今回追加しない。
+GUIのrecordと、BESで受信して保存したターミナル実行のrecordを集計する。
+BES側はobservationのcomplete=1かつ終了コードがあるbuild/testだけを対象とする。
+BuildFinishedを受信しても、最後のイベントが届くまでは含めない。
+同じworkspaceとinvocation IDのGUI recordがあれば、GUI側を優先する。
+この重複排除は期間・cmd・結果の絞り込み前に行い、GUI側が未完了でもBES側で補わない。
+GUI実行がないworkspaceと、既に保存済みのターミナル実行も対象とする。
+observation.recordの要約だけを読み、イベント本体やログの解析、保存形式の移行は行わない。
 BEPがない失敗も終了コードがあれば含め、全Bazel起動回数とは扱わない。
 未完了recordの終了保存や過去のrecordの追加で件数は変わり得る。
 runnerの状態と成果物のparseは参照しない。
@@ -65,6 +72,7 @@ runnerの状態と成果物のparseは参照しない。
 3. Unix ms、local日付、DST、タイムゾーン変更、当日の途中表示と過去の遅着。
 4. 再集計時のfilter保持、SQL値のbound処理。
 5. 日別とtarget別の合計、p50/p95、ランキング順位とtargetフィルタの独立性。
+6. ターミナルだけのworkspace、受信完了の判定、BES再送とGUI併用時の重複排除。
 
 5,000件の合成recordでworkspace/cmd/outcome/日付の分布、端末/OS、cold/warm、反復回数を残し、初期表示と再filterを測る。
 切り詰めず正しい件数を確認し、支障があれば取得/集計/描画を分けて調べる。
