@@ -74,7 +74,18 @@
 </section>
 
 <style>
-  .console-page { height: 100%; }
-  .console-log-spacer { visibility: hidden; }
-  .console-terminal { flex: 1; min-height: 0; overflow: hidden; }
+
+  .console-page {
+    height: 100%;
+  }
+
+  .console-log-spacer {
+    visibility: hidden;
+  }
+
+  .console-terminal {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
 </style>

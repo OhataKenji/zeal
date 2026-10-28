@@ -28,11 +28,25 @@
 </span>
 
 <style>
-  .running :global(svg) { animation: spin 1.2s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) {
-    .running :global(svg) { animation: none; }
+
+  .running :global(svg) {
+    animation: spin 1.2s linear infinite;
   }
+
+  @keyframes spin {
+
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+
+    .running :global(svg) {
+      animation: none;
+    }
+  }
+
   .run-status-icon {
     display: inline-flex;
     align-items: center;
@@ -44,14 +58,17 @@
     color: var(--muted-foreground);
     background: var(--muted);
   }
+
   .success {
     color: var(--success);
     background: var(--success-muted);
   }
+
   .failed {
     color: var(--destructive);
     background: color-mix(in oklch, var(--destructive) 10%, var(--background));
   }
+
   .compact {
     width: 12px;
     height: 12px;

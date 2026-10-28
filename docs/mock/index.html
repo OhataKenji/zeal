@@ -10,9 +10,11 @@
         --note: #777;
         --bg: #f4f4f4;
       }
+
       * {
         box-sizing: border-box;
       }
+
       body {
         font-family: Menlo, Consolas, monospace;
         font-size: 13px;
@@ -21,16 +23,19 @@
         margin: 0;
         padding: 24px;
       }
+
       h1 {
         font-size: 20px;
         margin: 0 0 4px;
       }
+
       h2 {
         font-size: 14px;
         margin: 0 0 10px;
         color: var(--note);
         font-weight: normal;
       }
+
       h3 {
         font-size: 12px;
         margin: 0 0 6px;
@@ -38,19 +43,23 @@
         text-transform: uppercase;
         letter-spacing: 0.05em;
       }
+
       .page {
         max-width: 1100px;
         margin: 0 auto 48px;
       }
+
       .sub {
         color: var(--note);
         font-size: 12px;
         margin-bottom: 12px;
       }
+
       .label {
         font-size: 11px;
         color: var(--note);
       }
+
       .dim {
         color: var(--note);
       }
@@ -61,6 +70,7 @@
         padding: 10px 16px;
         font-size: 12px;
       }
+
       .toc a {
         color: var(--ink);
         margin-right: 14px;
@@ -71,13 +81,16 @@
         background: #fff;
         padding: 16px;
       }
+
       .basis-table-primary-column {
         width: 10em;
       }
+
       .basis-table {
         border-collapse: collapse;
         width: 100%;
       }
+
       .basis-table td,
       .basis-table th {
         border: 1px solid var(--line);
@@ -86,15 +99,18 @@
         vertical-align: top;
         font-weight: normal;
       }
+
       .basis-table th {
         background: #eee;
       }
 
       /* window = toolbar + sidebar + content（chrome は script が生成） */
+
       .win {
         border: 2px solid var(--ink);
         background: #fff;
       }
+
       .toolbar {
         border-bottom: 1px solid var(--ink);
         padding: 6px 12px;
@@ -103,15 +119,18 @@
         gap: 10px;
         align-items: center;
       }
+
       .win-body {
         display: flex;
       }
+
       .sidebar {
         width: 280px;
         border-right: 2px solid var(--ink);
         padding: 8px;
         flex-shrink: 0;
       }
+
       .content {
         flex: 1;
         min-width: 0;
@@ -124,12 +143,14 @@
         background: #fff;
         font-size: 12px;
       }
+
       .select {
         border: 1px solid var(--ink);
         padding: 5px 8px;
         background: #fff;
         font-size: 12px;
       }
+
       .btn {
         display: inline-block;
         border: 1px solid var(--ink);
@@ -138,10 +159,12 @@
         font-size: 12px;
         white-space: nowrap;
       }
+
       .btn.primary {
         background: var(--ink);
         color: #fff;
       }
+
       .badge {
         display: inline-block;
         border: 1px solid var(--ink);
@@ -157,6 +180,7 @@
         margin: 0;
         padding: 0;
       }
+
       .list li {
         padding: 4px 0;
         border-bottom: 1px dotted #ccc;
@@ -164,16 +188,20 @@
         justify-content: space-between;
         gap: 8px;
       }
+
       .list li:last-child {
         border-bottom: none;
       }
+
       .list li.selected {
         font-weight: bold;
       }
+
       .tree {
         line-height: 1.7;
         font-size: 12px;
       }
+
       .tree-compact {
         font-size: 11px;
       }
@@ -184,6 +212,7 @@
         gap: 4px 10px;
         font-size: 12px;
       }
+
       .relations dt {
         color: var(--note);
       }
@@ -195,47 +224,59 @@
         font-size: 11px;
         line-height: 1.6;
       }
+
       .log .ok {
         color: #9d9;
       }
+
       .box {
         border: 1px dashed var(--line);
       }
+
       .empty-state {
         color: var(--note);
         padding: 26px;
         text-align: center;
       }
+
       .target-summary {
         font-size: 15px;
         margin-bottom: 12px;
       }
+
       .spaced-heading {
         margin-top: 16px;
       }
+
       .sidebar-heading {
         margin-top: 14px;
       }
+
       .analytics-filters {
         display: flex;
         gap: 6px;
       }
+
       .fill-space {
         flex: 1;
       }
+
       .search-toolbar {
         border: 1px solid var(--ink);
         border-bottom: none;
       }
 
       /* find の dropdown */
+
       .search-dropdown {
         border: 2px solid var(--ink);
         background: #fff;
       }
+
       .search-results-attached {
         border-top: none;
       }
+
       .search-dropdown .match {
         padding: 5px 10px;
         display: flex;
@@ -243,17 +284,21 @@
         gap: 8px;
         border-bottom: 1px dotted #eee;
       }
+
       .search-dropdown .match.selected {
         background: #eee;
       }
+
       .search-dropdown .match b {
         text-decoration: underline;
       }
+
       .search-dropdown .foot {
         padding: 5px 10px;
       }
 
       /* analytics */
+
       .chart {
         display: flex;
         align-items: flex-end;
@@ -263,57 +308,68 @@
         border-bottom: 1px solid var(--ink);
         padding: 0 4px;
       }
+
       .chart i {
         width: 11px;
         background: var(--line);
         display: block;
       }
+
       .chart i.highlighted {
         background: var(--ink);
       }
 
       /* timing フレームチャート */
+
       .timeline {
         border: 1px solid var(--ink);
         background: #fff;
         padding: 8px 8px 10px;
         position: relative;
       }
+
       .timeline-axis {
         font-size: 10px;
         color: var(--note);
         letter-spacing: 2px;
         margin: 0 0 4px 62px;
       }
+
       .timeline-row {
         display: flex;
         align-items: center;
         height: 15px;
       }
+
       .timeline-row .thread-name {
         width: 58px;
         font-size: 10px;
         color: var(--note);
         flex-shrink: 0;
       }
+
       .timeline-row .timeline-track {
         flex: 1;
         position: relative;
         height: 13px;
         border-bottom: 1px dotted #eee;
       }
+
       .timeline-track i {
         position: absolute;
         top: 0;
         bottom: 0;
         background: #c9c9c9;
       }
+
       .timeline-track i.dependency {
         background: #999;
       }
+
       .timeline-track i.error {
         background: var(--ink);
       }
+
       .tip {
         position: absolute;
         right: 14px;
@@ -324,6 +380,7 @@
         font-size: 11px;
         box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.12);
       }
+
       .timeline-legend {
         margin-top: 6px;
       }

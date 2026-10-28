@@ -24,12 +24,14 @@
 * {
   box-sizing: border-box;
 }
+
 body {
   margin: 0;
   font: 13px var(--font-sans);
   color: var(--foreground);
   background: var(--background);
 }
+
 button,
 input,
 select,
@@ -37,22 +39,27 @@ textarea {
   font: inherit;
   color: inherit;
 }
+
 button {
   cursor: pointer;
 }
+
 button:disabled {
   cursor: default;
   opacity: 0.5;
 }
+
 :where(button, input, select, textarea, canvas, summary):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
+
 .list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -67,25 +74,31 @@ button:disabled {
   font-weight: 500;
   white-space: nowrap;
 }
+
 .button:hover:not(:disabled) {
   background: var(--muted);
 }
+
 .button-primary {
   background: var(--primary);
   color: var(--background);
   border-color: var(--primary);
 }
+
 .button-primary:hover:not(:disabled) {
   background: #444;
 }
+
 .button-ghost {
   background: transparent;
   border-color: transparent;
 }
+
 .icon-button {
   width: 32px;
   padding: 0;
 }
+
 .input {
   width: 100%;
   min-width: 0;
@@ -95,9 +108,11 @@ button:disabled {
   border-radius: var(--radius-md);
   background: var(--background);
 }
+
 .workspace-path {
   font-family: var(--mono);
 }
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -106,6 +121,7 @@ button:disabled {
   font: 11px/1.5 var(--mono);
   white-space: nowrap;
 }
+
 .tab-button[aria-selected="true"] {
   background: var(--background);
   font-weight: 600;
@@ -666,9 +682,11 @@ button:disabled {
   height: 100%;
   min-height: 0;
 }
+
 .console-container[hidden] {
   display: none;
 }
+
 .panel-heading {
   flex: 0 0 auto;
   font-size: 13px;
