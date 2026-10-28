@@ -93,7 +93,7 @@ impl Observation {
             if let Some((id, summary)) = id.test_summary.as_ref().zip(event.test_summary.as_ref()) {
                 self.bep.tests.push(TestResult {
                     label: id.label.clone(),
-                    status: test_status(summary.overall_status).to_string(),
+                    status: crate::bep::test_status(summary.overall_status).to_string(),
                 });
             }
         }
@@ -128,20 +128,6 @@ fn millis(time: Option<&prost_types::Timestamp>, fallback: i64) -> u64 {
     })
     .unwrap_or(fallback)
     .max(0) as u64
-}
-
-fn test_status(status: i32) -> &'static str {
-    match status {
-        1 => "PASSED",
-        2 => "FLAKY",
-        3 => "TIMEOUT",
-        4 => "FAILED",
-        5 => "INCOMPLETE",
-        6 => "REMOTE_FAILURE",
-        7 => "FAILED_TO_BUILD",
-        8 => "TOOL_HALTED_BEFORE_TESTING",
-        _ => "NO_STATUS",
-    }
 }
 
 /// Reject gaps and contradictory retries; acknowledge identical retries without

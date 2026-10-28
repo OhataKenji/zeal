@@ -25,7 +25,7 @@ logとBEPとprofileは同じrunのdirに置き、詳細を開くときに読む�
 M4はこの要約の保存先をSQLiteへ置き換える。
 
 - **run record**：GUIが発行したUUID、workspace、入力、開始時刻、終了時刻、exit codeからなる要約。
-- **成果物**：既存の `log.txt`、`bep.json`、`profile.gz`。要約とは別に保存する詳細情報。
+- **成果物**：既存の `log.txt`、`bep.binpb`、`profile.gz`。要約とは別に保存する詳細情報。
 - **workspace**：Bazelを実行するcanonical path。別のworkspaceの履歴を混ぜないための識別に使う。
 
 実行と中断は[M3](./m3-find-and-run.md)、BEPとprofileの解析および表示は[M2](./m2-run-detail.md)を引き継ぐ。

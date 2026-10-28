@@ -226,7 +226,7 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
         Ok(data) => Section::Ok { data },
         Err(e) => read_error(e),
     };
-    let bep = match store::artifact(data, workspace, id, "bep.json") {
+    let bep = match store::artifact(data, workspace, id, "bep.binpb") {
         Err(e) => read_error(e),
         Ok(f) => {
             let data = bep::parse(BufReader::new(f));
@@ -305,7 +305,7 @@ mod tests {
         fs::create_dir_all(&ws).unwrap();
         let (_, dir) = store::create(&root.join("data"), &ws, "build", "//...").unwrap();
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run");
-        for name in ["bep.json", "profile.gz"] {
+        for name in ["bep.binpb", "profile.gz"] {
             let src = fixtures.join(case).join(name);
             if src.exists() {
                 fs::write(dir.join(name), fs::read(src).unwrap()).unwrap();
@@ -449,7 +449,7 @@ mod tests {
         let (_root, dir) = run_dir("ok");
         let rec = finish(&_root, &dir, 0).unwrap();
         fs::remove_file(dir.join("log.txt")).unwrap();
-        fs::remove_file(dir.join("bep.json")).unwrap();
+        fs::remove_file(dir.join("bep.binpb")).unwrap();
         fs::remove_file(dir.join("profile.gz")).unwrap();
         let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record, rec);

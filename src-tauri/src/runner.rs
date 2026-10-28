@@ -1,6 +1,6 @@
 //! Runs `bazel build|test|run <target>` and writes stdout/stderr to log.txt.
 //! All commands use a PTY; output is saved independently of the Console view.
-//! Build observations remain in the existing bep.json and profile files.
+//! Build observations remain in the existing bep.binpb and profile files.
 //!
 //! Stop is best-effort: SIGINT, then SIGKILL after a grace period. An unknown
 //! exit releases the slot with a note and leaves the record unfinished. Only
@@ -45,7 +45,10 @@ fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
     vec![
         cmd.to_string(),
         target.to_string(),
-        format!("--build_event_json_file={}", dir.join("bep.json").display()),
+        format!(
+            "--build_event_binary_file={}",
+            dir.join("bep.binpb").display()
+        ),
         format!("--profile={}", dir.join("profile.gz").display()),
         "--experimental_profile_include_primary_output".to_string(),
         "--noslim_profile".to_string(),
@@ -486,7 +489,7 @@ mod tests {
             assert_eq!(
                 &args[2..],
                 [
-                    "--build_event_json_file=/data/runs/abc/bep.json",
+                    "--build_event_binary_file=/data/runs/abc/bep.binpb",
                     "--profile=/data/runs/abc/profile.gz",
                     "--experimental_profile_include_primary_output",
                     "--noslim_profile",

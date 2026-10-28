@@ -31,7 +31,7 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 - **content**: ウィンドウ本体の3状態(target / run / analytics)
 - **run**: composer から起動した一回の bazel 呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
-- **BEP**: Build Event Protocol。bazel の `--build_event_json_file` 等で出力される、呼び出し単位のイベント列
+- **BEP**: Build Event Protocol。bazel の `--build_event_binary_file` 等で出力される、呼び出し単位のイベント列
 - **profile**: `--profile` で出力される、phase 内訳と時系列を持つ chrome trace 形式の計測結果
 - **観測 flag**: run 時に bazel へ付けて成果物を得る flag 群(BEP・profile の出力指定と profile 用補助 flag。[m2](./m2-run-detail.md)参照)
 - **run record**: run ごとの入力、時刻、終了結果などの保存値。M2 は run.json、M4 から DB を正本とする([m4](./m4-run-history.md))
@@ -153,7 +153,7 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 - **Electron**: 機能は同等に実現できるが、配布物とメモリ使用量が大きい。手元に常駐する local ツールとしては Tauri のほうが適する。
 - **ネイティブ UI(Swift 等)**: mock の表現(一覧・簡易チャート・ログ)は web 技術で十分に実現でき、開発速度と移植性を優先した。
 - **bazel のライブラリ利用**: bazel には安定した組み込み用 API がなく、subprocess が事実上の公式手段である。
-- **BEP の gRPC 接続**: `--build_event_json_file` での file 出力のほうが単純で、保存した file を後から再解析できる。「run の記録として残す」要件とも一致する。
+- **BEP の gRPC 接続**: `--build_event_binary_file` での file 出力のほうが単純で、保存した file を後から再解析できる。「run の記録として残す」要件とも一致する。
 
 ## Caveats
 
