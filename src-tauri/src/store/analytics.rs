@@ -1,5 +1,5 @@
-//! Read-only projections of completed GUI runs. Artifacts and live runner state
-//! never participate in counting or filtering.
+//! Read-only projections of completed GUI runs and terminal build observations.
+//! Artifacts and live runner state never participate in counting or filtering.
 use super::{ErrorKind, Store, StoreError};
 use rusqlite::{Connection, named_params, params};
 use serde::{Deserialize, Serialize};
@@ -51,10 +51,9 @@ pub struct Analytics {
     pub targets: Vec<TargetDuration>,
 }
 
-// The existing index supplies the workspace + millisecond range scan.
-// The local-date predicate determines which calendar days to count.
-const MATCH: &str = "workspace_id=:workspace
-    AND started_at_ms >= :start AND started_at_ms < :end
+// Both sources use the same local-date and result rules after workspace
+// selection and GUI precedence have been resolved.
+const MATCH: &str = "started_at_ms >= :start AND started_at_ms < :end
     AND exit_code IS NOT NULL AND cmd IN ('build','test')
     AND (:cmd IS NULL OR cmd=:cmd)
     AND (:outcome IS NULL OR
@@ -179,62 +178,70 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         .collect::<Result<_, _>>()?;
     let mut durations: Vec<Vec<i64>> = vec![Vec::new(); days.len()];
     let mut by_target: HashMap<String, TargetAgg> = HashMap::new();
-    if let Some(ws_id) = ws_id {
-        // Overflowing subtraction promotes to REAL rather than wrapping;
-        // reading it back as i64 then fails closed as Corrupt.
-        let sql = format!(
-            "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),exit_code,target_raw,finished_at_ms - started_at_ms FROM run WHERE {MATCH}"
-        );
-        let mut statement = tx.prepare(&sql)?;
-        let rows = statement
-            .query_map(
-                named_params! {
-                    ":workspace":ws_id, ":start":from, ":end":until,
-                    ":first_day":start, ":last_day":end,
-                    ":cmd":filter.cmd, ":outcome":filter.outcome,
-                },
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, Option<i64>>(3)?,
-                    ))
-                },
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-        for (day, exit_code, target, ms) in rows {
-            // A clock jump backwards must not corrupt the series.
-            let duration = ms.map(|ms| ms.max(0));
-            let entry = by_target.entry(target.clone()).or_default();
-            entry.runs += 1;
-            if let Some(duration) = duration {
-                entry.durations.push(duration);
-            }
-            if filter.target.as_deref().is_some_and(|t| t != target) {
-                continue;
-            }
-            let i = days
-                .binary_search_by(|d| d.day.cmp(&day))
-                .map_err(|_| super::fail(ErrorKind::Invalid))?;
-            let slot = &mut days[i];
-            slot.count += 1;
-            match exit_code {
-                0 => slot.ok += 1,
-                8 => slot.interrupted += 1,
-                _ => slot.failed += 1,
-            }
-            if let Some(duration) = duration {
-                slot.timed += 1;
-                slot.total_ms = slot.total_ms.saturating_add(duration);
-                durations[i].push(duration);
-            }
+    // Overflowing subtraction promotes to REAL rather than wrapping;
+    // reading it back as i64 then fails closed as Corrupt.
+    let sql = format!(
+        "WITH records(id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code) AS (
+            SELECT id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code
+            FROM run WHERE workspace_id=:workspace
+            UNION ALL
+            SELECT o.id,json_extract(o.record,'$.cmd'),json_extract(o.record,'$.target'),
+                json_extract(o.record,'$.startedAt'),json_extract(o.record,'$.finishedAt'),
+                json_extract(o.record,'$.exitCode')
+            FROM observation o WHERE o.workspace=:path AND o.complete=1
+                AND NOT EXISTS (SELECT 1 FROM run r WHERE r.workspace_id=:workspace AND r.id=o.id)
+        ) SELECT date(started_at_ms / 1000,'unixepoch','localtime'),exit_code,target_raw,
+            finished_at_ms - started_at_ms FROM records WHERE {MATCH}"
+    );
+    let mut statement = tx.prepare(&sql)?;
+    let rows = statement
+        .query_map(
+            named_params! {
+                ":workspace":ws_id, ":path":ws.to_string_lossy(), ":start":from, ":end":until,
+                ":first_day":start, ":last_day":end,
+                ":cmd":filter.cmd, ":outcome":filter.outcome,
+            },
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (day, exit_code, target, ms) in rows {
+        // A clock jump backwards must not corrupt the series.
+        let duration = ms.map(|ms| ms.max(0));
+        let entry = by_target.entry(target.clone()).or_default();
+        entry.runs += 1;
+        if let Some(duration) = duration {
+            entry.durations.push(duration);
         }
-        for (i, sorted) in durations.iter_mut().enumerate() {
-            sorted.sort_unstable();
-            days[i].p50_ms = percentile(sorted, 50);
-            days[i].p95_ms = percentile(sorted, 95);
+        if filter.target.as_deref().is_some_and(|t| t != target) {
+            continue;
         }
+        let i = days
+            .binary_search_by(|d| d.day.cmp(&day))
+            .map_err(|_| super::fail(ErrorKind::Invalid))?;
+        let slot = &mut days[i];
+        slot.count += 1;
+        match exit_code {
+            0 => slot.ok += 1,
+            8 => slot.interrupted += 1,
+            _ => slot.failed += 1,
+        }
+        if let Some(duration) = duration {
+            slot.timed += 1;
+            slot.total_ms = slot.total_ms.saturating_add(duration);
+            durations[i].push(duration);
+        }
+    }
+    for (i, sorted) in durations.iter_mut().enumerate() {
+        sorted.sort_unstable();
+        days[i].p50_ms = percentile(sorted, 50);
+        days[i].p95_ms = percentile(sorted, 95);
     }
     let mut targets: Vec<TargetDuration> = by_target
         .into_iter()
@@ -279,7 +286,10 @@ fn percentile(sorted: &[i64], p: u64) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::RunRecord;
     use super::*;
+    use crate::protocol::{bep, bes};
+    use prost::Message;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -295,14 +305,111 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            let fixture = Self::empty();
+            // Register workspace through M4; this unfinished record is excluded.
+            super::super::create(&fixture.data, &fixture.ws, "build", "//:unfinished").unwrap();
+            fixture
+        }
+        fn empty() -> Self {
             let root =
                 std::env::temp_dir().join(format!("zeal-analytics-{}", uuid::Uuid::new_v4()));
             let data = root.join("data");
             let ws = root.join("workspace");
             fs::create_dir_all(&ws).unwrap();
-            // Register workspace through M4; this unfinished record is excluded.
-            super::super::create(&data, &ws, "build", "//:unfinished").unwrap();
             Self { root, data, ws }
+        }
+        fn millis(&self, time: &str) -> u64 {
+            Store::open(&self.data)
+                .unwrap()
+                .conn
+                .query_row("SELECT unixepoch(?1,'utc')*1000", [time], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap()
+                .try_into()
+                .unwrap()
+        }
+        fn observation(
+            &self,
+            started: &str,
+            cmd: &str,
+            target: &str,
+            finished: Option<(&str, i32)>,
+        ) -> RunRecord {
+            RunRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                workspace: self
+                    .ws
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                cmd: cmd.into(),
+                target: target.into(),
+                started_at: self.millis(started),
+                finished_at: finished.map(|(time, _)| self.millis(time)),
+                exit_code: finished.map(|(_, code)| code),
+                external: true,
+            }
+        }
+        #[allow(deprecated)]
+        fn save_observation(&self, record: &RunRecord, complete: bool) -> bes::OrderedBuildEvent {
+            let ordered = |sequence_number, event: bep::BuildEvent| bes::OrderedBuildEvent {
+                stream_id: Some(bes::StreamId {
+                    build_id: record.id.clone(),
+                    invocation_id: record.id.clone(),
+                    component: 3,
+                }),
+                sequence_number,
+                event: Some(bes::BuildEvent {
+                    bazel_event: Some(prost_types::Any {
+                        type_url: "type.googleapis.com/build_event_stream.BuildEvent".into(),
+                        value: event.encode_to_vec(),
+                    }),
+                    ..Default::default()
+                }),
+            };
+            let mut last = ordered(
+                1,
+                bep::BuildEvent {
+                    payload: Some(bep::build_event::Payload::Started(bep::BuildStarted {
+                        uuid: record.id.clone(),
+                        command: record.cmd.clone(),
+                        workspace_directory: record.workspace.clone(),
+                        start_time_millis: record.started_at as i64,
+                        ..Default::default()
+                    })),
+                    children: vec![bep::BuildEventId {
+                        id: Some(bep::build_event_id::Id::Pattern(
+                            bep::build_event_id::PatternExpandedId {
+                                pattern: vec![record.target.clone()],
+                            },
+                        )),
+                    }],
+                    last_message: complete && record.finished_at.is_none(),
+                    ..Default::default()
+                },
+            );
+            super::super::events::save(&self.data, &last).unwrap();
+            if let Some(finished) = record.finished_at {
+                last = ordered(
+                    2,
+                    bep::BuildEvent {
+                        payload: Some(bep::build_event::Payload::Finished(bep::BuildFinished {
+                            finish_time_millis: finished as i64,
+                            exit_code: record.exit_code.map(|code| bep::build_finished::ExitCode {
+                                code,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })),
+                        last_message: complete,
+                        ..Default::default()
+                    },
+                );
+                super::super::events::save(&self.data, &last).unwrap();
+            }
+            last
         }
         fn insert(&self, day: &str, cmd: &str, code: Option<i32>) -> String {
             self.insert_at(day, cmd, code, "//synthetic:target", None)
@@ -345,6 +452,194 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn terminal_only_workspace_alias_and_retries_count_once() {
+        let f = Fixture::empty();
+        let record = f.observation(
+            "2026-03-07 12:00:00",
+            "test",
+            "//terminal:test",
+            Some(("2026-03-07 12:00:12", 0)),
+        );
+        let last = f.save_observation(&record, true);
+        super::super::events::save(&f.data, &last).unwrap();
+        let workspace_count: i64 = Store::open(&f.data)
+            .unwrap()
+            .conn
+            .query_row("SELECT count(*) FROM workspace", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(workspace_count, 0);
+        let other = f.root.join("other");
+        fs::create_dir(&other).unwrap();
+        let mut unrelated = record.clone();
+        unrelated.id = uuid::Uuid::new_v4().to_string();
+        unrelated.workspace = other.to_string_lossy().into_owned();
+        f.save_observation(&unrelated, true);
+        let alias = f.root.join("alias");
+        std::os::unix::fs::symlink(&f.ws, &alias).unwrap();
+        let result = query(&f.data, &alias, f.filter()).unwrap();
+        assert_eq!(total(&result), 1);
+        assert_eq!((result.days[0].ok, result.days[0].timed), (1, 1));
+        assert_eq!(result.days[0].total_ms, 12_000);
+        assert_eq!(
+            (result.days[0].p50_ms, result.days[0].p95_ms),
+            (12_000, 12_000)
+        );
+        assert_eq!(result.targets[0].target, "//terminal:test");
+    }
+
+    #[test]
+    fn terminal_stream_must_be_complete_with_a_build_or_test_exit() {
+        let f = Fixture::empty();
+        let incomplete = f.observation(
+            "2026-03-07 12:00:00",
+            "build",
+            "//:incomplete",
+            Some(("2026-03-07 12:00:01", 0)),
+        );
+        f.save_observation(&incomplete, false);
+        let mut missing_exit = incomplete.clone();
+        missing_exit.id = uuid::Uuid::new_v4().to_string();
+        missing_exit.exit_code = None;
+        f.save_observation(&missing_exit, true);
+        let unfinished = f.observation("2026-03-07 12:00:00", "test", "//:unfinished", None);
+        f.save_observation(&unfinished, false);
+        let run = f.observation(
+            "2026-03-07 12:00:00",
+            "run",
+            "//:program",
+            Some(("2026-03-07 12:00:01", 0)),
+        );
+        f.save_observation(&run, true);
+        let outside = f.observation(
+            "2026-03-10 00:00:00",
+            "test",
+            "//:outside",
+            Some(("2026-03-10 00:00:01", 0)),
+        );
+        f.save_observation(&outside, true);
+        let result = f.query(f.filter());
+        assert_eq!(total(&result), 0);
+        assert!(result.targets.is_empty());
+    }
+
+    #[test]
+    fn gui_precedence_is_applied_before_date_command_outcome_and_target_filters() {
+        let f = Fixture::new();
+        let gui = f.insert_at(
+            "2026-03-07 12:00:00",
+            "build",
+            Some(1),
+            "//:gui",
+            Some("2026-03-07 12:00:10"),
+        );
+        let unfinished = f.insert("2026-03-07 12:00:00", "build", None);
+        let run = f.insert("2026-03-07 12:00:00", "run", Some(0));
+        let outside = f.insert("2026-03-06 12:00:00", "build", Some(0));
+        for id in [gui, unfinished, run, outside] {
+            let mut observation = f.observation(
+                "2026-03-07 12:00:00",
+                "test",
+                "//:terminal",
+                Some(("2026-03-07 12:00:30", 0)),
+            );
+            observation.id = id;
+            f.save_observation(&observation, true);
+        }
+        let result = f.query(f.filter());
+        assert_eq!(total(&result), 1);
+        assert_eq!(
+            (result.days[0].failed, result.days[0].total_ms),
+            (1, 10_000)
+        );
+        assert_eq!(result.targets[0].target, "//:gui");
+        let terminal = f.query(Filter {
+            cmd: Some("test".into()),
+            outcome: Some("ok".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&terminal), 0);
+        assert!(terminal.targets.is_empty());
+        let target = f.query(Filter {
+            target: Some("//:terminal".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&target), 0);
+        assert_eq!(target.targets[0].target, "//:gui");
+    }
+
+    #[test]
+    fn terminal_and_gui_runs_share_duration_filters_and_rankings() {
+        let f = Fixture::new();
+        f.insert_at(
+            "2026-03-07 10:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 10:00:10"),
+        );
+        f.save_observation(
+            &f.observation(
+                "2026-03-07 11:00:00",
+                "test",
+                "//a:x",
+                Some(("2026-03-07 11:00:30", 0)),
+            ),
+            true,
+        );
+        f.save_observation(
+            &f.observation(
+                "2026-03-07 12:00:00",
+                "build",
+                "//b:y",
+                Some(("2026-03-07 12:00:20", 1)),
+            ),
+            true,
+        );
+        f.save_observation(
+            &f.observation(
+                "2026-03-08 12:00:00",
+                "test",
+                "//a:x",
+                Some(("2026-03-08 11:59:59", 8)),
+            ),
+            true,
+        );
+        let result = f.query(f.filter());
+        assert_eq!(total(&result), 4);
+        assert_eq!(result.days[0].total_ms, 60_000);
+        assert_eq!(
+            (result.days[0].p50_ms, result.days[0].p95_ms),
+            (20_000, 30_000)
+        );
+        assert_eq!((result.days[1].interrupted, result.days[1].timed), (1, 1));
+        assert_eq!(result.days[1].total_ms, 0);
+        assert_eq!(result.targets[0].target, "//a:x");
+        assert_eq!(
+            (result.targets[0].runs, result.targets[0].total_ms),
+            (3, 40_000)
+        );
+        assert_eq!(
+            (result.targets[0].p50_ms, result.targets[0].p95_ms),
+            (10_000, 30_000)
+        );
+        let scoped = f.query(Filter {
+            target: Some("//a:x".into()),
+            ..f.filter()
+        });
+        assert_eq!(scoped.days[0].count, 2);
+        assert_eq!(scoped.days[0].total_ms, 40_000);
+        assert_eq!(scoped.targets.len(), 2);
+        let failed = f.query(Filter {
+            cmd: Some("build".into()),
+            outcome: Some("failed".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&failed), 1);
+        assert_eq!(failed.targets[0].target, "//b:y");
+        assert_eq!(failed.days[0].total_ms, 20_000);
     }
 
     #[test]

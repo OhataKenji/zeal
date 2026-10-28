@@ -128,6 +128,7 @@ const records: RunRecord[] = Array.from(dayIndices, (dayIndex) => {
       id: `preview-${dayIndex}-${runIndex}`,
       workspace: WORKSPACE,
       cmd: runIndex % 3 === 1 ? "test" : "build",
+      external: runIndex < 2,
       target: PREVIEW_TARGETS[(dayIndex + runIndex) % PREVIEW_TARGETS.length],
       startedAt,
       // This record has an exit code but no finish time: counted, never timed.
@@ -396,7 +397,6 @@ export function installPreview() {
               run.exitCode === 0 ? "ok" : run.exitCode === 8 ? "interrupted" : "failed";
             return (
               run.exitCode !== undefined &&
-              !run.external &&
               ["build", "test"].includes(run.cmd) &&
               day >= filter.start &&
               day <= filter.end &&
