@@ -2,6 +2,7 @@
 
 use crate::snapshot::Snapshot;
 use serde::Serialize;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Emitter};
@@ -43,7 +44,43 @@ pub struct IngestError {
     pub summary: String,
 }
 
-pub type RunId = String;
+/// Identifier for one run owned by the application.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct RunId(String);
+
+impl RunId {
+    /// Wraps a run identifier from a persisted run record.
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Returns the persisted identifier text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RunId {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for RunId {
+    fn from(value: &str) -> Self {
+        Self::new(value.to_owned())
+    }
+}
+
+impl Deref for RunId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
 
 pub struct CoreState {
     pub bes_error: Option<String>,
@@ -75,6 +112,7 @@ pub struct Core {
 }
 
 impl Core {
+    #[must_use]
     pub fn new() -> Self {
         Core {
             state: Mutex::new(CoreState {
@@ -95,8 +133,9 @@ impl Core {
         }
     }
 
+    #[must_use]
     pub fn dto(&self) -> AppStateDto {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock().expect("application state lock poisoned");
         AppStateDto {
             bes_error: st.bes_error.clone(),
             workspace: st
@@ -121,6 +160,12 @@ impl Core {
     }
 }
 
+impl Default for Core {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +180,7 @@ mod tests {
 
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("abc".to_string());
+            st.run = Some("abc".into());
             st.run_stopping = true;
             st.run_note = Some("note".to_string());
         }

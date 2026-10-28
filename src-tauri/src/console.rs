@@ -1,10 +1,9 @@
 //! Incremental reads of the existing saved command output.
 use crate::store;
 use serde::Serialize;
-use std::{
-    io::{self, Read, Seek, SeekFrom},
-    path::Path,
-};
+use std::io;
+use std::io::SeekFrom;
+use std::path::Path;
 
 #[derive(Serialize)]
 pub struct Output {
@@ -21,6 +20,8 @@ pub fn read(
     offset: u64,
     running: bool,
 ) -> io::Result<Output> {
+    use std::io::{Read, Seek};
+
     let mut file = store::artifact(data, workspace, id, "log.txt")?;
     let length = file.metadata()?.len();
     if offset > length {

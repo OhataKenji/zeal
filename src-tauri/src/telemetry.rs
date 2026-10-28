@@ -1,13 +1,16 @@
 //! Development-only tracing subscriber and OTLP export lifecycle.
 //! https://docs.rs/tracing-opentelemetry/latest/tracing_opentelemetry/#examples
 
-use opentelemetry::{KeyValue, trace::TracerProvider};
+use opentelemetry::KeyValue;
+use opentelemetry::trace::TracerProvider;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use opentelemetry_otlp::{Protocol, RetryPolicy, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::time::Duration;
 use tauri::Manager;
-use tracing_subscriber::{Layer, layer::SubscriberExt};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
 
 const EXPORT_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -186,7 +189,9 @@ mod tests {
 
     #[cfg(debug_assertions)]
     async fn exported_request(header_variable: &'static str) -> String {
-        use axum::{Router, http::HeaderMap, routing::post};
+        use axum::Router;
+        use axum::http::HeaderMap;
+        use axum::routing::post;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());

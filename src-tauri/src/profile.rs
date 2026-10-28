@@ -6,10 +6,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, BufReader, Read, Write};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const COMPRESSED_LIMIT: usize = 32 * 1024 * 1024;
 pub const EXPANDED_LIMIT: usize = 64 * 1024 * 1024;

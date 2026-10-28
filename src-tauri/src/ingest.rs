@@ -36,7 +36,7 @@ enum Outcome {
 /// Start one ingestion. Busy requests are rejected rather than queued.
 pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     let (ws, bazel) = {
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         if st.ingest_running || st.run.is_some() {
             return Err("bazel is busy; refresh after it finishes".to_string());
         }
@@ -54,7 +54,7 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
             Outcome::Partial(rules, _) => Some(Arc::new(snapshot::build(rules, Status::Partial))),
             Outcome::Failed(_) => None,
         };
-        let mut st = core.state.lock().unwrap();
+        let mut st = core.state.lock().expect("application state lock poisoned");
         if let Some(snapshot) = snapshot {
             st.snapshot = Some(snapshot);
         }

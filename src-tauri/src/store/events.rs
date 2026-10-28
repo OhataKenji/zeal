@@ -1,9 +1,10 @@
 //! Durable observations, independent of process ownership. Acknowledgements
 //! follow the transaction containing both original events and their projection.
-use super::{ErrorKind, RunRecord, Store, StoreError, fail};
+use super::{ErrorKind, RunRecord, Store, StoreError};
 use crate::bep::{Bep, TargetResult, TestResult};
 use crate::protocol::{bep, bes};
-use bep::{build_event::Payload, build_event_id::Id};
+use bep::build_event::Payload;
+use bep::build_event_id::Id;
 use prost::Message;
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,7 @@ impl Observation {
     }
 }
 
+#[must_use]
 pub fn trim_log(log: &mut String) -> bool {
     if log.len() <= LOG_LIMIT {
         return false;
@@ -147,32 +149,33 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
     let stream = ordered
         .stream_id
         .as_ref()
-        .ok_or_else(|| fail(ErrorKind::Invalid))?;
+        .ok_or_else(|| super::fail(ErrorKind::Invalid))?;
     if stream.build_id.is_empty()
         || stream.build_id.len() > 256
         || stream.invocation_id.len() > 256
         || ordered.sequence_number < 1
         || !(1..=3).contains(&stream.component)
     {
-        return Err(fail(ErrorKind::Invalid));
+        return Err(super::fail(ErrorKind::Invalid));
     }
     let wrapper = ordered
         .event
         .as_ref()
-        .ok_or_else(|| fail(ErrorKind::Invalid))?;
+        .ok_or_else(|| super::fail(ErrorKind::Invalid))?;
     let event = wrapper
         .bazel_event
         .as_ref()
         .map(|any| {
             if !any.type_url.ends_with("/build_event_stream.BuildEvent") {
-                return Err(fail(ErrorKind::Invalid));
+                return Err(super::fail(ErrorKind::Invalid));
             }
-            bep::BuildEvent::decode(any.value.as_slice()).map_err(|_| fail(ErrorKind::Invalid))
+            bep::BuildEvent::decode(any.value.as_slice())
+                .map_err(|_| super::fail(ErrorKind::Invalid))
         })
         .transpose()?;
     if event.is_some() {
         if stream.component != 3 {
-            return Err(fail(ErrorKind::Invalid));
+            return Err(super::fail(ErrorKind::Invalid));
         }
         super::id(&stream.invocation_id)?;
     }
@@ -190,7 +193,7 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
             )
             .optional()?;
         if existing.is_some_and(|build| build != stream.build_id) {
-            return Err(fail(ErrorKind::Conflict));
+            return Err(super::fail(ErrorKind::Conflict));
         }
     }
     let previous: Option<Vec<u8>> = tx.query_row(
@@ -201,14 +204,14 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
         return if previous == bytes {
             Ok(())
         } else {
-            Err(fail(ErrorKind::Conflict))
+            Err(super::fail(ErrorKind::Conflict))
         };
     }
     let last: i64 = tx.query_row(
         "SELECT coalesce(max(sequence),0) FROM build_event WHERE build_id=?1 AND invocation_id=?2 AND component=?3",
         params![stream.build_id, stream.invocation_id, stream.component], |row| row.get(0))?;
     if ordered.sequence_number != last + 1 {
-        return Err(fail(ErrorKind::Conflict));
+        return Err(super::fail(ErrorKind::Conflict));
     }
     tx.execute(
         "INSERT INTO build_event VALUES(?1,?2,?3,?4,?5)",
@@ -223,13 +226,13 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
     if let Some(mut event) = event {
         if let Some(Payload::Started(started)) = &mut event.payload {
             if started.uuid != stream.invocation_id {
-                return Err(fail(ErrorKind::Conflict));
+                return Err(super::fail(ErrorKind::Conflict));
             }
             if !Path::new(&started.workspace_directory).is_absolute()
                 || started.workspace_directory.len() > 16 * 1024
                 || started.command.len() > 64
             {
-                return Err(fail(ErrorKind::Invalid));
+                return Err(super::fail(ErrorKind::Invalid));
             }
             if let Ok(path) = Path::new(&started.workspace_directory).canonicalize() {
                 started.workspace_directory = path.to_string_lossy().into_owned();
@@ -254,7 +257,7 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
             || (!observation.workspace.is_empty()
                 && matches!(event.payload.as_ref(), Some(Payload::Started(_))))
         {
-            return Err(fail(ErrorKind::Conflict));
+            return Err(super::fail(ErrorKind::Conflict));
         }
         // Bazel may publish progress before BuildStarted. Keep those events;
         // the observation becomes workspace-visible once BuildStarted arrives.
@@ -262,21 +265,22 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
         let tests = observation.bep.tests.len();
         observation.apply(&event);
         if observation.target.len() > 64 * 1024 {
-            return Err(fail(ErrorKind::Invalid));
+            return Err(super::fail(ErrorKind::Invalid));
         }
         let mut summary =
-            serde_json::to_string(&observation).map_err(|_| fail(ErrorKind::Corrupt))?;
+            serde_json::to_string(&observation).map_err(|_| super::fail(ErrorKind::Corrupt))?;
         if summary.len() > SUMMARY_LIMIT {
             observation.bep.targets.truncate(targets);
             observation.bep.tests.truncate(tests);
             observation.bep.truncated = true;
-            summary = serde_json::to_string(&observation).map_err(|_| fail(ErrorKind::Corrupt))?;
+            summary =
+                serde_json::to_string(&observation).map_err(|_| super::fail(ErrorKind::Corrupt))?;
             if summary.len() > SUMMARY_LIMIT {
-                return Err(fail(ErrorKind::Capacity));
+                return Err(super::fail(ErrorKind::Capacity));
             }
         }
-        let record =
-            serde_json::to_string(&observation.record()).map_err(|_| fail(ErrorKind::Corrupt))?;
+        let record = serde_json::to_string(&observation.record())
+            .map_err(|_| super::fail(ErrorKind::Corrupt))?;
         tx.execute("INSERT INTO observation(id,workspace,record,summary,complete) VALUES(?1,?2,?3,?4,?5)
             ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,record=excluded.record,summary=excluded.summary,complete=excluded.complete",
             params![observation.id, observation.workspace, record, summary, observation.complete])?;
@@ -286,7 +290,7 @@ pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreEr
 }
 
 fn decode(value: &str) -> Result<Observation, StoreError> {
-    serde_json::from_str(value).map_err(|_| fail(ErrorKind::Corrupt))
+    serde_json::from_str(value).map_err(|_| super::fail(ErrorKind::Corrupt))
 }
 
 #[tracing::instrument(target = "zeal::operations", name = "detail.observation", skip_all)]
@@ -311,7 +315,7 @@ pub(super) fn list(store: &Store, ws: &Path) -> Result<Vec<RunRecord>, StoreErro
         .conn
         .prepare("SELECT record FROM observation WHERE workspace=?1 AND complete=1")?
         .query_map([ws.to_string_lossy()], |row| row.get::<_, String>(0))?
-        .map(|row| serde_json::from_str(&row?).map_err(|_| fail(ErrorKind::Corrupt)))
+        .map(|row| serde_json::from_str(&row?).map_err(|_| super::fail(ErrorKind::Corrupt)))
         .collect()
 }
 
@@ -319,12 +323,11 @@ pub(super) fn list(store: &Store, ws: &Path) -> Result<Vec<RunRecord>, StoreErro
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use bep::{
-        build_event::Payload,
-        build_event_id::{Id, PatternExpandedId, TargetCompletedId},
-        build_finished::ExitCode,
-    };
-    use std::{fs, path::PathBuf};
+    use bep::build_event::Payload;
+    use bep::build_event_id::{Id, PatternExpandedId, TargetCompletedId};
+    use bep::build_finished::ExitCode;
+    use std::fs;
+    use std::path::PathBuf;
 
     fn payload(payload: Payload) -> bep::BuildEvent {
         bep::BuildEvent {
