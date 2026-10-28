@@ -1,7 +1,11 @@
-#[allow(clippy::result_large_err)] // Generated tonic client methods return Status.
+#[allow(clippy::all, dead_code)] // Keep upstream generated code untouched by local lint policy.
+pub mod generated {
+    include!(concat!(env!("OUT_DIR"), "/bazel_protos.rs"));
+}
+
 pub mod bes {
-    tonic::include_proto!("google.devtools.build.v1");
+    pub use super::generated::google::devtools::build::v1::*;
 }
 pub mod bep {
-    tonic::include_proto!("build_event_stream");
+    pub use super::generated::build_event_stream::*;
 }

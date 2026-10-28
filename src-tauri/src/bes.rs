@@ -258,12 +258,12 @@ mod tests {
         .unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let event = bep::BuildEvent {
-            started: Some(bep::BuildStarted {
+            payload: Some(bep::build_event::Payload::Started(bep::BuildStarted {
                 uuid: id.clone(),
                 workspace_directory: temp.0.to_string_lossy().into_owned(),
                 command: "build".into(),
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         };
         let ordered = wire::OrderedBuildEvent {
