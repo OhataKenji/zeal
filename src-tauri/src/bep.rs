@@ -16,7 +16,18 @@ const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 pub struct Bep {
     pub targets: Vec<TargetResult>,
     pub tests: Vec<TestResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<BuildOptions>,
     pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildOptions {
+    pub startup_options: Vec<String>,
+    pub explicit_startup_options: Vec<String>,
+    pub cmd_line: Vec<String>,
+    pub explicit_cmd_line: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -104,6 +115,14 @@ pub(crate) fn test_status(status: i32) -> &'static str {
 }
 
 fn project(event: BuildEvent, bep: &mut Bep) {
+    if let Some(Payload::OptionsParsed(options)) = &event.payload {
+        bep.options = Some(BuildOptions {
+            startup_options: options.startup_options.clone(),
+            explicit_startup_options: options.explicit_startup_options.clone(),
+            cmd_line: options.cmd_line.clone(),
+            explicit_cmd_line: options.explicit_cmd_line.clone(),
+        });
+    }
     let Some(id) = event.id.and_then(|id| id.id) else {
         return;
     };
@@ -209,6 +228,56 @@ mod tests {
             }]
         );
         assert!(!parsed.truncated);
+    }
+
+    #[test]
+    fn projects_all_options_parsed_groups_and_keeps_empty_distinct_from_missing() {
+        let parsed = parse(
+            event(BuildEvent {
+                payload: Some(Payload::OptionsParsed(
+                    crate::protocol::bep::OptionsParsed {
+                        startup_options: vec!["--batch".into(), "--output_base=/tmp/base".into()],
+                        explicit_startup_options: vec!["--batch".into()],
+                        cmd_line: vec!["--color=yes".into(), "--jobs=8".into()],
+                        explicit_cmd_line: vec!["--jobs=8".into()],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            })
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.options,
+            Some(BuildOptions {
+                startup_options: vec!["--batch", "--output_base=/tmp/base"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                explicit_startup_options: vec!["--batch".into()],
+                cmd_line: vec!["--color=yes".into(), "--jobs=8".into()],
+                explicit_cmd_line: vec!["--jobs=8".into()],
+            })
+        );
+        assert_eq!(parse(event(BuildEvent::default()).as_slice()).options, None);
+        assert_eq!(
+            parse(
+                event(BuildEvent {
+                    payload: Some(Payload::OptionsParsed(Default::default())),
+                    ..Default::default()
+                })
+                .as_slice()
+            )
+            .options,
+            Some(BuildOptions::default())
+        );
+    }
+
+    #[test]
+    fn old_bep_json_without_options_still_deserializes() {
+        let parsed: Bep =
+            serde_json::from_str(r#"{"targets":[],"tests":[],"truncated":false}"#).unwrap();
+        assert_eq!(parsed.options, None);
     }
 
     #[test]

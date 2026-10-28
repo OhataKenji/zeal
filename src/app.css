@@ -394,6 +394,38 @@ ul.list li {
   justify-content: center;
 }
 
+.run-command-block {
+  margin-top: 20px;
+}
+
+.run-arguments-heading,
+.run-command-block h4 {
+  margin: 0 0 12px;
+  font: 400 12px var(--font-sans);
+}
+
+.run-arguments-heading {
+  margin: 20px 0 12px;
+}
+
+.run-command-code {
+  display: block;
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  font: 12px/1.6 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.run-startup-options summary {
+  cursor: pointer;
+  font: 400 12px var(--font-sans);
+  padding: 8px 0;
+}
+
 .target-head {
   padding: 28px 0 24px;
   border-bottom: 1px solid var(--border);
