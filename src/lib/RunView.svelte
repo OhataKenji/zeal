@@ -5,7 +5,7 @@
   import LogPanel from "./run/LogPanel.svelte";
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
-  import { formatCommandLine, formatOptions } from "./run/options";
+  import { formatOptions } from "./run/options";
 
   let { view, reload, reloadProfile }: {
     view: SessionView;
@@ -145,7 +145,7 @@
               <section class="run-command-block">
                 <h4>Original command line</h4>
                 {#if bep?.originalCommandLine !== undefined}
-                  <code class="run-command-code">{formatCommandLine(bep.originalCommandLine) || "No command-line arguments."}</code>
+                  <code class="run-command-code">{bep.originalCommandLine || "No command-line arguments."}</code>
                 {:else}
                   <p class="panel-empty">Original command line was not recorded in the build events.</p>
                 {/if}
@@ -153,7 +153,7 @@
               <section class="run-command-block">
                 <h4>Canonical command line</h4>
                 {#if bep?.canonicalCommandLine !== undefined}
-                  <code class="run-command-code">{formatCommandLine(bep.canonicalCommandLine) || "No command-line arguments."}</code>
+                  <code class="run-command-code">{bep.canonicalCommandLine || "No command-line arguments."}</code>
                 {:else}
                   <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
                 {/if}

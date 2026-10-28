@@ -489,18 +489,8 @@ mod tests {
         )
         .unwrap();
         let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(
-            observed.bep.original_command_line,
-            Some(vec![crate::bep::CommandLinePart::Chunk {
-                value: "bazel".into()
-            },])
-        );
-        assert_eq!(
-            observed.bep.canonical_command_line,
-            Some(vec![crate::bep::CommandLinePart::Chunk {
-                value: "blaze".into()
-            },])
-        );
+        assert_eq!(observed.bep.original_command_line, Some("bazel".into()));
+        assert_eq!(observed.bep.canonical_command_line, Some("blaze".into()));
         let reopened = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
         assert_eq!(reopened.bep, observed.bep);
     }
@@ -525,12 +515,7 @@ mod tests {
         )
         .unwrap();
         let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(
-            observed.bep.original_command_line,
-            Some(vec![crate::bep::CommandLinePart::Chunk {
-                value: "bazel".into()
-            },])
-        );
+        assert_eq!(observed.bep.original_command_line, Some("bazel".into()));
         assert_eq!(observed.bep.canonical_command_line, None);
         assert!(observed.bep.truncated);
         assert!(serde_json::to_vec(&observed).unwrap().len() <= SUMMARY_LIMIT);
