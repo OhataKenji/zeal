@@ -38,9 +38,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const CLEANUP: (() => void)[] = [];
+const cleanup: Array<() => void> = [];
 afterEach(() => {
-  CLEANUP.splice(0).forEach((dispose) => dispose());
+  cleanup.splice(0).forEach((dispose) => dispose());
 });
 
 function harness(initial = Promise.resolve(IDLE)) {
@@ -49,11 +49,11 @@ function harness(initial = Promise.resolve(IDLE)) {
   let initialRequested = false;
   let nextState: Promise<AppState> | undefined;
   const listeners = new Map<string, (payload: unknown) => void>();
-  const pending: {
+  const pending: Array<{
     command: string;
     args?: Record<string, unknown>;
     reply: ReturnType<typeof deferred<unknown>>;
-  }[] = [];
+  }> = [];
   const removed: string[] = [];
   const stateRequested = deferred<void>();
   const transport: Transport = {
@@ -83,7 +83,7 @@ function harness(initial = Promise.resolve(IDLE)) {
   const session = createSession(transport, (next) => {
     view = next;
   });
-  CLEANUP.push(session.dispose);
+  cleanup.push(session.dispose);
   return {
     session,
     get view() {

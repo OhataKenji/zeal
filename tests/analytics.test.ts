@@ -10,11 +10,11 @@ import {
 
 function harness() {
   let view = emptyAnalytics();
-  const calls: {
+  const calls: Array<{
     args?: Record<string, unknown>;
     resolve: (result: DailyAnalytics) => void;
     reject: (error: Error) => void;
-  }[] = [];
+  }> = [];
   const model = createAnalytics(
     {
       invoke: <T>(command: string, args?: Record<string, unknown>) => {

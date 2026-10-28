@@ -5,7 +5,7 @@ import type { Target } from "./types.ts";
 export interface Match {
   target: Target;
   /** Highlight ranges into `target.label`, inclusive [start, end] pairs. */
-  indices: readonly (readonly [number, number])[];
+  indices: ReadonlyArray<readonly [number, number]>;
 }
 
 /**
@@ -36,7 +36,7 @@ export function search(index: SnapshotKey<Target>, query: string, limit = 20): M
  */
 export function segments(
   text: string,
-  indices: readonly (readonly [number, number])[],
+  indices: ReadonlyArray<readonly [number, number]>,
 ): Array<{ text: string; hit: boolean }> {
   const ranges = indices
     .map(([start, end]): readonly [number, number] => [

@@ -13,7 +13,7 @@ export interface AnalyticsFilter {
 export interface DailyAnalytics {
   filter: AnalyticsFilter;
   today: string;
-  days: {
+  days: Array<{
     day: string;
     count: number;
     timed: number;
@@ -23,14 +23,14 @@ export interface DailyAnalytics {
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
-  }[];
-  targets: {
+  }>;
+  targets: Array<{
     target: string;
     runs: number;
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
-  }[];
+  }>;
 }
 /** Query state shown by the analytics view. */
 export interface AnalyticsView {
