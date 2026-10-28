@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { canSend, canStop, createSession, emptyView, type Transport } from "../src/lib/session.ts";
 import type { AppState, Profile, RunDetail, RunRecord, Section } from "../src/lib/types.ts";
 
-const idle: AppState = {
+const IDLE: AppState = {
   workspace: "/workspace",
   bazel: "/bin/bazel",
   ingest: "idle",
@@ -13,21 +13,22 @@ const idle: AppState = {
   stopping: false,
   runNote: null,
 };
-const record: RunRecord = {
+const RECORD: RunRecord = {
   id: "run-a",
   workspace: "/workspace",
   cmd: "build",
   target: "//:app",
   startedAt: 1,
 };
-const completed: RunDetail = {
-  record: { ...record, finishedAt: 2, exitCode: 0 },
+const COMPLETED: RunDetail = {
+  record: { ...RECORD, finishedAt: 2, exitCode: 0 },
   log: { status: "ok", data: "same\nsame\n" },
   bep: { status: "missing" },
 };
-const profile: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
+const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 
 function deferred<T>() {
+  // Promise constructors assign these callbacks before `promise` is returned.
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
   const promise = new Promise<T>((yes, no) => {
@@ -37,22 +38,22 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const cleanup: (() => void)[] = [];
+const cleanup: Array<() => void> = [];
 afterEach(() => {
   cleanup.splice(0).forEach((dispose) => dispose());
 });
 
-function harness(initial = Promise.resolve(idle)) {
+function harness(initial = Promise.resolve(IDLE)) {
   let view = emptyView();
-  let coreState = idle;
+  let coreState = IDLE;
   let initialRequested = false;
   let nextState: Promise<AppState> | undefined;
   const listeners = new Map<string, (payload: unknown) => void>();
-  const pending: {
+  const pending: Array<{
     command: string;
     args?: Record<string, unknown>;
     reply: ReturnType<typeof deferred<unknown>>;
-  }[] = [];
+  }> = [];
   const removed: string[] = [];
   const stateRequested = deferred<void>();
   const transport: Transport = {
@@ -105,6 +106,18 @@ function harness(initial = Promise.resolve(idle)) {
   };
 }
 
+function pendingRequest(h: ReturnType<typeof harness>, command: string) {
+  const request = h.pending.find((call) => call.command === command);
+  assert.ok(request, `No ${command} request is pending.`);
+  return request;
+}
+
+function lastPendingRequest(h: ReturnType<typeof harness>, command: string) {
+  const request = h.pending.filter((call) => call.command === command).at(-1);
+  assert.ok(request, `No ${command} request is pending.`);
+  return request;
+}
+
 // Drain promise reactions only; no timers or arbitrary sleeps in race tests.
 async function settle() {
   await Promise.resolve();
@@ -114,77 +127,67 @@ async function settle() {
 test("logs and results arrive while profile parsing is still pending", async () => {
   const h = harness();
   await h.session.init();
-  h.session.selectRun(record.id);
-  const detailRequest = h.pending.find((call) => call.command === "get_run")!;
-  const profileRequest = h.pending.find((call) => call.command === "get_run_profile")!;
-  assert.deepEqual(profileRequest.args, { id: record.id });
-  detailRequest.reply.resolve(completed);
+  h.session.selectRun(RECORD.id);
+  const detailRequest = pendingRequest(h, "get_run");
+  const profileRequest = pendingRequest(h, "get_run_profile");
+  assert.deepEqual(profileRequest.args, { id: RECORD.id });
+  detailRequest.reply.resolve(COMPLETED);
   await settle();
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detailLoading, false);
   assert.equal(h.view.profileLoading, true);
   assert.equal(h.view.profile, null);
-  profileRequest.reply.resolve(profile);
+  profileRequest.reply.resolve(PROFILE);
   await settle();
-  assert.deepEqual(h.view.profile, profile);
+  assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileLoading, false);
 });
 
 test("timing can arrive before logs without clearing either response", async () => {
   const h = harness();
   await h.session.init();
-  h.session.selectRun(record.id);
-  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  h.session.selectRun(RECORD.id);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
-  assert.deepEqual(h.view.profile, profile);
+  assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.detailLoading, true);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
-  assert.deepEqual(h.view.detail, completed);
-  assert.deepEqual(h.view.profile, profile);
+  assert.deepEqual(h.view.detail, COMPLETED);
+  assert.deepEqual(h.view.profile, PROFILE);
 });
 
 test("a profile failure leaves logs visible and retries only timing", async () => {
   const h = harness();
   await h.session.init();
-  h.session.selectRun(record.id);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
-  h.pending
-    .find((call) => call.command === "get_run_profile")!
-    .reply.reject(new Error("profile worker busy"));
+  h.session.selectRun(RECORD.id);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.reject(new Error("profile worker busy"));
   await settle();
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detailError, null);
-  assert.match(h.view.profileError!, /profile worker busy/);
+  assert.match(h.view.profileError ?? "", /profile worker busy/);
   const retry = h.session.loadProfile();
-  h.pending
-    .filter((call) => call.command === "get_run_profile")
-    .at(-1)!
-    .reply.resolve(profile);
+  lastPendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await retry;
   assert.equal(h.pending.filter((call) => call.command === "get_run").length, 1);
-  assert.deepEqual(h.view.profile, profile);
+  assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
 });
 
 test("a log request failure leaves timing visible and retries only the summary", async () => {
   const h = harness();
   await h.session.init();
-  h.session.selectRun(record.id);
-  h.pending
-    .find((call) => call.command === "get_run")!
-    .reply.reject(new Error("record unavailable"));
-  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  h.session.selectRun(RECORD.id);
+  pendingRequest(h, "get_run").reply.reject(new Error("record unavailable"));
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
-  assert.deepEqual(h.view.profile, profile);
-  assert.match(h.view.detailError!, /record unavailable/);
+  assert.deepEqual(h.view.profile, PROFILE);
+  assert.match(h.view.detailError ?? "", /record unavailable/);
   const retry = h.session.loadDetail();
-  h.pending
-    .filter((call) => call.command === "get_run")
-    .at(-1)!
-    .reply.resolve(completed);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await retry;
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detailError, null);
   assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 1);
 });
@@ -196,13 +199,13 @@ test("a late profile response or error cannot replace a newer selection", async 
   h.session.selectRun("run-b");
   h.session.selectRun("run-c");
   const requests = h.pending.filter((call) => call.command === "get_run_profile");
-  requests[2].reply.resolve(profile);
+  requests[2].reply.resolve(PROFILE);
   await settle();
   requests[0].reply.resolve({ status: "missing" });
   requests[1].reply.reject(new Error("stale error"));
   await settle();
   assert.equal(h.view.selectedRun, "run-c");
-  assert.deepEqual(h.view.profile, profile);
+  assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
   assert.equal(h.view.profileLoading, false);
 });
@@ -213,13 +216,13 @@ test("Send waits for listeners, then rejects busy ingestion, a live run and a st
   await h.session.init();
   assert.deepEqual([...h.listeners.keys()], ["app-state"]);
   assert.equal(canSend(h.view, "//:app"), true);
-  h.emit("app-state", { ...idle, ingest: "running" });
+  h.emit("app-state", { ...IDLE, ingest: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   assert.equal(canSend(h.view, "//:app"), false);
-  h.emit("app-state", { ...idle, running: record.id, stopping: true });
+  h.emit("app-state", { ...IDLE, running: RECORD.id, stopping: true });
   assert.equal(canSend(h.view, "//:app"), false);
-  h.emit("app-state", idle);
+  h.emit("app-state", IDLE);
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
@@ -238,21 +241,23 @@ test("Send does not depend on a snapshot and stays usable after a failed ingesti
   const h = harness();
   await h.session.init();
   h.emit("app-state", {
-    ...idle,
+    ...IDLE,
     snapshot: null,
     lastError: { exitCode: 1, summary: "query failed" },
   });
   assert.equal(h.view.state?.snapshot, null);
-  assert.match(h.view.state!.lastError!.summary, /query failed/);
+  const lastError = h.view.state?.lastError;
+  assert.ok(lastError);
+  assert.match(lastError.summary, /query failed/);
   assert.equal(canSend(h.view, "//..."), true);
 });
 
 test("ingestion completing never starts a run", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, ingest: "running" });
+  h.emit("app-state", { ...IDLE, ingest: "running" });
   h.emit("app-state", {
-    ...idle,
+    ...IDLE,
     snapshot: { meta: { fetchedAt: 1, status: "ok" }, targets: [], edges: [], files: [] },
   });
   await settle();
@@ -282,9 +287,9 @@ test("start records the selected cmd and the target string unchanged", async () 
   const h = harness();
   await h.session.init();
   const started = h.session.start("test", "//app:tar;get");
-  const call = h.pending.find((item) => item.command === "start_run")!;
+  const call = pendingRequest(h, "start_run");
   assert.deepEqual(call.args, { cmd: "test", target: "//app:tar;get" });
-  call.reply.resolve({ ...record, cmd: "test", target: "//app:tar;get" });
+  call.reply.resolve({ ...RECORD, cmd: "test", target: "//app:tar;get" });
   await started;
 });
 
@@ -298,57 +303,52 @@ test("stop is offered only while a run is live and not already stopping", async 
     h.pending.some((call) => call.command === "stop_run"),
     false,
   );
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   assert.equal(canStop(h.view), true);
   const stopping = h.session.stop();
   // No optimistic local flag: the core reports stopping through app-state.
   assert.equal(h.view.state?.stopping, false);
   assert.equal(canStop(h.view), true);
   assert.equal(h.pending.filter((call) => call.command === "stop_run").length, 1);
-  h.emit("app-state", { ...idle, running: record.id, stopping: true });
+  h.emit("app-state", { ...IDLE, running: RECORD.id, stopping: true });
   assert.equal(canStop(h.view), false);
   await h.session.stop();
   assert.equal(h.pending.filter((call) => call.command === "stop_run").length, 1);
-  h.pending.find((call) => call.command === "stop_run")!.reply.resolve(undefined);
+  pendingRequest(h, "stop_run").reply.resolve(undefined);
   await stopping;
 });
 
 test("stop failure is surfaced and leaves the run in flight", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   const stopping = h.session.stop();
-  h.pending
-    .find((call) => call.command === "stop_run")!
-    .reply.reject(new Error("stop unavailable"));
+  pendingRequest(h, "stop_run").reply.reject(new Error("stop unavailable"));
   await stopping;
-  assert.match(h.view.error!, /stop unavailable/);
-  assert.equal(h.view.state?.running, record.id);
+  assert.match(h.view.error ?? "", /stop unavailable/);
+  assert.equal(h.view.state?.running, RECORD.id);
 });
 
 test("full artifacts are read only after the run finishes", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
   assert.equal(h.view.selectedRun, null);
-  assert.equal(h.view.console?.id, record.id);
+  assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(h.view.consoleOpen, true);
   assert.equal(
     h.pending.some((call) => call.command === "get_run" || call.command === "get_run_profile"),
     false,
   );
-  h.emit("app-state", idle);
-  h.session.selectRun(record.id);
+  h.emit("app-state", IDLE);
+  h.session.selectRun(RECORD.id);
   assert.equal(h.view.initialRunTab, "All");
-  h.pending
-    .filter((call) => call.command === "get_run")
-    .at(-1)!
-    .reply.resolve(completed);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detail?.log.status, "ok");
 });
 
@@ -356,35 +356,32 @@ test("run completing before start response immediately selects its All view", as
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.emit("app-state", idle);
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  h.emit("app-state", IDLE);
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
   assert.equal(h.view.state?.running, null);
   assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.selectedRun, RECORD.id);
   assert.equal(h.view.initialRunTab, "All");
-  h.pending
-    .filter((call) => call.command === "get_run")
-    .at(-1)!
-    .reply.resolve(completed);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
 });
 
 test("start response before the running event reconciles state without reading active observations", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
-  h.setCore({ ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.setCore({ ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
-  assert.equal(h.view.state?.running, record.id);
+  assert.equal(h.view.state?.running, RECORD.id);
   assert.equal(
     h.pending.some((call) => call.command === "get_run"),
     false,
   );
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
 });
 
 test("completion event during post-start reconciliation wins over its stale running response", async () => {
@@ -393,18 +390,15 @@ test("completion event during post-start reconciliation wins over its stale runn
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await settle();
-  h.emit("app-state", idle);
-  reconciled.resolve({ ...idle, running: record.id });
+  h.emit("app-state", IDLE);
+  reconciled.resolve({ ...IDLE, running: RECORD.id });
   await started;
   assert.equal(h.view.state?.running, null);
-  h.session.selectRun(record.id);
-  h.pending
-    .filter((call) => call.command === "get_run")
-    .at(-1)!
-    .reply.resolve(completed);
+  h.session.selectRun(RECORD.id);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
 });
@@ -415,21 +409,21 @@ test("failed state reconciliation preserves the started run until a later state 
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
   const started = h.session.start("build", "//:app");
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await settle();
   reconciled.reject(new Error("state unavailable"));
   await started;
-  assert.match(h.view.error!, /run started/);
+  assert.match(h.view.error ?? "", /run started/);
   assert.equal(canSend(h.view, "//:app"), false);
-  assert.equal(h.view.console?.id, record.id);
+  assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(
     h.pending.some((call) => call.command === "get_run"),
     false,
   );
   h.session.selectRun(null);
-  h.session.selectRun(record.id);
-  h.emit("app-state", idle);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  h.session.selectRun(RECORD.id);
+  h.emit("app-state", IDLE);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.error, null);
   assert.equal(h.view.detail?.record.exitCode, 0);
@@ -441,8 +435,8 @@ test("late bootstrap state cannot overwrite a newer workspace event", async () =
   const h = harness(bootstrap.promise);
   const initialized = h.session.init();
   await h.stateRequested;
-  h.emit("app-state", { ...idle, workspace: "/new-workspace" });
-  bootstrap.resolve(idle);
+  h.emit("app-state", { ...IDLE, workspace: "/new-workspace" });
+  bootstrap.resolve(IDLE);
   await initialized;
   assert.equal(h.view.state?.workspace, "/new-workspace");
 });
@@ -453,9 +447,9 @@ test("a slow previous run detail cannot replace the selected run", async () => {
   h.session.selectRun("run-a");
   h.session.selectRun("run-b");
   const requests = h.pending.filter((call) => call.command === "get_run");
-  requests[1].reply.resolve({ ...completed, record: { ...completed.record, id: "run-b" } });
+  requests[1].reply.resolve({ ...COMPLETED, record: { ...COMPLETED.record, id: "run-b" } });
   await settle();
-  requests[0].reply.resolve(completed);
+  requests[0].reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.selectedRun, "run-b");
   assert.equal(h.view.detail?.record.id, "run-b");
@@ -465,10 +459,10 @@ test("workspace switch rejects both stale run list and stale detail", async () =
   const h = harness();
   await h.session.init();
   h.session.selectRun("run-a");
-  h.emit("app-state", { ...idle, workspace: "/other" });
-  h.pending.find((call) => call.command === "list_runs")!.reply.resolve([record]);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
-  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  h.emit("app-state", { ...IDLE, workspace: "/other" });
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
   assert.deepEqual(h.view.runs, []);
   assert.equal(h.view.detail, null);
@@ -482,8 +476,8 @@ test("target selection cancels an in-flight detail without changing core running
   await h.session.init();
   h.session.selectRun("run-a");
   h.session.selectRun(null);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
-  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail, null);
   assert.equal(h.view.detailLoading, false);
@@ -495,11 +489,9 @@ test("failed spawn is visible and allows another Send", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("test", "//:app");
-  h.pending
-    .find((call) => call.command === "start_run")!
-    .reply.reject(new Error("failed to spawn bazel"));
+  pendingRequest(h, "start_run").reply.reject(new Error("failed to spawn bazel"));
   await started;
-  assert.match(h.view.error!, /failed to spawn/);
+  assert.match(h.view.error ?? "", /failed to spawn/);
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
@@ -512,14 +504,12 @@ test("failed spawn resumes a saved run detail selected while start was pending",
     h.pending.some((call) => call.command === "get_run"),
     false,
   );
-  h.pending
-    .find((call) => call.command === "start_run")!
-    .reply.reject(new Error("failed to spawn"));
+  pendingRequest(h, "start_run").reply.reject(new Error("failed to spawn"));
   await started;
   assert.equal(h.view.detailLoading, true);
-  const request = h.pending.find((call) => call.command === "get_run")!;
+  const request = pendingRequest(h, "get_run");
   assert.deepEqual(request.args, { id: "saved-run" });
-  request.reply.resolve({ ...completed, record: { ...completed.record, id: "saved-run" } });
+  request.reply.resolve({ ...COMPLETED, record: { ...COMPLETED.record, id: "saved-run" } });
   await settle();
   assert.equal(h.view.detail?.record.id, "saved-run");
 });
@@ -529,8 +519,8 @@ test("dispose removes listeners and ignores late reads", async () => {
   await h.session.init();
   h.session.selectRun("run-a");
   h.session.dispose();
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
-  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
   assert.deepEqual(h.removed, ["app-state"]);
   assert.equal(h.view.detail, null);
@@ -546,7 +536,7 @@ test("unmount during listener registration immediately cleans the late subscript
       listen: () => registered.promise,
       invoke: async <T>() => {
         invoked = true;
-        return idle as T;
+        return IDLE as T;
       },
     },
     () => {},
@@ -568,7 +558,7 @@ test("subscription failure leaves Send disabled", async () => {
       listen: async () => {
         throw new Error("listener unavailable");
       },
-      invoke: async <T>() => idle as T,
+      invoke: async <T>() => IDLE as T,
     },
     (next) => {
       view = next;
@@ -576,13 +566,13 @@ test("subscription failure leaves Send disabled", async () => {
   );
   await session.init();
   assert.equal(canSend(view, "//:app"), false);
-  assert.match(view.error!, /listener unavailable/);
+  assert.match(view.error ?? "", /listener unavailable/);
 });
 
 test("Bazel-busy workspace switch is rejected before calling the backend", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   await assert.rejects(h.session.openWorkspace("/other"), /Bazel/);
   assert.equal(
     h.pending.some((call) => call.command === "open_workspace"),
@@ -593,27 +583,27 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
 test("refresh is rejected while busy and is never queued", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   await h.session.refresh();
-  h.emit("app-state", { ...idle, ingest: "running" });
+  h.emit("app-state", { ...IDLE, ingest: "running" });
   await h.session.refresh();
-  h.emit("app-state", idle);
+  h.emit("app-state", IDLE);
   assert.equal(
     h.pending.some((call) => call.command === "refresh"),
     false,
   );
   const refreshing = h.session.refresh();
-  h.pending.find((call) => call.command === "refresh")!.reply.resolve(undefined);
+  pendingRequest(h, "refresh").reply.resolve(undefined);
   await refreshing;
 });
 
 test("an unconfirmed exit stays unknown and is not retried automatically", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id, stopping: true });
-  h.session.selectRun(record.id);
-  h.emit("app-state", { ...idle, runNote: "Could not confirm the stop" });
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve({ ...completed, record });
+  h.emit("app-state", { ...IDLE, running: RECORD.id, stopping: true });
+  h.session.selectRun(RECORD.id);
+  h.emit("app-state", { ...IDLE, runNote: "Could not confirm the stop" });
+  pendingRequest(h, "get_run").reply.resolve({ ...COMPLETED, record: RECORD });
   await settle();
   assert.equal(h.view.detail?.record.exitCode, undefined);
   assert.equal(h.view.state?.runNote, "Could not confirm the stop");
@@ -628,16 +618,16 @@ test("leaving Console keeps the process and prevents automatic navigation", asyn
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
   h.session.selectRun(null);
-  assert.equal(h.view.state?.running, record.id);
+  assert.equal(h.view.state?.running, RECORD.id);
   assert.equal(
     h.pending.some((call) => call.command === "stop_run"),
     false,
   );
-  h.emit("app-state", idle);
+  h.emit("app-state", IDLE);
   assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedRun, null);
 });
@@ -646,45 +636,42 @@ test("process completion selects All immediately, before history finishes loadin
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
   assert.equal(h.view.consoleOpen, true);
-  h.emit("app-state", idle);
+  h.emit("app-state", IDLE);
   assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.selectedRun, RECORD.id);
   assert.equal(h.view.initialRunTab, "All");
   assert.equal(h.view.detailLoading, true);
-  h.pending
-    .filter((call) => call.command === "get_run")
-    .at(-1)!
-    .reply.resolve(completed);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
 });
 
 test("the live run stays in the list so its row can reopen the Console", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "list_runs")!.reply.resolve([record]);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
   await settle();
-  assert.deepEqual(h.view.runs, [record]);
+  assert.deepEqual(h.view.runs, [RECORD]);
 });
 
 test("openConsole returns to a Console left while its run is in flight", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
   h.session.selectRun(null);
   assert.equal(h.view.consoleOpen, false);
-  h.session.openConsole(record);
+  h.session.openConsole(RECORD);
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.selectedRun, null);
-  assert.equal(h.view.console?.id, record.id);
+  assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(
     h.pending.some((call) => call.command === "stop_run" || call.command === "get_run"),
     false,
@@ -694,10 +681,10 @@ test("openConsole returns to a Console left while its run is in flight", async (
 test("openConsole restores the Console for a run already in flight at connect", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   assert.equal(h.view.console, null);
-  h.session.openConsole(record);
-  assert.equal(h.view.console?.id, record.id);
+  h.session.openConsole(RECORD);
+  assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.selectedRun, null);
 });
@@ -705,11 +692,11 @@ test("openConsole restores the Console for a run already in flight at connect", 
 test("openConsole cancels an in-flight run detail read", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...idle, running: record.id });
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
   h.session.selectRun("run-b");
-  h.session.openConsole(record);
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
-  h.pending.find((call) => call.command === "get_run_profile")!.reply.resolve(profile);
+  h.session.openConsole(RECORD);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
@@ -721,34 +708,31 @@ test("openConsole cancels an in-flight run detail read", async () => {
 test("openConsole on a finished run lands on its detail view", async () => {
   const h = harness();
   await h.session.init();
-  h.session.openConsole(record);
+  h.session.openConsole(RECORD);
   assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.selectedRun, RECORD.id);
   assert.equal(h.view.initialRunTab, "All");
-  h.pending.find((call) => call.command === "get_run")!.reply.resolve(completed);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
-  assert.equal(h.view.detail?.record.id, record.id);
+  assert.equal(h.view.detail?.record.id, RECORD.id);
 });
 
 test("a run finishing while its reopened Console is shown selects its All view", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");
-  h.emit("app-state", { ...idle, running: record.id });
-  h.pending.find((call) => call.command === "start_run")!.reply.resolve(record);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
   await started;
   h.session.selectRun(null);
-  h.session.openConsole(record);
+  h.session.openConsole(RECORD);
   assert.equal(h.view.consoleOpen, true);
-  h.emit("app-state", idle);
+  h.emit("app-state", IDLE);
   assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, record.id);
+  assert.equal(h.view.selectedRun, RECORD.id);
   assert.equal(h.view.initialRunTab, "All");
   assert.equal(h.view.detailLoading, true);
-  h.pending
-    .filter((call) => call.command === "get_run")
-    .at(-1)!
-    .reply.resolve(completed);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
-  assert.deepEqual(h.view.detail, completed);
+  assert.deepEqual(h.view.detail, COMPLETED);
 });

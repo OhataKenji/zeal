@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { createConsole } from "../src/lib/console.ts";
 
 test("a successful output read clears its previous error and retries the same offset", async () => {
-  const reports: (string | null)[] = [];
+  const reports: Array<string | null> = [];
   const displayed: number[] = [];
   let fail = true;
   const console = createConsole(
     "owned",
     {
-      invoke: async <T>(_command: string, args?: Record<string, unknown>) => {
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        assert.equal(command, "read_console");
         assert.equal(args?.offset, 0);
         if (fail) throw new Error("history storage permission or file safety error");
         return { data: [65], offset: 1, done: true } as T;
@@ -31,7 +32,7 @@ test("a successful output read clears its previous error and retries the same of
 });
 
 test("successful reads do not hide failed input or resize operations", async () => {
-  const reports: (string | null)[] = [];
+  const reports: Array<string | null> = [];
   let failWrite = true;
   let failResize = true;
   const console = createConsole(
@@ -72,7 +73,8 @@ test("output is delivered once in byte order, including split UTF-8", async () =
   const console = createConsole(
     "owned",
     {
-      invoke: async <T>(_command: string, args?: Record<string, unknown>) => {
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        assert.equal(command, "read_console");
         offsets.push(Number(args?.offset));
         const offset = Number(args?.offset);
         const data = Array.from(bytes.slice(offset, offset + 2));
@@ -87,7 +89,8 @@ test("output is delivered once in byte order, including split UTF-8", async () =
       displayed.push(...data);
     },
     (error) => {
-      assert.fail(error!);
+      assert.ok(error);
+      assert.fail(error);
     },
   );
   await console.poll();
@@ -116,7 +119,8 @@ test("partial writes and backpressure keep key bytes in order", async () => {
     },
     async () => {},
     (error) => {
-      assert.fail(error!);
+      assert.ok(error);
+      assert.fail(error);
     },
   );
   console.input(Uint8Array.from([27, 91, 65]));
@@ -131,6 +135,7 @@ test("partial writes and backpressure keep key bytes in order", async () => {
 });
 
 test("closing a Console ignores late output without stopping the process", async () => {
+  // The Promise executor assigns the callback before this helper returns.
   let resolve!: (value: unknown) => void;
   const calls: string[] = [];
   const console = createConsole(

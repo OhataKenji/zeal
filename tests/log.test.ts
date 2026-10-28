@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { logSpans } from "../src/lib/log.ts";
-import { terminalColors } from "../src/lib/terminal-style.ts";
+import { TERMINAL_COLORS } from "../src/lib/terminal_style.ts";
 
 test("Bazel color labels keep their text, color and reset across lines", () => {
   const spans = logSpans("\x1b[1;31mERROR:\x1b[0m failed\n\x1b[32mINFO:\x1b[0m next\n");
   assert.equal(spans.map((span) => span.text).join(""), "ERROR: failed\nINFO: next\n");
-  assert.ok(spans[0].style.includes(`color:${terminalColors.red}`));
+  assert.ok(spans[0].style.includes(`color:${TERMINAL_COLORS.red}`));
   assert.match(spans[0].style, /font-weight:700/);
   assert.equal(spans[1].style, "");
   assert.notEqual(spans[0].style, spans[2].style);
@@ -14,12 +14,12 @@ test("Bazel color labels keep their text, color and reset across lines", () => {
 
 test("normal, bright and indexed ANSI colors use the Console palette", () => {
   const spans = logSpans("\x1b[32mnormal\x1b[92mbright\x1b[38;5;2mindexed\x1b[104mbackground");
-  assert.equal(spans[0].style, `color:${terminalColors.green}`);
-  assert.equal(spans[1].style, `color:${terminalColors.brightGreen}`);
-  assert.equal(spans[2].style, `color:${terminalColors.green}`);
+  assert.equal(spans[0].style, `color:${TERMINAL_COLORS.green}`);
+  assert.equal(spans[1].style, `color:${TERMINAL_COLORS.brightGreen}`);
+  assert.equal(spans[2].style, `color:${TERMINAL_COLORS.green}`);
   assert.equal(
     spans[3].style,
-    `color:${terminalColors.green};background-color:${terminalColors.brightBlue}`,
+    `color:${TERMINAL_COLORS.green};background-color:${TERMINAL_COLORS.brightBlue}`,
   );
 });
 

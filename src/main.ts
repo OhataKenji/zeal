@@ -8,8 +8,5 @@ if (import.meta.env.DEV && !isTauri() && new URLSearchParams(location.search).ha
   installPreview();
 }
 
-const app = mount(App, {
-  target: document.getElementById("app")!,
-});
-
-export default app;
+// The entry HTML always includes the mount element.
+mount(App, { target: document.getElementById("app")! });

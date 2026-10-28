@@ -9,7 +9,7 @@
     Stop,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
-  import { app, connect, refresh, session } from "./lib/state.svelte";
+  import { app, connect, getSession, refresh } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
   import { runStatus } from "./lib/run";
   import {
@@ -113,8 +113,11 @@
   }
 
   function submit() {
-    if (running) void session.stop();
-    else void session.start(cmd, targetField);
+    if (running) {
+      void getSession().stop();
+    } else {
+      void getSession().start(cmd, targetField);
+    }
   }
 
   // Sidebar split: share of height given to the targets pane, and per-pane
@@ -124,7 +127,9 @@
 
   function dividerDown(e: PointerEvent) {
     e.preventDefault();
-    const sidebar = (e.currentTarget as HTMLElement).parentElement!;
+    const divider = e.currentTarget;
+    if (!(divider instanceof HTMLElement) || !divider.parentElement) return;
+    const sidebar = divider.parentElement;
     const move = (ev: PointerEvent) => {
       const r = sidebar.getBoundingClientRect();
       targetsShare = Math.min(
@@ -144,7 +149,7 @@
   // field, which is the single source of truth for "the current target".
   function select(label: string | null) {
     analyticsOpen = false;
-    session.selectRun(null);
+    getSession().selectRun(null);
     selected = label;
     if (label) targetField = label;
   }
@@ -218,7 +223,7 @@
         class:active={analyticsOpen && !app.view.selectedRun}
         onclick={() => {
           analyticsOpen = true;
-          session.selectRun(null);
+          getSession().selectRun(null);
         }}><ChartBar size={12} /> Analytics</button
       >
     </div>
@@ -239,8 +244,8 @@
                 aria-current={active ? "true" : undefined}
                 onclick={() =>
                   run.id === state.running
-                    ? session.openConsole(run)
-                    : session.selectRun(run.id)}
+                    ? getSession().openConsole(run)
+                    : getSession().selectRun(run.id)}
               >
                 <span class="run-label"
                   ><RunStatus {...status} compact /><span class="run-command"
@@ -259,7 +264,7 @@
           {/each}
         </ul>
         {#if app.view.runsError}<p class="err">{app.view.runsError}</p>
-          <button type="button" class="button" onclick={session.loadRuns}
+          <button type="button" class="button" onclick={getSession().loadRuns}
             >retry</button
           >
         {/if}
@@ -302,7 +307,7 @@
     {/if}
     {#if app.view.selectedRun}
       {#key app.view.selectedRun}
-        <RunView view={app.view} reload={session.loadDetail} reloadProfile={session.loadProfile} />
+        <RunView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
       {/key}
     {:else if analyticsOpen}
       {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}

@@ -23,8 +23,8 @@
     type LaneGeometry,
   } from "./timeline";
 
-  import { drawRuler, drawTimeline, type EventHit } from "./timeline-canvas";
-  import { pinchZoom } from "./timeline-gestures";
+  import { drawRuler, drawTimeline, type EventHit } from "./timeline_canvas";
+  import { pinchZoom } from "./timeline_gestures";
 
   const phaseColors = ["#dce5df", "#b2dfdb", "#81c5b7", "#81bd86", "#c3e2c3"];
 
@@ -83,16 +83,20 @@
     windowRange = zoomRange(range, layout, factor, anchor);
   }
   function pinch(factor: number, clientX: number) {
-    if (canvas)
+    if (canvas) {
       zoom(factor, anchor(clientX - canvas.getBoundingClientRect().left));
+    }
   }
   function pan(delta: number) {
     windowRange = panRange(range, layout, delta);
   }
   function toggleThread(tid: number) {
     const next = new Set(collapsed);
-    if (next.has(tid)) next.delete(tid);
-    else next.add(tid);
+    if (next.has(tid)) {
+      next.delete(tid);
+    } else {
+      next.add(tid);
+    }
     collapsed = next;
   }
 
@@ -123,8 +127,9 @@
   $effect(() => {
     if (!ruler || width <= gutter) return;
     const drawing = prepare(ruler, 26);
-    if (drawing)
+    if (drawing) {
       drawRuler(drawing.context, { width, gutter, range, ticks, theme: drawing.theme });
+    }
   });
 
   $effect(() => {
@@ -134,14 +139,15 @@
   function scrollTimeline() {
     if (!horizontalScroll || Math.abs(horizontalScroll.scrollLeft - scrollbar.left) < 1) return;
     const extent = horizontalScroll.scrollWidth - horizontalScroll.clientWidth;
-    if (extent > 0)
+    if (extent > 0) {
       windowRange = scrollRange(range, layout, horizontalScroll.scrollLeft / extent);
+    }
   }
 
   $effect(() => {
     if (!canvas || width <= gutter || height <= 0) return;
     const drawing = prepare(canvas, height);
-    if (drawing)
+    if (drawing) {
       hits = drawTimeline(drawing.context, {
         width,
         height,
@@ -153,10 +159,14 @@
         selection,
         theme: drawing.theme,
       });
+    }
   });
 
   function pointer(event: MouseEvent) {
-    const box = canvas!.getBoundingClientRect();
+    if (!canvas) {
+      throw new Error("Timeline canvas is unavailable.");
+    }
+    const box = canvas.getBoundingClientRect();
     return { x: event.clientX - box.left, y: event.clientY - box.top };
   }
   function hit(px: number, py: number) {
@@ -189,12 +199,13 @@
     if (drag?.id === event.pointerId) {
       const delta = event.clientX - drag.x;
       if (Math.hypot(delta, event.clientY - drag.y) > 3) drag.moved = true;
-      if (drag.moved)
+      if (drag.moved) {
         windowRange = panRange(
           drag.range,
           layout,
           (-delta / plotWidth) * (drag.range.end - drag.range.start),
         );
+      }
     }
   }
   function pointerUp(event: PointerEvent) {
@@ -205,8 +216,9 @@
       if (found) selection = { tid: found.tid, index: found.index };
     }
     drag = null;
-    if (canvas?.hasPointerCapture(event.pointerId))
+    if (canvas?.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
+    }
   }
   function cancelDrag() {
     drag = null;
@@ -219,8 +231,9 @@
     const nextIndex = Math.max(0, Math.min(lastIndex, selection.index + delta));
     selection = { tid: lane.tid, index: nextIndex };
     const position = eventPosition(tracks, lane.tid, nextIndex);
-    if (position?.track.kind === "events" && position.track.collapsed)
+    if (position?.track.kind === "events" && position.track.collapsed) {
       toggleThread(lane.tid);
+    }
 
     // Expansion changes track geometry. A newer selection must win during that render.
     await tick();
@@ -256,17 +269,23 @@
       event.ctrlKey ||
       event.metaKey ||
       event.altKey
-    )
+    ) {
       return;
+    }
     const key = event.key.toLowerCase();
-    if (key === "w" || key === "+" || key === "=") zoom(1.5, pointerAnchor);
-    else if (key === "s" || key === "-") zoom(1 / 1.5, pointerAnchor);
-    else if (key === "a" || key === "d")
+    if (key === "w" || key === "+" || key === "=") {
+      zoom(1.5, pointerAnchor);
+    } else if (key === "s" || key === "-") {
+      zoom(1 / 1.5, pointerAnchor);
+    } else if (key === "a" || key === "d") {
       pan(span * (key === "a" ? -0.15 : 0.15));
-    else if (key === "f") fit();
-    else if (key === "arrowleft" || key === "arrowright")
+    } else if (key === "f") {
+      fit();
+    } else if (key === "arrowleft" || key === "arrowright") {
       void moveEvent(key === "arrowleft" ? -1 : 1);
-    else return;
+    } else {
+      return;
+    }
     event.preventDefault();
   }
 </script>
@@ -318,7 +337,7 @@
       </dd>
       {#if selected.kind === "span"}<dt>Duration</dt>
         <dd>
-          {formatTime(selected.end! - selected.start!)}
+          {formatTime((selected.end ?? 0) - (selected.start ?? 0))}
         </dd>{/if}
       {#if typeof selected.event.cat === "string"}<dt>Category</dt>
         <dd>{selected.event.cat}</dd>{/if}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pinchZoom } from "../src/lib/timeline-gestures.ts";
+import { pinchZoom } from "../src/lib/timeline_gestures.ts";
 import { zoomRange } from "../src/lib/timeline.ts";
 
 function dispatch(node: EventTarget, type: string, fields = {}) {
