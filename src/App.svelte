@@ -402,9 +402,6 @@
           />{/if}
       </button>
     </div>
-    {#if st?.ingest === "running"}
-      <span class="label" role="status">Waiting for target data</span>
-    {/if}
   </div>
   {#if app.view.error}<p class="app-error error" role="alert">
       {app.view.error}
