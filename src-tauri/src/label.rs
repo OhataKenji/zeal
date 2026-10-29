@@ -91,15 +91,11 @@ pub fn is_external(label: &str) -> bool {
     label.starts_with('@')
 }
 
-/// Whether the label looks like a `select()` branch key
-/// (`//conditions:default`, `//tools/conditions:arm` etc.).
+/// Whether the label is Bazel's reserved default `select()` branch.
+/// Package names alone cannot distinguish conditions from ordinary inputs.
 #[must_use]
 pub fn is_select_key(label: &str) -> bool {
-    if is_external(label) {
-        return false;
-    }
-    let parts = split(label);
-    parts.package == "conditions" || parts.package.ends_with("/conditions")
+    label == "//conditions:default"
 }
 
 /// Whether a label-valued attribute expresses a dependency edge.
@@ -167,7 +163,9 @@ mod tests {
         assert!(!is_dep_attr("$cc_toolchain"));
         assert!(!is_dep_attr(":late_bound"));
         assert!(is_select_key("//conditions:default"));
-        assert!(is_select_key("//tools/conditions:arm"));
+        assert!(!is_select_key("//tools/conditions:arm"));
+        assert!(!is_select_key("//conditions:inputs"));
+        assert!(!is_select_key("//conditions:input.txt"));
         assert!(!is_select_key("//app:server"));
     }
 }

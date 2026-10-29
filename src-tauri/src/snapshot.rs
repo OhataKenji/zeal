@@ -174,6 +174,35 @@ mod tests {
     }
 
     #[test]
+    fn conditions_packages_keep_rule_and_file_inputs() {
+        let rules = xml::parse_rules(Cursor::new(
+            r#"<query>
+              <rule class="filegroup" name="//app:direct">
+                <list name="srcs">
+                  <label value="//conditions:inputs"/>
+                  <label value="//conditions:input.txt"/>
+                  <label value="//tools/conditions:input.txt"/>
+                </list>
+              </rule>
+              <rule class="filegroup" name="//conditions:inputs"/>
+            </query>"#,
+        ));
+        let snapshot = build(&rules, Status::Ok);
+        assert!(snapshot.edges.contains(&Edge {
+            from: "//app:direct".into(),
+            to: "//conditions:inputs".into(),
+            attr: "srcs".into(),
+        }));
+        for path in ["conditions/input.txt", "tools/conditions/input.txt"] {
+            assert!(snapshot.files.contains(&FileEntry {
+                owner: "//app:direct".into(),
+                path: path.into(),
+                role: "srcs".into(),
+            }));
+        }
+    }
+
+    #[test]
     fn snapshot_targets_canonicalize_bare_labels() {
         let snap = build(&fixture_rules(), Status::Ok);
         let labels: HashSet<&str> = snap.targets.iter().map(|t| t.label.as_str()).collect();
