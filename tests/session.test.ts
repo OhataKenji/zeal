@@ -569,6 +569,38 @@ test("subscription failure leaves Send disabled", async () => {
   assert.match(view.error ?? "", /listener unavailable/);
 });
 
+test("a state event recovers a failed initial state read", async () => {
+  const initial = deferred<AppState>();
+  const h = harness(initial.promise);
+  const initialized = h.session.init();
+  await h.stateRequested;
+  initial.reject(new Error("state unavailable"));
+  await initialized;
+  assert.equal(canSend(h.view, "//:app"), false);
+  assert.match(h.view.error ?? "", /state unavailable/);
+  assert.deepEqual(h.removed, []);
+  h.emit("app-state", IDLE);
+  assert.equal(canSend(h.view, "//:app"), true);
+  assert.equal(h.view.error, null);
+  h.session.dispose();
+  assert.deepEqual(h.removed, ["app-state"]);
+});
+
+test("a stale initial read failure cannot disconnect a session established by events", async () => {
+  const initial = deferred<AppState>();
+  const h = harness(initial.promise);
+  const initialized = h.session.init();
+  await h.stateRequested;
+  h.emit("app-state", IDLE);
+  initial.reject(new Error("stale read failure"));
+  await initialized;
+  assert.equal(h.view.error, null);
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  assert.equal(h.view.state?.running, RECORD.id);
+  assert.equal(canSend(h.view, "//:app"), false);
+  assert.deepEqual(h.removed, []);
+});
+
 test("Bazel-busy workspace switch is rejected before calling the backend", async () => {
   const h = harness();
   await h.session.init();

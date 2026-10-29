@@ -264,8 +264,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       const state = await transport.invoke<AppState>("get_state");
       if (revision === stateRevision) acceptState(state);
     } catch (error) {
-      update({ error: `Could not connect: ${String(error)}` });
-      dispose();
+      // A state event can recover a failed read, or already have superseded it.
+      if (!view.ready) update({ error: `Could not connect: ${String(error)}` });
     }
   }
 
