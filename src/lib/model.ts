@@ -141,10 +141,8 @@ export interface UsedBy {
 /** Direct dependency, data, and reverse-usage relationships for a target. */
 export interface Relations {
   target: Target;
-  deps: string[];
-  data: string[];
+  attributes: Array<{ name: string; labels: string[]; files: string[] }>;
   usedBy: UsedBy[];
-  inputs: FileEntry[];
   outputs: FileEntry[];
 }
 
@@ -153,16 +151,20 @@ export function relations(snap: Snapshot, label: string): Relations | null {
   const target = snap.targets.find((t) => t.label === label);
   if (!target) return null;
 
-  const deps = new Set<string>();
-  const data = new Set<string>();
+  const attributes = new Map<string, { labels: Set<string>; files: Set<string> }>();
+  function attribute(name: string) {
+    let value = attributes.get(name);
+    if (!value) {
+      value = { labels: new Set(), files: new Set() };
+      attributes.set(name, value);
+    }
+    return value;
+  }
+  for (const name of ["srcs", "data", "deps"]) attribute(name);
   const usedBy = new Map<string, Set<string>>();
   for (const e of snap.edges) {
     if (e.from === label) {
-      if (e.attr === "deps") {
-        deps.add(e.to);
-      } else if (e.attr === "data") {
-        data.add(e.to);
-      }
+      attribute(e.attr).labels.add(e.to);
     }
     if (e.to === label) {
       let attrs = usedBy.get(e.from);
@@ -170,15 +172,22 @@ export function relations(snap: Snapshot, label: string): Relations | null {
       attrs.add(e.attr);
     }
   }
+  for (const file of snap.files) {
+    if (file.owner === label && file.role !== "out") {
+      attribute(file.role).files.add(file.path);
+    }
+  }
 
   return {
     target,
-    deps: [...deps].sort(),
-    data: [...data].sort(),
+    attributes: [...attributes].map(([name, value]) => ({
+      name,
+      labels: [...value.labels].sort(),
+      files: [...value.files].sort(),
+    })),
     usedBy: [...usedBy]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([label, attrs]) => ({ label, attrs: [...attrs].sort() })),
-    inputs: snap.files.filter((f) => f.owner === label && f.role !== "out"),
     outputs: snap.files.filter((f) => f.owner === label && f.role === "out"),
   };
 }
