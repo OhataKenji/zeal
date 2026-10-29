@@ -25,20 +25,6 @@
       ]) ?? [],
     ),
   );
-  const sources = $derived([
-    ...new Set(
-      rel?.inputs
-        .filter((file) => file.role === "srcs")
-        .map((file) => file.path) ?? [],
-    ),
-  ]);
-  const otherInputs = $derived([
-    ...new Set(
-      rel?.inputs
-        .filter((file) => file.role !== "srcs")
-        .map((file) => file.path) ?? [],
-    ),
-  ]);
   const targets = $derived(
     new Map(snap.targets.map((target) => [target.label, target])),
   );
@@ -143,14 +129,22 @@
     >
   </div>
   <dl class="relations">
-    <dt>srcs</dt>
-    <dd>{@render files(sources, "srcs", target.pkg)}</dd>
-    {#if otherInputs.length}<dt>inputs</dt>
-      <dd>{@render files(otherInputs, "inputs", target.pkg)}</dd>{/if}
-    <dt>data</dt>
-    <dd>{@render labels(rel.data, "data", target.pkg)}</dd>
-    <dt>deps</dt>
-    <dd>{@render labels(rel.deps, "deps", target.pkg)}</dd>
+    {#each rel.attributes as attribute (attribute.name)}
+      {@const matchingLabels = attribute.labels.filter(matches)}
+      {@const matchingFiles = attribute.files.filter(matches)}
+      <dt>{attribute.name}</dt>
+      <dd>
+        {#if matchingLabels.length}
+          {@render labels(attribute.labels, `${attribute.name}-labels`, target.pkg)}
+        {/if}
+        {#if matchingFiles.length}
+          {@render files(attribute.files, `${attribute.name}-files`, target.pkg)}
+        {/if}
+        {#if !matchingLabels.length && !matchingFiles.length}
+          <span class="dim">{query ? "No matching labels or files" : "None"}</span>
+        {/if}
+      </dd>
+    {/each}
     <dt>outs</dt>
     <dd>
       {@render files(

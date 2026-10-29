@@ -81,3 +81,42 @@ test("reverse dependencies group unique attributes under each direct user", () =
     { label: "//app:z", attrs: ["hdrs", "srcs"] },
   ]);
 });
+
+test("forward attributes retain rule and file inputs under their original names", () => {
+  const snapshot: Snapshot = {
+    meta: { fetchedAt: 0, status: "ok" },
+    targets: [
+      {
+        label: "//app:generated",
+        pkg: "app",
+        name: "generated",
+        ruleClass: "genrule",
+        location: null,
+      },
+    ],
+    edges: [
+      { from: "//app:generated", to: "//app:inputs", attr: "srcs" },
+      { from: "//app:generated", to: "//app:inputs", attr: "srcs" },
+      { from: "//app:generated", to: "//tools:compiler", attr: "tools" },
+      { from: "//other:target", to: "//app:inputs", attr: "deps" },
+    ],
+    files: [
+      { owner: "//app:generated", path: "app/input.txt", role: "srcs" },
+      { owner: "//app:generated", path: "app/runtime.txt", role: "data" },
+      { owner: "//app:generated", path: "app/helper.sh", role: "tools" },
+      { owner: "//app:generated", path: "app/generated.txt", role: "out" },
+      { owner: "//other:target", path: "other/input.txt", role: "srcs" },
+    ],
+  };
+  const result = relations(snapshot, "//app:generated");
+  assert.deepEqual(result?.attributes, [
+    { name: "srcs", labels: ["//app:inputs"], files: ["app/input.txt"] },
+    { name: "data", labels: [], files: ["app/runtime.txt"] },
+    { name: "deps", labels: [], files: [] },
+    { name: "tools", labels: ["//tools:compiler"], files: ["app/helper.sh"] },
+  ]);
+  assert.deepEqual(
+    result?.outputs.map((file) => file.path),
+    ["app/generated.txt"],
+  );
+});
