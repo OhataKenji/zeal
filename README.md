@@ -14,7 +14,7 @@ Tool versions are pinned with [mise](https://mise.jdx.dev/).
 mise install   # installs the pinned tools (trusts mise.toml on first run)
 pnpm install
 pnpm tauri dev    # run the app in dev mode
-pnpm tauri build  # build a release bundle
+pnpm tauri build -- --locked  # build a release bundle
 ```
 
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
