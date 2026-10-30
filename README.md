@@ -24,9 +24,7 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
 ### Fuzzy Search Target and Run
 
-Find targets or source files with fuzzy search and choose `build`, `test`, or `run`.
-
-![Fuzzy search finding parser targets and source files from “parsr”](docs/screenshots/fuzzy-search.jpg)
+Find Bazel targets by fuzzy-searching their full labels, then choose `build`, `test`, or `run`.
 
 ### Run Page
 
