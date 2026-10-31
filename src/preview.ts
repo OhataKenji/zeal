@@ -4,6 +4,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { AppState, Profile, RunRecord, Snapshot, Target } from "./lib/types";
 import type { AnalyticsFilter } from "./lib/analytics";
+import { previewAnalytics } from "./preview/analytics.ts";
+import { interpretConsoleInput } from "./preview/console.ts";
 
 const WORKSPACE = "/demo/acme-mono";
 const NOW = Date.now();
@@ -106,9 +108,6 @@ const SNAPSHOT: Snapshot = {
     })),
   ],
 };
-function dayString(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
 const PREVIEW_TARGETS = [
   "//app:server",
   "//app/lib:all",
@@ -229,6 +228,116 @@ const PROFILE: Profile = {
   ],
 };
 
+function readConsole(id: string, offset: number) {
+  const bytes = new TextEncoder().encode(consoleOutput.get(id) ?? "");
+  const data = Array.from(bytes.slice(offset, offset + 64 * 1024));
+  return {
+    data,
+    offset: offset + data.length,
+    done: state.running !== id && offset + data.length === bytes.length,
+  };
+}
+
+function writeConsole(id: string, data: unknown) {
+  if (!Array.isArray(data)) throw new Error("Preview console input must be a byte array.");
+  if (state.running !== id) throw new Error("Preview process has ended");
+  const text = new TextDecoder().decode(Uint8Array.from(data));
+  const result = interpretConsoleInput(consoleInput.get(id) ?? "", text);
+  consoleInput.set(id, result.input);
+  consoleOutput.set(id, (consoleOutput.get(id) ?? "") + result.output);
+  if (result.exitCode !== null) {
+    const record = records.find((run) => run.id === id);
+    if (!record) throw new Error("Preview run was not found.");
+    record.finishedAt = Date.now();
+    record.exitCode = result.exitCode;
+    state.running = null;
+    void emit("app-state", structuredClone(state));
+  }
+  return data.length;
+}
+
+function getRun(id: unknown) {
+  const record = records.find((run) => run.id === id);
+  if (!record) throw new Error("Preview run not found");
+  return {
+    record,
+    log: {
+      status: "ok",
+      data:
+        consoleOutput.get(record.id) ??
+        `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
+    },
+    bep: {
+      status: "ok",
+      data: {
+        targets: [{ label: record.target, ok: record.exitCode === 0 }],
+        tests: [],
+        ...(record.id === records[0]?.id
+          ? {
+              originalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root ${record.cmd} --config=dev --define='message=hello world' ${record.target}`,
+              canonicalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root --batch ${record.cmd} --jobs=8 --keep_going --define='message=hello world' ${record.target}`,
+              options: {
+                startupOptions: ["--output_user_root=/tmp/zeal-preview-root", "--batch"],
+                explicitStartupOptions: ["--output_user_root=/tmp/zeal-preview-root"],
+                cmdLine: [
+                  "--color=yes",
+                  "--jobs=8",
+                  "--define=message=hello world",
+                  "--keep_going",
+                  "--test_output=errors",
+                  "--copt=-DNAME=preview value",
+                  "--remote_cache=grpc://cache.example.invalid",
+                ],
+                explicitCmdLine: [
+                  "--define=message=hello world",
+                  "--jobs=8",
+                  "--keep_going",
+                  "--test_output=errors",
+                  "--copt=-DNAME=preview value",
+                ],
+              },
+            }
+          : {}),
+        truncated: false,
+      },
+    },
+  };
+}
+
+function startRun(cmd: string, target: string) {
+  const record: PreviewRecord = {
+    id: `preview-${crypto.randomUUID()}`,
+    workspace: WORKSPACE,
+    cmd,
+    target,
+    startedAt: Date.now(),
+  };
+  records.unshift(record);
+  state.running = record.id;
+  state.consoleRun = record.id;
+  consoleOutput.set(
+    record.id,
+    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.target}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+  );
+  if (record.cmd !== "run") {
+    record.finishedAt = Date.now();
+    record.exitCode = 0;
+    state.running = null;
+  }
+  void emit("app-state", structuredClone(state));
+  return structuredClone(record);
+}
+
+function stopRun() {
+  const record = records.find((run) => run.id === state.running);
+  if (record) {
+    record.finishedAt = Date.now();
+    record.exitCode = 8;
+  }
+  state.running = null;
+  void emit("app-state", structuredClone(state));
+}
+
 /** Installs mock core IPC for the development-only browser preview. */
 export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
@@ -245,262 +354,26 @@ export function installPreview() {
           return structuredClone(state);
         case "list_runs":
           return structuredClone(records);
-        case "read_console": {
-          const id = String(payload?.id);
-          const bytes = new TextEncoder().encode(consoleOutput.get(id) ?? "");
-          const offset = Number(payload?.offset ?? 0);
-          const data = Array.from(bytes.slice(offset, offset + 64 * 1024));
-          return {
-            data,
-            offset: offset + data.length,
-            done: state.running !== id && offset + data.length === bytes.length,
-          };
-        }
+        case "read_console":
+          return readConsole(String(payload?.id), Number(payload?.offset ?? 0));
         case "resize_console":
           return;
-        case "write_console": {
-          const id = String(payload?.id);
-          const data = payload?.data;
-          if (!Array.isArray(data)) {
-            throw new Error("Preview console input must be a byte array.");
-          }
-          if (state.running !== id) throw new Error("Preview process has ended");
-          const text = new TextDecoder().decode(Uint8Array.from(data));
-          let output = consoleOutput.get(id) ?? "";
-          let input = consoleInput.get(id) ?? "";
-          let finish: number | null = null;
-          for (const ch of text) {
-            if (ch === "\x03" || ch === "\x04") {
-              output += "^" + (ch === "\x03" ? "C" : "D") + "\r\n";
-              finish = 130;
-              break;
-            }
-            if (ch === "\r" || ch === "\n") {
-              output += `\r\n${Number(input) * 2}\r\n`;
-              finish = 0;
-              break;
-            }
-            if (ch === "\x7f") {
-              input = input.slice(0, -1);
-              output += "\b \b";
-            } else {
-              input += ch;
-              output += ch;
-            }
-          }
-          consoleInput.set(id, input);
-          consoleOutput.set(id, output);
-          if (finish !== null) {
-            const record = records.find((run) => run.id === id);
-            if (!record) {
-              throw new Error("Preview run was not found.");
-            }
-            record.finishedAt = Date.now();
-            record.exitCode = finish;
-            state.running = null;
-            void emit("app-state", structuredClone(state));
-          }
-          return data.length;
-        }
-        case "get_run": {
-          const record = records.find((run) => run.id === payload?.id);
-          if (!record) throw new Error("Preview run not found");
-          return {
-            record,
-            log: {
-              status: "ok",
-              data:
-                consoleOutput.get(record.id) ??
-                `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
-            },
-            bep: {
-              status: "ok",
-              data: {
-                targets: [{ label: record.target, ok: record.exitCode === 0 }],
-                tests: [],
-                ...(record.id === records[0]?.id
-                  ? {
-                      originalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root ${record.cmd} --config=dev --define='message=hello world' ${record.target}`,
-                      canonicalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root --batch ${record.cmd} --jobs=8 --keep_going --define='message=hello world' ${record.target}`,
-                      options: {
-                        startupOptions: ["--output_user_root=/tmp/zeal-preview-root", "--batch"],
-                        explicitStartupOptions: ["--output_user_root=/tmp/zeal-preview-root"],
-                        cmdLine: [
-                          "--color=yes",
-                          "--jobs=8",
-                          "--define=message=hello world",
-                          "--keep_going",
-                          "--test_output=errors",
-                          "--copt=-DNAME=preview value",
-                          "--remote_cache=grpc://cache.example.invalid",
-                        ],
-                        explicitCmdLine: [
-                          "--define=message=hello world",
-                          "--jobs=8",
-                          "--keep_going",
-                          "--test_output=errors",
-                          "--copt=-DNAME=preview value",
-                        ],
-                      },
-                    }
-                  : {}),
-                truncated: false,
-              },
-            },
-          };
-        }
-        case "get_run_profile": {
+        case "write_console":
+          return writeConsole(String(payload?.id), payload?.data);
+        case "get_run":
+          return getRun(payload?.id);
+        case "get_run_profile":
           if (!records.some((run) => run.id === payload?.id)) {
             throw new Error("Preview run not found");
           }
           return { status: "ok", data: PROFILE };
-        }
-        case "get_analytics": {
+        case "get_analytics":
           // The app sends this command with the AnalyticsFilter shape.
-          const requested = (payload?.filter ?? {}) as AnalyticsFilter;
-          const from = new Date(NOW);
-          from.setDate(from.getDate() - 29);
-          const filter = {
-            ...requested,
-            start: requested.start ?? dayString(from),
-            end: requested.end ?? dayString(new Date(NOW)),
-          };
-          // Mirror the backend contract: reject, never silently truncate.
-          // Pure proleptic-Gregorian checks — local-time Date parsing would
-          // reject days a skipped-timezone calendar still counts.
-          const utcDay = (s: string): number | null => {
-            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-            if (!m) return null;
-            const d = new Date(0);
-            const year = Number(m[1]);
-            const month = Number(m[2]);
-            const day = Number(m[3]);
-            d.setUTCFullYear(year, month - 1, day);
-            return d.getUTCFullYear() === year &&
-              d.getUTCMonth() === month - 1 &&
-              d.getUTCDate() === day
-              ? d.getTime()
-              : null;
-          };
-          const first = utcDay(filter.start);
-          const last = utcDay(filter.end);
-          if (first === null || last === null) {
-            throw new Error("invalid analytics filter");
-          }
-          const spanDays = (last - first) / 86400000 + 1;
-          if (
-            !(spanDays >= 1 && spanDays <= 366) ||
-            (filter.cmd != null && !["build", "test"].includes(filter.cmd)) ||
-            (filter.outcome != null && !["ok", "failed", "interrupted"].includes(filter.outcome)) ||
-            (filter.target != null && new TextEncoder().encode(filter.target).length > 64 * 1024)
-          ) {
-            throw new Error("invalid analytics filter");
-          }
-          const pct = (sorted: number[], p: number) =>
-            sorted.length ? sorted[Math.ceil((sorted.length * p) / 100) - 1] : 0;
-          const inPeriod = records.filter((run) => {
-            const day = dayString(new Date(run.startedAt));
-            const outcome =
-              run.exitCode === 0 ? "ok" : run.exitCode === 8 ? "interrupted" : "failed";
-            return (
-              run.exitCode !== undefined &&
-              ["build", "test"].includes(run.cmd) &&
-              day >= filter.start &&
-              day <= filter.end &&
-              (filter.cmd == null || run.cmd === filter.cmd) &&
-              (filter.outcome == null || outcome === filter.outcome)
-            );
-          });
-          const days = new Map<
-            string,
-            {
-              count: number;
-              timed: number;
-              ok: number;
-              failed: number;
-              interrupted: number;
-              durations: number[];
-            }
-          >();
-          const utcString = (d: Date) =>
-            `${String(d.getUTCFullYear()).padStart(4, "0")}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-          for (
-            const d = new Date(first);
-            utcString(d) <= filter.end;
-            d.setUTCDate(d.getUTCDate() + 1)
-          ) {
-            days.set(utcString(d), {
-              count: 0,
-              timed: 0,
-              ok: 0,
-              failed: 0,
-              interrupted: 0,
-              durations: [],
-            });
-          }
-          const byTarget = new Map<string, { runs: number; durations: number[] }>();
-          for (const run of inPeriod) {
-            const duration =
-              run.finishedAt === undefined ? null : Math.max(0, run.finishedAt - run.startedAt);
-            const agg = byTarget.get(run.target) ?? { runs: 0, durations: [] };
-            agg.runs += 1;
-            if (duration !== null) agg.durations.push(duration);
-            byTarget.set(run.target, agg);
-            if (filter.target != null && run.target !== filter.target) {
-              continue;
-            }
-            const slot = days.get(dayString(new Date(run.startedAt)));
-            if (!slot) {
-              throw new Error("Preview analytics day was not initialized.");
-            }
-            slot.count += 1;
-            if (run.exitCode === 0) {
-              slot.ok += 1;
-            } else if (run.exitCode === 8) {
-              slot.interrupted += 1;
-            } else {
-              slot.failed += 1;
-            }
-            if (duration !== null) {
-              slot.timed += 1;
-              slot.durations.push(duration);
-            }
-          }
-          return {
-            filter,
-            today: dayString(new Date(NOW)),
-            days: [...days].map(([day, slot]) => {
-              const sorted = [...slot.durations].sort((a, b) => a - b);
-              return {
-                day,
-                count: slot.count,
-                timed: slot.timed,
-                ok: slot.ok,
-                failed: slot.failed,
-                interrupted: slot.interrupted,
-                totalMs: sorted.reduce((a, b) => a + b, 0),
-                p50Ms: pct(sorted, 50),
-                p95Ms: pct(sorted, 95),
-              };
-            }),
-            targets: [...byTarget]
-              .map(([target, agg]) => {
-                const sorted = agg.durations.sort((a, b) => a - b);
-                return {
-                  target,
-                  runs: agg.runs,
-                  totalMs: sorted.reduce((a, b) => a + b, 0),
-                  p50Ms: pct(sorted, 50),
-                  p95Ms: pct(sorted, 95),
-                };
-              })
-              .sort(
-                (a, b) =>
-                  b.totalMs - a.totalMs || (a.target < b.target ? -1 : a.target > b.target ? 1 : 0),
-              )
-              .slice(0, 10),
-          };
-        }
+          return previewAnalytics(
+            records,
+            (payload?.filter ?? {}) as Partial<AnalyticsFilter>,
+            NOW,
+          );
         case "open_workspace":
           state.workspace = WORKSPACE;
           state.snapshot = SNAPSHOT;
@@ -510,39 +383,10 @@ export function installPreview() {
           return;
         case "open_location":
           return;
-        case "start_run": {
-          const record: PreviewRecord = {
-            id: `preview-${crypto.randomUUID()}`,
-            workspace: WORKSPACE,
-            cmd: String(payload?.cmd),
-            target: String(payload?.target),
-            startedAt: Date.now(),
-          };
-          records.unshift(record);
-          state.running = record.id;
-          state.consoleRun = record.id;
-          consoleOutput.set(
-            record.id,
-            `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.target}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
-          );
-          if (record.cmd !== "run") {
-            record.finishedAt = Date.now();
-            record.exitCode = 0;
-            state.running = null;
-          }
-          void emit("app-state", structuredClone(state));
-          return structuredClone(record);
-        }
-        case "stop_run": {
-          const record = records.find((run) => run.id === state.running);
-          if (record) {
-            record.finishedAt = Date.now();
-            record.exitCode = 8;
-          }
-          state.running = null;
-          void emit("app-state", structuredClone(state));
-          return;
-        }
+        case "start_run":
+          return startRun(String(payload?.cmd), String(payload?.target));
+        case "stop_run":
+          return stopRun();
         default:
           throw new Error(`Unsupported preview command: ${command}`);
       }
