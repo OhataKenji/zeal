@@ -1,3 +1,4 @@
+import { COMMANDS } from "./commands.ts";
 import { targetError } from "./target.ts";
 import type { AppState, Profile, RunCmd, RunDetail, RunRecord, Section } from "./types.ts";
 
@@ -98,7 +99,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     listing = true;
     const generation = ++listGeneration;
     try {
-      const runs = await transport.invoke<RunRecord[]>("list_runs");
+      const runs = await transport.invoke<RunRecord[]>(COMMANDS.listRuns);
       if (generation === listGeneration) {
         if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
           update({ runs, runsError: null });
@@ -122,7 +123,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++detailGeneration;
     update({ detailLoading: true, detailError: null });
     try {
-      const detail = await transport.invoke<RunDetail>("get_run", { id });
+      const detail = await transport.invoke<RunDetail>(COMMANDS.getRun, { id });
       if (generation === detailGeneration) {
         update({ detail, detailLoading: false });
       }
@@ -141,7 +142,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++profileGeneration;
     update({ profileLoading: true, profileError: null });
     try {
-      const profile = await transport.invoke<Section<Profile>>("get_run_profile", { id });
+      const profile = await transport.invoke<Section<Profile>>(COMMANDS.getRunProfile, { id });
       if (generation === profileGeneration) {
         update({ profile, profileLoading: false });
       }
@@ -244,7 +245,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       }
       unlisten = remove;
       const revision = stateRevision;
-      const state = await transport.invoke<AppState>("get_state");
+      const state = await transport.invoke<AppState>(COMMANDS.getState);
       if (revision === stateRevision) acceptState(state);
     } catch (error) {
       // A state event can recover a failed read, or already have superseded it.
@@ -258,7 +259,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({ starting: true, error: null });
     try {
       // The target goes through verbatim: one argument, no shell interpretation.
-      const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
+      const record = await transport.invoke<RunRecord>(COMMANDS.startRun, { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
       selectRun(null);
       // Composer input labels the live Console until build events report it.
@@ -268,7 +269,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       // read completed files. Events received during this read take priority.
       const revision = stateRevision;
       try {
-        const state = await transport.invoke<AppState>("get_state");
+        const state = await transport.invoke<AppState>(COMMANDS.getState);
         if (disposed || workspace !== view.state?.workspace) return;
         if (revision === stateRevision) acceptState(state);
       } catch (error) {
@@ -294,7 +295,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (!canStop(view)) return;
     const workspace = view.state?.workspace;
     try {
-      await transport.invoke("stop_run");
+      await transport.invoke(COMMANDS.stopRun);
     } catch (error) {
       if (workspace === view.state?.workspace) update({ error: String(error) });
     }
@@ -315,7 +316,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({ opening: true });
     const revision = stateRevision;
     try {
-      const state = await transport.invoke<AppState>("open_workspace", { path });
+      const state = await transport.invoke<AppState>(COMMANDS.openWorkspace, { path });
       if (revision === stateRevision) acceptState(state);
     } finally {
       update({ opening: false });
@@ -333,7 +334,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       return;
     }
     try {
-      await transport.invoke("refresh");
+      await transport.invoke(COMMANDS.refresh);
     } catch (error) {
       update({ error: String(error) });
     }

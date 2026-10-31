@@ -1,3 +1,4 @@
+import { COMMANDS } from "./commands.ts";
 import type { Transport } from "./session.ts";
 
 /** Bytes read from the core's durable console stream at a requested offset. */
@@ -48,7 +49,7 @@ export function createConsole(
     try {
       while (!disposed && !done && running && pending.length) {
         const data = Array.from(pending.subarray(0, 8192));
-        const count = await transport.invoke<number>("write_console", { id, data });
+        const count = await transport.invoke<number>(COMMANDS.writeConsole, { id, data });
         if (disposed) return;
         pending = pending.slice(count);
         if (count > 0) setError("write", null);
@@ -81,7 +82,7 @@ export function createConsole(
     reading = true;
     try {
       do {
-        const result = await transport.invoke<ConsoleOutput>("read_console", { id, offset });
+        const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, { id, offset });
         if (disposed) return;
         if (result.data.length) await display(Uint8Array.from(result.data));
         if (disposed) return;
@@ -101,7 +102,7 @@ export function createConsole(
   async function resize(cols: number, rows: number) {
     if (disposed || done || !running) return;
     try {
-      await transport.invoke("resize_console", { id, cols, rows });
+      await transport.invoke(COMMANDS.resizeConsole, { id, cols, rows });
       setError("resize", null);
     } catch (error) {
       setError("resize", String(error));
