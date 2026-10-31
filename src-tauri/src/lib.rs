@@ -14,13 +14,20 @@ mod terminal;
 mod workspace;
 mod xml;
 
+// Public boundaries used by external clients and integration tests.
+pub use bes::serve as serve_build_events;
+pub use protocol::{bep as build_event_protocol, bes as build_event_service_protocol};
+pub use store::{
+    ErrorKind, RunRecord, StoreError, artifact as open_run_artifact, list as list_run_records,
+    read_record as read_run_record,
+};
+
 use ingest::{RunDetail, Section};
 use profile::Profile;
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use store::RunRecord;
 use tauri::{AppHandle, Manager, RunEvent, State};
 
 #[tauri::command]
@@ -338,7 +345,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod artifact_worker_tests {
+mod tests {
     use super::{ArtifactWorker, DETAIL_BUSY, PROFILE_BUSY};
 
     #[test]
