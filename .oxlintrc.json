@@ -1,10 +1,13 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "unicorn", "oxc"],
+  "jsPlugins": ["eslint-plugin-sonarjs"],
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "rules": {
+    "sonarjs/cognitive-complexity": ["warn", 15]
+  },
   "env": {
     "builtin": true
   }
