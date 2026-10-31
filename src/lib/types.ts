@@ -56,6 +56,8 @@ export interface AppState {
   snapshot: Snapshot | null;
   lastError: IngestError | null;
   running: string | null;
+  // The current workspace's last Console remains readable after process exit.
+  consoleRun?: string | null;
   // Stop is best-effort. An unconfirmed exit releases the slot with runNote.
   stopping: boolean;
   runNote: string | null;

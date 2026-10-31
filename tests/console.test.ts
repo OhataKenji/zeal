@@ -163,3 +163,60 @@ test("closing a Console ignores late output without stopping the process", async
   await console.poll();
   assert.deepEqual(calls, ["read_console"]);
 });
+
+test("completed Console drains its final output without further process operations", async () => {
+  const calls: string[] = [];
+  const displayed: number[] = [];
+  const replies = [
+    { data: [65], offset: 1, done: false },
+    { data: [66, 67], offset: 3, done: true },
+  ];
+  const console = createConsole(
+    "owned",
+    {
+      invoke: async <T>(command: string) => {
+        calls.push(command);
+        assert.equal(command, "read_console");
+        return replies.shift() as T;
+      },
+    },
+    async (bytes) => {
+      displayed.push(...bytes);
+    },
+    (error) => {
+      assert.equal(error, null);
+    },
+  );
+  await console.poll();
+  console.setRunning(false);
+  console.input(Uint8Array.of(68));
+  await console.resize(80, 24);
+  await console.poll();
+  await console.poll();
+  assert.deepEqual(displayed, [65, 66, 67]);
+  assert.deepEqual(calls, ["read_console", "read_console"]);
+});
+
+test("process completion discards pending input under backpressure but keeps reading", async () => {
+  const calls: string[] = [];
+  const console = createConsole(
+    "owned",
+    {
+      invoke: async <T>(command: string) => {
+        calls.push(command);
+        return (command === "write_console" ? 0 : { data: [], offset: 0, done: false }) as T;
+      },
+    },
+    async () => {},
+    (error) => {
+      assert.equal(error, null);
+    },
+  );
+  console.input(Uint8Array.of(65));
+  await console.poll();
+  const writes = calls.filter((command) => command === "write_console").length;
+  console.setRunning(false);
+  await console.poll();
+  assert.equal(calls.filter((command) => command === "write_console").length, writes);
+  assert.equal(calls.at(-1), "read_console");
+});

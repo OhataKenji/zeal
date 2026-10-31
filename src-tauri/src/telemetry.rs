@@ -260,7 +260,10 @@ mod tests {
             // Arguments and returned errors must not become span fields.
             let private = std::path::Path::new("private-token");
             assert!(crate::store::read_record(private, private, "private-token").is_err());
-            assert!(crate::console::read(private, private, "private-token", 0, true).is_err());
+            assert!(
+                crate::console::read(private, &crate::state::Core::new(), "private-token", 0)
+                    .is_err()
+            );
             assert!(crate::store::events::get(private, private, "private-token").is_err());
             let event = crate::protocol::bes::OrderedBuildEvent {
                 event: Some(crate::protocol::bes::BuildEvent {

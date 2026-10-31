@@ -6,7 +6,7 @@
 //! exit releases the slot with a note and leaves the record unfinished. Only
 //! the currently held run may be signalled; descendants are not supervised.
 
-use crate::state::{Core, CoreState};
+use crate::state::{ConsoleSession, Core, CoreState};
 use crate::store::{self, RunRecord};
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
@@ -115,7 +115,7 @@ pub fn start(
     // The record exists before bazel does; a failing store prevents the spawn.
     let (rec, dir) = store::create(data, &ws, cmd, target).map_err(|e| e.to_string())?;
     // Its own process group: a stop reaches bazel and whatever it started.
-    let (mut child, terminal, mut capture) = match crate::terminal::spawn(
+    let (mut child, terminal, capture) = match crate::terminal::spawn(
         Command::new(&bazel)
             .args(argv(cmd, target, &dir))
             .arg(format!("--invocation_id={}", rec.id))
@@ -129,6 +129,11 @@ pub fn start(
         }
     };
     st.run = Some(rec.id.clone().into());
+    st.console = Some(ConsoleSession {
+        id: rec.id.clone().into(),
+        workspace: ws.clone(),
+        finished: false,
+    });
     st.run_terminal = Some(terminal);
     st.run_pgid = Some(child.id() as i32);
     st.run_stopping = false;
@@ -145,6 +150,8 @@ pub fn start(
             id: &id,
             emit: || core.emit(&app),
         };
+        // Drain capture before the slot is dropped, including on unwind.
+        let mut capture = capture;
         let exit = observe_process(
             &core,
             &id,
@@ -168,6 +175,7 @@ pub fn start(
             Err(_) => Ok(()),
         };
         let mut st = core.state.lock().expect("application state lock poisoned");
+        finish_console(&mut st, &id);
         if apply_reap(&mut st, &id, &exit)
             && let Err(e) = saved
         {
@@ -178,6 +186,14 @@ pub fn start(
         }
     });
     Ok(rec)
+}
+
+fn finish_console(st: &mut CoreState, id: &str) {
+    if let Some(console) = &mut st.console
+        && console.id.as_str() == id
+    {
+        console.finished = true;
+    }
 }
 
 /// Stop the run in flight: SIGINT to its process group, SIGKILL after
@@ -268,6 +284,7 @@ impl<F: Fn()> Drop for RunSlot<'_, F> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        finish_console(&mut st, self.id);
         if still_held(&st, self.id) {
             clear_run(&mut st);
             if thread::panicking() {
@@ -508,6 +525,24 @@ mod tests {
                 "{cmd}"
             );
         }
+    }
+
+    #[test]
+    fn an_old_capture_cannot_finish_or_restore_a_new_console() {
+        let core = Core::new();
+        let mut state = core.state.lock().unwrap();
+        state.console = Some(ConsoleSession {
+            id: "new".into(),
+            workspace: Path::new("/workspace").into(),
+            finished: false,
+        });
+        finish_console(&mut state, "old");
+        assert!(!state.console.as_ref().unwrap().finished);
+        finish_console(&mut state, "new");
+        assert!(state.console.as_ref().unwrap().finished);
+        state.console = None;
+        finish_console(&mut state, "new");
+        assert!(state.console.is_none());
     }
 
     #[test]

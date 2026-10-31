@@ -18,11 +18,13 @@
   } = $props();
   let host: HTMLDivElement;
   let terminal = $state.raw<Terminal>();
+  let connection = $state.raw<ReturnType<typeof createConsole>>();
   let error = $state<string | null>(null);
   const status = $derived(runStatus(record, running ? record.id : null, stopping));
 
   $effect(() => {
     if (terminal) terminal.options.disableStdin = !running;
+    connection?.setRunning(running);
   });
 
   $effect(() => { if (visible && terminal) terminal.focus(); });
@@ -37,27 +39,29 @@
     term.loadAddon(fit);
     term.open(host);
     terminal = term;
-    const connection = createConsole(record.id, { invoke },
+    const stream = createConsole(record.id, { invoke },
       (bytes) => new Promise<void>((resolve) => term.write(bytes, resolve)),
       (message) => { error = message; });
+    stream.setRunning(running);
+    connection = stream;
     const keys = term.onData((data) => {
-      if (running) connection.input(new TextEncoder().encode(data));
+      if (running) stream.input(new TextEncoder().encode(data));
     });
     const binary = term.onBinary((data) => {
-      if (running) connection.input(Uint8Array.from(data, (ch) => ch.charCodeAt(0)));
+      if (running) stream.input(Uint8Array.from(data, (ch) => ch.charCodeAt(0)));
     });
-    const sizes = term.onResize(({ cols, rows }) => { void connection.resize(cols, rows); });
+    const sizes = term.onResize(({ cols, rows }) => { void stream.resize(cols, rows); });
     const observer = new ResizeObserver(() => { if (host.clientWidth && host.clientHeight) fit.fit(); });
     observer.observe(host);
     fit.fit();
-    void connection.resize(term.cols, term.rows);
-    void connection.poll();
-    const timer = setInterval(() => { void connection.poll(); }, 50);
+    void stream.resize(term.cols, term.rows);
+    void stream.poll();
+    const timer = setInterval(() => { void stream.poll(); }, 50);
     term.focus();
     return () => {
       clearInterval(timer);
       observer.disconnect();
-      connection.dispose();
+      stream.dispose();
       keys.dispose(); binary.dispose(); sizes.dispose();
       term.dispose();
     };

@@ -92,19 +92,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
     view = { ...view, ...patch };
-    // Reconcile start_run first: a short command can finish before its reply.
-    // Each Console gets one transition; later updates never restart it.
-    if (
-      view.console &&
-      view.consoleOpen &&
-      !view.opening &&
-      view.ready &&
-      !view.starting &&
-      !view.state?.running
-    ) {
-      selectRun(view.console.id, "All");
-      return;
-    }
     changed(view);
   }
 
@@ -113,7 +100,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     listing = true;
     const generation = ++listGeneration;
     try {
-      // `runs` keeps the live record: its row is the way back to the Console.
       const runs = await transport.invoke<RunRecord[]>("list_runs");
       if (generation === listGeneration) {
         if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
@@ -190,9 +176,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadSelected();
   }
 
-  // Reopen the live run's Console; anything else falls through to detail.
+  // Console read access outlives process controls for the last local process.
   function openConsole(record: RunRecord) {
-    if (record.id !== view.state?.running) {
+    if (record.id !== (view.state?.consoleRun ?? view.state?.running)) {
       selectRun(record.id);
       return;
     }

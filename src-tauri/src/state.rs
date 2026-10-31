@@ -27,6 +27,8 @@ pub struct AppStateDto {
     pub last_error: Option<IngestError>,
     /// Id of the run in flight, if any.
     pub running: Option<RunId>,
+    /// The Console whose output can still be read in the open workspace.
+    pub console_run: Option<RunId>,
     /// A stop was accepted for `running`; it stays until the run leaves the
     /// slot, however it ends.
     pub stopping: bool,
@@ -82,6 +84,15 @@ impl Deref for RunId {
     }
 }
 
+/// Read access to the last Console. This outlives process control and is never
+/// used to classify or persist invocation history.
+pub struct ConsoleSession {
+    pub id: RunId,
+    pub workspace: PathBuf,
+    /// The capture worker has stopped writing, including its final drain.
+    pub finished: bool,
+}
+
 pub struct CoreState {
     pub bes_error: Option<String>,
     pub workspace: Option<PathBuf>,
@@ -93,6 +104,7 @@ pub struct CoreState {
     pub ingest_running: bool,
     /// The run in flight.
     pub run: Option<RunId>,
+    pub console: Option<ConsoleSession>,
     /// Process group of the run in flight (the child's pid), for the one stop
     /// that signals it.
     pub run_terminal: Option<crate::terminal::Control>,
@@ -104,6 +116,15 @@ pub struct CoreState {
     pub run_stop_started: Option<std::time::Instant>,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
+}
+
+impl CoreState {
+    pub fn console_run(&self) -> Option<&RunId> {
+        self.console
+            .as_ref()
+            .filter(|console| self.workspace.as_ref() == Some(&console.workspace))
+            .map(|console| &console.id)
+    }
 }
 
 pub struct Core {
@@ -123,6 +144,7 @@ impl Core {
                 last_error: None,
                 ingest_running: false,
                 run: None,
+                console: None,
                 run_pgid: None,
                 run_terminal: None,
                 run_stopping: false,
@@ -147,6 +169,7 @@ impl Core {
             snapshot: st.snapshot.clone(),
             last_error: st.last_error.clone(),
             running: st.run.clone(),
+            console_run: st.console_run().cloned(),
             stopping: st.run_stopping,
             run_note: st.run_note.clone(),
         }
