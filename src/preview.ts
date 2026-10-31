@@ -6,6 +6,7 @@ import type { AppState, Profile, RunRecord, Snapshot, Target } from "./lib/types
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
+import type { CommandName } from "./lib/commands.ts";
 
 const WORKSPACE = "/demo/acme-mono";
 const NOW = Date.now();
@@ -345,51 +346,39 @@ export function installPreview() {
     state.workspace = null;
     state.snapshot = null;
   }
+  // Every command the app invokes needs a handler; the Record type makes a
+  // missing one a typecheck error instead of a runtime surprise.
+  const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
+    get_state: () => structuredClone(state),
+    list_runs: () => structuredClone(records),
+    read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
+    resize_console: () => {},
+    write_console: (payload) => writeConsole(String(payload?.id), payload?.data),
+    get_run: (payload) => getRun(payload?.id),
+    get_run_profile: (payload) => {
+      if (!records.some((run) => run.id === payload?.id)) {
+        throw new Error("Preview run not found");
+      }
+      return { status: "ok", data: PROFILE };
+    },
+    // The app sends this command with the AnalyticsFilter shape.
+    get_analytics: (payload) =>
+      previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
+    open_workspace: () => {
+      state.workspace = WORKSPACE;
+      state.snapshot = SNAPSHOT;
+      return structuredClone(state);
+    },
+    refresh: () => void emit("app-state", structuredClone(state)),
+    open_location: () => {},
+    start_run: (payload) => startRun(String(payload?.cmd), String(payload?.target)),
+    stop_run: () => stopRun(),
+  };
   mockIPC(
     (command, args) => {
-      // Tauri's mock callback provides command arguments as a key-value object.
-      const payload = args as Record<string, unknown> | undefined;
-      switch (command) {
-        case "get_state":
-          return structuredClone(state);
-        case "list_runs":
-          return structuredClone(records);
-        case "read_console":
-          return readConsole(String(payload?.id), Number(payload?.offset ?? 0));
-        case "resize_console":
-          return;
-        case "write_console":
-          return writeConsole(String(payload?.id), payload?.data);
-        case "get_run":
-          return getRun(payload?.id);
-        case "get_run_profile":
-          if (!records.some((run) => run.id === payload?.id)) {
-            throw new Error("Preview run not found");
-          }
-          return { status: "ok", data: PROFILE };
-        case "get_analytics":
-          // The app sends this command with the AnalyticsFilter shape.
-          return previewAnalytics(
-            records,
-            (payload?.filter ?? {}) as Partial<AnalyticsFilter>,
-            NOW,
-          );
-        case "open_workspace":
-          state.workspace = WORKSPACE;
-          state.snapshot = SNAPSHOT;
-          return structuredClone(state);
-        case "refresh":
-          void emit("app-state", structuredClone(state));
-          return;
-        case "open_location":
-          return;
-        case "start_run":
-          return startRun(String(payload?.cmd), String(payload?.target));
-        case "stop_run":
-          return stopRun();
-        default:
-          throw new Error(`Unsupported preview command: ${command}`);
-      }
+      const handler = handlers[command as CommandName];
+      if (!handler) throw new Error(`Unsupported preview command: ${command}`);
+      return handler(args as Record<string, unknown> | undefined);
     },
     { shouldMockEvents: true },
   );

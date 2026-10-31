@@ -1,3 +1,4 @@
+import { COMMANDS } from "./commands.ts";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSession, emptyView } from "./session";
@@ -61,5 +62,5 @@ export function refresh() {
 
 /** Opens a target location using the operating system's configured editor. */
 export function openLocation(path: string): Promise<void> {
-  return invoke("open_location", { path });
+  return invoke(COMMANDS.openLocation, { path });
 }

@@ -1,3 +1,4 @@
+import { COMMANDS } from "./commands.ts";
 import type { Transport } from "./session.ts";
 
 /** Date and optional run filters sent to the core analytics query. */
@@ -67,7 +68,9 @@ export function createAnalytics(
     view = { filter: { ...filter }, data: view.data, loading: true, error: null };
     changed(view);
     try {
-      const data = await transport.invoke<DailyAnalytics>("get_analytics", { filter: view.filter });
+      const data = await transport.invoke<DailyAnalytics>(COMMANDS.getAnalytics, {
+        filter: view.filter,
+      });
       if (disposed || request !== generation) return;
       view = { filter: data.filter, data, loading: false, error: null };
     } catch (error) {
