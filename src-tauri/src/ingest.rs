@@ -14,7 +14,7 @@ use crate::state::{Core, IngestError};
 use crate::store::{self, RunRecord};
 use crate::xml::{self, RawRule};
 use serde::Serialize;
-use std::io::{self, BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -209,34 +209,53 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
             bep,
         });
     }
-    let log = match store::artifact(data, workspace, id, "log.txt").and_then(|mut file| {
-        let start = file.metadata()?.len().saturating_sub(512 * 1024);
-        file.seek(SeekFrom::Start(start))?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        if start > 0 {
-            let first = bytes
-                .iter()
-                .position(|b| b & 0xc0 != 0x80)
-                .unwrap_or(bytes.len());
-            bytes.drain(..first);
+    let (log, bep) = match store::artifact(data, workspace, id, "bep.binpb") {
+        Err(error) => {
+            let kind = error.kind();
+            let note = error.to_string();
+            if kind == io::ErrorKind::NotFound {
+                (Section::Missing, Section::Missing)
+            } else {
+                (
+                    Section::ReadError { note: note.clone() },
+                    Section::ReadError { note },
+                )
+            }
         }
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }) {
-        Ok(data) => Section::Ok { data },
-        Err(e) => read_error(e),
-    };
-    let bep = match store::artifact(data, workspace, id, "bep.binpb") {
-        Err(e) => read_error(e),
-        Ok(f) => {
-            let data = bep::parse(BufReader::new(f));
-            if data.truncated {
-                Section::Incomplete {
-                    data,
-                    note: "BEP ended with an invalid or unreadable event".to_string(),
+        Ok(file) => {
+            let length = file.metadata()?.len();
+            let parsed = bep::parse_detail(BufReader::new(file), length);
+            if parsed.invalid && parsed.events == 0 {
+                let note = "BEP contains an invalid or incomplete event".to_string();
+                if parsed.read_error {
+                    (
+                        Section::ReadError { note: note.clone() },
+                        Section::ReadError { note },
+                    )
+                } else {
+                    (
+                        Section::ParseError { note: note.clone() },
+                        Section::ParseError { note },
+                    )
                 }
             } else {
-                Section::Ok { data }
+                let log = if parsed.invalid {
+                    Section::Incomplete {
+                        data: parsed.log,
+                        note: "BEP ended with an invalid or incomplete event".into(),
+                    }
+                } else {
+                    Section::Ok { data: parsed.log }
+                };
+                let bep = if parsed.bep.truncated {
+                    Section::Incomplete {
+                        data: parsed.bep,
+                        note: "BEP is incomplete or reached its display limit".into(),
+                    }
+                } else {
+                    Section::Ok { data: parsed.bep }
+                };
+                (log, bep)
             }
         }
     };
@@ -286,7 +305,9 @@ fn read_error<T>(error: io::Error) -> Section<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
 
     /// Removes the temp root when the test ends.
@@ -339,14 +360,28 @@ mod tests {
         )
     }
 
+    fn append_progress(dir: &Path, text: &str) {
+        let event = crate::protocol::bep::BuildEvent {
+            payload: Some(crate::protocol::bep::build_event::Payload::Progress(
+                crate::protocol::bep::Progress {
+                    stdout: text.into(),
+                    stderr: String::new(),
+                },
+            )),
+            ..Default::default()
+        };
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("bep.binpb"))
+            .unwrap();
+        file.write_all(&event.encode_length_delimited_to_vec())
+            .unwrap();
+    }
+
     #[test]
     fn saved_log_reads_only_the_last_512_kib() {
         let (root, dir) = run_dir("ok");
-        fs::write(
-            dir.join("log.txt"),
-            format!("{}tail", "a".repeat(600 * 1024)),
-        )
-        .unwrap();
+        append_progress(&dir, &format!("{}tail", "a".repeat(600 * 1024)));
         let Section::Ok { data } = detail(&root, &dir).unwrap().log else {
             panic!("expected log");
         };
@@ -357,17 +392,22 @@ mod tests {
     #[test]
     fn record_and_log() {
         let (_root, dir) = run_dir("ok");
-        store::append_log(&dir, "INFO: Build completed").unwrap();
+        append_progress(&dir, "INFO: Build completed\n");
         let rec = finish(&_root, &dir, 0).unwrap();
         let d = detail(&_root, &dir).unwrap();
         assert_eq!(d.record, rec);
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["record"]["exitCode"], 0);
         assert_eq!(json["log"]["status"], "ok");
-        assert_eq!(json["log"]["data"], "INFO: Build completed\n");
+        assert!(
+            json["log"]["data"]
+                .as_str()
+                .unwrap()
+                .ends_with("INFO: Build completed\n")
+        );
         assert!(json.get("profile").is_none());
         assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
-        assert!(matches!(d.log, Section::Ok { data } if data == "INFO: Build completed\n"));
+        assert!(matches!(d.log, Section::Ok { data } if data.ends_with("INFO: Build completed\n")));
     }
 
     #[test]
@@ -459,14 +499,14 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_log_is_reported_without_hiding_other_observations() {
+    fn unreadable_event_file_does_not_hide_profile_or_record() {
         let (_root, dir) = run_dir("ok");
         finish(&_root, &dir, 0).unwrap();
-        fs::remove_file(dir.join("log.txt")).unwrap();
-        fs::create_dir(dir.join("log.txt")).unwrap();
+        fs::remove_file(dir.join("bep.binpb")).unwrap();
+        fs::create_dir(dir.join("bep.binpb")).unwrap();
         let d = detail(&_root, &dir).unwrap();
         assert!(matches!(d.log, Section::ReadError { note } if !note.is_empty()));
-        assert!(matches!(d.bep, Section::Ok { .. }));
+        assert!(matches!(d.bep, Section::ReadError { .. }));
         assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
     }
 
