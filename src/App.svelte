@@ -7,6 +7,7 @@
     ArrowClockwise,
     Play,
     Stop,
+    TreeStructure,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
@@ -28,6 +29,7 @@
   import RunStatus from "./lib/RunStatus.svelte";
   import RunView from "./lib/RunView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
+  import QueryView from "./lib/QueryView.svelte";
   import SearchDropdown from "./lib/SearchDropdown.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
@@ -44,6 +46,7 @@
   const known = $derived(new Set(snap?.targets.map((t) => t.label) ?? []));
 
   let analyticsOpen = $state(false);
+  let queryOpen = $state(false);
   let selected = $state<string | null>(null);
   let revealRequest = $state(0);
   let targetField = $state("");
@@ -54,7 +57,8 @@
       app.view.starting ||
       app.view.opening ||
       !!st?.running ||
-      st?.ingest === "running",
+      st?.ingest === "running" ||
+      st?.query === "running",
   );
   const running = $derived(!!st?.running);
   const actionLabel = $derived(
@@ -149,6 +153,7 @@
   // field, which is the single source of truth for "the current target".
   function select(label: string | null) {
     analyticsOpen = false;
+    queryOpen = false;
     getSession().selectRun(null);
     selected = label;
     if (label) targetField = label;
@@ -173,18 +178,29 @@
     class:collapsed={collapsed.targets}
     style:flex-grow={collapsed.targets ? 0 : targetsShare}
   >
-    <button
-      class="pane-head"
-      aria-expanded={!collapsed.targets}
-      onclick={() => (collapsed.targets = !collapsed.targets)}
-    >
-      {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
-          size={10}
-        />{/if} Targets
-      <span class="pane-count"
-        >{snap?.targets.length.toLocaleString() ?? "—"}</span
+    <div class="pane-heading">
+      <button
+        class="pane-head"
+        aria-expanded={!collapsed.targets}
+        onclick={() => (collapsed.targets = !collapsed.targets)}
       >
-    </button>
+        {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
+            size={10}
+          />{/if} Targets
+        <span class="pane-count"
+          >{snap?.targets.length.toLocaleString() ?? "—"}</span
+        >
+      </button>
+      <button
+        class="analytics-link"
+        class:active={queryOpen && !app.view.selectedRun}
+        onclick={() => {
+          queryOpen = true;
+          analyticsOpen = false;
+          getSession().selectRun(null);
+        }}><TreeStructure size={12} /> Query</button
+      >
+    </div>
     {#if !collapsed.targets}
       <div class="pane-body">
         {#if snap && tree}
@@ -223,6 +239,7 @@
         class:active={analyticsOpen && !app.view.selectedRun}
         onclick={() => {
           analyticsOpen = true;
+          queryOpen = false;
           getSession().selectRun(null);
         }}><ChartBar size={12} /> Analytics</button
       >
@@ -276,7 +293,7 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen}
+    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen || queryOpen}
   >
     {#if app.view.console}
       {#key app.view.console.id}
@@ -311,6 +328,10 @@
       {/key}
     {:else if analyticsOpen}
       {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
+    {:else if queryOpen}
+      {#key workspace}
+        <QueryView {snap} {workspace} />
+      {/key}
     {:else if snap && selected}
       <TargetView
         {snap}

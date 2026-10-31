@@ -59,6 +59,9 @@ export interface AppState {
   // Stop is best-effort. An unconfirmed exit releases the slot with runNote.
   stopping: boolean;
   runNote: string | null;
+  // An ad-hoc query-editor `bazel query`, distinct from a run or snapshot ingest.
+  query: "idle" | "running";
+  queryStopping: boolean;
 }
 
 /** Commands accepted by the run composer. */

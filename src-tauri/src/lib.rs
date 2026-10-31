@@ -5,6 +5,7 @@ mod ingest;
 mod label;
 mod profile;
 mod protocol;
+mod query;
 mod runner;
 mod snapshot;
 mod state;
@@ -16,6 +17,7 @@ mod xml;
 
 use ingest::{RunDetail, Section};
 use profile::Profile;
+use query::QueryOutput;
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,9 +50,10 @@ fn open_workspace(
     let bazel = workspace::resolve_bazel();
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        // Keep the busy check and workspace assignment atomic with start
-        // and query. Filesystem validation above holds no shared state.
-        if st.run.is_some() || st.ingest_running {
+        // Keep the busy check and workspace assignment atomic with any bazel
+        // invocation (ingest, run, editor query). Filesystem validation above
+        // holds no shared state.
+        if st.bazel_busy() {
             return Err("cannot change workspace while bazel is busy".to_string());
         }
         store::analytics::refresh_timezone();
@@ -96,6 +99,46 @@ fn start_run(
 #[tracing::instrument(target = "zeal::operations", name = "run.stop", skip_all)]
 fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
+}
+
+/// Run an ad-hoc `bazel query` from the query editor. Serialized with ingest
+/// and run through the same busy slot; the blocking work is spawned so this
+/// command does not hold the main thread for the whole query.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "query.run", skip_all)]
+async fn run_query(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    expr: String,
+    output: String,
+    no_implicit_deps: bool,
+    no_tool_deps: bool,
+) -> Result<QueryOutput, String> {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        query::run(app, core, &expr, &output, no_implicit_deps, no_tool_deps)
+    })
+    .await
+    {
+        Ok(result) => result,
+        // A panicked worker released its slot without emitting (Drop skips
+        // emit while unwinding); tell the UI the query state changed here.
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("query worker failed".to_string())
+        }
+    }
+}
+
+/// Stop the ad-hoc query in flight: SIGINT to its process group, then SIGKILL
+/// if it does not exit. Does nothing when no query is held or a stop is
+/// already in flight.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "query.stop", skip_all)]
+fn stop_query(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
+    query::stop(app, core.inner().clone())
 }
 
 #[tauri::command]
@@ -336,6 +379,8 @@ pub fn run() {
             refresh,
             start_run,
             stop_run,
+            run_query,
+            stop_query,
             list_runs,
             get_analytics,
             get_run,

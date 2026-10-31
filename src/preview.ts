@@ -148,8 +148,11 @@ const state: AppState = {
   running: null,
   stopping: false,
   runNote: null,
+  query: "idle",
+  queryStopping: false,
 };
 const consoleOutput = new Map<string, string>();
+let pendingQuery: { finish: (result: unknown) => void } | null = null;
 const consoleInput = new Map<string, string>();
 function span(name: string, ts: number, dur: number) {
   return {
@@ -535,6 +538,64 @@ export function installPreview() {
           }
           state.running = null;
           void emit("app-state", structuredClone(state));
+          return;
+        }
+        case "run_query": {
+          if (state.ingest === "running" || state.running !== null || state.query === "running") {
+            throw new Error("bazel is busy");
+          }
+          const output = String(payload?.output ?? "label");
+          const expr = String(payload?.expr ?? "");
+          const labels = expr.includes("//")
+            ? SNAPSHOT.targets.map((t) => t.label)
+            : ["//app:server", "//app/lib:parser", "//tools:cli"];
+          const finished = {
+            exitCode: 0,
+            stdout:
+              output === "graph"
+                ? `digraph mygraph {\n${labels
+                    .slice(0, 6)
+                    .map((l, i) => `  node${i} [label="${l}"];`)
+                    .join("\n")}\n${labels
+                    .slice(1, 6)
+                    .map((_, i) => `  node${i} -> node${i + 1};`)
+                    .join("\n")}\n}\n`
+                : labels.join("\n") + "\n",
+            truncated: false,
+            stderrTail: "",
+            timedOut: false,
+            stopped: false,
+          };
+          // The reply lands only when the (mock) query finishes, so the
+          // preview's running/stopping states behave like the real slot.
+          state.query = "running";
+          void emit("app-state", structuredClone(state));
+          return new Promise((resolve) => {
+            const finish = (result: unknown) => {
+              if (pendingQuery === null) return;
+              pendingQuery = null;
+              state.query = "idle";
+              state.queryStopping = false;
+              void emit("app-state", structuredClone(state));
+              resolve(result);
+            };
+            pendingQuery = { finish };
+            setTimeout(() => finish(finished), 800);
+          });
+        }
+        case "stop_query": {
+          if (state.query === "running") {
+            state.queryStopping = true;
+            void emit("app-state", structuredClone(state));
+            pendingQuery?.finish({
+              exitCode: null,
+              stdout: "",
+              truncated: false,
+              stderrTail: "",
+              timedOut: false,
+              stopped: true,
+            });
+          }
           return;
         }
         default:

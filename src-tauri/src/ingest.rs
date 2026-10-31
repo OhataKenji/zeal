@@ -24,7 +24,7 @@ use tauri::AppHandle;
 
 /// Upper bound for one `bazel query`. First runs may include a bazelisk
 /// download and a cold analysis cache.
-const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 
 enum Outcome {
     Ok(Vec<RawRule>),
@@ -37,7 +37,7 @@ enum Outcome {
 pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     let (ws, bazel) = {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        if st.ingest_running || st.run.is_some() {
+        if st.bazel_busy() {
             return Err("bazel is busy; refresh after it finishes".to_string());
         }
         let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {

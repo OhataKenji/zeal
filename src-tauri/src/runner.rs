@@ -107,7 +107,7 @@ pub fn start(
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
-    if st.ingest_running || st.run.is_some() {
+    if st.bazel_busy() {
         return Err("bazel is busy".to_string());
     }
     // Held across the record write and the spawn, so that the busy check above
@@ -285,40 +285,64 @@ impl<F: Fn()> Drop for RunSlot<'_, F> {
 
 /// Bound process stopping to the short exit grace. A child already reaped has
 /// nothing left to signal; wait for its in-progress save to release the slot.
+/// A live editor query gets the same INT then KILL within the same budget; it
+/// has no condvar, so it is simply signalled, never joined.
 pub fn exit_stop(core: &Core) {
-    let id = {
+    let (id, query_pgid) = {
         let mut st = core.state.lock().expect("application state lock poisoned");
         begin_stop(&mut st);
-        st.run.clone()
-    };
-    let Some(id) = id else {
-        return;
+        // Flag a live query even before its pgid lands: its own wait loop
+        // escalates from `query_stop_started`, so the flag alone stops it.
+        // Shared with `stop_query` so an already-stopping query is not
+        // signalled twice.
+        crate::query::begin_stop(&mut st);
+        (st.run.clone(), st.query_pgid)
     };
     let deadline = Instant::now() + EXIT_GRACE;
-    loop {
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        if !still_held(&st, &id) {
-            return;
-        }
-        if st.run_pgid.is_none() {
-            while still_held(&st, &id) {
-                st = core
-                    .run_finished
-                    .wait(st)
-                    .unwrap_or_else(|error| error.into_inner());
+    if let Some(id) = id {
+        loop {
+            let mut st = core.state.lock().expect("application state lock poisoned");
+            if !still_held(&st, &id) {
+                break;
             }
-            return;
+            if st.run_pgid.is_none() {
+                while still_held(&st, &id) {
+                    st = core
+                        .run_finished
+                        .wait(st)
+                        .unwrap_or_else(|error| error.into_inner());
+                }
+                break;
+            }
+            if Instant::now() >= deadline {
+                if let Some(pgid) = st.run_pgid
+                    && let Err(e) = signal_run(&st, pgid, Signal::KILL)
+                {
+                    log::warn!("SIGKILL to run group failed: {e}");
+                }
+                break;
+            }
+            drop(st);
+            thread::sleep(EXIT_POLL);
         }
-        if Instant::now() >= deadline {
-            if let Some(pgid) = st.run_pgid
-                && let Err(e) = signal_run(&st, pgid, Signal::KILL)
+    }
+    // The query's group shares the run's grace: kill it once the deadline has
+    // passed, whether or not the INT ended it. A worker that reaped meanwhile
+    // revoked the pgid — signal only while the group is still ours.
+    if let Some(pgid) = query_pgid {
+        while Instant::now() < deadline {
             {
-                log::warn!("SIGKILL to run group failed: {e}");
+                let st = core.state.lock().expect("application state lock poisoned");
+                if st.query_pgid != Some(pgid) {
+                    return;
+                }
             }
-            return;
+            thread::sleep(EXIT_POLL);
         }
-        drop(st);
-        thread::sleep(EXIT_POLL);
+        let st = core.state.lock().expect("application state lock poisoned");
+        if st.query_pgid == Some(pgid) {
+            let _ = signal_group(pgid, Signal::KILL);
+        }
     }
 }
 
@@ -375,7 +399,7 @@ fn clear_run(st: &mut CoreState) {
 
 /// A run's process group must not address the caller's group (0) or all
 /// signalable processes (1 when negated by kill_process_group).
-fn process_group(pgid: i32) -> io::Result<Pid> {
+pub(crate) fn process_group(pgid: i32) -> io::Result<Pid> {
     if pgid <= 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -386,7 +410,7 @@ fn process_group(pgid: i32) -> io::Result<Pid> {
 }
 
 /// Signal the run's session group, or its terminal's foreground job group.
-fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
+pub(crate) fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
     Ok(process::kill_process_group(process_group(pgid)?, signal)?)
 }
 
