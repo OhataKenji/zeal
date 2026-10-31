@@ -4,6 +4,7 @@
     createAnalytics,
     emptyAnalytics,
     fmtMs,
+    PLOT,
     segments,
     type AnalyticsFilter,
   } from "./analytics";
@@ -127,15 +128,15 @@
               )
               .join("; ")}
           </desc>
-          <line x1="50" y1="20" x2="50" y2="200" />
-          <line x1="50" y1="200" x2={width - 10} y2="200" />
+          <line x1="50" y1="20" x2="50" y2={PLOT.baseline} />
+          <line x1="50" y1={PLOT.baseline} x2={width - 10} y2={PLOT.baseline} />
           <text x="4" y="16">Count</text><text x="12" y="34">{max}</text><text
             x="30"
-            y="200">0</text
+            y={PLOT.baseline}>0</text
           >
           <text x={width - 45} y="236">Date</text>
           {#each data.days as day, index}
-            {@const h = (day.count / max) * 160}
+            {@const h = (day.count / max) * PLOT.height}
             {@const okH = day.count ? (day.ok / day.count) * h : 0}
             {@const failedH = day.count ? (day.failed / day.count) * h : 0}
             <g>
@@ -143,8 +144,8 @@
               {#if okH > 0}
                 <rect
                   class="bar-ok"
-                  x={55 + index * step}
-                  y={200 - okH}
+                  x={PLOT.left + index * step}
+                  y={PLOT.baseline - okH}
                   width={Math.max(1, step - 3)}
                   height={okH}
                 />
@@ -152,8 +153,8 @@
               {#if failedH > 0}
                 <rect
                   class="bar-failed"
-                  x={55 + index * step}
-                  y={200 - okH - failedH}
+                  x={PLOT.left + index * step}
+                  y={PLOT.baseline - okH - failedH}
                   width={Math.max(1, step - 3)}
                   height={failedH}
                 />
@@ -161,8 +162,8 @@
               {#if h - okH - failedH > 0}
                 <rect
                   class="bar-interrupted"
-                  x={55 + index * step}
-                  y={200 - h}
+                  x={PLOT.left + index * step}
+                  y={PLOT.baseline - h}
                   width={Math.max(1, step - 3)}
                   height={h - okH - failedH}
                 />
@@ -170,7 +171,7 @@
             </g>
             {#if index === 0 || index === data.days.length - 1}
               <text
-                x={55 + index * step}
+                x={PLOT.left + index * step}
                 y="218"
                 text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
               >
@@ -195,24 +196,24 @@
           aria-label="Total run time per day"
         >
           <title>Total run time per day</title>
-          <line x1="50" y1="20" x2="50" y2="200" />
-          <line x1="50" y1="200" x2={width - 10} y2="200" />
-          <text x="4" y="16">{fmtMs(maxTotal)}</text><text x="30" y="200"
+          <line x1="50" y1="20" x2="50" y2={PLOT.baseline} />
+          <line x1="50" y1={PLOT.baseline} x2={width - 10} y2={PLOT.baseline} />
+          <text x="4" y="16">{fmtMs(maxTotal)}</text><text x="30" y={PLOT.baseline}
             >0</text
           >
           <text x={width - 45} y="236">Date</text>
           {#each data.days as day, index}
             <rect
-              x={55 + index * step}
-              y={200 - (day.totalMs / maxTotal) * 160}
+              x={PLOT.left + index * step}
+              y={PLOT.baseline - (day.totalMs / maxTotal) * PLOT.height}
               width={Math.max(1, step - 3)}
-              height={(day.totalMs / maxTotal) * 160}
+              height={(day.totalMs / maxTotal) * PLOT.height}
             >
               <title>{`${day.day}: ${fmtMs(day.totalMs)}${day.day === data.today ? " (in progress)" : ""}`}</title>
             </rect>
             {#if index === 0 || index === data.days.length - 1}
               <text
-                x={55 + index * step}
+                x={PLOT.left + index * step}
                 y="218"
                 text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
               >
@@ -232,9 +233,9 @@
           aria-label="Run duration percentiles per day"
         >
           <title>Run duration percentiles per day</title>
-          <line x1="50" y1="20" x2="50" y2="200" />
-          <line x1="50" y1="200" x2={width - 10} y2="200" />
-          <text x="4" y="16">{fmtMs(maxP95)}</text><text x="30" y="200">0</text>
+          <line x1="50" y1="20" x2="50" y2={PLOT.baseline} />
+          <line x1="50" y1={PLOT.baseline} x2={width - 10} y2={PLOT.baseline} />
+          <text x="4" y="16">{fmtMs(maxP95)}</text><text x="30" y={PLOT.baseline}>0</text>
           <text x={width - 45} y="236">Date</text>
           {#each segments(
             data.days.map((d) => (d.timed ? d.p95Ms : null)),
@@ -254,16 +255,16 @@
             {#if day.timed}
               <circle
                 class="dot-p95"
-                cx={55 + index * step + step / 2}
-                cy={200 - (day.p95Ms / maxP95) * 160}
+                cx={PLOT.left + index * step + step / 2}
+                cy={PLOT.baseline - (day.p95Ms / maxP95) * PLOT.height}
                 r="2.5"
               >
                 <title>{`${day.day}: p95 ${fmtMs(day.p95Ms)}`}</title>
               </circle>
               <circle
                 class="dot-p50"
-                cx={55 + index * step + step / 2}
-                cy={200 - (day.p50Ms / maxP95) * 160}
+                cx={PLOT.left + index * step + step / 2}
+                cy={PLOT.baseline - (day.p50Ms / maxP95) * PLOT.height}
                 r="2.5"
               >
                 <title>{`${day.day}: p50 ${fmtMs(day.p50Ms)}, p95 ${fmtMs(day.p95Ms)}`}</title>
@@ -271,7 +272,7 @@
             {/if}
             {#if index === 0 || index === data.days.length - 1}
               <text
-                x={55 + index * step}
+                x={PLOT.left + index * step}
                 y="218"
                 text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
               >
