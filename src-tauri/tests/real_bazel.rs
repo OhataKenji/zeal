@@ -1,7 +1,4 @@
 //! Opt-in end-to-end BES coverage using a local Bazel binary.
-use super::serve;
-use super::tests::Temp;
-use crate::store;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -17,7 +14,12 @@ async fn real_bazel_records_invocation_and_accepts_standard_input() {
     fixture.records_invocation("build", "//:double").await;
     fixture.records_invocation("test", "//:check").await;
     fixture.accepts_standard_input().await;
-    assert_eq!(store::list(&fixture.data, &fixture.ws).unwrap().len(), 3);
+    assert_eq!(
+        zeal_lib::list_run_records(&fixture.data, &fixture.ws)
+            .unwrap()
+            .len(),
+        3
+    );
 }
 
 struct BazelFixture {
@@ -51,7 +53,7 @@ impl BazelFixture {
         fs::write(ws.join("binary.bzl"), "def _impl(ctx):\n    out = ctx.actions.declare_file(ctx.label.name + '.py')\n    ctx.actions.write(out, '#!/usr/bin/env python3\\nprint(int(input()) * 2)\\n', is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary = rule(implementation=_impl, executable=True)\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve(listener, data.clone()));
+        let server = tokio::spawn(zeal_lib::serve_build_events(listener, data.clone()));
         Self {
             temp,
             ws,
@@ -101,7 +103,7 @@ impl BazelFixture {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let record = store::read_record(&self.data, &self.ws, &id).unwrap();
+        let record = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
         assert_eq!(record.cmd.as_deref(), Some(cmd));
         assert_eq!(record.target.as_deref(), Some(target));
         assert_eq!(record.exit_code, Some(0));
@@ -114,7 +116,7 @@ impl BazelFixture {
         let process =
             tokio::task::spawn_blocking(move || run_with_input_after_build(command, wait_input));
         self.wait_for_build(&id, &process).await;
-        let observed = store::read_record(&self.data, &self.ws, &id).unwrap();
+        let observed = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
         assert!(observed.finished_at.is_some(), "BEP finishes before input");
         let _ = send_input.send(());
         let output = process.await.unwrap();
@@ -125,7 +127,7 @@ impl BazelFixture {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
-        let observed = store::read_record(&self.data, &self.ws, &id).unwrap();
+        let observed = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
         assert_eq!(observed.cmd.as_deref(), Some("run"));
         assert_eq!(observed.target.as_deref(), Some("//:double"));
         assert_eq!(observed.exit_code, Some(0));
@@ -152,7 +154,8 @@ async fn wait_for_build_receipt(
     id: &str,
     process: &tokio::task::JoinHandle<std::process::Output>,
 ) {
-    while !store::read_record(data, workspace, id).is_ok_and(|build| build.finished_at.is_some())
+    while !zeal_lib::read_run_record(data, workspace, id)
+        .is_ok_and(|build| build.finished_at.is_some())
         && !process.is_finished()
     {
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -217,4 +220,20 @@ fn run_with_input_after_build(
     );
     child.stdin.take().unwrap().write_all(b"21\n").unwrap();
     process.output()
+}
+
+struct Temp(PathBuf);
+
+impl Temp {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!("zeal-bes-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&path).unwrap();
+        Self(path.canonicalize().unwrap())
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
