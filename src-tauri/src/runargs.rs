@@ -131,9 +131,17 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_quotes_and_escapes_are_rejected() {
+    fn unclosed_single_quote_is_rejected() {
         assert!(parse_arguments("'unfinished").is_err());
+    }
+
+    #[test]
+    fn unclosed_double_quote_is_rejected() {
         assert!(parse_arguments("\"unfinished").is_err());
+    }
+
+    #[test]
+    fn trailing_escape_is_rejected() {
         assert!(parse_arguments("trailing\\").is_err());
     }
 

@@ -95,6 +95,23 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Install browser test runtime
+        run: pnpm exec playwright install --with-deps webkit
+        timeout-minutes: 10
+
+      - name: Browser regression tests
+        run: pnpm test:browser
+        timeout-minutes: 5
+
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-failures
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   gitleaks:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
