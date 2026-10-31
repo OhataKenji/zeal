@@ -271,6 +271,21 @@ fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
+    // Reopen the last workspace, if it is still a workspace.
+    if let Ok(dir) = app.path().app_data_dir()
+        && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))
+    {
+        {
+            let mut st = core.state.lock().expect("application state lock poisoned");
+            store::analytics::refresh_timezone();
+            st.workspace = Some(ws);
+            st.bazel = workspace::resolve_bazel();
+        }
+        let _ = ingest::request(app.handle().clone(), core);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -291,18 +306,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 bes::start(data, receiver_core.clone(), || receiver_core.emit(&handle)).await;
             });
-            // Reopen the last workspace, if it is still a workspace.
-            if let Ok(dir) = app.path().app_data_dir()
-                && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))
-            {
-                {
-                    let mut st = core.state.lock().expect("application state lock poisoned");
-                    store::analytics::refresh_timezone();
-                    st.workspace = Some(ws);
-                    st.bazel = workspace::resolve_bazel();
-                }
-                let _ = ingest::request(app.handle().clone(), core);
-            }
+            restore_workspace(app, core);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

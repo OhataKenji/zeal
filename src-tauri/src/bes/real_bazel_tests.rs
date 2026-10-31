@@ -137,19 +137,25 @@ impl BazelFixture {
         id: &str,
         process: &tokio::task::JoinHandle<std::process::Output>,
     ) {
-        tokio::time::timeout(Duration::from_secs(25), async {
-            loop {
-                if store::read_record(&self.data, &self.ws, id)
-                    .is_ok_and(|build| build.finished_at.is_some())
-                    || process.is_finished()
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        })
+        tokio::time::timeout(
+            Duration::from_secs(25),
+            wait_for_build_receipt(&self.data, &self.ws, id, process),
+        )
         .await
         .expect("BEP finishes while the program is waiting");
+    }
+}
+
+async fn wait_for_build_receipt(
+    data: &std::path::Path,
+    workspace: &std::path::Path,
+    id: &str,
+    process: &tokio::task::JoinHandle<std::process::Output>,
+) {
+    while !store::read_record(data, workspace, id).is_ok_and(|build| build.finished_at.is_some())
+        && !process.is_finished()
+    {
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -188,10 +194,12 @@ fn run_with_input_after_build(
     loop {
         match wait_input.recv_timeout(Duration::from_millis(25)) {
             Ok(()) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                if child.try_wait().unwrap().is_some() =>
+            {
+                return process.output();
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if child.try_wait().unwrap().is_some() {
-                    return process.output();
-                }
                 assert!(
                     std::time::Instant::now() < deadline,
                     "build completes before input"
