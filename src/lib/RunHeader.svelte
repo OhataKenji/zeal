@@ -16,7 +16,7 @@
   <header class="run-summary">
     <RunStatus {...status} />
     <div>
-      <h1>{record?.target ?? fallback}{#if record}<span class="badge">bazel {record.cmd}</span>{/if}</h1>
+      <h1>{record?.target ?? fallback ?? record?.id}{#if record?.cmd}<span class="badge">bazel {record.cmd}</span>{/if}</h1>
     </div>
   </header>
   {@render children?.()}

@@ -184,7 +184,6 @@ pub enum Section<T> {
     Missing,
     ParseError { note: String },
     ReadError { note: String },
-    NotAvailable { note: String },
 }
 
 /// Read the record and available observations from a run dir. A missing or
@@ -192,24 +191,7 @@ pub enum Section<T> {
 #[tracing::instrument(target = "zeal::operations", name = "run.detail", skip_all)]
 pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
     let record = store::read_record(data, workspace, id)?;
-    if record.external {
-        let observed = store::events::get(data, workspace, id)?
-            .ok_or_else(|| io::Error::other("missing BES record"))?;
-        let bep = if observed.bep.truncated {
-            Section::Incomplete {
-                data: observed.bep,
-                note: "BES result display reached its 8 MiB limit.".into(),
-            }
-        } else {
-            Section::Ok { data: observed.bep }
-        };
-        return Ok(RunDetail {
-            record,
-            log: Section::Ok { data: observed.log },
-            bep,
-        });
-    }
-    let (log, bep) = match store::artifact(data, workspace, id, "bep.binpb") {
+    let (log, bep) = match store::event_artifact(data, workspace, id).map_err(io::Error::from) {
         Err(error) => {
             let kind = error.kind();
             let note = error.to_string();
@@ -222,7 +204,7 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
                 )
             }
         }
-        Ok(file) => {
+        Ok((file, complete)) => {
             let length = file.metadata()?.len();
             let parsed = bep::parse_detail(BufReader::new(file), length);
             if parsed.invalid && parsed.events == 0 {
@@ -239,7 +221,7 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
                     )
                 }
             } else {
-                let log = if parsed.invalid {
+                let log = if parsed.invalid || !complete {
                     Section::Incomplete {
                         data: parsed.log,
                         note: "BEP ended with an invalid or incomplete event".into(),
@@ -247,7 +229,7 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
                 } else {
                     Section::Ok { data: parsed.log }
                 };
-                let bep = if parsed.bep.truncated {
+                let bep = if parsed.bep.truncated || !complete {
                     Section::Incomplete {
                         data: parsed.bep,
                         note: "BEP is incomplete or reached its display limit".into(),
@@ -263,18 +245,10 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
 }
 
 /// Read a saved profile, reporting artifact failures as section statuses.
-/// Unfinished and external runs return `Section::NotAvailable`.
+/// Optional artifacts are independent of invocation result and origin.
 pub fn run_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
-    let record = store::read_record(data, workspace, id)?;
-    Ok(if record.external {
-        Section::NotAvailable {
-            note: "Profiles from terminal builds are not imported.".into(),
-        }
-    } else if record.finished_at.is_none() {
-        Section::NotAvailable {
-            note: "timing is available after run completion is recorded".to_string(),
-        }
-    } else {
+    store::read_record(data, workspace, id)?;
+    Ok({
         match store::artifact(data, workspace, id, "profile.gz") {
             Err(e) => read_error(e),
             Ok(f) => match profile::parse_bounded(f, profile::IPC_LIMIT) {
@@ -305,240 +279,57 @@ fn read_error<T>(error: io::Error) -> Section<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prost::Message;
+    use crate::store::events::test_support::Fixture;
     use std::fs;
-    use std::io::Write;
-    use std::path::{Path, PathBuf};
-
-    /// Removes the temp root when the test ends.
-    struct TempRoot(PathBuf);
-
-    impl Drop for TempRoot {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// A new unfinished run with a fixture's observations, if present.
-    fn run_dir(case: &str) -> (TempRoot, PathBuf) {
-        let root = std::env::temp_dir().join(format!("zeal-run-detail-{}", uuid::Uuid::new_v4()));
-        let ws = root.join("ws");
-        fs::create_dir_all(&ws).unwrap();
-        let (_, dir) = store::create(&root.join("data"), &ws, "build", "//...").unwrap();
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run");
-        for name in ["bep.binpb", "profile.gz"] {
-            let src = fixtures.join(case).join(name);
-            if src.exists() {
-                fs::write(dir.join(name), fs::read(src).unwrap()).unwrap();
-            }
-        }
-        (TempRoot(root), dir)
-    }
-
-    fn detail(root: &TempRoot, dir: &Path) -> io::Result<RunDetail> {
-        run_detail(
-            &root.0.join("data"),
-            &root.0.join("ws"),
-            dir.file_name().unwrap().to_str().unwrap(),
-        )
-    }
-
-    fn timing(root: &TempRoot, dir: &Path) -> io::Result<Section<Profile>> {
-        run_profile(
-            &root.0.join("data"),
-            &root.0.join("ws"),
-            dir.file_name().unwrap().to_str().unwrap(),
-        )
-    }
-
-    fn finish(root: &TempRoot, dir: &Path, code: i32) -> Result<RunRecord, store::StoreError> {
-        store::finish(
-            &root.0.join("data"),
-            &root.0.join("ws"),
-            dir.file_name().unwrap().to_str().unwrap(),
-            code,
-        )
-    }
-
-    fn append_progress(dir: &Path, text: &str) {
-        let event = crate::protocol::bep::BuildEvent {
-            payload: Some(crate::protocol::bep::build_event::Payload::Progress(
-                crate::protocol::bep::Progress {
-                    stdout: text.into(),
-                    stderr: String::new(),
-                },
-            )),
-            ..Default::default()
-        };
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(dir.join("bep.binpb"))
-            .unwrap();
-        file.write_all(&event.encode_length_delimited_to_vec())
-            .unwrap();
-    }
-
     #[test]
-    fn saved_log_reads_only_the_last_512_kib() {
-        let (root, dir) = run_dir("ok");
-        append_progress(&dir, &format!("{}tail", "a".repeat(600 * 1024)));
-        let Section::Ok { data } = detail(&root, &dir).unwrap().log else {
-            panic!("expected log");
-        };
-        assert_eq!(data.len(), 512 * 1024);
-        assert!(data.ends_with("tail"));
-    }
-
-    #[test]
-    fn record_and_log() {
-        let (_root, dir) = run_dir("ok");
-        append_progress(&dir, "INFO: Build completed\n");
-        let rec = finish(&_root, &dir, 0).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert_eq!(d.record, rec);
-        let json = serde_json::to_value(&d).unwrap();
-        assert_eq!(json["record"]["exitCode"], 0);
-        assert_eq!(json["log"]["status"], "ok");
-        assert!(
-            json["log"]["data"]
-                .as_str()
-                .unwrap()
-                .ends_with("INFO: Build completed\n")
-        );
-        assert!(json.get("profile").is_none());
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
-        assert!(matches!(d.log, Section::Ok { data } if data.ends_with("INFO: Build completed\n")));
-    }
-
-    #[test]
-    fn complete_cases_have_both_sections() {
-        for case in [
-            "ok",
-            "disk_cache_hit",
-            "action_failed",
-            "analysis_failed",
-            "loading_failed",
-        ] {
-            let (_root, dir) = run_dir(case);
-            finish(&_root, &dir, 0).unwrap();
-            let d = detail(&_root, &dir).unwrap();
-            assert!(matches!(d.bep, Section::Ok { .. }), "{case}");
-            assert!(
-                matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }),
-                "{case}"
-            );
-        }
-    }
-
-    #[test]
-    fn incomplete_bep_and_missing_profile_preserve_the_exit_result() {
-        let (_root, dir) = run_dir("bep_truncated");
-        finish(&_root, &dir, 1).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert_eq!(d.record.exit_code, Some(1));
-        assert!(matches!(d.bep, Section::Incomplete { data, note }
-            if !data.targets.is_empty() && !note.is_empty()));
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Missing));
-    }
-
-    #[test]
-    fn complete_observations_do_not_imply_process_success() {
-        let (_root, dir) = run_dir("ok");
-        finish(&_root, &dir, 42).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert_eq!(d.record.exit_code, Some(42));
-        assert!(matches!(d.bep, Section::Ok { .. }));
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
-    }
-
-    #[test]
-    fn unfinished_profile_is_not_parsed_even_when_it_is_valid() {
-        let (_root, dir) = run_dir("ok");
-        let d = detail(&_root, &dir).unwrap();
+    fn event_details_are_shared_and_missing_files_do_not_hide_build_result() {
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
+        let detail = run_detail(&f.data, &f.ws, id).unwrap();
+        assert_eq!(detail.record.exit_code, Some(0));
+        assert!(matches!(detail.log, Section::Ok { .. }));
+        assert!(matches!(detail.bep, Section::Ok { .. }));
         assert!(matches!(
-            timing(&_root, &dir).unwrap(),
-            Section::NotAvailable { .. }
+            run_profile(&f.data, &f.ws, id).unwrap(),
+            Section::Missing
         ));
-        assert_eq!(d.record.finished_at, None);
-        assert_eq!(d.record.exit_code, None);
-
-        finish(&_root, &dir, 0).unwrap();
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
+        fs::remove_file(f.dir().join("attempt/1/bep.binpb")).unwrap();
+        let missing = run_detail(&f.data, &f.ws, id).unwrap();
+        assert_eq!(missing.record, detail.record);
+        assert!(matches!(missing.log, Section::Missing));
+        assert!(matches!(missing.bep, Section::Missing));
     }
-
     #[test]
-    fn broken_profile_is_reported_only_after_completion_and_preserves_success() {
-        let (_root, dir) = run_dir("ok");
-        fs::write(dir.join("profile.gz"), b"not gzip").unwrap();
+    fn malformed_detail_and_optional_profile_are_independent_sections() {
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
+        fs::write(f.dir().join("attempt/1/bep.binpb"), b"\xff").unwrap();
+        fs::write(f.dir().join("profile.gz"), b"invalid gzip").unwrap();
+        let detail = run_detail(&f.data, &f.ws, id).unwrap();
+        assert_eq!(detail.record.exit_code, Some(0));
+        assert!(matches!(detail.log, Section::ParseError { .. }));
+        assert!(matches!(detail.bep, Section::ParseError { .. }));
         assert!(matches!(
-            timing(&_root, &dir).unwrap(),
-            Section::NotAvailable { .. }
+            run_profile(&f.data, &f.ws, id).unwrap(),
+            Section::ParseError { .. }
         ));
-
-        finish(&_root, &dir, 0).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert_eq!(d.record.exit_code, Some(0));
-        assert!(
-            matches!(timing(&_root, &dir).unwrap(), Section::ParseError { note } if !note.is_empty())
-        );
-        assert!(matches!(d.bep, Section::Ok { .. }));
-    }
-
-    #[test]
-    fn missing_observations_do_not_hide_the_record() {
-        let (_root, dir) = run_dir("ok");
-        let rec = finish(&_root, &dir, 0).unwrap();
-        fs::remove_file(dir.join("log.txt")).unwrap();
-        fs::remove_file(dir.join("bep.binpb")).unwrap();
-        fs::remove_file(dir.join("profile.gz")).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert_eq!(d.record, rec);
-        assert!(matches!(d.log, Section::Missing));
-        assert!(matches!(d.bep, Section::Missing));
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Missing));
-    }
-
-    #[test]
-    fn unreadable_event_file_does_not_hide_profile_or_record() {
-        let (_root, dir) = run_dir("ok");
-        finish(&_root, &dir, 0).unwrap();
-        fs::remove_file(dir.join("bep.binpb")).unwrap();
-        fs::create_dir(dir.join("bep.binpb")).unwrap();
-        let d = detail(&_root, &dir).unwrap();
-        assert!(matches!(d.log, Section::ReadError { note } if !note.is_empty()));
-        assert!(matches!(d.bep, Section::ReadError { .. }));
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
-    }
-
-    #[test]
-    fn each_request_reads_the_current_artifacts() {
-        let (_root, dir) = run_dir("ok");
-        finish(&_root, &dir, 0).unwrap();
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Ok { .. }));
-        fs::remove_file(dir.join("profile.gz")).unwrap();
-        assert!(matches!(timing(&_root, &dir).unwrap(), Section::Missing));
-    }
-
-    #[test]
-    fn a_different_workspace_cannot_read_the_record_or_artifacts() {
-        let (root, dir) = run_dir("ok");
-        let other = root.0.join("other");
+        let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
-        assert!(
-            run_detail(
-                &root.0.join("data"),
-                &other,
-                dir.file_name().unwrap().to_str().unwrap()
-            )
-            .is_err()
-        );
-        assert!(
-            run_profile(
-                &root.0.join("data"),
-                &other,
-                dir.file_name().unwrap().to_str().unwrap()
-            )
-            .is_err()
-        );
+        assert!(run_detail(&f.data, &other, id).is_err());
+        assert!(run_profile(&f.data, &other, id).is_err());
+    }
+
+    #[test]
+    fn valid_prefix_from_a_disconnected_receipt_is_shown_as_incomplete() {
+        let f = Fixture::new();
+        let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        receipt.partial().unwrap();
+        let detail = run_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert!(matches!(detail.log, Section::Incomplete { .. }));
+        assert!(matches!(detail.bep, Section::Incomplete { .. }));
+        assert_eq!(detail.record.exit_code, None);
     }
 }

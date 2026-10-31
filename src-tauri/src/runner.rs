@@ -1,9 +1,9 @@
-//! Runs `bazel build|test|run <target>` and writes stdout/stderr to log.txt.
+//! Runs `bazel build|test|run <target>` and captures terminal.log.
 //! All commands use a PTY; output is saved independently of the Console view.
-//! Build observations remain in the existing bep.binpb and profile files.
+//! Build history is received by the app-owned BES, independently of process exit.
 //!
 //! Stop is best-effort: SIGINT, then SIGKILL after a grace period. An unknown
-//! exit releases the slot with a note and leaves the record unfinished. Only
+//! exit releases the slot with a note. Only
 //! the currently held run may be signalled; descendants are not supervised.
 
 use crate::state::{ConsoleSession, Core, CoreState};
@@ -42,14 +42,13 @@ const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
 /// Arguments after the bazel executable. Bazel writes its artifacts into the
 /// run dir.
-fn argv(cmd: &str, target: &str, dir: &Path) -> Vec<String> {
+fn argv(cmd: &str, target: &str, dir: &Path, endpoint: &str) -> Vec<String> {
     vec![
         cmd.to_string(),
         target.to_string(),
-        format!(
-            "--build_event_binary_file={}",
-            dir.join("bep.binpb").display()
-        ),
+        format!("--bes_backend={endpoint}"),
+        "--bes_proxy=".to_string(),
+        "--bes_upload_mode=wait_for_upload_complete".to_string(),
         format!("--profile={}", dir.join("profile.gz").display()),
         "--experimental_profile_include_primary_output".to_string(),
         "--noslim_profile".to_string(),
@@ -110,28 +109,39 @@ pub fn start(
     if st.ingest_running || st.run.is_some() {
         return Err("bazel is busy".to_string());
     }
+    let endpoint = receiver_endpoint(&st)?;
     // Held across the record write and the spawn, so that the busy check above
     // and the slot below stay one atomic step, without a `starting` flag.
     // The record exists before bazel does; a failing store prevents the spawn.
-    let (rec, dir) = store::create(data, &ws, cmd, target).map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = store::reserve_invocation(data, &id).map_err(|e| e.to_string())?;
+    let rec = RunRecord {
+        id,
+        workspace: None,
+        cmd: None,
+        target: None,
+        started_at: None,
+        finished_at: None,
+        exit_code: None,
+    };
     // Its own process group: a stop reaches bazel and whatever it started.
     let (mut child, terminal, capture) = match crate::terminal::spawn(
         Command::new(&bazel)
-            .args(argv(cmd, target, &dir))
+            .args(argv(cmd, target, &dir, endpoint))
             .arg(format!("--invocation_id={}", rec.id))
             .current_dir(&ws),
         &dir,
     ) {
         Ok(c) => c,
         Err(e) => {
-            let _ = store::abort_create(data, &ws, &rec.id);
+            let _ = store::abort_reservation(data, &rec.id);
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
     st.run = Some(rec.id.clone().into());
     st.console = Some(ConsoleSession {
         id: rec.id.clone().into(),
-        workspace: ws.clone(),
+        workspace: ws,
         finished: false,
     });
     st.run_terminal = Some(terminal);
@@ -143,14 +153,14 @@ pub fn start(
     core.emit(&app);
 
     let id = rec.id.clone();
-    let data = data.to_path_buf();
     thread::spawn(move || {
         let _slot = RunSlot {
             core: &core,
             id: &id,
             emit: || core.emit(&app),
         };
-        // Drain capture before the slot is dropped, including on unwind.
+        // Drop capture before the slot on unwind, so Console completion can
+        // never precede the capture worker's final drain.
         let mut capture = capture;
         let exit = observe_process(
             &core,
@@ -167,25 +177,26 @@ pub fn start(
             STOP_GRACE,
             STOP_CONFIRM,
         );
-        // Reap already revoked signal ownership. Keep the run slot through the
-        // save, without holding the lock across filesystem work.
+        // Reap already revoked signal ownership. Keep the slot until terminal
+        // capture ends; build history is finalized only by BES.
         let captured = capture.finish();
-        let saved = match &exit {
-            Ok(code) => store::finish(&data, &ws, &id, *code).map(|_| ()),
-            Err(_) => Ok(()),
-        };
         let mut st = core.state.lock().expect("application state lock poisoned");
         finish_console(&mut st, &id);
         if apply_reap(&mut st, &id, &exit)
-            && let Err(e) = saved
+            && let Err(error) = captured
         {
-            st.run_note = Some(format!("Could not save the exit result: {e}"));
-        }
-        if let Err(error) = captured {
             st.run_note = Some(format!("Failed to save the terminal output: {error}"));
         }
     });
     Ok(rec)
+}
+
+fn receiver_endpoint(st: &CoreState) -> Result<&str, String> {
+    st.bes_endpoint.as_deref().ok_or_else(|| {
+        st.bes_error
+            .clone()
+            .unwrap_or_else(|| "BES receiver is not ready".to_string())
+    })
 }
 
 fn finish_console(st: &mut CoreState, id: &str) {
@@ -358,10 +369,8 @@ fn give_up(st: &mut CoreState, id: &str) -> bool {
 }
 
 /// Apply the reap of `id` to the state and return whether this reap belongs to
-/// the run still holding the slot, whose record the caller then writes. A
-/// `wait` error leaves the exit unknown, with the reason in the note and no
-/// code to record. When the slot no longer holds `id` — a stop that gave up
-/// released it — nothing is touched and the record stays unfinished.
+/// the run still holding the slot. A `wait` error leaves the process exit
+/// unknown, with the reason in the note. A successor run is never touched.
 fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool {
     if !still_held(st, id) {
         return false;
@@ -431,7 +440,7 @@ mod tests {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!("zeal-run-log-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
-            fs::write(path.join("log.txt"), b"").unwrap();
+            fs::write(path.join("terminal.log"), b"").unwrap();
             Self(path)
         }
     }
@@ -458,11 +467,11 @@ mod tests {
         assert!(child.wait().unwrap().success());
         capture.finish().unwrap();
         assert_eq!(
-            fs::read(dir.0.join("log.txt")).unwrap(),
+            fs::read(dir.0.join("terminal.log")).unwrap(),
             b"out\r\r\nerr\r\n\xfftail"
         );
         assert_eq!(
-            store::read_log(&dir.0).unwrap(),
+            String::from_utf8_lossy(&fs::read(dir.0.join("terminal.log")).unwrap()),
             "out\r\r\nerr\r\n\u{fffd}tail"
         );
     }
@@ -491,13 +500,16 @@ mod tests {
             "descendant should still retain its output file"
         );
         capture.finish().unwrap();
-        assert_eq!(store::read_log(&dir.0).unwrap(), "done\r\n");
+        assert_eq!(
+            String::from_utf8_lossy(&fs::read(dir.0.join("terminal.log")).unwrap()),
+            "done\r\n"
+        );
     }
 
     #[test]
     fn missing_log_prevents_the_command_from_starting() {
         let dir = LogDir::new();
-        fs::remove_file(dir.0.join("log.txt")).unwrap();
+        fs::remove_file(dir.0.join("terminal.log")).unwrap();
         let marker = dir.0.join("spawned");
         let result = crate::terminal::spawn(Command::new("touch").arg(&marker), &dir.0);
         assert!(result.is_err());
@@ -508,13 +520,15 @@ mod tests {
     fn argv_has_the_command_one_target_and_the_observation_flags() {
         let dir = Path::new("/data/runs/abc");
         for (cmd, target) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
-            let args = argv(cmd, target, dir);
+            let args = argv(cmd, target, dir, "grpc://127.0.0.1:12345");
             assert_eq!(args[0], cmd);
             assert_eq!(args[1], target);
             assert_eq!(
                 &args[2..],
                 [
-                    "--build_event_binary_file=/data/runs/abc/bep.binpb",
+                    "--bes_backend=grpc://127.0.0.1:12345",
+                    "--bes_proxy=",
+                    "--bes_upload_mode=wait_for_upload_complete",
                     "--profile=/data/runs/abc/profile.gz",
                     "--experimental_profile_include_primary_output",
                     "--noslim_profile",
@@ -525,6 +539,73 @@ mod tests {
                 "{cmd}"
             );
         }
+    }
+
+    #[test]
+    fn receiver_readiness_is_required_before_and_after_server_termination() {
+        let core = Core::new();
+        let mut state = core.state.lock().unwrap();
+        assert_eq!(
+            receiver_endpoint(&state).unwrap_err(),
+            "BES receiver is not ready"
+        );
+        state.bes_endpoint = Some("grpc://127.0.0.1:12345".into());
+        assert_eq!(receiver_endpoint(&state).unwrap(), "grpc://127.0.0.1:12345");
+        state.bes_endpoint = None;
+        state.bes_error = Some("BES receiver stopped".into());
+        assert_eq!(
+            receiver_endpoint(&state).unwrap_err(),
+            "BES receiver stopped"
+        );
+    }
+
+    #[test]
+    fn failed_process_before_started_keeps_stderr_in_the_completed_console() {
+        let temp = LogDir::new();
+        let ws = temp.0.join("workspace");
+        fs::create_dir(&ws).unwrap();
+        let data = temp.0.join("data");
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = store::reserve_invocation(&data, &id).unwrap();
+        let (mut child, terminal, mut capture) = crate::terminal::spawn(
+            Command::new("sh").args(["-c", "printf 'startup failed\\n' >&2; exit 7"]),
+            &dir,
+        )
+        .unwrap();
+        let core = Core::new();
+        {
+            let mut state = core.state.lock().unwrap();
+            state.workspace = Some(ws.clone());
+            state.run = Some(id.clone().into());
+            state.run_pgid = Some(child.id() as i32);
+            state.run_terminal = Some(terminal);
+            state.console = Some(ConsoleSession {
+                id: id.clone().into(),
+                workspace: ws.clone(),
+                finished: false,
+            });
+        }
+        let exit = Ok(child.wait().unwrap().code().unwrap());
+        capture.finish().unwrap();
+        {
+            let mut state = core.state.lock().unwrap();
+            finish_console(&mut state, &id);
+            assert!(apply_reap(&mut state, &id, &exit));
+            begin_stop(&mut state);
+            assert!(!state.run_stopping);
+        }
+        assert!(store::read_record(&data, &ws, &id).is_err());
+        assert!(crate::terminal::write(&core, &id, b"late input").is_err());
+        assert!(crate::terminal::resize(&core, &id, 80, 24).is_ok());
+        let output =
+            serde_json::to_value(crate::console::read(&data, &core, &id, 0).unwrap()).unwrap();
+        let bytes: Vec<u8> = serde_json::from_value(output["data"].clone()).unwrap();
+        assert_eq!(bytes, b"startup failed\r\n");
+        assert_eq!(output["done"], true);
+        assert_eq!(core.dto().console_run.as_deref(), Some(id.as_str()));
+        let reopened =
+            serde_json::to_value(crate::console::read(&data, &core, &id, 0).unwrap()).unwrap();
+        assert_eq!(reopened, output);
     }
 
     #[test]
@@ -543,6 +624,157 @@ mod tests {
         state.console = None;
         finish_console(&mut state, "new");
         assert!(state.console.is_none());
+    }
+
+    /// Uses only a temporary workspace, rc file, data directory and Bazel root.
+    /// The rc deliberately points at another backend and an invalid Unix proxy.
+    #[tokio::test]
+    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    async fn real_bazel_gui_flags_build_test_and_run_with_input() {
+        let bazel = std::env::var("ZEAL_TEST_BAZEL").expect("ZEAL_TEST_BAZEL");
+        let temp = LogDir::new();
+        let ws = temp.0.join("workspace");
+        let data = temp.0.join("data");
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("WORKSPACE"), "workspace(name='zeal_gui_test')\n").unwrap();
+        fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
+        fs::write(ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
+        fs::write(ws.join("binary.bzl"), "def _binary(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.py')\n    ctx.actions.write(out,'#!/usr/bin/env python3\\nprint(int(input())*2)\\nraise SystemExit(23)\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary=rule(implementation=_binary,executable=True)\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let endpoint = format!("grpc://{address}");
+        let server = tokio::spawn(crate::bes::serve(listener, data.clone()));
+        for (cmd, target) in [
+            ("build", "//:double"),
+            ("test", "//:check"),
+            ("run", "//:double"),
+        ] {
+            let id = uuid::Uuid::new_v4().to_string();
+            let dir = store::reserve_invocation(&data, &id).unwrap();
+            let mut command = Command::new(&bazel);
+            command
+                .current_dir(&ws)
+                .args(["--batch", "--nosystem_rc", "--nohome_rc"])
+                .arg(format!(
+                    "--output_user_root={}",
+                    temp.0.join("bazel").display()
+                ))
+                .args(argv(cmd, target, &dir, &endpoint))
+                .arg(format!("--invocation_id={id}"))
+                .args([
+                    "--enable_bzlmod=false",
+                    "--enable_workspace=true",
+                    "--incompatible_autoload_externally=",
+                    "--host_platform=//:host",
+                    "--platforms=//:host",
+                    "--spawn_strategy=local",
+                    "--bes_timeout=10s",
+                ]);
+            let (mut child, terminal, mut capture) =
+                crate::terminal::spawn(&mut command, &dir).unwrap();
+            let core = Arc::new(Core::new());
+            {
+                let mut state = core.state.lock().unwrap();
+                state.workspace = Some(ws.clone());
+                state.console = Some(ConsoleSession {
+                    id: id.clone().into(),
+                    workspace: ws.clone(),
+                    finished: false,
+                });
+                state.run = Some(id.clone().into());
+                state.run_pgid = Some(child.id() as i32);
+                state.run_terminal = Some(terminal);
+            }
+            let (release, input) = mpsc::sync_channel(1);
+            let owner_core = core.clone();
+            let owner_id = id.clone();
+            let process = tokio::task::spawn_blocking(move || {
+                let _group = GroupGuard(child.id() as i32);
+                if cmd == "run" {
+                    input
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("BEP completes before stdin");
+                    assert!(
+                        child.try_wait().unwrap().is_none(),
+                        "program still waits for input"
+                    );
+                    crate::terminal::write(&owner_core, &owner_id, b"21\n").unwrap();
+                }
+                let exit = observe_process(
+                    &owner_core,
+                    &owner_id,
+                    || Ok(child.try_wait()?.map(|status| status.code().unwrap_or(-1))),
+                    STOP_GRACE,
+                    STOP_CONFIRM,
+                );
+                capture.finish().unwrap();
+                {
+                    let mut state = owner_core.state.lock().unwrap();
+                    finish_console(&mut state, &owner_id);
+                    apply_reap(&mut state, &owner_id, &exit);
+                }
+                exit.unwrap()
+            });
+            if cmd == "run" {
+                tokio::time::timeout(Duration::from_secs(25), async {
+                    loop {
+                        if store::read_record(&data, &ws, &id)
+                            .is_ok_and(|record| record.exit_code == Some(0))
+                        {
+                            break;
+                        }
+                        if process.is_finished() {
+                            panic!(
+                                "Bazel ended before recording the build: {}",
+                                fs::read_to_string(dir.join("terminal.log")).unwrap()
+                            );
+                        }
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "BES did not finalize before stdin: {error}; {}",
+                        fs::read_to_string(dir.join("terminal.log")).unwrap()
+                    )
+                });
+                crate::terminal::resize(&core, &id, 100, 30).unwrap();
+                release.send(()).unwrap();
+            }
+            let code = tokio::time::timeout(Duration::from_secs(60), process)
+                .await
+                .unwrap()
+                .unwrap();
+            let output = fs::read_to_string(dir.join("terminal.log")).unwrap();
+            assert_eq!(code, if cmd == "run" { 23 } else { 0 }, "{cmd}: {output}");
+            let record = store::read_record(&data, &ws, &id).unwrap();
+            assert_eq!(record.cmd.as_deref(), Some(cmd));
+            assert_eq!(record.target.as_deref(), Some(target));
+            assert_eq!(
+                record.exit_code,
+                Some(0),
+                "program exit must not replace build exit"
+            );
+            assert!(record.finished_at.is_some());
+            assert!(store::artifact(&data, &ws, &id, "bep.binpb").is_ok());
+            assert!(store::artifact(&data, &ws, &id, "profile.gz").is_ok());
+            assert!(core.state.lock().unwrap().run.is_none());
+            let console =
+                serde_json::to_value(crate::console::read(&data, &core, &id, 0).unwrap()).unwrap();
+            assert_eq!(
+                console["done"], true,
+                "final terminal bytes must already be saved"
+            );
+            let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
+            assert_eq!(String::from_utf8(bytes).unwrap(), output);
+            let reopened =
+                serde_json::to_value(crate::console::read(&data, &core, &id, 0).unwrap()).unwrap();
+            assert_eq!(reopened, console);
+            assert!(crate::terminal::write(&core, &id, b"late input").is_err());
+        }
+        assert_eq!(store::list(&data, &ws).unwrap().len(), 3);
+        server.abort();
     }
 
     #[test]
@@ -570,7 +802,12 @@ mod tests {
         ] {
             assert!(validate_target(target).is_ok(), "{target:?}");
             assert_eq!(
-                argv("build", target, Path::new("/data/runs/abc"))[1],
+                argv(
+                    "build",
+                    target,
+                    Path::new("/data/runs/abc"),
+                    "grpc://127.0.0.1:12345"
+                )[1],
                 target
             );
         }
@@ -649,7 +886,7 @@ mod tests {
         assert_eq!(st.run_note.as_deref(), Some("old"));
     }
 
-    /// A reap of the run the slot still holds: its record may be written, the
+    /// A reap of the run the slot still holds: the
     /// slot is cleared and the note follows the outcome.
     #[test]
     fn apply_reap_clears_the_run_it_still_holds() {
@@ -676,7 +913,7 @@ mod tests {
     }
 
     /// A reap after the stop gave up: the slot is no longer this run's, so its
-    /// record stays unfinished and the give-up note stands. A successor run is
+    /// give-up note stands. A successor run is
     /// not ours to reap either.
     #[test]
     fn apply_reap_after_give_up_writes_nothing() {

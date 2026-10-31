@@ -1,7 +1,10 @@
-//! The app-owned, loopback-only Build Event Service. It never owns child
-//! processes. Each stream acknowledges only committed events.
+//! The app-owned loopback Build Event Service. Build receipts acknowledge only
+//! after normal EOF, file flush, and the conditional database update.
 use crate::protocol::bes as wire;
+use crate::state::Core;
 use crate::store;
+use crate::store::events::{AckRange, Receipt};
+use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -35,48 +38,90 @@ impl Receiver {
             Status::resource_exhausted("BES is handling its maximum number of streams")
         })
     }
+}
 
-    #[allow(clippy::result_large_err)] // tonic's RPC boundary uses Status by value.
-    async fn save(
-        &self,
+/// The blocking worker owns admission together with its receipt, so cancelling
+/// the RPC never permits another worker while this one's disk I/O still runs.
+struct Session {
+    receipt: Option<Receipt>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+#[allow(clippy::result_large_err)] // The RPC task reports tonic Status by value.
+impl Session {
+    async fn append(
+        mut self,
+        data: PathBuf,
         event: wire::OrderedBuildEvent,
-        permit: Option<tokio::sync::OwnedSemaphorePermit>,
-    ) -> Result<(), Status> {
-        let data = self.data.clone();
+    ) -> Result<Self, Status> {
         tokio::task::spawn_blocking(move || {
-            // A cancelled lifecycle RPC must not release admission while its
-            // blocking save is still queued or running.
-            let _permit = permit;
-            store::events::save(&data, &event)
+            if self.receipt.is_none() {
+                let stream = event
+                    .stream_id
+                    .as_ref()
+                    .ok_or_else(|| Status::invalid_argument("missing stream id"))?;
+                self.receipt = Some(Receipt::begin(&data, stream).map_err(store_status)?);
+            }
+            let result = self
+                .receipt
+                .as_mut()
+                .expect("receipt was initialized")
+                .append(&event);
+            if let Err(error) = result {
+                if let Some(receipt) = self.receipt.take() {
+                    let _ = receipt.partial();
+                }
+                return Err(store_status(error));
+            }
+            Ok(self)
         })
         .await
         .map_err(|_| Status::internal("event worker failed"))?
-        .map_err(|error| match error.kind {
-            store::ErrorKind::Invalid => Status::invalid_argument(error.to_string()),
-            store::ErrorKind::Conflict => {
-                Status::failed_precondition("sequence gap or conflicting retry")
-            }
-            store::ErrorKind::Capacity => Status::resource_exhausted(error.to_string()),
-            _ => Status::unavailable(error.to_string()),
-        })
     }
+
+    async fn finish(mut self) -> Result<(Self, AckRange), Status> {
+        tokio::task::spawn_blocking(move || {
+            let receipt = self.receipt.take().expect("nonempty stream has a receipt");
+            let range = receipt.finish().map_err(store_status)?;
+            Ok((self, range))
+        })
+        .await
+        .map_err(|_| Status::internal("event worker failed"))?
+    }
+
+    async fn partial(mut self) {
+        let _ = tokio::task::spawn_blocking(move || {
+            let _permit = self._permit;
+            if let Some(receipt) = self.receipt.take() {
+                let _ = receipt.partial();
+            }
+        })
+        .await;
+    }
+}
+
+fn store_status(error: store::StoreError) -> Status {
+    match error.kind {
+        store::ErrorKind::Invalid => Status::invalid_argument(error.to_string()),
+        store::ErrorKind::Conflict => Status::failed_precondition(error.to_string()),
+        store::ErrorKind::Capacity => Status::resource_exhausted(error.to_string()),
+        _ => Status::unavailable(error.to_string()),
+    }
+}
+
+async fn send_error(
+    send: &tokio::sync::mpsc::Sender<Result<wire::PublishBuildToolEventStreamResponse, Status>>,
+    error: Status,
+) {
+    let _ = tokio::time::timeout(IDLE_TIMEOUT, send.send(Err(error))).await;
 }
 
 #[tonic::async_trait]
 impl PublishBuildEvent for Receiver {
     async fn publish_lifecycle_event(
         &self,
-        request: Request<wire::PublishLifecycleEventRequest>,
+        _request: Request<wire::PublishLifecycleEventRequest>,
     ) -> Result<Response<()>, Status> {
-        let session = self.admit()?;
-        self.save(
-            request
-                .into_inner()
-                .build_event
-                .ok_or_else(|| Status::invalid_argument("missing event"))?,
-            Some(session),
-        )
-        .await?;
         Ok(Response::new(()))
     }
 
@@ -88,58 +133,113 @@ impl PublishBuildEvent for Receiver {
         &self,
         request: Request<tonic::Streaming<wire::PublishBuildToolEventStreamRequest>>,
     ) -> Result<Response<Self::PublishBuildToolEventStreamStream>, Status> {
-        let session = self.admit()?;
+        let mut session = Session {
+            receipt: None,
+            _permit: self.admit()?,
+        };
         let mut incoming = request.into_inner();
-        let receiver = self.clone();
+        let data = self.data.clone();
         let (send, receive) = tokio::sync::mpsc::channel(8);
         tokio::spawn(async move {
-            let _session = session;
             let mut stream = None;
             loop {
-                let result = async {
-                    let Some(request) = tokio::time::timeout(IDLE_TIMEOUT, incoming.message())
-                        .await
-                        .map_err(|_| Status::deadline_exceeded("BES stream was idle"))??
-                    else {
-                        return Ok(None);
-                    };
-                    let ordered = request
-                        .ordered_build_event
-                        .ok_or_else(|| Status::invalid_argument("missing ordered event"))?;
-                    let id = ordered
-                        .stream_id
-                        .clone()
-                        .ok_or_else(|| Status::invalid_argument("missing stream id"))?;
-                    if stream.as_ref().is_some_and(|previous| previous != &id) {
-                        return Err(Status::invalid_argument("stream id changed"));
+                let request = match tokio::time::timeout(IDLE_TIMEOUT, incoming.message()).await {
+                    Ok(Ok(Some(request))) => request,
+                    Ok(Ok(None)) => break,
+                    result => {
+                        session.partial().await;
+                        let error = match result {
+                            Ok(Err(error)) => error,
+                            _ => Status::deadline_exceeded("BES stream was idle"),
+                        };
+                        send_error(&send, error).await;
+                        return;
                     }
-                    stream = Some(id.clone());
-                    let sequence_number = ordered.sequence_number;
-                    receiver.save(ordered, None).await?;
-                    Ok(Some(wire::PublishBuildToolEventStreamResponse {
-                        stream_id: Some(id),
-                        sequence_number,
-                    }))
+                };
+                let Some(ordered) = request.ordered_build_event else {
+                    session.partial().await;
+                    send_error(&send, Status::invalid_argument("missing ordered event")).await;
+                    return;
+                };
+                if stream.is_none() {
+                    stream = ordered.stream_id.clone();
                 }
-                .await;
-                match result {
-                    Ok(Some(ack)) => {
-                        if !matches!(
-                            tokio::time::timeout(IDLE_TIMEOUT, send.send(Ok(ack))).await,
-                            Ok(Ok(()))
-                        ) {
-                            break;
-                        }
-                    }
-                    Ok(None) => break,
+                session = match session.append(data.clone(), ordered).await {
+                    Ok(session) => session,
                     Err(error) => {
-                        let _ = tokio::time::timeout(IDLE_TIMEOUT, send.send(Err(error))).await;
-                        break;
+                        send_error(&send, error).await;
+                        return;
                     }
+                };
+            }
+            let Some(stream) = stream else {
+                return;
+            };
+            let (_session, range) = match session.finish().await {
+                Ok(saved) => saved,
+                Err(error) => {
+                    send_error(&send, error).await;
+                    return;
+                }
+            };
+            for sequence_number in range.first..=range.last {
+                let ack = wire::PublishBuildToolEventStreamResponse {
+                    stream_id: Some(stream.clone()),
+                    sequence_number,
+                };
+                if !matches!(
+                    tokio::time::timeout(IDLE_TIMEOUT, send.send(Ok(ack))).await,
+                    Ok(Ok(()))
+                ) {
+                    return;
                 }
             }
         });
         Ok(Response::new(Box::pin(ReceiverStream::new(receive))))
+    }
+}
+
+async fn bind(preferred: &str) -> io::Result<tokio::net::TcpListener> {
+    match tokio::net::TcpListener::bind(preferred).await {
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+            tokio::net::TcpListener::bind("127.0.0.1:0").await
+        }
+        result => result,
+    }
+}
+
+fn unavailable(core: &Core, error: String) {
+    let mut state = core.state.lock().expect("application state lock poisoned");
+    state.bes_endpoint = None;
+    state.bes_error = Some(error);
+}
+
+/// Publish only the listener we own. Any server termination revokes readiness.
+pub async fn start(data: Result<PathBuf, String>, core: Arc<Core>, changed: impl Fn()) {
+    let result: Result<(), String> = async {
+        let data = data?;
+        let listener = bind(ADDRESS).await.map_err(|error| error.to_string())?;
+        let address = listener.local_addr().map_err(|error| error.to_string())?;
+        let endpoint = format!("grpc://{address}");
+        {
+            let mut state = core.state.lock().expect("application state lock poisoned");
+            state.bes_error = (address.port() != 4718).then(|| {
+                format!(
+                    "BES port 4718 is occupied; use --bes_backend={endpoint} for terminal builds"
+                )
+            });
+            state.bes_endpoint = Some(endpoint);
+        }
+        changed();
+        serve(listener, data)
+            .await
+            .map_err(|error| error.to_string())?;
+        Err("BES receiver stopped".to_string())
+    }
+    .await;
+    if let Err(error) = result {
+        unavailable(&core, error);
+        changed();
     }
 }
 
@@ -162,7 +262,6 @@ pub async fn serve(
 mod tests {
     use super::*;
     use crate::protocol::bep;
-    use crate::store::events;
     use prost::Message;
     use std::fs;
     use std::io::Write;
@@ -182,28 +281,57 @@ mod tests {
         }
     }
 
+    fn ordered(id: &str, sequence: i64, event: bep::BuildEvent) -> wire::OrderedBuildEvent {
+        wire::OrderedBuildEvent {
+            stream_id: Some(wire::StreamId {
+                build_id: "build".into(),
+                invocation_id: id.into(),
+                component: 3,
+            }),
+            sequence_number: sequence,
+            event: Some(wire::BuildEvent {
+                bazel_event: Some(prost_types::Any {
+                    type_url: "type.googleapis.com/build_event_stream.BuildEvent".into(),
+                    value: event.encode_to_vec(),
+                }),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn started(id: &str, workspace: &std::path::Path) -> bep::BuildEvent {
+        bep::BuildEvent {
+            payload: Some(bep::build_event::Payload::Started(bep::BuildStarted {
+                uuid: id.into(),
+                workspace_directory: workspace.to_string_lossy().into_owned(),
+                command: "build".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
-    async fn lifecycle_requests_share_the_stream_admission_limit() {
+    async fn lifecycle_is_a_noop_even_when_stream_admission_is_full() {
         let temp = Temp::new();
-        let receiver = Receiver::new(temp.0.join("data"));
-        let permits: Vec<_> = (0..MAX_SESSIONS)
-            .map(|_| receiver.clone().admit().unwrap())
+        let data = temp.0.join("data");
+        let receiver = Receiver::new(data.clone());
+        let _permits: Vec<_> = (0..MAX_SESSIONS)
+            .map(|_| receiver.admit().unwrap())
             .collect();
-        let error = receiver
+        assert_eq!(
+            receiver.admit().unwrap_err().code(),
+            tonic::Code::ResourceExhausted
+        );
+        receiver
             .publish_lifecycle_event(Request::new(wire::PublishLifecycleEventRequest::default()))
             .await
-            .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::ResourceExhausted);
-        drop(permits);
-        let error = receiver
-            .publish_lifecycle_event(Request::new(wire::PublishLifecycleEventRequest::default()))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            .unwrap();
+        assert!(!data.exists());
     }
 
     #[test]
-    fn cancelled_lifecycle_keeps_admission_until_queued_save_finishes() {
+    fn cancelled_append_keeps_admission_until_queued_save_finishes() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
@@ -214,42 +342,96 @@ mod tests {
             let receiver = Receiver::new(temp.0.join("data"));
             let (release, wait) = std::sync::mpsc::channel();
             let blocker = tokio::task::spawn_blocking(move || wait.recv().unwrap());
-            let request = wire::PublishLifecycleEventRequest {
-                build_event: Some(wire::OrderedBuildEvent {
-                    stream_id: Some(wire::StreamId {
-                        build_id: "build".into(),
-                        invocation_id: "invocation".into(),
-                        component: 1,
-                    }),
-                    sequence_number: 1,
-                    event: Some(wire::BuildEvent::default()),
-                }),
+            let session = Session {
+                receipt: None,
+                _permit: receiver.admit().unwrap(),
             };
-            let worker = receiver.clone();
-            let rpc =
-                tokio::spawn(
-                    async move { worker.publish_lifecycle_event(Request::new(request)).await },
-                );
+            let id = uuid::Uuid::new_v4().to_string();
+            let event = ordered(&id, 1, started(&id, &temp.0));
+            let rpc = tokio::spawn(session.append(receiver.data.clone(), event));
             tokio::task::yield_now().await;
-            assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
             rpc.abort();
-            assert!(rpc.await.unwrap_err().is_cancelled());
+            assert!(matches!(rpc.await, Err(error) if error.is_cancelled()));
             assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
             release.send(()).unwrap();
             blocker.await.unwrap();
-            let permits = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
+            let _permits = tokio::time::timeout(
+                Duration::from_secs(5),
                 receiver.sessions.acquire_many(MAX_SESSIONS as u32),
             )
             .await
             .unwrap()
             .unwrap();
-            drop(permits);
+        });
+    }
+
+    #[test]
+    fn cancelled_partial_keeps_admission_until_queued_save_finishes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let receiver = Receiver::new(PathBuf::new());
+            let (release, wait) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || wait.recv().unwrap());
+            let session = Session {
+                receipt: None,
+                _permit: receiver.admit().unwrap(),
+            };
+            let rpc = tokio::spawn(session.partial());
+            tokio::task::yield_now().await;
+            rpc.abort();
+            assert!(rpc.await.unwrap_err().is_cancelled());
+            assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            let _permits = tokio::time::timeout(
+                Duration::from_secs(5),
+                receiver.sessions.acquire_many(MAX_SESSIONS as u32),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         });
     }
 
     #[tokio::test]
-    async fn grpc_ack_means_the_event_can_be_read_back() {
+    async fn occupied_preferred_port_binds_an_owned_loopback_listener() {
+        let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let occupied = other.local_addr().unwrap();
+        let own = bind(&occupied.to_string()).await.unwrap();
+        let address = own.local_addr().unwrap();
+        assert!(address.ip().is_loopback());
+        assert_ne!(address, occupied);
+        let connection = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (_, accepted) = own.accept().await.unwrap();
+        assert_eq!(connection.local_addr().unwrap(), accepted);
+    }
+
+    #[tokio::test]
+    async fn binding_errors_do_not_publish_an_endpoint() {
+        assert!(bind("invalid address").await.is_err());
+        let core = Arc::new(Core::new());
+        start(Err("app data unavailable".into()), core.clone(), || {}).await;
+        let state = core.state.lock().unwrap();
+        assert!(state.bes_endpoint.is_none());
+        assert_eq!(state.bes_error.as_deref(), Some("app data unavailable"));
+    }
+
+    #[test]
+    fn server_termination_revokes_the_published_endpoint() {
+        let core = Core::new();
+        core.state.lock().unwrap().bes_endpoint = Some("grpc://127.0.0.1:12345".into());
+        unavailable(&core, "BES receiver stopped".into());
+        let state = core.state.lock().unwrap();
+        assert!(state.bes_endpoint.is_none());
+        assert_eq!(state.bes_error.as_deref(), Some("BES receiver stopped"));
+    }
+
+    #[tokio::test]
+    async fn grpc_ack_waits_for_eof_and_saved_events() {
         let temp = Temp::new();
         let data = temp.0.join("data");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -261,52 +443,48 @@ mod tests {
         .await
         .unwrap();
         let id = uuid::Uuid::new_v4().to_string();
-        let event = bep::BuildEvent {
-            payload: Some(bep::build_event::Payload::Started(bep::BuildStarted {
-                uuid: id.clone(),
-                workspace_directory: temp.0.to_string_lossy().into_owned(),
-                command: "build".into(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        let ordered = wire::OrderedBuildEvent {
-            stream_id: Some(wire::StreamId {
-                build_id: "build".into(),
-                invocation_id: id.clone(),
-                component: 3,
-            }),
-            sequence_number: 1,
-            event: Some(wire::BuildEvent {
-                bazel_event: Some(prost_types::Any {
-                    type_url: "type.googleapis.com/build_event_stream.BuildEvent".into(),
-                    value: event.encode_to_vec(),
-                }),
-                ..Default::default()
-            }),
-        };
-        let request = wire::PublishBuildToolEventStreamRequest {
-            ordered_build_event: Some(ordered),
-        };
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        send.send(wire::PublishBuildToolEventStreamRequest {
+            ordered_build_event: Some(ordered(&id, 1, started(&id, &temp.0))),
+        })
+        .await
+        .unwrap();
         let mut response = client
-            .publish_build_tool_event_stream(tokio_stream::iter([request.clone(), request]))
+            .publish_build_tool_event_stream(ReceiverStream::new(receive))
             .await
             .unwrap()
             .into_inner();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), response.message())
+                .await
+                .is_err()
+        );
+        let last = bep::BuildEvent {
+            last_message: true,
+            ..Default::default()
+        };
+        send.send(wire::PublishBuildToolEventStreamRequest {
+            ordered_build_event: Some(ordered(&id, 2, last)),
+        })
+        .await
+        .unwrap();
+        drop(send);
         assert_eq!(
             response.message().await.unwrap().unwrap().sequence_number,
             1
         );
-        assert_eq!(
-            events::get(&data, &temp.0, &id).unwrap().unwrap().cmd,
-            "build"
-        );
+        let record = store::read_record(&data, &temp.0, &id).unwrap();
+        assert_eq!(record.cmd.as_deref(), Some("build"));
+        assert_eq!(record.exit_code, None);
         assert_eq!(
             response.message().await.unwrap().unwrap().sequence_number,
-            1
+            2
         );
         assert!(response.message().await.unwrap().is_none());
-        assert!(store::list(&data, &temp.0).unwrap().is_empty());
+        let file = store::artifact(&data, &temp.0, &id, "bep.binpb").unwrap();
+        assert!(file.metadata().unwrap().len() > 0);
+        assert_eq!(store::list(&data, &temp.0).unwrap().len(), 1);
+        assert!(!data.join("runs").join(&id).join("log.txt").exists());
         server.abort();
     }
 
@@ -314,7 +492,7 @@ mod tests {
     /// rule with no external language rules or network dependencies.
     #[tokio::test]
     #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
-    async fn real_bazel_records_external_run_and_accepts_standard_input() {
+    async fn real_bazel_records_invocation_and_accepts_standard_input() {
         exercise_real_bazel().await;
     }
 
@@ -327,46 +505,83 @@ mod tests {
         fs::write(ws.join("WORKSPACE"), "workspace(name = 'zeal_bes_test')\n").unwrap();
         fs::write(
             ws.join("BUILD"),
-            "load(':binary.bzl', 'binary')\nplatform(name='host')\nbinary(name='double')\n",
+            "load(':binary.bzl', 'binary', 'check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n",
         )
         .unwrap();
-        fs::write(ws.join("binary.bzl"), "def _impl(ctx):\n    out = ctx.actions.declare_file(ctx.label.name + '.py')\n    ctx.actions.write(out, '#!/usr/bin/env python3\\nprint(int(input()) * 2)\\n', is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary = rule(implementation=_impl, executable=True)\n").unwrap();
+        fs::write(ws.join("binary.bzl"), "def _impl(ctx):\n    out = ctx.actions.declare_file(ctx.label.name + '.py')\n    ctx.actions.write(out, '#!/usr/bin/env python3\\nprint(int(input()) * 2)\\n', is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary = rule(implementation=_impl, executable=True)\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(serve(listener, data.clone()));
-        let id = uuid::Uuid::new_v4().to_string();
         let output_root = temp.0.join("bazel");
-        let run_ws = ws.clone();
-        let run_id = id.clone();
-        let (send_input, wait_input) = std::sync::mpsc::sync_channel(1);
-        let process = tokio::task::spawn_blocking(move || {
-            let mut command = Command::new(bazel);
+        let command = |cmd: &str, target: &str, id: &str| {
+            let mut command = Command::new(&bazel);
             command
-                .current_dir(run_ws)
-                .arg("--batch")
-                .arg("--ignore_all_rc_files")
+                .current_dir(&ws)
+                .args(["--batch", "--ignore_all_rc_files"])
                 .arg(format!("--output_user_root={}", output_root.display()))
+                .arg(cmd)
                 .args([
-                    "run",
                     "--enable_bzlmod=false",
                     "--enable_workspace=true",
                     "--incompatible_autoload_externally=",
                     "--host_platform=//:host",
                     "--platforms=//:host",
+                    "--spawn_strategy=local",
                 ])
                 .arg(format!("--bes_backend=grpc://{address}"))
+                .arg("--bes_proxy=")
+                .arg("--bes_upload_mode=wait_for_upload_complete")
                 .arg("--bes_timeout=10s")
-                .arg(format!("--invocation_id={run_id}"))
-                .arg("//:double");
+                .arg(format!("--invocation_id={id}"))
+                .arg(target);
+            command
+        };
+        for (cmd, target) in [("build", "//:double"), ("test", "//:check")] {
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut process = command(cmd, target, &id);
+            let output = tokio::task::spawn_blocking(move || process.output().unwrap())
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{cmd}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let record = store::read_record(&data, &ws, &id).unwrap();
+            assert_eq!(record.cmd.as_deref(), Some(cmd));
+            assert_eq!(record.target.as_deref(), Some(target));
+            assert_eq!(record.exit_code, Some(0));
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut command = command("run", "//:double", &id);
+        let (send_input, wait_input) = std::sync::mpsc::sync_channel(1);
+        let process = tokio::task::spawn_blocking(move || {
             let mut child = command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
-            wait_input
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .expect("build completes before input");
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                match wait_input.recv_timeout(Duration::from_millis(25)) {
+                    Ok(()) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if child.try_wait().unwrap().is_some() {
+                            return child.wait_with_output().unwrap();
+                        }
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "build completes before input"
+                        );
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        let _ = child.kill();
+                        return child.wait_with_output().unwrap();
+                    }
+                }
+            }
             assert!(
                 child.try_wait().unwrap().is_none(),
                 "program is still waiting for input"
@@ -376,10 +591,9 @@ mod tests {
         });
         tokio::time::timeout(std::time::Duration::from_secs(25), async {
             loop {
-                if events::get(&data, &ws, &id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|build| build.complete)
+                if store::read_record(&data, &ws, &id)
+                    .is_ok_and(|build| build.finished_at.is_some())
+                    || process.is_finished()
                 {
                     break;
                 }
@@ -388,7 +602,7 @@ mod tests {
         })
         .await
         .expect("BEP finishes while the program is waiting");
-        send_input.send(()).unwrap();
+        let _ = send_input.send(());
         let output = process.await.unwrap();
         assert!(
             output.status.success(),
@@ -397,12 +611,12 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
-        let observed = events::get(&data, &ws, &id).unwrap().unwrap();
-        assert_eq!(observed.cmd, "run");
-        assert_eq!(observed.target, "//:double");
+        let observed = store::read_record(&data, &ws, &id).unwrap();
+        assert_eq!(observed.cmd.as_deref(), Some("run"));
+        assert_eq!(observed.target.as_deref(), Some("//:double"));
         assert_eq!(observed.exit_code, Some(0));
-        assert!(observed.complete);
-        assert_eq!(store::list(&data, &ws).unwrap().len(), 1);
+        assert!(observed.finished_at.is_some());
+        assert_eq!(store::list(&data, &ws).unwrap().len(), 3);
         server.abort();
     }
 }

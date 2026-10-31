@@ -289,24 +289,7 @@ pub fn run() {
             let receiver_core = core.clone();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let result = async {
-                    let data = data?;
-                    let listener = tokio::net::TcpListener::bind(bes::ADDRESS)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    bes::serve(listener, data)
-                        .await
-                        .map_err(|error| error.to_string())
-                }
-                .await;
-                if let Err(error) = result {
-                    receiver_core
-                        .state
-                        .lock()
-                        .expect("application state lock poisoned")
-                        .bes_error = Some(error);
-                    receiver_core.emit(&handle);
-                }
+                bes::start(data, receiver_core.clone(), || receiver_core.emit(&handle)).await;
             });
             // Reopen the last workspace, if it is still a workspace.
             if let Ok(dir) = app.path().app_data_dir()

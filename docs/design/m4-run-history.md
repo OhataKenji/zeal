@@ -1,145 +1,197 @@
 # Zeal 設計: M4 実行履歴の保存と再表示
 
 _OhataKenji_
-_Last update: 2026/10/18_
+_Last update: 2026/10/31_
 _Status: Approved_
+
+履歴の入力とビルド結果はDBから表示し、詳細は保存したイベントから読む。
+受取確認の順序は[正常受信](#正常受信)、表示上限は[詳細の読込](#詳細の読込)を参照する。
 
 ## Goal
 
-GUIから実行した履歴をSQLiteに保存し、過去の入力、終了結果、log、BEP、profileを再表示できるようにする([PRD](../prd.md)シナリオ4とM4)。
-詳細fileが欠けても、保存済みの入力と終了結果を残す。
-画面は[mock](../mock/)に従い、既存の詳細表示を使う。
+一回のBazel呼び出し(**invocation**)を保存し、入力、ビルド結果、ログ、BEP、profileを再表示する([PRD](../prd.md)シナリオ4とM4)。
+詳細fileが欠けても、DBの入力とビルド結果を維持する。
 
 ### Non Goals
 
-- BES受信、CLIからの収集、観測項目と画面の追加
-- profile parserの変更、読込上限、解析workerの制御
-- runnerの終了確認、停止処理、計時方法の改善
-- 旧履歴の移行、未完了recordの復旧、DBの自動修復
+- 自動修復、未完了runの復旧
 - 容量監視、自動整理、共有、同期、export、run同士のdiff
-
-## Background
-
-M2とM3は、一回のGUI操作にUUIDを発行し、入力と終了情報を `run.json` に保存している。
-logとBEPとprofileは同じrunのdirに置き、詳細を開くときに読む。
-M4はこの要約の保存先をSQLiteへ置き換える。
-
-- **run record**：GUIが発行したUUID、workspace、入力、開始時刻、終了時刻、exit codeからなる要約。
-- **成果物**：既存の `log.txt`、`bep.binpb`、`profile.gz`。要約とは別に保存する詳細情報。
-- **workspace**：Bazelを実行するcanonical path。別のworkspaceの履歴を混ぜないための識別に使う。
-
-実行と中断は[M3](./m3-find-and-run.md)、BEPとprofileの解析および表示は[M2](./m2-run-detail.md)を引き継ぐ。
-profile解析とrunnerの独立した改善は、それぞれ別PRで扱う。
+- profile parserの変更、cloud保存、remote execution
 
 ## Overview
 
-storeはworkspaceとrunの要約をSQLiteへ保存する。
-既存のcreate、実行、finishという順序を保ち、開始recordを保存できた場合だけBazelを起動する。
-終了を確認した場合は、同じrecordの終了時刻とexit codeを一つのtransactionで保存する。
-
-一覧はDBからworkspaceごとに取得する。
-詳細はDBのrecordと所属を確認してから、そのrunの成果物を既存のparserへ渡す。
-成果物の欠損や解析失敗で、DBの終了結果を書き換えない。
-
-UIのrecord形式と実行状態は変えない。
-開始recordが未完了のまま残った場合も、既存の「結果不明」表示を使う。
-再起動後の復旧と、以前のprocessへのsignal送信は行わない。
+Bazelは入力、時刻、結果をBuild Event Protocol(**BEP**)のイベントとして報告する。
+アプリや端末が起動したBazelは、Zeal内のBuild Event Service(**BES**) receiverへ送る。
+保存と表示は同じinvocation IDを使い、起動元を分類しない。
+receiverはBEPの入力、時刻、build exitをDBへ保存し、ログを含むイベントをfileへ書く。
+一覧、結果表示、所要時間、集計用データはapplicationがDBの事実から組み立てる。
 
 ```mermaid
 flowchart LR
-    SEND["Send"] -->|"開始record"| DB[("SQLite")]
-    SEND --> RUNNER["既存runner"] --> BAZEL["Bazel"]
-    RUNNER -->|"終了確認時に更新"| DB
-    BAZEL --> FILES["log / BEP / profile"]
-    DB --> LIST["履歴一覧"] --> DETAIL["既存の詳細表示"]
-    FILES --> DETAIL
+    BAZEL["Bazel"] --> BES["共通BES receiver"]
+    BES --> DB[("workspace / run")]
+    BES --> EVENTS["ログ込みevent file"]
+    DB --> VIEW["一覧 / 詳細 / Analytics"]
+    EVENTS -->|"詳細要求時に一度parse"| VIEW
 ```
 
 ## Detailed Design
 
-### 要約と成果物の保存先
+### 保存する事実
 
 DBはアプリ全体で一つの `<app data dir>/zeal.db` とする。
-WAL、`synchronous=FULL`、foreign keyを有効にし、schemaは `PRAGMA user_version` で管理する。
+WAL、`synchronous=FULL`、foreign keyを有効にし、`PRAGMA user_version=3` で管理する。
+表は次の2つだけとする。
 
 ```text
-workspace(id PRIMARY KEY, canonical_path UNIQUE)
+workspace(id TEXT NOT NULL PRIMARY KEY, canonical_path BLOB NOT NULL UNIQUE)
 run(
-  id PRIMARY KEY, workspace_id REFERENCES workspace(id),
-  cmd, target_raw, started_at_ms, finished_at_ms, exit_code
+  id TEXT NOT NULL PRIMARY KEY,
+  workspace_id TEXT REFERENCES workspace(id),
+  cmd TEXT, target_raw TEXT,
+  started_at_ms INTEGER, finished_at_ms INTEGER, exit_code INTEGER,
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0),
+  received_complete INTEGER NOT NULL DEFAULT 0 CHECK(received_complete IN (0, 1))
 )
 ```
 
-workspaceのcanonical pathを完全一致で照合し、保存用のUUIDを割り当てる。
-成果物は `workspaces/<workspace_id>/runs/<run_id>/` に置く。
-runのUUID、入力、Unix msの時刻、終了情報は既存のrecord形式を保つ。
-経過時間と結果の表示規則は今回変更しない。
+workspaceは可能ならcanonicalizeしたpathで照合し、不可能ならBEPの絶対pathを使う。
+runの入力と時刻はBEPで観測するまでNULLとする。
+`attempt` は現在の受信回、`received_complete` は最後のイベントと正常EOFを確認し保存した事実である。
 
-### 保存と読込
+成功表示や所要時間、画面へ返すデータ(**DTO**)、イベント本体はSQLへ保存しない。
+indexは `run(workspace_id, started_at_ms DESC, id)` とする。
 
-`create` は新しいrunのdirと空logを排他的に作り、開始recordをcommitして返す。
-これに失敗した場合はspawnしない。
-spawn失敗時は今回の未完了recordと既知のfileだけを削除し、未知の内容を再帰削除しない。
-削除や保存に失敗した場合は、不完全なrecordや孤児dirが残り得る。
+#### 起動時の予約
 
-`finish` は要求workspaceに所属する未完了recordだけを更新する。
-終了時刻とexit codeを一つのtransactionで保存し、完了済みrecordは上書きしない。
-waitエラーや停止打切りでは、既存runnerと同じく終了情報を補完しない。
+Bazelを起動するときはUUIDだけを予約してcommitし、そのIDを渡す。
+既存IDとの衝突はspawn前に拒否する。
+Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻や入力へ代入しない。
+起動失敗時は未受信の予約と既知の一時fileだけを取り消す。
 
-`list` は要求workspaceのrecordを開始時刻の新しい順に返す。
-`read_record` と成果物の読込も同じworkspaceの所属を確認する。
-成果物を削除しても、要約の読込と履歴一覧は維持する。
-BEPとprofileの読込および解析は既存の動作を保ち、解析結果はDBへ保存しない。
+### event fileと受信
 
-### DB障害と互換性
+保存先は `<app data dir>/runs/<invocation_uuid>/attempt/<number>/bep.binpb` とする。
+BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
+ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
+任意の `terminal.log` は擬似端末(**PTY**)の出力、`profile.gz` は計時情報として `runs/<invocation_uuid>/` に置く。
+これらの有無を起動元の判定に使わない。
 
-新規DBから始め、旧 `run.json` と開発中の旧schemaは取り込まない。
-破損、permission、disk full、新しすぎるschema、busyを区別してエラーを返す。
-自動修復、DBの削除、fileへの代替保存は行わない。
-DBがなくsidecarだけ残る場合も初期化しない。
-DBを利用できなければ新規runを起動せず、生存するprocessのstopはDBから独立させる。
+### 正常受信
 
-## Alternatives Considered
+**EOF**は、この接続での送信終了を示す。
+受取確認を**ACK**、buffer内のデータをfileへ書き出す処理を**flush**と呼ぶ。
 
-- **fileのまま保存する**：依存を増やさずに済むが、一覧の取得をfile走査に依存させ、M5の検索もfile管理で担う必要がある。要約の正本をSQLiteへ移す。
-- **parserとrunnerも同時に変更する**：資源上限と終了確認をまとめて改善できるが、履歴保存のレビュー範囲が広がる。独立したPRへ分ける。
-- **成果物から一覧を再構築する**：DBを省けるが、詳細削除後に既知の入力と終了結果を保持できない。
+1. イベントを順にbufferへ書く。この時点ではACKしない。
+2. 正常EOFを受け取る。
+3. fileをflushし、現在のattemptを条件にDBを更新する。
+4. 受信番号を順にACKする。
 
-## Caveats
+`received_complete=1` にするには、最後のBEPイベントを示す `last_message` も必要である。
+last_messageがなければ、正常EOFをACKしても `received_complete=0` とする。
 
-未完了recordは終了不明のまま残り、crash後のprocess照合や復旧は行わない。
-既存のfile履歴は新しい一覧へ移行しない。
-workspaceの移動は別workspaceとして扱う。
+| 報告          | 意味                  |
+| ------------- | --------------------- |
+| BuildFinished | ビルド終了とexit code |
+| last_message  | BEPの最後のイベント   |
+| EOF           | この接続での送信終了  |
 
-既存の詳細解析と作業fileには、今回新しい容量上限を加えない。
-履歴の自動整理も行わず、手動整理は全Zealと残存processを停止した後に行う。
-DBとsidecarの手動初期化では全workspaceの要約を失い、成果物からは復元しない。
+BuildFinishedがなければビルド結果は不明である。
+flushは電源断後のfile保持を保証しない。
 
-### Consoleの寿命
+### 失敗と再送
 
-process終了後も最後のConsoleを保持して末尾を読み、詳細画面から戻って端末出力を確認できる。
+| 状態                  | 受信動作                                                         |
+| --------------------- | ---------------------------------------------------------------- |
+| 未確定runの再送       | 新しいattemptへ番号1から全部送る                                 |
+| 受信確定済みrunの再送 | 保存を繰り返さず、正常EOF後にACKする。末尾だけの再送も受け付ける |
+| fileやDBの失敗        | ACKしない                                                        |
+| 切断やidle期限切れ    | 可能な範囲を保存するがACKしない。次の接続の全送に委ねる          |
+
+古いattemptからの更新が拒否された場合もACKしない。
+接続内の受信番号は連続昇順とする。
+同じIDの既知のworkspaceや入力と矛盾する報告は拒否する。
+途中更新と確定はすべて現在のattemptを確認し、古い接続が新しい記録を変更することを防ぐ。
+
+lifecycle unaryはBEPとは別の通知APIであり、保存せず成功応答だけを返す。
+
+### 詳細の読込
+
+`get_run` は、DBのworkspace所属を確認して現在のattemptのfileを一度だけ逐次parseする。
+同じ走査でBEPの表示データとログを組み立て、全イベントや全ログをメモリへためない。
+Progressのログはstderr、stdoutの順に取り込む。
+任意のprofileは `get_run_profile` で別途読む。
+
+#### 上限とメモリ
+
+一つのイベントを長さ付きで格納した単位を**frame**と呼ぶ。
+
+| 対象          | 上限と動作                                     |
+| ------------- | ---------------------------------------------- |
+| ログ          | 末尾512 KiB。Unicode文字を分断しない           |
+| BEP表示データ | serialize後8 MiB。項目を省略したら不完全と示す |
+| 一つのframe   | 16 MiB。長さとfile残量をbuffer確保前に確認する |
+| 解析worker    | 同時1件。処理中の追加要求は待たせず拒否する    |
+
+表示上限後も走査を続け、後続ログの末尾を取り込む。
+8 MiBは表示用の上限であり、受信できるイベントの保存条件には使わない。
+解析結果のfile、永続cache、offset表は作らない。
+
+#### 読めない場合
+
+file欠損、読込失敗、解析失敗は該当sectionへ表示する。
+読めた部分を返す場合も不完全と示す。
+DBの入力やビルド結果は維持する。
+
+### 履歴とlive process
+
+一覧はworkspaceが判明したrunをBEP開始時刻の新しい順に返す。
+未観測の入力や時刻は表示でも不明のままにする。
+成功はBuildFinishedのexit、所要時間はBEP開始終了時刻から求める。
+子processのexitや停止操作からビルド結果を補わない。
+
+`bazel run` のプログラムは、ビルド結果の送信後も動き続ける場合がある。
+Console、stdin、停止はCoreがメモリで保持するlive processを使う。
+履歴が確定してもその操作を続けられる。
+
+process終了後も最後のConsoleを保持して末尾を読む。
+詳細画面から戻って端末出力を確認できる。
 終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
-stdin、resize、停止は現在のprocessだけを操作する。
 
-## Security Concerns
+workspace未判明の予約が一覧に出ない間も、live processからConsoleを開ける。
+再起動後の以前のprocessへのsignal送信は行わない。
 
-保存領域は所有者を確認してdirを0700、新規DBとlogを0600にする。
-UUIDとworkspace所属を確認し、dirfdとnofollowによるアクセスでsymlinkと特殊fileを拒否する。
-Bazelのumaskは変えず、BEPとprofileは保護dir内の既存の出力方法を使う。
-SQLはbound parameterを使い、UIは入力と成果物をtextとして表示する。
-同じOSユーザーで実行するリポジトリコードの隔離は行わない。
+### DB障害
 
-## Privacy Concerns
+対応するschemaと一致しないDBは、DBとfileを変更せず利用を拒否する。
+自動削除、再作成、fileからの履歴復元は行わない。
+DBがなくWAL/SHMの補助file(sidecar)だけ残る場合も初期化しない。
 
-入力と成果物には秘密値やlocal pathが含まれ得る。
-履歴と成果物はlocalに保存する。開発版の任意のtrace送信も、履歴の生の入力と成果物を含めない([README](../../README.md#development-traces))。
-Bazel自身の通信は既存設定に従う。
-公開fixtureへ秘密値を含めない。
+破損、permission、disk full、新しすぎるschema、busyは区別する。
+DBを利用できなくても、生存するprocessのstopは維持する。
+
+過去attemptや孤児fileの自動整理も行わない。
+
+## Security and Privacy
+
+UUIDと正整数だけを保存先名に使う。
+保存領域は所有者を確認し、dirfdとnofollowでsymlinkと特殊fileを拒否する。
+dirは0700、新規DBとevent fileは0600とする。
+SQLはbound parameter、UIはtext表示を使う。
+入力と成果物はlocalに保存し、公開fixtureへ秘密値を含めない。
+Bazelの通信設定とアプリ起動時のBES上書きは[overview](./overview.md#privacy-concerns)に従う。
 
 ## Test Plan
 
-- create、finish、list、詳細の再表示を通し、再接続後も入力と終了結果が一致することを確認する。
-- workspaceの分離とcanonical pathの別名、完了済みrecordの上書き拒否を確認する。
-- 詳細fileの削除後も要約が残り、欠損と解析エラーを既存の表示で区別する。
-- spawn失敗時の削除、保存先の権限、symlinkと特殊file、DB障害とschema不一致を確認する。
-- 既存のrunner、BEP、profile、UIのテストを維持し、SQLite接続以外の動作を変えない。
+### 保存と再表示
+
+- 同じBEPから同じDB事実、詳細、DTO、Analyticsが得られること。
+- ログ込みeventだけを保存し、一度の走査でBEPとUnicode末尾ログを返すこと。
+- 表示上限後の後続ログ、巨大frame、欠損、不完全なfileが一覧と集計を変えないこと。
+- BEP結果確定後もプログラムのstdinとstopが動き、process終了だけでは結果を補完しないこと。
+
+### 失敗と安全性
+
+- EOF前ACKなし、全送retry、確定済み再送を確認する。
+- 並行attemptで古い接続が更新できず、file/DB失敗時にACKしないこと。
+- 保存先の権限、symlink、特殊file、非対応schemaの非破壊拒否を確認する。

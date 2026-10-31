@@ -264,7 +264,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       const record = await transport.invoke<RunRecord>("start_run", { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
       selectRun(null);
-      update({ console: record, consoleOpen: true });
+      // Composer input labels the live Console until build events report it.
+      update({ console: { ...record, cmd, target }, consoleOpen: true });
       // Invoke responses and events use different Tauri delivery paths. The
       // reply may precede its running event, so reconcile before deciding to
       // read completed files. Events received during this read take priority.
