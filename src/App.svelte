@@ -51,6 +51,7 @@
   let argumentsText = $state("");
   let argumentsOpen = $state(false);
   let argumentsToggle: HTMLButtonElement | undefined;
+  let argumentsPanel = $state<HTMLDivElement>();
   let argumentsInput = $state<HTMLInputElement>();
   const argumentsConfigured = $derived(argumentsText.trim() !== "");
   let switchingWs = $state(false);
@@ -135,9 +136,20 @@
   }
 
   function argumentsKey(event: KeyboardEvent) {
-    if (event.isComposing || event.key !== "Escape") return;
+    if (!argumentsOpen || event.isComposing || event.key !== "Escape") return;
     event.preventDefault();
     void setArgumentsOpen(false);
+  }
+
+  function dismissArguments(event: Event) {
+    if (
+      argumentsOpen &&
+      event.target instanceof Node &&
+      !argumentsPanel?.contains(event.target) &&
+      !argumentsToggle?.contains(event.target)
+    ) {
+      argumentsOpen = false;
+    }
   }
 
   // Sidebar split: share of height given to the targets pane, and per-pane
@@ -360,6 +372,12 @@
   </main>
 {/snippet}
 
+<svelte:window
+  onpointerdown={dismissArguments}
+  onfocusin={dismissArguments}
+  onkeydown={argumentsKey}
+/>
+
 <div class="win">
   <div class="toolbar">
     <div class="workspace-picker">
@@ -425,13 +443,32 @@
         class="button button-ghost arguments-toggle"
         aria-label={argumentsConfigured ? "Arguments (configured)" : "Arguments"}
         aria-expanded={argumentsOpen}
-        aria-controls="run-arguments-row"
+        aria-controls="run-arguments-popover"
         title={argumentsConfigured ? argumentsText : "Specify arguments"}
         onclick={() => setArgumentsOpen(!argumentsOpen)}
       >
         Arguments
         {#if argumentsConfigured}<span class="arguments-indicator" aria-hidden="true"></span>{/if}
       </button>
+      {#if argumentsOpen}
+        <div
+          bind:this={argumentsPanel}
+          class="arguments-popover"
+          id="run-arguments-popover"
+        >
+          <input
+            bind:this={argumentsInput}
+            bind:value={argumentsText}
+            id="run-arguments"
+            class="input arguments-input"
+            aria-label="Arguments"
+            placeholder="--config=dev; run program arguments after --"
+            title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </div>
+      {/if}
       <button
         type="button"
         class="button button-primary icon-button"
@@ -447,22 +484,6 @@
           />{/if}
       </button>
     </div>
-    {#if argumentsOpen}
-      <div class="arguments-row" id="run-arguments-row">
-        <input
-          bind:this={argumentsInput}
-          bind:value={argumentsText}
-          id="run-arguments"
-          class="input arguments-input"
-          aria-label="Arguments"
-          placeholder="--config=dev; run program arguments after --"
-          title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
-          autocomplete="off"
-          spellcheck={false}
-          onkeydown={argumentsKey}
-        />
-      </div>
-    {/if}
   </div>
   {#if app.view.error}<p class="app-error error" role="alert">
       {app.view.error}

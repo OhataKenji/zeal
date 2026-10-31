@@ -920,6 +920,7 @@ button {
 }
 
 .composer {
+  position: relative;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -955,8 +956,18 @@ button {
   background: var(--success);
 }
 
-.arguments-row {
-  grid-column: 2;
+.arguments-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  /* Align with the toggle before the 32px Run button and two 4px gaps. */
+  right: 40px;
+  width: min(420px, calc(100% - 44px));
+  z-index: 20;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  box-shadow: 0 12px 32px #00000014;
 }
 
 .arguments-input {
@@ -1184,10 +1195,6 @@ button.chip:hover {
     padding: 8px;
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
-  }
-
-  .arguments-row {
-    grid-column: 1;
   }
 
   .sidebar {
