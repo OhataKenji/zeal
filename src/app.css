@@ -436,7 +436,7 @@ button:disabled {
   white-space: pre-wrap;
 }
 
-.run-startup-options summary {
+.run-collapsible summary {
   cursor: pointer;
   font: 400 12px var(--font-sans);
   padding: 8px 0;

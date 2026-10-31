@@ -132,22 +132,22 @@
                   </dd>{/if}
               </dl>
               <h3 class="run-arguments-heading">Command lines</h3>
-              <section class="run-command-block">
-                <h4>Original command line</h4>
+              <details class="run-collapsible">
+                <summary>Original command line</summary>
                 {#if bep?.originalCommandLine !== undefined}
                   <code class="run-command-code">{bep.originalCommandLine || "No command-line arguments."}</code>
                 {:else}
                   <p class="panel-empty">Original command line was not recorded in the build events.</p>
                 {/if}
-              </section>
-              <section class="run-command-block">
-                <h4>Canonical command line</h4>
+              </details>
+              <details class="run-collapsible">
+                <summary>Canonical command line</summary>
                 {#if bep?.canonicalCommandLine !== undefined}
                   <code class="run-command-code">{bep.canonicalCommandLine || "No command-line arguments."}</code>
                 {:else}
                   <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
                 {/if}
-              </section>
+              </details>
               <h3 class="run-arguments-heading">Bazel arguments</h3>
               {#if bep?.options}
                 <div class="run-command-options">
@@ -160,7 +160,7 @@
                     <code class="run-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
                   </section>
                   {#if bep.options.explicitStartupOptions.length || bep.options.startupOptions.length}
-                    <details class="run-startup-options">
+                    <details class="run-collapsible">
                       <summary>Startup options</summary>
                       {#if bep.options.explicitStartupOptions.length}
                         <section class="run-command-block">
