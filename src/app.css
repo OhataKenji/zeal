@@ -254,7 +254,6 @@ button:disabled {
 .composer-search {
   position: relative;
   min-width: 0;
-  flex: 1;
   display: flex;
 }
 
@@ -922,7 +921,8 @@ button {
 .composer {
   position: relative;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   padding: 4px;
   border: 1px solid var(--input);
@@ -958,10 +958,11 @@ button {
 
 .arguments-popover {
   position: absolute;
+  grid-column: 2 / 3;
+  grid-row: 1 / 2;
   top: calc(100% + 8px);
-  /* Align with the toggle before the 32px Run button and two 4px gaps. */
-  right: 40px;
-  width: min(420px, calc(100% - 44px));
+  left: 0;
+  right: 0;
   z-index: 20;
   padding: 8px;
   border: 1px solid var(--border);
