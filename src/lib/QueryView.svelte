@@ -77,11 +77,6 @@
   let resultView = $state<"raw" | "graph">("raw");
   // The result view the in-flight run belongs to; cleared when it settles.
   let runningView = $state<"raw" | "graph" | null>(null);
-  // Armed-confirm replaces window.confirm (WKWebView has no dialogs).
-  let armed = $state<
-    { kind: "example"; id: string } | { kind: "revert" } | null
-  >(null);
-  let armTimer: ReturnType<typeof setTimeout> | undefined;
   let feedback = $state("");
   let fbTimer: ReturnType<typeof setTimeout> | undefined;
   let qstate = $state<QueryState>(emptyQueryState());
@@ -99,7 +94,6 @@
     if (!qstate.running) runningView = null;
   });
   onDestroy(() => {
-    clearTimeout(armTimer);
     clearTimeout(fbTimer);
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
@@ -276,45 +270,24 @@
       codeError = errs.values().next().value ?? "Invalid expression";
       return;
     }
-    clearPending();
     root = parsed.expr;
     codeError = null;
     mode = "builder";
   }
 
-  // A view switch that wanted to run but was gated retries when the slot
-  // frees; only switches remember a pending run, never stale-key edits.
-  let pendingKey = $state<string | null>(null);
+  // A view whose result is missing or fetched under another key runs on
+  // entry, under the same gates as the Run button. A gated switch does not
+  // retry: pressing Run once the slot frees is explicit and simpler.
   function setResultView(view: "raw" | "graph") {
     if (view === resultView) return;
     resultView = view;
-    // A view whose result is missing or fetched under another key runs on
-    // entry, under the same gates as the Run button.
     const s = qstate.results[view];
     const key = exprText.trim() === "" ? null : keyFor(exprText, view, flags);
-    if (canRun && key !== null && s?.key !== key) {
-      run();
-      return;
-    }
-    if (s === undefined && key !== null) pendingKey = key;
-  }
-  $effect(() => {
-    if (pendingKey && pendingKey === currentKey && canRun) {
-      pendingKey = null;
-      run();
-    }
-  });
-  // Any edit to the expression or flags voids an armed auto-run; example
-  // loads and view switches arm it only after their own edits are done.
-  function clearPending() {
-    pendingKey = null;
+    if (canRun && key !== null && s?.key !== key) run();
   }
 
   function run() {
     if (!canRun) return;
-    // Any actual run fulfills an armed auto-run intent; leaving it armed
-    // would fire a duplicate when this run frees the gate again.
-    pendingKey = null;
     runningView = resultView;
     void controller?.run(exprText, resultView, flags);
   }
@@ -336,49 +309,19 @@
     void controller?.stop();
   }
 
-  function disarm() {
-    armed = null;
-    clearTimeout(armTimer);
-  }
-
-  function armFor(token: { kind: "example"; id: string } | { kind: "revert" }) {
-    armed = token;
-    clearTimeout(armTimer);
-    armTimer = setTimeout(() => (armed = null), 4000);
-  }
-
   function loadExample(id: string) {
-    const needsConfirm =
-      mode === "code" &&
-      codeDiverged(root, draft) &&
-      !(armed?.kind === "example" && armed.id === id);
-    if (needsConfirm) {
-      armFor({ kind: "example", id });
-      return;
-    }
     const built = applyExample(id);
     if (!built) return;
-    disarm();
     root = built;
     mode = "builder";
     draft = "";
     codeError = null;
     noImplicit = DEFAULT_FLAGS.noImplicit;
     noTool = DEFAULT_FLAGS.noTool;
-    if (canRun) {
-      run();
-    } else {
-      pendingKey = currentKey;
-    }
+    run();
   }
 
   function revertToBuilder() {
-    if (armed?.kind !== "revert") {
-      armFor({ kind: "revert" });
-      return;
-    }
-    disarm();
-    clearPending();
     draft = builderText;
     codeError = null;
     mode = "builder";
@@ -435,11 +378,7 @@
           onclick={() => loadExample(example.id)}
         >
           <code>{example.name}</code>
-          {#if armed?.kind === "example" && armed.id === example.id}
-            <span class="query-ex-desc"
-              >Discard Code edits — click again to load</span
-            >
-          {:else if example.desc}<span class="query-ex-desc">{example.desc}</span>{/if}
+          {#if example.desc}<span class="query-ex-desc">{example.desc}</span>{/if}
         </button>
       {/each}
     </div>
@@ -474,13 +413,7 @@
           <div class="query-builder">
             <div>
               <QueryExpr
-                bind:node={
-                  () => root,
-                  (v) => {
-                    clearPending();
-                    root = v;
-                  }
-                }
+                bind:node={root}
                 {errors}
                 {literalEditors}
                 {labelsId}
@@ -517,10 +450,7 @@
               spellcheck="false"
               autocomplete="off"
               bind:value={draft}
-              oninput={() => {
-                codeError = null;
-                clearPending();
-              }}
+              oninput={() => (codeError = null)}
             ></textarea>
             <p class="query-hint">
               Switching to Builder parses supported syntax and normalizes
@@ -536,9 +466,7 @@
                   type="button"
                   class="button"
                   onclick={revertToBuilder}
-                  >{armed?.kind === "revert"
-                    ? "Discard Code edits?"
-                    : "Revert to last Builder"}</button
+                  >Revert to last Builder</button
                 >
               </div>
             {/if}
@@ -551,19 +479,11 @@
           </details>
           <div class="query-flags">
             <label class="query-check">
-              <input
-                type="checkbox"
-                bind:checked={noImplicit}
-                onchange={clearPending}
-              />
+              <input type="checkbox" bind:checked={noImplicit} />
               <code>--noimplicit_deps</code>
             </label>
             <label class="query-check">
-              <input
-                type="checkbox"
-                bind:checked={noTool}
-                onchange={clearPending}
-              />
+              <input type="checkbox" bind:checked={noTool} />
               <code>--notool_deps</code>
             </label>
             <div class="query-actions">
