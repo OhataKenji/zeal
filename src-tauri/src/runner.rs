@@ -7,7 +7,7 @@
 //! the currently held run may be signalled; descendants are not supervised.
 
 use crate::runargs::{argv, validate_cmd, validate_target};
-use crate::state::{ConsoleSession, Core, CoreState};
+use crate::state::{ActiveRun, ConsoleSession, Core, CoreState};
 use crate::store::{self, RunRecord};
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
@@ -84,16 +84,18 @@ pub fn start(
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
-    st.run = Some(rec.id.clone().into());
+    st.run = Some(ActiveRun {
+        id: rec.id.clone().into(),
+        terminal,
+        pgid: Some(child.id() as i32),
+        stopping: false,
+        stop_started: None,
+    });
     st.console = Some(ConsoleSession {
         id: rec.id.clone().into(),
         workspace: ws,
         finished: false,
     });
-    st.run_terminal = Some(terminal);
-    st.run_pgid = Some(child.id() as i32);
-    st.run_stopping = false;
-    st.run_stop_started = None;
     st.run_note = None;
     drop(st);
     core.emit(&app);
@@ -170,15 +172,16 @@ pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
 /// The first request sends SIGINT and fixes the deadlines. Only the thread
 /// owning the child can reap or escalate, so a reap cannot race a later signal.
 fn begin_stop(st: &mut CoreState) {
-    if st.run_stopping || st.run_pgid.is_none() {
+    let Some(run) = st.run.as_mut() else {
         return;
-    }
-    st.run_stopping = true;
-    st.run_stop_started = Some(Instant::now());
+    };
+    let Some(pgid) = run.pgid.filter(|_| !run.stopping) else {
+        return;
+    };
+    run.stopping = true;
+    run.stop_started = Some(Instant::now());
     st.run_note = None;
-    if let Some(pgid) = st.run_pgid
-        && let Err(e) = signal_run(st, pgid, Signal::INT)
-    {
+    if let Err(e) = signal_run(st, pgid, Signal::INT) {
         log::warn!("SIGINT to run group failed: {e}");
     }
 }
@@ -201,24 +204,30 @@ fn observe_process(
         }
         match poll() {
             Ok(Some(code)) => {
-                st.run_pgid = None;
+                if let Some(run) = st.run.as_mut() {
+                    run.pgid = None;
+                }
                 return Ok(code);
             }
             Ok(None) => (),
             Err(error) => {
                 // A failed wait can mean another reaper already consumed the
                 // child. Its former PID is no longer safe to signal.
-                st.run_pgid = None;
+                if let Some(run) = st.run.as_mut() {
+                    run.pgid = None;
+                }
                 return Err(error);
             }
         }
-        if let Some(started) = st.run_stop_started {
+        if let Some(started) = st.run.as_ref().and_then(|run| run.stop_started) {
             if started.elapsed() >= grace && !killed {
                 kill_run(&st);
                 killed = true;
             }
             if started.elapsed() >= grace + confirm {
-                st.run_pgid = None;
+                if let Some(run) = st.run.as_mut() {
+                    run.pgid = None;
+                }
                 return Err(io::Error::new(io::ErrorKind::TimedOut, STOP_UNCONFIRMED));
             }
         }
@@ -264,7 +273,7 @@ pub fn exit_stop(core: &Core) {
     let id = {
         let mut st = core.state.lock().expect("application state lock poisoned");
         begin_stop(&mut st);
-        st.run.clone()
+        st.run.as_ref().map(|run| run.id.clone())
     };
     let Some(id) = id else {
         return;
@@ -275,7 +284,7 @@ pub fn exit_stop(core: &Core) {
         if !still_held(&st, &id) {
             return;
         }
-        if st.run_pgid.is_none() {
+        if st.run.as_ref().is_some_and(|run| run.pgid.is_none()) {
             wait_for_save(core, st, &id);
             return;
         }
@@ -298,7 +307,7 @@ fn wait_for_save(core: &Core, mut state: std::sync::MutexGuard<'_, CoreState>, i
 }
 
 fn kill_run(state: &CoreState) {
-    if let Some(pgid) = state.run_pgid
+    if let Some(pgid) = state.run.as_ref().and_then(|run| run.pgid)
         && let Err(error) = signal_run(state, pgid, Signal::KILL)
     {
         log::warn!("SIGKILL to run group failed: {error}");
@@ -308,7 +317,7 @@ fn kill_run(state: &CoreState) {
 /// Whether `id` is still the run in flight: only that run's group may be
 /// signalled and only its slot may be released.
 fn still_held(st: &CoreState, id: &str) -> bool {
-    st.run.as_deref() == Some(id)
+    st.run.as_ref().is_some_and(|run| run.id.as_str() == id)
 }
 
 /// Give up on the run `id` after an unconfirmed kill: release its slot and put
@@ -347,11 +356,7 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool
 /// Clear the run slot: nothing is in flight, nothing is ours to signal. The
 /// note is the caller's: a recorded exit clears it, an unknown one sets it.
 fn clear_run(st: &mut CoreState) {
-    st.run_terminal = None;
     st.run = None;
-    st.run_pgid = None;
-    st.run_stopping = false;
-    st.run_stop_started = None;
 }
 
 /// A run's process group must not address the caller's group (0) or all
@@ -373,9 +378,9 @@ fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
 
 fn signal_run(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()> {
     if let Some(foreground) = st
-        .run_terminal
+        .run
         .as_ref()
-        .and_then(|terminal| terminal.foreground_group())
+        .and_then(|run| run.terminal.foreground_group())
         && foreground != pgid
     {
         let _ = signal_group(foreground, signal);
@@ -386,6 +391,19 @@ fn signal_run(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn held_id(st: &CoreState) -> Option<&str> {
+        st.run.as_ref().map(|run| run.id.as_str())
+    }
+
+    fn held_pgid(st: &CoreState) -> Option<i32> {
+        st.run.as_ref().and_then(|run| run.pgid)
+    }
+
+    fn is_stopping(st: &CoreState) -> bool {
+        st.run.as_ref().is_some_and(|run| run.stopping)
+    }
+
     use std::io::{BufRead, BufReader};
     use std::sync::mpsc;
 
@@ -531,9 +549,13 @@ mod tests {
         {
             let mut state = core.state.lock().unwrap();
             state.workspace = Some(ws.clone());
-            state.run = Some(id.clone().into());
-            state.run_pgid = Some(child.id() as i32);
-            state.run_terminal = Some(terminal);
+            state.run = Some(ActiveRun {
+                id: id.clone().into(),
+                terminal,
+                pgid: Some(child.id() as i32),
+                stopping: false,
+                stop_started: None,
+            });
             state.console = Some(ConsoleSession {
                 id: id.clone().into(),
                 workspace: ws.clone(),
@@ -547,7 +569,7 @@ mod tests {
             finish_console(&mut state, &id);
             assert!(apply_reap(&mut state, &id, &exit));
             begin_stop(&mut state);
-            assert!(!state.run_stopping);
+            assert!(!is_stopping(&state));
         }
         assert!(store::read_record(&data, &ws, &id).is_err());
         assert!(crate::terminal::write(&core, &id, b"late input").is_err());
@@ -668,9 +690,13 @@ mod tests {
                 workspace: fixture.ws.clone(),
                 finished: false,
             });
-            state.run = Some(id.clone().into());
-            state.run_pgid = Some(child.id() as i32);
-            state.run_terminal = Some(terminal);
+            state.run = Some(ActiveRun {
+                id: id.clone().into(),
+                terminal,
+                pgid: Some(child.id() as i32),
+                stopping: false,
+                stop_started: None,
+            });
         }
         let (release, input) = mpsc::sync_channel(1);
         let owner_core = core.clone();
@@ -876,16 +902,17 @@ mod tests {
     fn give_up_releases_the_run_and_says_the_exit_is_unknown() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("abc".into());
-        st.run_pgid = Some(42);
-        st.run_stopping = true;
+        st.run = Some(ActiveRun {
+            stopping: true,
+            ..ActiveRun::stub("abc", Some(42))
+        });
         st.run_note = Some("old".to_string());
 
         assert!(still_held(&st, "abc"));
         assert!(give_up(&mut st, "abc"));
-        assert_eq!(st.run, None);
-        assert_eq!(st.run_pgid, None, "the group is no longer ours to signal");
-        assert!(!st.run_stopping);
+        assert!(st.run.is_none());
+        assert!(st.run.is_none(), "the group is no longer ours to signal");
+        assert!(!is_stopping(&st));
         assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
     }
 
@@ -895,14 +922,13 @@ mod tests {
     fn give_up_never_touches_a_successor_run() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("def".into());
-        st.run_pgid = Some(7);
+        st.run = Some(ActiveRun::stub("def", Some(7)));
         st.run_note = Some("old".to_string());
 
         assert!(!still_held(&st, "abc"));
         assert!(!give_up(&mut st, "abc"));
-        assert_eq!(st.run.as_deref(), Some("def"));
-        assert_eq!(st.run_pgid, Some(7));
+        assert_eq!(held_id(&st), Some("def"));
+        assert_eq!(held_pgid(&st), Some(7));
         assert_eq!(st.run_note.as_deref(), Some("old"));
     }
 
@@ -912,22 +938,22 @@ mod tests {
     fn apply_reap_clears_the_run_it_still_holds() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("abc".into());
-        st.run_pgid = Some(42);
-        st.run_stopping = true;
+        st.run = Some(ActiveRun {
+            stopping: true,
+            ..ActiveRun::stub("abc", Some(42))
+        });
         st.run_note = Some("old".to_string());
 
         assert!(apply_reap(&mut st, "abc", &Ok(3)));
-        assert_eq!(st.run, None);
-        assert_eq!(st.run_pgid, None);
-        assert!(!st.run_stopping);
+        assert!(st.run.is_none());
+        assert!(st.run.is_none());
+        assert!(!is_stopping(&st));
         assert_eq!(st.run_note, None, "a recorded exit clears the note");
 
-        st.run = Some("abc".into());
-        st.run_pgid = Some(42);
+        st.run = Some(ActiveRun::stub("abc", Some(42)));
         let why = std::io::Error::from_raw_os_error(libc::EINTR);
         assert!(apply_reap(&mut st, "abc", &Err(why)));
-        assert_eq!(st.run, None, "an unknown exit still releases the slot");
+        assert!(st.run.is_none(), "an unknown exit still releases the slot");
         let note = st.run_note.clone().expect("the reason is shown");
         assert!(note.starts_with("Could not confirm the exit:"), "{note}");
     }
@@ -939,19 +965,19 @@ mod tests {
     fn apply_reap_after_give_up_writes_nothing() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("abc".into());
-        st.run_pgid = Some(42);
-        st.run_stopping = true;
+        st.run = Some(ActiveRun {
+            stopping: true,
+            ..ActiveRun::stub("abc", Some(42))
+        });
         assert!(give_up(&mut st, "abc"));
 
         assert!(!apply_reap(&mut st, "abc", &Ok(0)));
-        assert_eq!(st.run, None);
+        assert!(st.run.is_none());
         assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED), "untouched");
 
-        st.run = Some("def".into());
-        st.run_pgid = Some(7);
+        st.run = Some(ActiveRun::stub("def", Some(7)));
         assert!(!apply_reap(&mut st, "abc", &Ok(0)));
-        assert_eq!(st.run.as_deref(), Some("def"));
+        assert_eq!(held_id(&st), Some("def"));
     }
 
     /// Best-effort SIGKILL of the test's group, so a failed assertion cannot
@@ -1063,8 +1089,7 @@ mod tests {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("abc".into());
-            st.run_pgid = Some(pgid);
+            st.run = Some(ActiveRun::stub("abc", Some(pgid)));
         }
 
         let started = Instant::now();
@@ -1104,8 +1129,7 @@ mod tests {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("run".into());
-            st.run_pgid = Some(pgid);
+            st.run = Some(ActiveRun::stub("run", Some(pgid)));
             begin_stop(&mut st);
         }
         let exit = observe_process(
@@ -1121,15 +1145,14 @@ mod tests {
         )
         .unwrap();
         assert_ne!(exit, 0);
-        assert!(core.state.lock().unwrap().run_pgid.is_none());
+        assert!(held_pgid(&core.state.lock().unwrap()).is_none());
     }
     #[test]
     fn wait_errors_immediately_revoke_signal_ownership() {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("run".into());
-            st.run_pgid = Some(i32::MAX);
+            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
         }
         let started = Instant::now();
         let error = observe_process(
@@ -1143,8 +1166,8 @@ mod tests {
         assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
         assert!(started.elapsed() < Duration::from_secs(1));
         let mut st = core.state.lock().unwrap();
-        assert!(st.run_pgid.is_none());
-        assert!(!st.run_stopping);
+        assert!(held_pgid(&st).is_none());
+        assert!(!is_stopping(&st));
         assert!(apply_reap(&mut st, "run", &Err(error)));
         assert!(st.run.is_none());
         assert!(
@@ -1159,8 +1182,7 @@ mod tests {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("run".into());
-            st.run_pgid = Some(i32::MAX);
+            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
         }
         assert_eq!(
             observe_process(&core, "run", || Ok(Some(7)), STOP_GRACE, STOP_CONFIRM).unwrap(),
@@ -1168,28 +1190,26 @@ mod tests {
         );
         let mut st = core.state.lock().unwrap();
         begin_stop(&mut st);
-        assert_eq!(st.run.as_deref(), Some("run"));
-        assert!(st.run_pgid.is_none());
-        assert!(!st.run_stopping);
+        assert_eq!(held_id(&st), Some("run"));
+        assert!(held_pgid(&st).is_none());
+        assert!(!is_stopping(&st));
     }
     #[test]
     fn repeated_stop_does_not_extend_deadlines() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some("run".into());
-        st.run_pgid = Some(i32::MAX);
+        st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
         begin_stop(&mut st);
-        let first = st.run_stop_started;
+        let first = st.run.as_ref().and_then(|run| run.stop_started);
         begin_stop(&mut st);
-        assert_eq!(st.run_stop_started, first);
+        assert_eq!(st.run.as_ref().and_then(|run| run.stop_started), first);
     }
     #[test]
     fn old_owner_never_polls_or_signals_a_successor() {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("next".into());
-            st.run_pgid = Some(i32::MAX);
+            st.run = Some(ActiveRun::stub("next", Some(i32::MAX)));
         }
         assert!(
             observe_process(
@@ -1202,13 +1222,13 @@ mod tests {
             .is_err()
         );
         let st = core.state.lock().unwrap();
-        assert_eq!(st.run.as_deref(), Some("next"));
-        assert_eq!(st.run_pgid, Some(i32::MAX));
+        assert_eq!(held_id(&st), Some("next"));
+        assert_eq!(held_pgid(&st), Some(i32::MAX));
     }
     #[test]
     fn panic_releases_the_run_slot_and_wakes_exit() {
         let core = Arc::new(Core::new());
-        core.state.lock().unwrap().run = Some("run".into());
+        core.state.lock().unwrap().run = Some(ActiveRun::stub("run", None));
         let exiting_core = core.clone();
         let exiting = thread::spawn(move || exit_stop(&exiting_core));
         let owning_core = core.clone();
@@ -1238,8 +1258,7 @@ mod tests {
         let core = Arc::new(Core::new());
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("run".into());
-            st.run_pgid = Some(i32::MAX);
+            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
         }
         let (polling_tx, polling_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -1264,13 +1283,13 @@ mod tests {
         assert_eq!(owner.join().unwrap().unwrap(), 0);
         stopping.join().unwrap();
         let st = core.state.lock().unwrap();
-        assert!(st.run_pgid.is_none());
-        assert!(!st.run_stopping);
+        assert!(held_pgid(&st).is_none());
+        assert!(!is_stopping(&st));
     }
     #[test]
     fn app_exit_waits_for_a_reaped_runs_save_and_never_signals_it() {
         let core = Arc::new(Core::new());
-        core.state.lock().unwrap().run = Some("run".into());
+        core.state.lock().unwrap().run = Some(ActiveRun::stub("run", None));
         let (finish_tx, finish_rx) = mpsc::sync_channel(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let finishing_core = core.clone();
@@ -1300,29 +1319,27 @@ mod tests {
         exiting.join().unwrap();
         let st = core.state.lock().unwrap();
         assert!(st.run.is_none());
-        assert!(!st.run_stopping);
-        assert!(st.run_pgid.is_none());
+        assert!(!is_stopping(&st));
+        assert!(held_pgid(&st).is_none());
     }
     #[test]
     fn unconfirmed_kill_expires_without_releasing_a_successors_slot() {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("run".into());
-            st.run_pgid = Some(i32::MAX);
+            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
             begin_stop(&mut st);
         }
         let exit = observe_process(&core, "run", || Ok(None), Duration::ZERO, Duration::ZERO);
         assert_eq!(exit.as_ref().unwrap_err().kind(), io::ErrorKind::TimedOut);
         let mut st = core.state.lock().unwrap();
-        assert!(st.run_pgid.is_none());
+        assert!(held_pgid(&st).is_none());
         assert!(apply_reap(&mut st, "run", &exit));
         assert!(st.run.is_none());
         assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
-        st.run = Some("next".into());
-        st.run_pgid = Some(i32::MAX);
+        st.run = Some(ActiveRun::stub("next", Some(i32::MAX)));
         assert!(!apply_reap(&mut st, "run", &exit));
-        assert_eq!(st.run.as_deref(), Some("next"));
-        assert_eq!(st.run_pgid, Some(i32::MAX));
+        assert_eq!(held_id(&st), Some("next"));
+        assert_eq!(held_pgid(&st), Some(i32::MAX));
     }
 }

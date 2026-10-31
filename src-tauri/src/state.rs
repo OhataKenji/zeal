@@ -84,6 +84,40 @@ impl Deref for RunId {
     }
 }
 
+/// The run holding the run slot. All of its fields exist exactly while a run
+/// owns the slot: releasing the slot drops them together, so a group id can
+/// never outlive the run it belongs to. `pgid` is revoked at reap so a racing
+/// stop can never signal a recycled process group.
+pub struct ActiveRun {
+    /// Persisted identifier of the run in flight.
+    pub id: RunId,
+    /// The PTY the run's process writes through.
+    pub terminal: crate::terminal::Control,
+    /// The child's process group, for the one stop that signals it; `None`
+    /// once the owner has reaped the child.
+    pub pgid: Option<i32>,
+    /// A stop was accepted for `id`: its group was signalled and a repeated
+    /// stop does nothing. It stays until the run leaves the slot, however it
+    /// ends.
+    pub stopping: bool,
+    /// First stop request; the child owner applies its escalation deadlines.
+    pub stop_started: Option<std::time::Instant>,
+}
+
+impl ActiveRun {
+    /// A held slot for state tests; its terminal is detached from any pty.
+    #[cfg(test)]
+    pub fn stub(id: &str, pgid: Option<i32>) -> Self {
+        Self {
+            id: id.into(),
+            terminal: crate::terminal::Control::stub(),
+            pgid,
+            stopping: false,
+            stop_started: None,
+        }
+    }
+}
+
 /// Read access to the last Console. This outlives process control and is never
 /// used to classify or persist invocation history.
 pub struct ConsoleSession {
@@ -104,18 +138,9 @@ pub struct CoreState {
     pub last_error: Option<IngestError>,
     /// At most one query or run is active. Busy requests are rejected.
     pub ingest_running: bool,
-    /// The run in flight.
-    pub run: Option<RunId>,
+    /// The run holding the slot; `None` when no run is in flight.
+    pub run: Option<ActiveRun>,
     pub console: Option<ConsoleSession>,
-    /// Process group of the run in flight (the child's pid), for the one stop
-    /// that signals it.
-    pub run_terminal: Option<crate::terminal::Control>,
-    pub run_pgid: Option<i32>,
-    /// A stop was accepted for `run`: its group was signalled and a repeated
-    /// stop does nothing.
-    pub run_stopping: bool,
-    /// First stop request; the child owner applies its escalation deadlines.
-    pub run_stop_started: Option<std::time::Instant>,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
 }
@@ -148,10 +173,6 @@ impl Core {
                 ingest_running: false,
                 run: None,
                 console: None,
-                run_pgid: None,
-                run_terminal: None,
-                run_stopping: false,
-                run_stop_started: None,
                 run_note: None,
             }),
             run_finished: Condvar::new(),
@@ -171,9 +192,9 @@ impl Core {
             ingest: if st.ingest_running { "running" } else { "idle" },
             snapshot: st.snapshot.clone(),
             last_error: st.last_error.clone(),
-            running: st.run.clone(),
+            running: st.run.as_ref().map(|run| run.id.clone()),
             console_run: st.console_run().cloned(),
-            stopping: st.run_stopping,
+            stopping: st.run.as_ref().is_some_and(|run| run.stopping),
             run_note: st.run_note.clone(),
         }
     }
@@ -206,8 +227,10 @@ mod tests {
 
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some("abc".into());
-            st.run_stopping = true;
+            st.run = Some(ActiveRun {
+                stopping: true,
+                ..ActiveRun::stub("abc", Some(1))
+            });
             st.run_note = Some("note".to_string());
         }
         let json = serde_json::to_value(core.dto()).unwrap();
