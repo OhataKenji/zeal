@@ -37,6 +37,11 @@ pub struct AppStateDto {
     /// Why the last run's exit is unknown: its `wait` failed, or its group was
     /// killed and no exit was confirmed.
     pub run_note: Option<String>,
+    /// "idle" | "running": whether an ad-hoc editor query is in flight.
+    pub query: &'static str,
+    /// A stop was accepted for the query; it stays until the query leaves the
+    /// slot, however it ends.
+    pub query_stopping: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -139,13 +144,33 @@ pub struct CoreState {
     /// The latest fully built snapshot; swapped atomically per fetch.
     pub snapshot: Option<Arc<Snapshot>>,
     pub last_error: Option<IngestError>,
-    /// At most one query or run is active. Busy requests are rejected.
+    /// At most one bazel invocation is active: ingest, run, or editor query.
+    /// Busy requests are rejected.
     pub ingest_running: bool,
     /// The run holding the slot; `None` when no run is in flight.
     pub run: Option<ActiveRun>,
     pub console: Option<ConsoleSession>,
     /// Message for the UI about why the last run's exit is unknown.
     pub run_note: Option<String>,
+    /// Ad-hoc editor query in flight (the "query" DTO field; distinct from
+    /// ingest's `bazel query //...` snapshot fetch).
+    pub query_running: bool,
+    /// Process group of the query child (its pid), for stop signaling.
+    pub query_pgid: Option<i32>,
+    /// A stop was accepted: SIGINT sent, escalation runs inside the worker.
+    pub query_stopping: bool,
+    /// First query stop request; the child owner applies its escalation
+    /// deadlines.
+    pub query_stop_started: Option<std::time::Instant>,
+    /// Generation guard: a given-up worker must not clear a successor's slot.
+    pub query_gen: u64,
+}
+
+impl CoreState {
+    /// Whether any bazel invocation holds the serialized slot.
+    pub fn bazel_busy(&self) -> bool {
+        self.ingest_running || self.run.is_some() || self.query_running
+    }
 }
 
 impl CoreState {
@@ -178,6 +203,11 @@ impl Core {
                 run: None,
                 console: None,
                 run_note: None,
+                query_running: false,
+                query_pgid: None,
+                query_stopping: false,
+                query_stop_started: None,
+                query_gen: 0,
             }),
             run_finished: Condvar::new(),
         }
@@ -204,6 +234,8 @@ impl Core {
             console_run: st.console_run().cloned(),
             stopping: st.run.as_ref().is_some_and(|run| run.stopping),
             run_note: st.run_note.clone(),
+            query: if st.query_running { "running" } else { "idle" },
+            query_stopping: st.query_stopping,
         }
     }
 
@@ -245,6 +277,41 @@ mod tests {
         assert_eq!(json["running"], "abc");
         assert_eq!(json["stopping"], true);
         assert_eq!(json["runNote"], "note");
+    }
+
+    /// Every way the serialized slot can be held makes `bazel_busy` true.
+    #[test]
+    fn bazel_busy_covers_ingest_run_and_query() {
+        let core = Core::new();
+        assert!(!core.state.lock().unwrap().bazel_busy());
+        {
+            let mut st = core.state.lock().unwrap();
+            st.ingest_running = true;
+            assert!(st.bazel_busy());
+            st.ingest_running = false;
+            st.run = Some(ActiveRun::stub("r", None));
+            assert!(st.bazel_busy());
+            st.run = None;
+            st.query_running = true;
+            assert!(st.bazel_busy());
+        }
+    }
+
+    #[test]
+    fn dto_reports_the_query_state() {
+        let core = Core::new();
+        let idle = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(idle["query"], "idle");
+        assert_eq!(idle["queryStopping"], false);
+
+        {
+            let mut st = core.state.lock().unwrap();
+            st.query_running = true;
+            st.query_stopping = true;
+        }
+        let json = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(json["query"], "running");
+        assert_eq!(json["queryStopping"], true);
     }
 
     #[test]
