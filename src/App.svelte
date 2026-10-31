@@ -449,12 +449,12 @@
     </div>
     {#if argumentsOpen}
       <div class="arguments-row" id="run-arguments-row">
-        <label for="run-arguments">Arguments</label>
         <input
           bind:this={argumentsInput}
           bind:value={argumentsText}
           id="run-arguments"
           class="input arguments-input"
+          aria-label="Arguments"
           placeholder="--config=dev; run program arguments after --"
           title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
           autocomplete="off"

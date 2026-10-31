@@ -957,16 +957,6 @@ button {
 
 .arguments-row {
   grid-column: 2;
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-}
-
-.arguments-row label {
-  padding-left: 12px;
-  color: var(--muted-foreground);
-  font-size: 12px;
 }
 
 .arguments-input {
