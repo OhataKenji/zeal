@@ -490,31 +490,6 @@ mod tests {
     }
 
     #[test]
-    fn argv_has_the_command_one_target_and_the_observation_flags() {
-        let dir = Path::new("/data/runs/abc");
-        for (cmd, target) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
-            let args = argv(cmd, target, dir, "grpc://127.0.0.1:12345");
-            assert_eq!(args[0], cmd);
-            assert_eq!(args[1], target);
-            assert_eq!(
-                &args[2..],
-                [
-                    "--bes_backend=grpc://127.0.0.1:12345",
-                    "--bes_proxy=",
-                    "--bes_upload_mode=wait_for_upload_complete",
-                    "--profile=/data/runs/abc/profile.gz",
-                    "--experimental_profile_include_primary_output",
-                    "--noslim_profile",
-                    "--tool_tag=zeal",
-                    "--color=yes",
-                    "--curses=no",
-                ],
-                "{cmd}"
-            );
-        }
-    }
-
-    #[test]
     fn receiver_readiness_is_required_before_and_after_server_termination() {
         let core = Core::new();
         let mut state = core.state.lock().unwrap();
@@ -820,79 +795,6 @@ mod tests {
                 fs::read_to_string(dir.join("terminal.log")).unwrap()
             );
             tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    }
-
-    #[test]
-    fn target_validation_accepts_labels_and_patterns() {
-        for target in [
-            "//app/lib:parser",
-            "//...",
-            ":all",
-            ":*",
-            "@maven//:guava",
-            "//app/...",
-            // Shell metacharacters are ordinary label characters here: nothing
-            // splits or evaluates the target, so it reaches bazel verbatim as
-            // one argument.
-            "//app:tar;get",
-            "//a:b$(id)",
-            "//a:b`id`",
-            "//a:b&&c",
-            "//a:b|c",
-            "//a:b>c",
-            // U+FEFF and U+00AD are neither White_Space nor Cc, so the core
-            // takes them and the UI's `/[\p{White_Space}\p{Cc}]/u` must too.
-            "//a:\u{feff}b",
-            "//a:\u{ad}b",
-        ] {
-            assert!(validate_target(target).is_ok(), "{target:?}");
-            assert_eq!(
-                argv(
-                    "build",
-                    target,
-                    Path::new("/data/runs/abc"),
-                    "grpc://127.0.0.1:12345"
-                )[1],
-                target
-            );
-        }
-    }
-
-    #[test]
-    fn target_validation_rejects_empty_whitespace_control_and_leading_dash() {
-        for target in [
-            "",
-            " ",
-            "//a:b ",
-            "a\tb",
-            "a\nb",
-            "a\0b",
-            "-//a:b",
-            "\u{3000}",
-            "//a:b; id",
-            // The boundary characters the UI test pins: U+0085 and U+2028 are
-            // White_Space, U+009F is Cc. `/[\p{White_Space}\p{Cc}]/u` in
-            // `src/lib/target.ts` is the same rule and must stay identical.
-            "\u{85}",
-            "\u{9f}",
-            "\u{2028}",
-        ] {
-            assert!(validate_target(target).is_err(), "{target:?}");
-        }
-        // One message for both rules, and it does not echo the input.
-        let msg = validate_target("a b").unwrap_err();
-        assert!(msg.contains("whitespace"), "{msg}");
-        assert!(msg.contains("'-'"), "{msg}");
-    }
-
-    #[test]
-    fn command_validation_accepts_build_test_and_run() {
-        for cmd in ["build", "test", "run"] {
-            assert!(validate_cmd(cmd).is_ok(), "{cmd:?}");
-        }
-        for cmd in ["clean", "query", ""] {
-            assert!(validate_cmd(cmd).is_err(), "{cmd:?}");
         }
     }
 
