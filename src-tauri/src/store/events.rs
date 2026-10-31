@@ -50,35 +50,7 @@ impl Receipt {
             return Err(fail(ErrorKind::Invalid));
         }
         let run_id = id(&stream.invocation_id)?;
-        let attempt = {
-            let mut store = Store::open(data)?;
-            let tx = store
-                .conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute(
-                "INSERT INTO run(id) VALUES(?1) ON CONFLICT(id) DO NOTHING",
-                [&run_id],
-            )?;
-            let (previous, complete): (i64, bool) = tx.query_row(
-                "SELECT attempt,received_complete FROM run WHERE id=?1",
-                [&run_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            let next = if complete {
-                None
-            } else {
-                let next = previous
-                    .checked_add(1)
-                    .ok_or_else(|| fail(ErrorKind::Capacity))?;
-                tx.execute(
-                    "UPDATE run SET attempt=?2 WHERE id=?1 AND received_complete=0",
-                    params![run_id, next],
-                )?;
-                Some(next)
-            };
-            tx.commit()?;
-            next
-        };
+        let attempt = reserve_attempt(data, &run_id)?;
         // No Store or SQL transaction survives into file writes.
         let writer = if let Some(attempt) = attempt {
             let root = super::securefs::Dir::root(data)?;
@@ -120,85 +92,76 @@ impl Receipt {
             .as_ref()
             .ok_or_else(|| fail(ErrorKind::Invalid))?;
         if let Some(any) = &wrapper.bazel_event {
-            if self.last_message {
-                return Err(fail(ErrorKind::Conflict));
-            }
-            if self.stream.component != 3
-                || !any.type_url.ends_with("/build_event_stream.BuildEvent")
-                || any.value.len() > FRAME_LIMIT
-            {
-                return Err(fail(ErrorKind::Invalid));
-            }
-            let event = bep::BuildEvent::decode(any.value.as_slice())
-                .map_err(|_| fail(ErrorKind::Invalid))?;
-            let started = matches!(event.payload, Some(Payload::Started(_)));
-            self.observe(&event)?;
-            if let Some(writer) = &mut self.writer {
-                // Keep the decoded BuildEvent, including Progress stdout/stderr.
-                let mut bytes = Vec::with_capacity(10);
-                prost::encoding::encode_varint(any.value.len() as u64, &mut bytes);
-                writer.write_all(&bytes)?;
-                writer.write_all(&any.value)?;
-            }
-            if started {
-                self.save(false)?;
-            }
-            self.last_message = event.last_message;
+            self.append_bazel_event(any)?;
         }
         self.first.get_or_insert(ordered.sequence_number);
         self.last = ordered.sequence_number;
         Ok(())
     }
 
+    fn append_bazel_event(&mut self, any: &prost_types::Any) -> Result<(), StoreError> {
+        if self.last_message {
+            return Err(fail(ErrorKind::Conflict));
+        }
+        if self.stream.component != 3
+            || !any.type_url.ends_with("/build_event_stream.BuildEvent")
+            || any.value.len() > FRAME_LIMIT
+        {
+            return Err(fail(ErrorKind::Invalid));
+        }
+        let event =
+            bep::BuildEvent::decode(any.value.as_slice()).map_err(|_| fail(ErrorKind::Invalid))?;
+        self.observe(&event)?;
+        if let Some(writer) = &mut self.writer {
+            // Keep the decoded BuildEvent, including Progress stdout/stderr.
+            let mut bytes = Vec::with_capacity(10);
+            prost::encoding::encode_varint(any.value.len() as u64, &mut bytes);
+            writer.write_all(&bytes)?;
+            writer.write_all(&any.value)?;
+        }
+        if matches!(event.payload, Some(Payload::Started(_))) {
+            self.save(false)?;
+        }
+        self.last_message = event.last_message;
+        Ok(())
+    }
+
     #[allow(deprecated)]
     fn observe(&mut self, event: &bep::BuildEvent) -> Result<(), StoreError> {
-        if let Some(Payload::Started(started)) = &event.payload {
-            if id(&started.uuid)? != id(&self.stream.invocation_id)? {
-                return Err(fail(ErrorKind::Conflict));
+        match &event.payload {
+            Some(Payload::Started(started)) => self.observe_started(started, &event.children)?,
+            Some(Payload::Finished(finished)) => {
+                self.facts.finished =
+                    millis(finished.finish_time.as_ref(), finished.finish_time_millis);
+                self.facts.exit = finished.exit_code.as_ref().map(|v| v.code);
             }
-            if self.facts.workspace.is_some()
-                || started.workspace_directory.len() > 16 * 1024
-                || started.command.len() > 64
-            {
-                return Err(fail(ErrorKind::Invalid));
-            }
-            let mut target = String::new();
-            for pattern in event
-                .children
-                .iter()
-                .filter_map(|v| v.id.as_ref())
-                .filter_map(|v| match v {
-                    Id::Pattern(p) | Id::PatternSkipped(p) => Some(&p.pattern),
-                    _ => None,
-                })
-                .flatten()
-            {
-                let separator = usize::from(!target.is_empty());
-                if target
-                    .len()
-                    .saturating_add(separator)
-                    .saturating_add(pattern.len())
-                    > 64 * 1024
-                {
-                    return Err(fail(ErrorKind::Invalid));
-                }
-                if separator != 0 {
-                    target.push(' ');
-                }
-                target.push_str(pattern);
-            }
-            self.facts.workspace = Some(database::workspace_path(Path::new(
-                &started.workspace_directory,
-            ))?);
-            self.facts.cmd = Some(started.command.clone());
-            self.facts.target = Some(target);
-            self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
+            _ => {}
         }
-        if let Some(Payload::Finished(finished)) = &event.payload {
-            self.facts.finished =
-                millis(finished.finish_time.as_ref(), finished.finish_time_millis);
-            self.facts.exit = finished.exit_code.as_ref().map(|v| v.code);
+        Ok(())
+    }
+
+    #[allow(deprecated)]
+    fn observe_started(
+        &mut self,
+        started: &bep::BuildStarted,
+        children: &[bep::BuildEventId],
+    ) -> Result<(), StoreError> {
+        if id(&started.uuid)? != id(&self.stream.invocation_id)? {
+            return Err(fail(ErrorKind::Conflict));
         }
+        if self.facts.workspace.is_some()
+            || started.workspace_directory.len() > 16 * 1024
+            || started.command.len() > 64
+        {
+            return Err(fail(ErrorKind::Invalid));
+        }
+        let target = target_patterns(children)?;
+        self.facts.workspace = Some(database::workspace_path(Path::new(
+            &started.workspace_directory,
+        ))?);
+        self.facts.cmd = Some(started.command.clone());
+        self.facts.target = Some(target);
+        self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
         Ok(())
     }
 
@@ -225,31 +188,36 @@ impl Receipt {
             return Err(fail(ErrorKind::Conflict));
         }
         if let Some(attempt) = self.attempt {
-            let current: bool = tx.query_row(
-                "SELECT attempt=?2 AND received_complete=0 FROM run WHERE id=?1",
-                params![run_id, attempt],
-                |r| r.get(0),
-            )?;
-            if !current {
-                return Err(fail(ErrorKind::Conflict));
-            }
-            let ws_id = if let Some(path) = path {
-                tx.execute("INSERT INTO workspace(id,canonical_path) VALUES(?1,?2) ON CONFLICT(canonical_path) DO NOTHING",params![uuid::Uuid::new_v4().to_string(),path])?;
-                tx.query_row(
-                    "SELECT id FROM workspace WHERE canonical_path=?1",
-                    [path],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?
-            } else {
-                None
-            };
-            let updated=tx.execute("UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=?7,exit_code=?8,received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",params![run_id,attempt,ws_id,self.facts.cmd,self.facts.target,self.facts.started,self.facts.finished,self.facts.exit,complete])?;
-            if updated != 1 {
-                return Err(fail(ErrorKind::Conflict));
-            }
+            self.save_attempt(&tx, &run_id, attempt, path.as_deref(), complete)?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    fn save_attempt(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        run_id: &str,
+        attempt: i64,
+        path: Option<&[u8]>,
+        complete: bool,
+    ) -> Result<(), StoreError> {
+        let current: bool = tx.query_row(
+            "SELECT attempt=?2 AND received_complete=0 FROM run WHERE id=?1",
+            params![run_id, attempt],
+            |r| r.get(0),
+        )?;
+        if !current {
+            return Err(fail(ErrorKind::Conflict));
+        }
+        let ws_id = save_workspace(tx, path)?;
+        let updated = tx.execute(
+            "UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=?7,exit_code=?8,received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
+            params![run_id,attempt,ws_id,self.facts.cmd,self.facts.target,self.facts.started,self.facts.finished,self.facts.exit,complete],
+        )?;
+        if updated != 1 {
+            return Err(fail(ErrorKind::Conflict));
+        }
         Ok(())
     }
 
@@ -269,6 +237,83 @@ impl Receipt {
         }
         self.save(false)
     }
+}
+
+/// Reserve a new attempt before opening its files. Completed receipts are replayed read-only.
+fn reserve_attempt(data: &Path, run_id: &str) -> Result<Option<i64>, StoreError> {
+    let mut store = Store::open(data)?;
+    let tx = store
+        .conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute(
+        "INSERT INTO run(id) VALUES(?1) ON CONFLICT(id) DO NOTHING",
+        [run_id],
+    )?;
+    let (previous, complete): (i64, bool) = tx.query_row(
+        "SELECT attempt,received_complete FROM run WHERE id=?1",
+        [run_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if complete {
+        tx.commit()?;
+        return Ok(None);
+    }
+    let next = previous
+        .checked_add(1)
+        .ok_or_else(|| fail(ErrorKind::Capacity))?;
+    tx.execute(
+        "UPDATE run SET attempt=?2 WHERE id=?1 AND received_complete=0",
+        params![run_id, next],
+    )?;
+    tx.commit()?;
+    Ok(Some(next))
+}
+
+fn target_patterns(children: &[bep::BuildEventId]) -> Result<String, StoreError> {
+    let patterns = children
+        .iter()
+        .filter_map(|child| match child.id.as_ref() {
+            Some(Id::Pattern(pattern) | Id::PatternSkipped(pattern)) => Some(&pattern.pattern),
+            _ => None,
+        })
+        .flatten();
+    let mut target = String::new();
+    for pattern in patterns {
+        let separator = usize::from(!target.is_empty());
+        if target
+            .len()
+            .saturating_add(separator)
+            .saturating_add(pattern.len())
+            > 64 * 1024
+        {
+            return Err(fail(ErrorKind::Invalid));
+        }
+        if separator != 0 {
+            target.push(' ');
+        }
+        target.push_str(pattern);
+    }
+    Ok(target)
+}
+
+fn save_workspace(
+    tx: &rusqlite::Transaction<'_>,
+    path: Option<&[u8]>,
+) -> Result<Option<String>, StoreError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    tx.execute(
+        "INSERT INTO workspace(id,canonical_path) VALUES(?1,?2) ON CONFLICT(canonical_path) DO NOTHING",
+        params![uuid::Uuid::new_v4().to_string(), path],
+    )?;
+    Ok(tx
+        .query_row(
+            "SELECT id FROM workspace WHERE canonical_path=?1",
+            [path],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 fn millis(time: Option<&prost_types::Timestamp>, fallback: i64) -> Option<i64> {
