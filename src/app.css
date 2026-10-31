@@ -527,16 +527,6 @@ button:disabled {
   color: var(--foreground);
 }
 
-.run-row small {
-  display: block;
-  margin: 5px 0 0 20px;
-  color: var(--muted-foreground);
-  font:
-    11px -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
-}
-
 .run-row.selected {
   background: var(--accent);
   box-shadow: inset 2px 0 var(--primary);
@@ -642,10 +632,6 @@ button:disabled {
   color: var(--foreground);
   border-left: 2px solid var(--border);
   overflow-wrap: anywhere;
-}
-
-.run-panel > .run-notice {
-  margin-bottom: 10px;
 }
 
 .panel-empty {

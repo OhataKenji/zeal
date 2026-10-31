@@ -24,13 +24,8 @@
   );
   const sections = ["Logs", "Targets", "Details", "Timing"] as const;
   const tabs = ["All", ...sections] as const;
-  let active = $state<(typeof tabs)[number]>("Logs");
+  let active = $state<(typeof tabs)[number]>("All");
   let panel = $state<HTMLDivElement>();
-
-  $effect(() => {
-    void selectedRun;
-    active = view.initialRunTab;
-  });
 
   $effect(() => {
     void active;

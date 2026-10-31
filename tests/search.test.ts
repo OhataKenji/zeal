@@ -38,13 +38,7 @@ const SNAPSHOT: Snapshot = {
     },
   ],
   edges: [],
-  files: [
-    // Several owners: the ascending-first label is the second one seen.
-    { path: "app/lib/Parser.java", owner: "//app/lib:zparser", role: "src" },
-    { path: "app/lib/Parser.java", owner: "//app/lib:aparser", role: "src" },
-    { path: "app/lib/parser.jar", owner: "//app/lib:parser", role: "out" },
-    { path: "app/lib/Lexer.java", owner: "//app/lib:lexer", role: "src" },
-  ],
+  files: [],
 };
 
 // The index belongs to whoever holds the candidates: built once here, searched
