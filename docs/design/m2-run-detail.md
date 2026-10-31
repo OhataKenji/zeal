@@ -88,7 +88,10 @@ BEP の tail とログイベントの配信は行わない。
 ### 表示時の parse
 
 `get_run` のたびに BEP と profile を読み、結果を保存せず返す。
-BEP は length-delimited protobuf event として parse し、末尾の frame が欠けた場合も受理できた結果を使う。
+BEPは一度の逐次decodeで、BEP表示データとProgressの末尾512KiBログを同時に組み立てる。
+BEP表示は8MiBまでとし、上限後もログ末尾のために走査を続ける。
+長さ情報をbuffer確保前に検査し、frameが欠けた場合も読めた部分を不完全と明示する。
+履歴のログはBEPから読み、Consoleの端末出力とは分ける。
 frame は 16 MiB まで読み、長さ prefix の overflow や不正 protobuf も incomplete とする。
 profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error とする。
 

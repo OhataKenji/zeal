@@ -115,9 +115,29 @@ pub struct TestResult {
     pub status: String,
 }
 
+pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
+pub const LOG_LIMIT: usize = 512 * 1024;
+
+pub struct Parsed {
+    pub bep: Bep,
+    pub log: String,
+    pub invalid: bool,
+    pub read_error: bool,
+    pub events: usize,
+}
+
+/// One bounded pass builds both display sections. No event collection survives
+/// a frame, and reaching the BEP display limit does not stop log extraction.
 #[tracing::instrument(target = "zeal::operations", name = "detail.bep_parse", skip_all)]
-pub fn parse<R: Read>(mut input: R) -> Bep {
-    let mut bep = Bep::default();
+pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
+    let mut parsed = Parsed {
+        bep: Bep::default(),
+        log: String::new(),
+        invalid: false,
+        read_error: false,
+        events: 0,
+    };
+    let mut display_size = json_size(&parsed.bep);
     loop {
         let mut first = [0];
         match input.read(&mut first) {
@@ -125,30 +145,182 @@ pub fn parse<R: Read>(mut input: R) -> Bep {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => {
-                bep.truncated = true;
+                parsed.invalid = true;
+                parsed.read_error = true;
                 break;
             }
         }
-        let Some(length) = frame_length(&mut input, first[0]) else {
-            bep.truncated = true;
+        remaining = match remaining.checked_sub(1) {
+            Some(v) => v,
+            None => {
+                parsed.invalid = true;
+                break;
+            }
+        };
+        let mut delimiter = CountingRead {
+            inner: &mut input,
+            count: 0,
+            failed: false,
+        };
+        let length = frame_length(&mut delimiter, first[0]);
+        let consumed = delimiter.count;
+        parsed.read_error = delimiter.failed;
+        let Some(length) = length else {
+            parsed.invalid = true;
             break;
         };
-        if length > u64::from(MAX_FRAME_SIZE) {
-            bep.truncated = true;
+        remaining = match remaining.checked_sub(consumed) {
+            Some(v) => v,
+            None => {
+                parsed.invalid = true;
+                break;
+            }
+        };
+        if length > u64::from(MAX_FRAME_SIZE) || length > remaining {
+            parsed.invalid = true;
             break;
         }
         let mut bytes = vec![0; length as usize];
-        if input.read_exact(&mut bytes).is_err() {
-            bep.truncated = true;
+        if let Err(error) = input.read_exact(&mut bytes) {
+            parsed.invalid = true;
+            parsed.read_error = error.kind() != io::ErrorKind::UnexpectedEof;
             break;
         }
+        remaining -= length;
         let Ok(event) = BuildEvent::decode(bytes.as_slice()) else {
-            bep.truncated = true;
+            parsed.invalid = true;
             break;
         };
-        project(event, &mut bep);
+        parsed.events += 1;
+        if let Some(Payload::Progress(progress)) = &event.payload {
+            append_tail(&mut parsed.log, &progress.stderr);
+            append_tail(&mut parsed.log, &progress.stdout);
+        }
+        let mut delta = Bep::default();
+        project(event, &mut delta);
+        merge_bounded(&mut parsed.bep, delta, &mut display_size);
     }
-    bep
+    parsed.bep.truncated |= parsed.invalid;
+    parsed
+}
+
+struct CountingRead<R> {
+    inner: R,
+    count: u64,
+    failed: bool,
+}
+impl<R: Read> Read for CountingRead<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let count = self.inner.read(bytes).inspect_err(|error| {
+            self.failed = !matches!(
+                error.kind(),
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::Interrupted
+            );
+        })?;
+        self.count += count as u64;
+        Ok(count)
+    }
+}
+struct Size(usize);
+impl io::Write for Size {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+fn json_size(value: &impl Serialize) -> usize {
+    let mut size = Size(0);
+    serde_json::to_writer(&mut size, value).expect("BEP display data serializes");
+    size.0
+}
+fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
+    // Keep one byte for the longer `false` spelling if truncated changes.
+    fn room(size: &mut usize, old: usize, new: usize) -> bool {
+        let candidate = size.saturating_sub(old).saturating_add(new);
+        if candidate <= DISPLAY_LIMIT {
+            *size = candidate;
+            true
+        } else {
+            false
+        }
+    }
+    for value in delta.targets {
+        if room(
+            size,
+            0,
+            json_size(&value) + usize::from(!bep.targets.is_empty()),
+        ) {
+            bep.targets.push(value);
+        } else {
+            bep.truncated = true;
+        }
+    }
+    for value in delta.tests {
+        if room(
+            size,
+            0,
+            json_size(&value) + usize::from(!bep.tests.is_empty()),
+        ) {
+            bep.tests.push(value);
+        } else {
+            bep.truncated = true;
+        }
+    }
+    if let Some(options) = delta.options {
+        let old = bep.options.as_ref().map_or(0, |v| json_size(v) + 11);
+        if room(size, old, json_size(&options) + 11) {
+            bep.options = Some(options);
+        } else {
+            bep.truncated = true;
+        }
+    }
+    for (destination, incoming, key_bytes) in [
+        (
+            &mut bep.original_command_line,
+            delta.original_command_line,
+            23,
+        ),
+        (
+            &mut bep.canonical_command_line,
+            delta.canonical_command_line,
+            24,
+        ),
+    ] {
+        if let Some(value) = incoming {
+            let old = destination.as_ref().map_or(0, |v| json_size(v) + key_bytes);
+            if room(size, old, json_size(&value) + key_bytes) {
+                *destination = Some(value);
+            } else {
+                bep.truncated = true;
+            }
+        }
+    }
+}
+fn append_tail(log: &mut String, value: &str) {
+    if value.len() >= LOG_LIMIT {
+        let mut start = value.len() - LOG_LIMIT;
+        while !value.is_char_boundary(start) {
+            start += 1;
+        }
+        log.clear();
+        log.push_str(&value[start..]);
+    } else {
+        log.push_str(value);
+        let mut start = log.len().saturating_sub(LOG_LIMIT);
+        while !log.is_char_boundary(start) {
+            start += 1;
+        }
+        if start > 0 {
+            log.drain(..start);
+        }
+    }
+}
+#[cfg(test)]
+pub fn parse<R: Read>(input: R) -> Bep {
+    parse_detail(input, u64::MAX).bep
 }
 
 /// Read a protobuf uint64 delimiter. `None` means incomplete or malformed.
@@ -350,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn old_bep_json_without_options_still_deserializes() {
+    fn optional_display_fields_are_omitted_when_unreported() {
         let parsed: Bep =
             serde_json::from_str(r#"{"targets":[],"tests":[],"truncated":false}"#).unwrap();
         assert_eq!(parsed.options, None);
@@ -632,6 +804,45 @@ mod tests {
             assert!(parsed.truncated);
             assert!(parsed.targets.is_empty());
         }
+    }
+
+    #[test]
+    fn one_scan_bounds_bep_and_unicode_log_but_keeps_logs_after_display_limit() {
+        let mut stream = Vec::new();
+        for _ in 0..10 {
+            stream.extend(event(target(&"x".repeat(1024 * 1024), true)));
+        }
+        stream.extend(event(BuildEvent {
+            payload: Some(Payload::OptionsParsed(
+                crate::protocol::bep::OptionsParsed {
+                    cmd_line: vec!["x".repeat(DISPLAY_LIMIT)],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }));
+        stream.extend(event(BuildEvent {
+            payload: Some(Payload::Progress(crate::protocol::bep::Progress {
+                stderr: "界".repeat(LOG_LIMIT),
+                stdout: "tail".into(),
+            })),
+            ..Default::default()
+        }));
+        let parsed = parse_detail(stream.as_slice(), stream.len() as u64);
+        assert!(!parsed.invalid);
+        assert!(parsed.bep.truncated);
+        assert!(serde_json::to_vec(&parsed.bep).unwrap().len() <= DISPLAY_LIMIT);
+        assert!(parsed.bep.options.is_none());
+        assert!(parsed.log.len() <= LOG_LIMIT);
+        assert!(parsed.log.ends_with("tail"));
+        assert!(parsed.log.starts_with('界'));
+    }
+
+    #[test]
+    fn frame_length_cannot_allocate_past_the_file_snapshot() {
+        let parsed = parse_detail([0x80, 0x80, 0x80, 0x04].as_slice(), 4);
+        assert!(parsed.invalid);
+        assert_eq!(parsed.events, 0);
     }
 
     #[test]
