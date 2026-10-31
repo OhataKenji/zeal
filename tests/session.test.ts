@@ -382,14 +382,15 @@ test("full artifacts are read only after the run finishes", async () => {
     false,
   );
   h.emit("app-state", IDLE);
-  h.session.selectRun(RECORD.id);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, RECORD.id);
   lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detail?.log.status, "ok");
 });
 
-test("run completing before start response retains its Console without reading unknown history", async () => {
+test("run completing before start response opens its detail after reconciliation", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
@@ -398,13 +399,11 @@ test("run completing before start response retains its Console without reading u
   pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
   await started;
   assert.equal(h.view.state?.running, null);
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, RECORD.id);
   assert.equal(h.view.console?.id, RECORD.id);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_run"),
-    false,
-  );
+  assert.deepEqual(pendingRequest(h, "get_run").args, { id: RECORD.id });
+  assert.deepEqual(pendingRequest(h, "get_run_profile").args, { id: RECORD.id });
 });
 
 test("start response before the running event reconciles state without reading active observations", async () => {
@@ -435,13 +434,14 @@ test("completion event during post-start reconciliation wins over its stale runn
   reconciled.resolve({ ...IDLE, running: RECORD.id });
   await started;
   assert.equal(h.view.state?.running, null);
-  h.session.selectRun(RECORD.id);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, RECORD.id);
   lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
 });
 
-test("failed state reconciliation preserves the started run until a later state event", async () => {
+test("failed state reconciliation waits for a later state event before opening completed detail", async () => {
   const h = harness();
   await h.session.init();
   const reconciled = deferred<AppState>();
@@ -458,14 +458,37 @@ test("failed state reconciliation preserves the started run until a later state 
     h.pending.some((call) => call.command === "get_run"),
     false,
   );
-  h.session.selectRun(null);
-  h.session.selectRun(RECORD.id);
-  h.emit("app-state", IDLE);
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, RECORD.id);
   pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.error, null);
   assert.equal(h.view.detail?.record.exitCode, 0);
   assert.equal(canSend(h.view, "//:app"), true);
+});
+
+test("state recovery keeps a previous Console reopened while reconciliation was unavailable", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, consoleRun: "old-run" });
+  const reconciled = deferred<AppState>();
+  h.nextStateReply(reconciled.promise);
+  const started = h.session.start("build", "//:app");
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  await settle();
+  reconciled.reject(new Error("state unavailable"));
+  await started;
+  h.session.openConsole({ id: "old-run" });
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  assert.equal(h.view.ready, true);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.console?.id, "old-run");
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
 });
 
 test("late bootstrap state cannot overwrite a newer workspace event", async () => {
@@ -533,6 +556,23 @@ test("failed spawn is visible and allows another Send", async () => {
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
+test("failed spawn leaves a previously completed Console open", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  h.session.openConsole(COMPLETED.record);
+  const started = h.session.start("build", "//:other");
+  pendingRequest(h, "start_run").reply.reject(new Error("failed to spawn bazel"));
+  await started;
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.console?.id, RECORD.id);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
+});
+
 test("failed spawn resumes a saved run detail selected while start was pending", async () => {
   const h = harness();
   await h.session.init();
@@ -563,6 +603,26 @@ test("dispose removes listeners and ignores late reads", async () => {
   assert.deepEqual(h.removed, ["app-state"]);
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
+});
+
+test("dispose during start reconciliation ignores completion without reading artifacts", async () => {
+  const h = harness();
+  await h.session.init();
+  const reconciled = deferred<AppState>();
+  h.nextStateReply(reconciled.promise);
+  const started = h.session.start("build", "//:app");
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  await settle();
+  const before = h.view;
+  h.session.dispose();
+  reconciled.resolve({ ...IDLE, consoleRun: RECORD.id });
+  await started;
+  assert.equal(h.view, before);
+  assert.deepEqual(h.removed, ["app-state"]);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run" || call.command === "get_run_profile"),
+    false,
+  );
 });
 
 test("unmount during listener registration immediately cleans the late subscription", async () => {
@@ -702,7 +762,7 @@ test("leaving Console keeps the process and prevents automatic navigation", asyn
   assert.equal(h.view.selectedRun, null);
 });
 
-test("process completion retains Console while history is still unknown", async () => {
+test("process completion opens detail once and allows Console to stay reopened", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");
@@ -710,14 +770,83 @@ test("process completion retains Console while history is still unknown", async 
   pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
   await started;
   h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, RECORD.id);
   assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(canStop(h.view), false);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_run"),
-    false,
-  );
+  h.session.openConsole({ id: RECORD.id });
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
+  pendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 1);
+  assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 1);
+});
+
+test("successive executions each open detail once after their own completion", async () => {
+  const h = harness();
+  await h.session.init();
+  const first = h.session.start("build", "//:app");
+  h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  await first;
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  assert.equal(h.view.selectedRun, RECORD.id);
+  assert.deepEqual(pendingRequest(h, "get_run").args, { id: RECORD.id });
+  h.session.openConsole(RECORD);
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  assert.equal(h.view.consoleOpen, true);
+  const secondRecord = { ...RECORD, id: "run-b" };
+  const second = h.session.start("build", "//:app");
+  h.emit("app-state", { ...IDLE, running: secondRecord.id, consoleRun: secondRecord.id });
+  lastPendingRequest(h, "start_run").reply.resolve(secondRecord);
+  await second;
+  h.emit("app-state", { ...IDLE, consoleRun: secondRecord.id });
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, secondRecord.id);
+  assert.deepEqual(lastPendingRequest(h, "get_run").args, { id: secondRecord.id });
+  h.session.openConsole(secondRecord);
+  h.emit("app-state", { ...IDLE, consoleRun: secondRecord.id });
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 2);
+  assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 2);
+});
+
+test("process completion preserves another selected run", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  await started;
+  h.session.selectRun("saved-run");
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, "saved-run");
+  assert.deepEqual(pendingRequest(h, "get_run").args, { id: "saved-run" });
+});
+
+test("completion during start reconciliation preserves a screen selected before the state reply", async () => {
+  const h = harness();
+  await h.session.init();
+  const reconciled = deferred<AppState>();
+  h.nextStateReply(reconciled.promise);
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  await settle();
+  h.session.selectRun("saved-run");
+  h.emit("app-state", IDLE);
+  reconciled.resolve(IDLE);
+  await started;
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedRun, "saved-run");
+  assert.deepEqual(pendingRequest(h, "get_run").args, { id: "saved-run" });
 });
 
 test("observed live runs remain in the workspace list", async () => {

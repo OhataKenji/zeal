@@ -155,6 +155,8 @@ Console、stdin、停止はCoreがメモリで保持するlive processを使う�
 履歴が確定してもその操作を続けられる。
 
 process終了後も最後のConsoleを保持して末尾を読む。
+Consoleを表示中のprocessが終了すると、そのrunの詳細へ一度だけ自動で移る。
+別画面を表示中は移らず、終了済みConsoleを開き直した場合も表示を維持する。
 詳細画面から戻って端末出力を確認できる。
 終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
 

@@ -174,6 +174,21 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadSelected();
   }
 
+  // Only lifecycle transitions call this; reopening a completed Console stays put.
+  function selectCompletedConsole(id: string | null | undefined): boolean {
+    if (
+      !id ||
+      !view.consoleOpen ||
+      view.console?.id !== id ||
+      view.starting ||
+      view.state?.running
+    ) {
+      return false;
+    }
+    selectRun(id);
+    return true;
+  }
+
   // Console read access outlives process controls for the last local process.
   function openConsole(record: RunRecord) {
     if (record.id !== (view.state?.consoleRun ?? view.state?.running)) {
@@ -227,7 +242,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
-    if (resumed || (before?.running && before.running !== state.running)) loadSelected();
+    if (resumed || (before?.running && before.running !== state.running)) {
+      const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
+      if (!selectCompletedConsole(completed)) loadSelected();
+    }
   }
 
   function dispose() {
@@ -256,11 +274,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   async function start(cmd: RunCmd, target: string) {
     if (!canSend(view, target)) return;
     const workspace = view.state?.workspace;
+    let startedRun: string | undefined;
     update({ starting: true, error: null });
     try {
       // The target goes through verbatim: one argument, no shell interpretation.
       const record = await transport.invoke<RunRecord>(COMMANDS.startRun, { cmd, target });
       if (disposed || workspace !== view.state?.workspace) return;
+      startedRun = record.id;
       selectRun(null);
       // Composer input labels the live Console until build events report it.
       update({ console: { ...record, cmd, target }, consoleOpen: true });
@@ -287,7 +307,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
       update({ starting: false });
-      if (!disposed && workspace === view.state?.workspace && view.ready) loadSelected();
+      if (!disposed && workspace === view.state?.workspace && view.ready) {
+        if (!selectCompletedConsole(startedRun)) loadSelected();
+      }
     }
   }
 
