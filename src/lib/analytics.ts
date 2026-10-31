@@ -99,6 +99,10 @@ export function fmtMs(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+/** The SVG plot box every analytics chart draws into. The markup in
+ * `AnalyticsView.svelte` and `segments` must agree on these numbers. */
+export const PLOT = { left: 55, baseline: 200, height: 160 } as const;
+
 /**
  * Projects samples into SVG polyline segments for the chart's fixed plot box.
  * Null samples split lines instead of joining across missing data.
@@ -112,7 +116,9 @@ export function segments(values: Array<number | null>, maxValue: number, step: n
       run = [];
       return;
     }
-    run.push(`${55 + i * step + step / 2},${200 - (value / maxValue) * 160}`);
+    run.push(
+      `${PLOT.left + i * step + step / 2},${PLOT.baseline - (value / maxValue) * PLOT.height}`,
+    );
   });
   if (run.length) out.push(run.join(" "));
   return out;
