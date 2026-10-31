@@ -6,6 +6,9 @@ license = "Apache-2.0"
 edition = "2024"
 rust-version = "1.90"
 
+[lints.clippy]
+cognitive_complexity = "warn"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
