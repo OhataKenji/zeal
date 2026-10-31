@@ -186,7 +186,7 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 左側に Examples として代表的な query をプリセットで並べる。
 初期の利用はここから編集に入ることを想定する。
 プリセット選択は flag を既定に戻し、結果の実行も行う。
-Code に未適用の編集があるときは、捨てる前に確認を出す。
+Code に未適用の編集があっても確認せず捨てる。再入力コストが低く、確認 UI の実装が重いため(worse is better)。
 label・attribute 名・`kind` の pattern の入力には、snapshot の target・属性名・rule class を datalist で補完する。
 
 ## Alternatives Considered
