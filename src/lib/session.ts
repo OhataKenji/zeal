@@ -271,14 +271,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  async function start(cmd: RunCmd, target: string) {
+  async function start(cmd: RunCmd, target: string, argumentsText = "") {
     if (!canSend(view, target)) return;
     const workspace = view.state?.workspace;
     let startedRun: string | undefined;
     update({ starting: true, error: null });
     try {
-      // The target goes through verbatim: one argument, no shell interpretation.
-      const record = await transport.invoke<RunRecord>(COMMANDS.startRun, { cmd, target });
+      // The core parses arguments once; the target stays a separate token.
+      const record = await transport.invoke<RunRecord>(COMMANDS.startRun, {
+        cmd,
+        target,
+        arguments: argumentsText,
+      });
       if (disposed || workspace !== view.state?.workspace) return;
       startedRun = record.id;
       selectRun(null);
