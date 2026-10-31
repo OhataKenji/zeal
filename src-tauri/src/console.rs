@@ -77,7 +77,7 @@ mod tests {
             let core = Core::new();
             let mut state = core.state.lock().unwrap();
             state.workspace = Some(workspace.clone());
-            state.run = Some(id.clone().into());
+            state.run = Some(crate::state::ActiveRun::stub(&id, None));
             state.console = Some(ConsoleSession {
                 id: id.clone().into(),
                 workspace: workspace.clone(),

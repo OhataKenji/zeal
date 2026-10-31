@@ -15,6 +15,14 @@ use std::time::{Duration, Instant};
 
 pub struct Control(File);
 
+#[cfg(test)]
+impl Control {
+    /// A detached control for tests that never exercise the terminal.
+    pub fn stub() -> Self {
+        Self(File::open("/dev/null").expect("/dev/null"))
+    }
+}
+
 impl Control {
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         match self.0.write(bytes) {
@@ -189,31 +197,30 @@ pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
         return Err("terminal input chunk is too large".into());
     }
     let mut st = core.state.lock().expect("application state lock poisoned");
-    if st.run.as_deref() != Some(id) || st.run_pgid.is_none() || st.run_stopping {
+    let Some(run) = st.run.as_mut() else {
+        return Err("terminal is no longer running".into());
+    };
+    if run.id.as_str() != id || run.pgid.is_none() || run.stopping {
         return Err("terminal is no longer running".into());
     }
-    st.run_terminal
-        .as_mut()
-        .ok_or("no terminal")?
-        .write(bytes)
-        .map_err(|e| e.to_string())
+    run.terminal.write(bytes).map_err(|e| e.to_string())
 }
 
 pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String> {
     let st = core.state.lock().expect("application state lock poisoned");
-    if st.run.as_deref() != Some(id) || st.run_pgid.is_none() {
+    let Some(run) = st.run.as_ref() else {
+        return Ok(());
+    };
+    if run.id.as_str() != id || run.pgid.is_none() {
         return Ok(());
     }
-    st.run_terminal
-        .as_ref()
-        .ok_or("no terminal")?
-        .resize(cols, rows)
-        .map_err(|e| e.to_string())
+    run.terminal.resize(cols, rows).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ActiveRun;
     use crate::store;
 
     struct Fixture {
@@ -236,9 +243,13 @@ mod tests {
                 spawn(Command::new("sh").args(["-c", script]), &dir).unwrap();
             let core = Core::new();
             let mut st = core.state.lock().unwrap();
-            st.run = Some(id.clone().into());
-            st.run_pgid = Some(child.id() as i32);
-            st.run_terminal = Some(control);
+            st.run = Some(ActiveRun {
+                id: id.clone().into(),
+                terminal: control,
+                pgid: Some(child.id() as i32),
+                stopping: false,
+                stop_started: None,
+            });
             drop(st);
             Self {
                 root,
@@ -261,7 +272,14 @@ mod tests {
         fn finish(&mut self) -> i32 {
             let code = wait_for_exit(&mut self.child, &self.dir);
             self.capture.finish().unwrap();
-            self.core.state.lock().unwrap().run_pgid = None;
+            _ = self
+                .core
+                .state
+                .lock()
+                .unwrap()
+                .run
+                .as_mut()
+                .map(|run| run.pgid = None);
             code
         }
     }
@@ -322,9 +340,10 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .run_terminal
+                .run
                 .as_ref()
                 .unwrap()
+                .terminal
                 .foreground_group(),
             Some(f.child.id() as i32)
         );
@@ -335,9 +354,10 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .run_terminal
+                .run
                 .as_ref()
                 .unwrap()
+                .terminal
                 .foreground_group(),
             None
         );
