@@ -259,17 +259,18 @@ pub async fn serve(
 }
 
 #[cfg(test)]
+mod real_bazel_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::bep;
     use prost::Message;
     use std::fs;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
-    struct Temp(PathBuf);
+    pub(super) struct Temp(pub(super) PathBuf);
     impl Temp {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let path = std::env::temp_dir().join(format!("zeal-bes-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path.canonicalize().unwrap())
@@ -485,138 +486,6 @@ mod tests {
         assert!(file.metadata().unwrap().len() > 0);
         assert_eq!(store::list(&data, &temp.0).unwrap().len(), 1);
         assert!(!data.join("runs").join(&id).join("log.txt").exists());
-        server.abort();
-    }
-
-    /// Opt-in test against a locally installed Bazel. Uses a tiny executable
-    /// rule with no external language rules or network dependencies.
-    #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
-    async fn real_bazel_records_invocation_and_accepts_standard_input() {
-        exercise_real_bazel().await;
-    }
-
-    async fn exercise_real_bazel() {
-        let bazel = std::env::var("ZEAL_TEST_BAZEL").expect("ZEAL_TEST_BAZEL");
-        let temp = Temp::new();
-        let ws = temp.0.join("workspace");
-        let data = temp.0.join("data");
-        fs::create_dir(&ws).unwrap();
-        fs::write(ws.join("WORKSPACE"), "workspace(name = 'zeal_bes_test')\n").unwrap();
-        fs::write(
-            ws.join("BUILD"),
-            "load(':binary.bzl', 'binary', 'check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n",
-        )
-        .unwrap();
-        fs::write(ws.join("binary.bzl"), "def _impl(ctx):\n    out = ctx.actions.declare_file(ctx.label.name + '.py')\n    ctx.actions.write(out, '#!/usr/bin/env python3\\nprint(int(input()) * 2)\\n', is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary = rule(implementation=_impl, executable=True)\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve(listener, data.clone()));
-        let output_root = temp.0.join("bazel");
-        let command = |cmd: &str, target: &str, id: &str| {
-            let mut command = Command::new(&bazel);
-            command
-                .current_dir(&ws)
-                .args(["--batch", "--ignore_all_rc_files"])
-                .arg(format!("--output_user_root={}", output_root.display()))
-                .arg(cmd)
-                .args([
-                    "--enable_bzlmod=false",
-                    "--enable_workspace=true",
-                    "--incompatible_autoload_externally=",
-                    "--host_platform=//:host",
-                    "--platforms=//:host",
-                    "--spawn_strategy=local",
-                ])
-                .arg(format!("--bes_backend=grpc://{address}"))
-                .arg("--bes_proxy=")
-                .arg("--bes_upload_mode=wait_for_upload_complete")
-                .arg("--bes_timeout=10s")
-                .arg(format!("--invocation_id={id}"))
-                .arg(target);
-            command
-        };
-        for (cmd, target) in [("build", "//:double"), ("test", "//:check")] {
-            let id = uuid::Uuid::new_v4().to_string();
-            let mut process = command(cmd, target, &id);
-            let output = tokio::task::spawn_blocking(move || process.output().unwrap())
-                .await
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{cmd}: {}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let record = store::read_record(&data, &ws, &id).unwrap();
-            assert_eq!(record.cmd.as_deref(), Some(cmd));
-            assert_eq!(record.target.as_deref(), Some(target));
-            assert_eq!(record.exit_code, Some(0));
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        let mut command = command("run", "//:double", &id);
-        let (send_input, wait_input) = std::sync::mpsc::sync_channel(1);
-        let process = tokio::task::spawn_blocking(move || {
-            let mut child = command
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(30);
-            loop {
-                match wait_input.recv_timeout(Duration::from_millis(25)) {
-                    Ok(()) => break,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if child.try_wait().unwrap().is_some() {
-                            return child.wait_with_output().unwrap();
-                        }
-                        assert!(
-                            std::time::Instant::now() < deadline,
-                            "build completes before input"
-                        );
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        let _ = child.kill();
-                        return child.wait_with_output().unwrap();
-                    }
-                }
-            }
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "program is still waiting for input"
-            );
-            child.stdin.take().unwrap().write_all(b"21\n").unwrap();
-            child.wait_with_output().unwrap()
-        });
-        tokio::time::timeout(std::time::Duration::from_secs(25), async {
-            loop {
-                if store::read_record(&data, &ws, &id)
-                    .is_ok_and(|build| build.finished_at.is_some())
-                    || process.is_finished()
-                {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .expect("BEP finishes while the program is waiting");
-        let _ = send_input.send(());
-        let output = process.await.unwrap();
-        assert!(
-            output.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
-        let observed = store::read_record(&data, &ws, &id).unwrap();
-        assert_eq!(observed.cmd.as_deref(), Some("run"));
-        assert_eq!(observed.target.as_deref(), Some("//:double"));
-        assert_eq!(observed.exit_code, Some(0));
-        assert!(observed.finished_at.is_some());
-        assert_eq!(store::list(&data, &ws).unwrap().len(), 3);
         server.abort();
     }
 }

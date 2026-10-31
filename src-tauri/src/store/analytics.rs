@@ -353,6 +353,17 @@ mod tests {
                 .unwrap();
             id
         }
+        fn set_started_at(&self, id: &str, millis: i64) {
+            Store::open(&self.data)
+                .unwrap()
+                .conn
+                .execute(
+                    "UPDATE run SET started_at_ms=?1 WHERE id=?2",
+                    params![millis, id],
+                )
+                .unwrap();
+        }
+
         fn filter(&self) -> Filter {
             Filter {
                 start: Some("2026-03-07".into()),
@@ -407,7 +418,7 @@ mod tests {
         assert_eq!(total(&failed), 1);
     }
     #[test]
-    fn durations_outcomes_and_target_ranking() {
+    fn daily_duration_statistics_use_only_observed_runs() {
         let f = Fixture::new();
         f.insert_at(
             "2026-03-07 10:00:00",
@@ -431,7 +442,7 @@ mod tests {
             Some("2026-03-07 12:00:20"),
         );
         f.insert("2026-03-07 13:00:00", "build", None);
-        f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
+
         let result = f.query(f.filter());
         let first = &result.days[0];
         assert_eq!(first.count, 3);
@@ -439,10 +450,49 @@ mod tests {
         assert_eq!(first.timed, 3);
         assert_eq!(first.total_ms, 60_000);
         assert_eq!((first.p50_ms, first.p95_ms), (20_000, 30_000));
+    }
+
+    #[test]
+    fn untimed_runs_keep_outcome_counts_without_duration_statistics() {
+        let f = Fixture::new();
+        f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
+
+        let result = f.query(f.filter());
         let second = &result.days[1];
         assert_eq!((second.count, second.interrupted), (1, 1));
         assert_eq!((second.timed, second.total_ms), (0, 0));
         assert_eq!((second.p50_ms, second.p95_ms), (0, 0));
+    }
+
+    #[test]
+    fn target_ranking_aggregates_runs_across_days() {
+        let f = Fixture::new();
+        f.insert_at(
+            "2026-03-07 10:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 10:00:10"),
+        );
+        f.insert_at(
+            "2026-03-07 11:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 11:00:30"),
+        );
+        f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
+        f.insert_at(
+            "2026-03-07 12:00:00",
+            "test",
+            Some(1),
+            "//b:y",
+            Some("2026-03-07 12:00:20"),
+        );
+
+        f.insert("2026-03-07 13:00:00", "build", None);
+
+        let result = f.query(f.filter());
         assert_eq!(result.targets.len(), 2);
         assert_eq!(result.targets[0].target, "//a:x");
         assert_eq!(result.targets[0].runs, 3);
@@ -450,7 +500,28 @@ mod tests {
         assert_eq!(result.targets[0].p50_ms, 10_000);
         assert_eq!(result.targets[1].target, "//b:y");
         assert_eq!(result.targets[1].runs, 1);
-        // The target filter narrows the daily series but not the ranking.
+    }
+
+    #[test]
+    fn target_filter_narrows_daily_series_but_not_ranking() {
+        let f = Fixture::new();
+        f.insert_at(
+            "2026-03-07 10:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 10:00:10"),
+        );
+        f.insert_at(
+            "2026-03-07 11:00:00",
+            "build",
+            Some(0),
+            "//a:x",
+            Some("2026-03-07 11:00:30"),
+        );
+        f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
+        f.insert_at("2026-03-07 12:00:00", "test", Some(1), "//b:y", None);
+
         let scoped = f.query(Filter {
             target: Some("//a:x".into()),
             ..f.filter()
@@ -459,13 +530,26 @@ mod tests {
         assert_eq!(scoped.days[0].total_ms, 40_000);
         assert_eq!(scoped.days[1].count, 1);
         assert_eq!(scoped.targets.len(), 2);
-        // The ranking follows the cmd/outcome filters too.
+    }
+
+    #[test]
+    fn outcome_filter_narrows_target_ranking() {
+        let f = Fixture::new();
+        f.insert_at("2026-03-07 10:00:00", "build", Some(0), "//a:x", None);
+        f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
+        f.insert_at("2026-03-07 12:00:00", "test", Some(1), "//b:y", None);
+
         let failed = f.query(Filter {
             outcome: Some("failed".into()),
             ..f.filter()
         });
         assert_eq!(failed.targets.len(), 1);
         assert_eq!(failed.targets[0].target, "//b:y");
+    }
+
+    #[test]
+    fn oversized_target_filter_is_rejected() {
+        let f = Fixture::new();
         assert_eq!(
             query(
                 &f.data,
@@ -576,6 +660,16 @@ mod tests {
     }
     // Each timezone is a separate process. Changing TZ inside a multithreaded
     // Rust test process would be unsafe and contaminate unrelated tests.
+    fn run_timezone_case(zone: &str, case: &str) {
+        let test = format!("store::analytics::tests::{case}");
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([test.as_str(), "--exact", "--ignored"])
+            .env("TZ", zone)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{case} failed in {zone}");
+    }
+
     #[test]
     fn timezone_boundaries_in_isolated_processes() {
         for zone in [
@@ -587,141 +681,154 @@ mod tests {
             "Pacific/Apia",
             "America/Goose_Bay",
         ] {
-            assert!(
-                Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "store::analytics::tests::timezone_probe",
-                        "--exact",
-                        "--ignored"
-                    ])
-                    .env("TZ", zone)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            run_timezone_case(zone, "spring_day_boundaries");
         }
+        run_timezone_case("America/New_York", "autumn_day_boundaries");
+        run_timezone_case("America/Havana", "autumn_day_boundaries");
+        run_timezone_case("Asia/Beirut", "midnight_gap_keeps_the_new_day");
+        run_timezone_case("Pacific/Apia", "skipped_calendar_day_is_empty");
+        run_timezone_case(
+            "America/Goose_Bay",
+            "repeated_day_keeps_disjoint_occurrences",
+        );
     }
+
     #[test]
     #[ignore = "invoked with an explicit TZ by timezone_boundaries_in_isolated_processes"]
-    fn timezone_probe() {
+    fn spring_day_boundaries() {
         refresh_timezone();
         let f = Fixture::new();
-
         let zone = std::env::var("TZ").unwrap();
-        let spring: (i64, i64) = Store::open(&f.data)
-            .unwrap()
-            .conn
-            .query_row(
+        let (sql, hours) = match zone.as_str() {
+            "America/New_York" | "America/Havana" => (
+                "SELECT unixepoch('2026-03-08 05:00:00')*1000,unixepoch('2026-03-09 04:00:00')*1000",
+                23,
+            ),
+            "America/Goose_Bay" => (
                 "SELECT unixepoch('2026-03-08','utc')*1000,unixepoch('2026-03-09','utc')*1000",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        let spring = if zone == "America/New_York" || zone == "America/Havana" {
-            Store::open(&f.data).unwrap().conn.query_row("SELECT unixepoch('2026-03-08 05:00:00')*1000,unixepoch('2026-03-09 04:00:00')*1000",[],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).unwrap()
-        } else {
-            spring
+                23,
+            ),
+            _ => (
+                "SELECT unixepoch('2026-03-08','utc')*1000,unixepoch('2026-03-09','utc')*1000",
+                24,
+            ),
         };
-        if ["America/New_York", "America/Havana", "America/Goose_Bay"].contains(&zone.as_str()) {
-            assert_eq!(spring.1 - spring.0, 23 * 3_600_000);
-        } else {
-            assert_eq!(spring.1 - spring.0, 24 * 3_600_000);
-        }
-        if zone == "Asia/Beirut" {
-            f.insert("2026-03-28 23:30:00", "build", Some(0));
-            f.insert("2026-03-29 01:00:00", "build", Some(0));
-            let result = f.query(Filter {
-                start: Some("2026-03-29".into()),
-                end: Some("2026-03-29".into()),
-                ..Filter::default()
-            });
-            assert_eq!(total(&result), 1);
-        }
-        if zone == "Pacific/Apia" {
-            // The calendar skipped December 30, 2011 entirely.
-            let skipped = f.query(Filter {
-                start: Some("2011-12-30".into()),
-                end: Some("2011-12-30".into()),
-                ..Filter::default()
-            });
-            assert_eq!(total(&skipped), 0);
-        }
-        let expected = f.insert("2026-03-08 12:00:00", "build", Some(0));
+        let (from, until): (i64, i64) = Store::open(&f.data)
+            .unwrap()
+            .conn
+            .query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(until - from, hours * 3_600_000);
+
+        let first = f.insert("2026-03-08 12:00:00", "build", Some(0));
         let last = f.insert("2026-03-08 23:59:59", "build", Some(0));
-        let sql = "UPDATE run SET started_at_ms=?1 WHERE id=?2";
-        Store::open(&f.data)
-            .unwrap()
-            .conn
-            .execute(sql, params![spring.0, expected])
-            .unwrap();
-        // One millisecond before each exclusive boundary must stay on that day.
-        Store::open(&f.data)
-            .unwrap()
-            .conn
-            .execute(sql, params![spring.1 - 1, last])
-            .unwrap();
         let before = f.insert("2026-03-07", "build", Some(0));
-        Store::open(&f.data)
-            .unwrap()
-            .conn
-            .execute(sql, params![spring.0 - 1, before])
-            .unwrap();
+        f.set_started_at(&first, from);
+        // One millisecond before each exclusive boundary must stay on that day.
+        f.set_started_at(&last, until - 1);
+        f.set_started_at(&before, from - 1);
         f.insert("2026-03-09 00:00:00", "build", Some(0));
+
         let result = f.query(Filter {
             start: Some("2026-03-08".into()),
             end: Some("2026-03-08".into()),
             ..Filter::default()
         });
         assert_eq!(total(&result), 2);
-        let result = f.query(Filter {
+        let empty = f.query(Filter {
             start: Some("2026-11-01".into()),
             end: Some("2026-11-01".into()),
             ..Filter::default()
         });
-        assert_eq!(total(&result), 0);
-        if zone == "America/New_York" || zone == "America/Havana" {
-            let (from, until): (i64, i64) = Store::open(&f.data).unwrap().conn.query_row(
-                    "SELECT unixepoch('2026-11-01 04:00:00')*1000,unixepoch('2026-11-02 05:00:00')*1000",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .unwrap();
-            assert_eq!(until - from, 25 * 3_600_000);
-            let first = f.insert("2026-11-01 12:00:00", "build", Some(0));
-            let last = f.insert("2026-11-01 12:01:00", "build", Some(0));
-            Store::open(&f.data)
-                .unwrap()
-                .conn
-                .execute(sql, params![from, first])
-                .unwrap();
-            Store::open(&f.data)
-                .unwrap()
-                .conn
-                .execute(sql, params![until - 1, last])
-                .unwrap();
-            let selected = f.query(Filter {
-                start: Some("2026-11-01".into()),
-                end: Some("2026-11-01".into()),
-                ..Filter::default()
-            });
-            assert_eq!(total(&selected), 2);
-        }
-        if zone == "America/Goose_Bay" {
-            // In 1988 the clock rolled from Oct 30 00:01 back into Oct 29.
-            // Oct 30 is not a contiguous UTC interval. Both its short early
-            // occurrence and its later occurrence count, but Oct 29 does not.
-            let early = f.insert("1988-10-30 12:00:00", "build", Some(0));
-            let previous = f.insert("1988-10-30 12:01:00", "build", Some(0));
-            Store::open(&f.data).unwrap().conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",[early]).unwrap();
-            Store::open(&f.data).unwrap().conn.execute("UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",[previous]).unwrap();
-            f.insert("1988-10-30 12:02:00", "build", Some(0));
-            let selected = f.query(Filter {
-                start: Some("1988-10-30".into()),
-                end: Some("1988-10-30".into()),
-                ..Filter::default()
-            });
-            assert_eq!(total(&selected), 2);
-        }
+        assert_eq!(total(&empty), 0);
+    }
+
+    #[test]
+    #[ignore = "invoked with an explicit TZ by timezone_boundaries_in_isolated_processes"]
+    fn autumn_day_boundaries() {
+        refresh_timezone();
+        let f = Fixture::new();
+        let (from, until): (i64, i64) = Store::open(&f.data).unwrap().conn.query_row(
+            "SELECT unixepoch('2026-11-01 04:00:00')*1000,unixepoch('2026-11-02 05:00:00')*1000",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(until - from, 25 * 3_600_000);
+        let first = f.insert("2026-11-01 12:00:00", "build", Some(0));
+        let last = f.insert("2026-11-01 12:01:00", "build", Some(0));
+        f.set_started_at(&first, from);
+        f.set_started_at(&last, until - 1);
+
+        let selected = f.query(Filter {
+            start: Some("2026-11-01".into()),
+            end: Some("2026-11-01".into()),
+            ..Filter::default()
+        });
+        assert_eq!(total(&selected), 2);
+    }
+
+    #[test]
+    #[ignore = "invoked with an explicit TZ by timezone_boundaries_in_isolated_processes"]
+    fn midnight_gap_keeps_the_new_day() {
+        refresh_timezone();
+        let f = Fixture::new();
+        f.insert("2026-03-28 23:30:00", "build", Some(0));
+        f.insert("2026-03-29 01:00:00", "build", Some(0));
+        let result = f.query(Filter {
+            start: Some("2026-03-29".into()),
+            end: Some("2026-03-29".into()),
+            ..Filter::default()
+        });
+        assert_eq!(total(&result), 1);
+    }
+
+    #[test]
+    #[ignore = "invoked with an explicit TZ by timezone_boundaries_in_isolated_processes"]
+    fn skipped_calendar_day_is_empty() {
+        refresh_timezone();
+        let f = Fixture::new();
+        // The calendar skipped December 30, 2011 entirely.
+        let skipped = f.query(Filter {
+            start: Some("2011-12-30".into()),
+            end: Some("2011-12-30".into()),
+            ..Filter::default()
+        });
+        assert_eq!(total(&skipped), 0);
+    }
+
+    #[test]
+    #[ignore = "invoked with an explicit TZ by timezone_boundaries_in_isolated_processes"]
+    fn repeated_day_keeps_disjoint_occurrences() {
+        refresh_timezone();
+        let f = Fixture::new();
+        // In 1988 the clock rolled from Oct 30 00:01 back into Oct 29.
+        // Oct 30 is not a contiguous UTC interval. Both its short early
+        // occurrence and its later occurrence count, but Oct 29 does not.
+        let early = f.insert("1988-10-30 12:00:00", "build", Some(0));
+        let previous = f.insert("1988-10-30 12:01:00", "build", Some(0));
+        Store::open(&f.data)
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",
+                [early],
+            )
+            .unwrap();
+        Store::open(&f.data)
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",
+                [previous],
+            )
+            .unwrap();
+        f.insert("1988-10-30 12:02:00", "build", Some(0));
+        let selected = f.query(Filter {
+            start: Some("1988-10-30".into()),
+            end: Some("1988-10-30".into()),
+            ..Filter::default()
+        });
+        assert_eq!(total(&selected), 2);
     }
     #[test]
     #[ignore = "manual synthetic 5,000-record measurement; run with --ignored --nocapture"]
