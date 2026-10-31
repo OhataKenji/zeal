@@ -19,7 +19,6 @@ export interface SessionView {
   runs: RunRecord[];
   runsError: string | null;
   selectedRun: string | null;
-  initialRunTab: "All" | "Logs";
   detail: RunDetail | null;
   detailLoading: boolean;
   detailError: string | null;
@@ -41,7 +40,6 @@ export function emptyView(): SessionView {
     runs: [],
     runsError: null,
     selectedRun: null,
-    initialRunTab: "All",
     detail: null,
     detailLoading: false,
     detailError: null,
@@ -159,14 +157,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     void loadProfile();
   }
 
-  function selectRun(id: string | null, initialRunTab: "All" | "Logs" = "All") {
+  function selectRun(id: string | null) {
     ++detailGeneration;
     ++profileGeneration;
     update({
       consoleOpen: false,
       selectedRun: id,
       detail: null,
-      initialRunTab,
       detailError: null,
       detailLoading: false,
       profile: null,

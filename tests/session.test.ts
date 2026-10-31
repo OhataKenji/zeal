@@ -383,7 +383,6 @@ test("full artifacts are read only after the run finishes", async () => {
   );
   h.emit("app-state", IDLE);
   h.session.selectRun(RECORD.id);
-  assert.equal(h.view.initialRunTab, "All");
   lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
@@ -782,7 +781,6 @@ test("openConsole on a finished run lands on its detail view", async () => {
   h.session.openConsole(RECORD);
   assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedRun, RECORD.id);
-  assert.equal(h.view.initialRunTab, "All");
   pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.id, RECORD.id);

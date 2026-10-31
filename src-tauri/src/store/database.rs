@@ -255,7 +255,7 @@ fn open_artifact(data: &Path, ws: &Path, run_id: &str, name: &str) -> Result<Fil
     let store = Store::open(data)?;
     let dir = store.run_dir(run_id, false)?;
     let file = match name {
-        "terminal.log" | "profile.gz" => dir.artifact(name)?,
+        "profile.gz" => dir.artifact(name)?,
         _ => return Err(fail(ErrorKind::Invalid)),
     };
     Ok(file)
