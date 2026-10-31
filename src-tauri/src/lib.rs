@@ -1,6 +1,7 @@
 mod bep;
 mod bes;
 mod console;
+mod detail;
 mod ingest;
 mod label;
 mod profile;
@@ -22,7 +23,7 @@ pub use store::{
     read_record as read_run_record,
 };
 
-use ingest::{RunDetail, Section};
+use detail::{RunDetail, Section};
 use profile::Profile;
 use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
@@ -215,7 +216,7 @@ async fn get_run(
     let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "run detail worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        ingest::run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+        detail::run_detail(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "run detail worker failed".to_string())?
@@ -246,7 +247,7 @@ async fn get_run_profile(
     let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        ingest::run_profile(&data, &ws, &id).map_err(|e| e.to_string())
+        detail::run_profile(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "profile worker failed".to_string())?
