@@ -6,6 +6,7 @@ mod ingest;
 mod label;
 mod profile;
 mod protocol;
+mod runargs;
 mod runner;
 mod snapshot;
 mod state;
