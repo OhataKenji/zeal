@@ -8,7 +8,9 @@ use crate::protocol::bep::BuildEvent;
 use crate::protocol::bep::build_event::Payload;
 use crate::protocol::bep::build_event_id::Id;
 use crate::protocol::generated::command_line::command_line_section::SectionType;
-use crate::protocol::generated::command_line::{CommandLine, Option as CommandLineOption};
+use crate::protocol::generated::command_line::{
+    CommandLine, CommandLineSection, Option as CommandLineOption,
+};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -38,25 +40,29 @@ pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
     };
     let mut parts = Vec::new();
     for section in &command_line.sections {
-        match &section.section_type {
-            Some(SectionType::ChunkList(chunks)) => {
-                // Bazel reports residue separately from its options. A dash
-                // argument needs this boundary when rendered as a command.
-                if section.section_label == "residual"
-                    && chunks.chunk.first().is_some_and(|chunk| chunk != "--")
-                    && chunks.chunk.iter().any(|chunk| chunk.starts_with('-'))
-                {
-                    parts.push("--".into());
-                }
-                parts.extend(chunks.chunk.iter().map(|value| quote_argument(value)));
-            }
-            Some(SectionType::OptionList(options)) => {
-                parts.extend(options.option.iter().map(format_option));
-            }
-            None => {}
-        }
+        append_command_line_section(section, &mut parts);
     }
     *destination = Some(parts.join(" "));
+}
+
+fn append_command_line_section(section: &CommandLineSection, parts: &mut Vec<String>) {
+    match &section.section_type {
+        Some(SectionType::ChunkList(chunks)) => {
+            // Bazel reports residue separately from its options. A dash
+            // argument needs this boundary when rendered as a command.
+            if section.section_label == "residual"
+                && chunks.chunk.first().is_some_and(|chunk| chunk != "--")
+                && chunks.chunk.iter().any(|chunk| chunk.starts_with('-'))
+            {
+                parts.push("--".into());
+            }
+            parts.extend(chunks.chunk.iter().map(|value| quote_argument(value)));
+        }
+        Some(SectionType::OptionList(options)) => {
+            parts.extend(options.option.iter().map(format_option));
+        }
+        None => {}
+    }
 }
 
 /// Quote one shell argument while keeping ordinary labels and paths readable.
@@ -289,13 +295,14 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
             24,
         ),
     ] {
-        if let Some(value) = incoming {
-            let old = destination.as_ref().map_or(0, |v| json_size(v) + key_bytes);
-            if room(size, old, json_size(&value) + key_bytes) {
-                *destination = Some(value);
-            } else {
-                bep.truncated = true;
-            }
+        let Some(value) = incoming else {
+            continue;
+        };
+        let old = destination.as_ref().map_or(0, |v| json_size(v) + key_bytes);
+        if room(size, old, json_size(&value) + key_bytes) {
+            *destination = Some(value);
+        } else {
+            bep.truncated = true;
         }
     }
 }
