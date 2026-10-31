@@ -6,7 +6,7 @@
 //! exit releases the slot with a note. Only
 //! the currently held run may be signalled; descendants are not supervised.
 
-use crate::runargs::{argv, validate_cmd, validate_target};
+use crate::runargs::{argv, parse_arguments, validate_cmd, validate_target};
 use crate::state::{ActiveRun, ConsoleSession, Core, CoreState};
 use crate::store::{self, RunRecord};
 use rustix::process::{self, Pid, Signal};
@@ -45,9 +45,11 @@ pub fn start(
     data: &Path,
     cmd: &str,
     target: &str,
+    arguments: &str,
 ) -> Result<RunRecord, String> {
     validate_cmd(cmd)?;
     validate_target(target)?;
+    let arguments = parse_arguments(arguments)?;
     let mut st = core.state.lock().expect("application state lock poisoned");
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
@@ -73,8 +75,7 @@ pub fn start(
     // Its own process group: a stop reaches bazel and whatever it started.
     let (mut child, terminal, capture) = match crate::terminal::spawn(
         Command::new(&bazel)
-            .args(argv(cmd, target, &dir, endpoint))
-            .arg(format!("--invocation_id={}", rec.id))
+            .args(argv(cmd, target, &arguments, &dir, endpoint, &rec.id))
             .current_dir(&ws),
         &dir,
     ) {
@@ -493,11 +494,11 @@ mod tests {
     fn argv_has_the_command_one_target_and_the_observation_flags() {
         let dir = Path::new("/data/runs/abc");
         for (cmd, target) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
-            let args = argv(cmd, target, dir, "grpc://127.0.0.1:12345");
+            let args = argv(cmd, target, &[], dir, "grpc://127.0.0.1:12345", "abc");
             assert_eq!(args[0], cmd);
-            assert_eq!(args[1], target);
+            assert_eq!(args.last().unwrap(), target);
             assert_eq!(
-                &args[2..],
+                &args[1..args.len() - 1],
                 [
                     "--bes_backend=grpc://127.0.0.1:12345",
                     "--bes_proxy=",
@@ -508,6 +509,7 @@ mod tests {
                     "--tool_tag=zeal",
                     "--color=yes",
                     "--curses=no",
+                    "--invocation_id=abc",
                 ],
                 "{cmd}"
             );
@@ -609,10 +611,38 @@ mod tests {
     #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
     async fn real_bazel_gui_flags_build_test_and_run_with_input() {
         let fixture = GuiBazelFixture::new().await;
-        check_gui_run(&fixture, "build", "//:double").await;
-        check_gui_run(&fixture, "test", "//:check").await;
-        check_gui_run(&fixture, "run", "//:double").await;
+        check_gui_run(&fixture, "build", "//:double", "--config=arguments").await;
+        check_gui_run(&fixture, "test", "//:check", "--test_filter='suite one'").await;
+        let output = check_gui_run(
+            &fixture,
+            "run",
+            "//:double",
+            r#"--config=arguments -- "two words" '' '$HOME;$(touch marker)' `id` $HOME $(id) | > * '#'"#,
+        )
+        .await;
+        let expected = [
+            "two words",
+            "",
+            "$HOME;$(touch marker)",
+            "`id`",
+            "$HOME",
+            "$(id)",
+            "|",
+            ">",
+            "*",
+            "#",
+        ];
+        assert!(
+            output.contains(&format!(
+                "ARGV={}",
+                serde_json::to_string(&expected).unwrap()
+            )),
+            "{output}"
+        );
+        assert!(!fixture.ws.join("marker").exists());
         assert_eq!(store::list(&fixture.data, &fixture.ws).unwrap().len(), 3);
+        check_missing_value(&fixture, "--test_filter").await;
+        check_missing_value(&fixture, "--config").await;
     }
 
     struct GuiBazelFixture {
@@ -633,12 +663,22 @@ mod tests {
             let bazel = std::env::var("ZEAL_TEST_BAZEL").expect("ZEAL_TEST_BAZEL");
             let temp = LogDir::new();
             let ws = temp.0.join("workspace");
-            let data = temp.0.join("data");
+            let data = temp.0.join("data 日本語");
             fs::create_dir(&ws).unwrap();
             fs::write(ws.join("WORKSPACE"), "workspace(name='zeal_gui_test')\n").unwrap();
-            fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
+            fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\nbuild:arguments --define=message=hello\n").unwrap();
             fs::write(ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
-            fs::write(ws.join("binary.bzl"), "def _binary(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.py')\n    ctx.actions.write(out,'#!/usr/bin/env python3\\nprint(int(input())*2)\\nraise SystemExit(23)\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary=rule(implementation=_binary,executable=True)\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
+            fs::write(ws.join("binary.bzl"), r#"def _binary(ctx):
+    out=ctx.actions.declare_file(ctx.label.name+'.py')
+    ctx.actions.write(out,'#!/usr/bin/env python3\nimport json,sys\nprint("ARGV="+json.dumps(sys.argv[1:],separators=(",",":")))\nprint(int(input())*2)\nraise SystemExit(23)\n',is_executable=True)
+    return [DefaultInfo(executable=out)]
+def _check(ctx):
+    out=ctx.actions.declare_file(ctx.label.name+'.sh')
+    ctx.actions.write(out,'#!/bin/sh\n[ "$TESTBRIDGE_TEST_ONLY" = "suite one" ]\n',is_executable=True)
+    return [DefaultInfo(executable=out)]
+binary=rule(implementation=_binary,executable=True)
+check_test=rule(implementation=_check,test=True)
+"#).unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let endpoint = format!("grpc://{address}");
@@ -661,8 +701,7 @@ mod tests {
                     "--output_user_root={}",
                     self.temp.0.join("bazel").display()
                 ))
-                .args(argv(cmd, target, dir, &self.endpoint))
-                .arg(format!("--invocation_id={id}"))
+                .args(argv(cmd, target, &[], dir, &self.endpoint, id))
                 .args([
                     "--enable_bzlmod=false",
                     "--enable_workspace=true",
@@ -676,10 +715,16 @@ mod tests {
         }
     }
 
-    async fn check_gui_run(fixture: &GuiBazelFixture, cmd: &'static str, target: &str) {
+    async fn check_gui_run(
+        fixture: &GuiBazelFixture,
+        cmd: &'static str,
+        target: &str,
+        arguments: &str,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let dir = store::reserve_invocation(&fixture.data, &id).unwrap();
         let mut command = fixture.command(cmd, target, &dir, &id);
+        command.args(parse_arguments(arguments).unwrap());
         let (child, terminal, capture) = crate::terminal::spawn(&mut command, &dir).unwrap();
         let core = Arc::new(Core::new());
         {
@@ -734,6 +779,23 @@ mod tests {
         assert!(store::artifact(&fixture.data, &fixture.ws, &id, "profile.gz").is_ok());
         assert!(core.state.lock().unwrap().run.is_none());
         assert_saved_console(&fixture.data, &core, &id, &output);
+        output
+    }
+
+    async fn check_missing_value(fixture: &GuiBazelFixture, option: &str) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = store::reserve_invocation(&fixture.data, &id).unwrap();
+        let mut command = fixture.command("test", "//:check", &dir, &id);
+        command.args(parse_arguments(option).unwrap());
+        let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("Expected value after {option}"))
+        );
+        assert!(store::read_record(&fixture.data, &fixture.ws, &id).is_err());
     }
 
     /// Completed consoles expose durable bytes even when reopened, but reject new input.
@@ -851,9 +913,13 @@ mod tests {
                 argv(
                     "build",
                     target,
+                    &[],
                     Path::new("/data/runs/abc"),
-                    "grpc://127.0.0.1:12345"
-                )[1],
+                    "grpc://127.0.0.1:12345",
+                    "abc",
+                )
+                .last()
+                .unwrap(),
                 target
             );
         }

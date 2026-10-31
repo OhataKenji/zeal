@@ -143,11 +143,12 @@ button:disabled {
 }
 
 .toolbar {
-  display: flex;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr);
+  gap: 8px 20px;
   align-items: center;
   min-height: 64px;
-  padding-right: 20px;
+  padding: 11px 20px 11px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -903,7 +904,6 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 0 0 252px;
   min-width: 0;
   padding: 0 12px;
 }
@@ -920,7 +920,6 @@ button {
 }
 
 .composer {
-  flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -934,6 +933,44 @@ button {
 .composer:focus-within {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 25%, transparent);
+}
+
+.arguments-toggle {
+  margin-right: 4px;
+  border-left-color: var(--border);
+  border-radius: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.arguments-toggle[aria-expanded="true"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.arguments-indicator {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.arguments-row {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.arguments-row label {
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.arguments-input {
+  font: 12px var(--mono);
 }
 
 .pane-count {
@@ -1143,8 +1180,8 @@ button.chip:hover {
     width: 215px;
   }
 
-  .workspace-picker {
-    flex-basis: 215px;
+  .toolbar {
+    grid-template-columns: 215px minmax(0, 1fr);
   }
 
   .run-header {
@@ -1155,17 +1192,12 @@ button.chip:hover {
 @media (max-width: 800px) {
   .toolbar {
     padding: 8px;
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
 
-  .workspace-picker {
-    flex: 1;
-  }
-
-  .composer {
-    order: 2;
-    flex-basis: 100%;
+  .arguments-row {
+    grid-column: 1;
   }
 
   .sidebar {

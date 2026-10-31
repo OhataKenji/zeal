@@ -26,6 +26,12 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
 Find Bazel targets by fuzzy-searching their full labels, then choose `build`, `test`, or `run`.
 
+Open **Arguments** to add Bazel command options. For `run`, put program arguments
+after `--`, for example `--config=dev -- "two words"`. Arguments use shell-style
+quotes and escapes, but never run through a shell or expand variables or commands.
+An unquoted `#` at the start of a word starts a comment; quote `'#'` to pass it literally.
+Options that override Zeal's recording flags can prevent history or timing data from being captured.
+
 ### Run Page
 
 Inspect a run's logs, target results, details, and per-thread timing trace from the history.
