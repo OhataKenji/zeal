@@ -17,7 +17,7 @@ pub struct Output {
 pub fn read(data: &Path, core: &Core, id: &str, offset: u64) -> io::Result<Output> {
     use std::io::{Read, Seek};
 
-    let (workspace, finished) = {
+    let finished = {
         let state = core.state.lock().expect("application state lock poisoned");
         if state.console_run().map(|run| run.as_str()) != Some(id) {
             return Err(io::Error::new(
@@ -25,11 +25,15 @@ pub fn read(data: &Path, core: &Core, id: &str, offset: u64) -> io::Result<Outpu
                 "Console is no longer available",
             ));
         }
-        let console = state.console.as_ref().expect("Console access was checked");
-        (console.workspace.clone(), console.finished)
+        state
+            .console
+            .as_ref()
+            .expect("Console access was checked")
+            .finished
     };
-    // Read access outlives process control but remains workspace-scoped.
-    let mut file = store::artifact(data, &workspace, id, "log.txt")?;
+    // The Core read grant authorizes this ID even if Started never associated
+    // it with a workspace in history. Process controls use Core.run instead.
+    let mut file = store::live_artifact(data, id, "terminal.log")?;
     let length = file.metadata()?.len();
     if offset > length {
         return Err(io::Error::other("invalid terminal output offset"));
@@ -68,8 +72,8 @@ mod tests {
             let workspace = root.join("workspace");
             let data = root.join("data");
             std::fs::create_dir_all(&workspace).unwrap();
-            let (record, dir) = store::create(&data, &workspace, "run", "//:test").unwrap();
-            let id = record.id;
+            let id = uuid::Uuid::new_v4().to_string();
+            let dir = store::reserve_invocation(&data, &id).unwrap();
             let core = Core::new();
             {
                 let mut state = core.state.lock().unwrap();
@@ -101,7 +105,7 @@ mod tests {
     #[test]
     fn process_exit_does_not_end_drain_before_the_capture_writes_its_final_bytes() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.dir.join("log.txt"), vec![0xff; 70 * 1024]).unwrap();
+        std::fs::write(fixture.dir.join("terminal.log"), vec![0xff; 70 * 1024]).unwrap();
         let first = read(&fixture.data, &fixture.core, &fixture.id, 0).unwrap();
         assert_eq!(first.data.len(), 64 * 1024);
         assert!(!first.done);
@@ -111,7 +115,7 @@ mod tests {
         assert!(!middle.done);
         let mut file = std::fs::OpenOptions::new()
             .append(true)
-            .open(fixture.dir.join("log.txt"))
+            .open(fixture.dir.join("terminal.log"))
             .unwrap();
         file.write_all(b"program tail\n").unwrap();
         fixture
@@ -133,14 +137,15 @@ mod tests {
     }
 
     #[test]
-    fn completed_console_keeps_its_failure_output_after_capture_finishes() {
+    fn unobserved_invocation_keeps_its_failure_output_after_capture_finishes() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.dir.join("log.txt"), b"startup failed\n").unwrap();
+        std::fs::write(fixture.dir.join("terminal.log"), b"startup failed\n").unwrap();
         {
             let mut state = fixture.core.state.lock().unwrap();
             state.run = None;
             state.console.as_mut().unwrap().finished = true;
         }
+        assert!(store::read_record(&fixture.data, &fixture.workspace, &fixture.id).is_err());
         let output = read(&fixture.data, &fixture.core, &fixture.id, 0).unwrap();
         assert_eq!(output.data, b"startup failed\n");
         assert!(output.done);
@@ -156,9 +161,8 @@ mod tests {
     #[test]
     fn console_read_grant_rejects_other_ids_workspaces_and_replaced_consoles() {
         let fixture = Fixture::new();
-        let (other, _) =
-            store::create(&fixture.data, &fixture.workspace, "run", "//:other").unwrap();
-        let other_id = other.id;
+        let other_id = uuid::Uuid::new_v4().to_string();
+        store::reserve_invocation(&fixture.data, &other_id).unwrap();
         assert_eq!(
             read(&fixture.data, &fixture.core, &other_id, 0)
                 .unwrap_err()

@@ -318,6 +318,26 @@ test("stop is offered only while a run is live and not already stopping", async 
   await stopping;
 });
 
+test("an unobserved reservation keeps composer input in the live Console only", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("run", "//:app");
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
+  await started;
+  assert.deepEqual(h.view.console, { id: RECORD.id, cmd: "run", target: "//:app" });
+  assert.equal(h.view.console?.startedAt, undefined);
+  pendingRequest(h, "list_runs").reply.resolve([]);
+  await settle();
+  h.session.selectRun(null);
+  assert.equal(h.view.consoleOpen, false);
+  const live = h.view.console;
+  assert.ok(live);
+  h.session.openConsole(live);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(canStop(h.view), true);
+});
+
 test("a confirmed build result leaves the live program and Console controls active", async () => {
   const h = harness();
   await h.session.init();

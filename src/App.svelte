@@ -220,11 +220,14 @@
       </button>
       {#if state.consoleRun ?? state.running}
         {@const consoleId = (state.consoleRun ?? state.running)!}
-        {@const consoleRecord = app.view.console?.id === consoleId ? app.view.console : app.view.runs.find((run) => run.id === consoleId)}
-        {#if consoleRecord}<button
+        <button
           class="analytics-link"
           class:active={app.view.consoleOpen}
-          onclick={() => getSession().openConsole(consoleRecord)}>Console</button>{/if}
+          onclick={() => getSession().openConsole(
+            app.view.console?.id === consoleId
+              ? app.view.console
+              : { id: consoleId },
+          )}>Console</button>
       {/if}
       <button
         class="analytics-link"
@@ -246,8 +249,8 @@
             <li>
               <button
                 class="run-row"
-                title={`${run.cmd} ${run.target} — ${status.label}`}
-                aria-label={`${run.cmd} ${run.target}: ${status.label}`}
+                title={`${run.cmd ?? "Command not recorded"} ${run.target ?? run.id} — ${status.label}`}
+                aria-label={`${run.cmd ?? "Command not recorded"} ${run.target ?? run.id}: ${status.label}`}
                 class:selected={active}
                 aria-current={active ? "true" : undefined}
                 onclick={() =>
@@ -257,16 +260,17 @@
               >
                 <span class="run-label"
                   ><RunStatus {...status} compact /><span class="run-command"
-                    >{run.cmd}</span
+                    >{run.cmd ?? "?"}</span
                   >
+                  {#if run.startedAt !== undefined}
                   <time datetime={new Date(run.startedAt).toISOString()}
                     >{new Date(run.startedAt).toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}</time
-                  ></span
+                  >{:else}<span>Time not recorded</span>{/if}</span
                 >
-                <span class="run-target">{run.target}</span>
+                <span class="run-target">{run.target ?? run.id}</span>
               </button>
             </li>
           {/each}

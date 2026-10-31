@@ -1,6 +1,6 @@
 # M5: 日次集計グラフ
 
-_Last update: 2026/10/29_ · _Status: Approved_
+_Last update: 2026/10/31_ · _Status: Approved_
 
 M4の保存済みrecordを日付ごとに集計し、件数・結果内訳・合計時間・所要時間の推移と、
 target別のランキングを表示する。新しい観測と保存状態は追加しない。
@@ -31,7 +31,7 @@ flowchart LR
 ## 集計ルール
 
 workspaceはM4のcanonical pathで照合する。
-GUIのrecordはworkspace表のworkspace_id、BESのrecordはobservation.workspaceで絞る。
+共通run表のworkspace_idで絞る。
 workspaceとfilterはbound parameterを使い、別workspaceを混ぜない。
 
 基準は `started_at_ms`、dayはSQLの `date(started_at_ms / 1000, 'unixepoch', 'localtime')` とする。
@@ -43,24 +43,23 @@ index用のUnix ms範囲は前後のcalendar日まで広く取り、同じSQLの
 
 SQLで対象期間の行を `(local日付, exit_code, target_raw, 経過ms)` で返し、
 日別集計とランキングはRustで行う。recordなしの日は0件とする。
-`run(workspace_id, started_at_ms)` にindexを置き、途中切詰め、事前集計表、cache、OLAPは使わない。
+`run(workspace_id, started_at_ms DESC, id)` にindexを置き、途中切詰め、事前集計表、cache、OLAPは使わない。
 percentileは昇順列に対するnearest-rankとし、対象がない日・targetは0とする。
 経過時間は `finished_at_ms - started_at_ms` とし、終了時刻がないrecordは件数と結果には含め、
 時間集計からは外す。負の経過時間は0に丸める。
 targetフィルタは日別系列だけに適用し、ランキングは常に期間全体の順位を返す。
 詳細fileの有無や読込/parse状態は集計に影響させない。
-M4の開始時刻を使い、終了コードがNULLの未完了recordは除外する。
+BEPの開始時刻とbuild exitが既知のrecordを集計する。
+開始時刻やexit codeがNULLなら除外する。
 結果は保存済みexit codeから `0=ok`、`8=interrupted`、その他は `failed` とする。
-現行M4がsignal終了に保存する `-1` もfailedに含める。
+子processの終了やsignalからビルド結果を補完しない。
 
-GUIのrecordと、BESで受信して保存したターミナル実行のrecordを集計する。
-BES側はobservationのcomplete=1かつ終了コードがあるbuild/testだけを対象とする。
-BuildFinishedを受信しても、最後のイベントが届くまでは含めない。
-同じworkspaceとinvocation IDのGUI recordがあれば、GUI側を優先する。
-この重複排除は期間・cmd・結果の絞り込み前に行い、GUI側が未完了でもBES側で補わない。
-GUI実行がないworkspaceと、既に保存済みのターミナル実行も対象とする。
-observation.recordの要約だけを読み、イベント本体やログの解析、保存形式の移行は行わない。
-BEPがない失敗も終了コードがあれば含め、全Bazel起動回数とは扱わない。
+共通run表のbuild/testを一度ずつ集計する。
+受信回の確定状態は集計条件に使わない。
+起動元による優先や重複排除も行わない。
+
+BEPの結果送信後も動くプログラムの待ち時間は、ビルド時間へ加えない。
+イベント本体とログは読み直さない。
 未完了recordの終了保存や過去のrecordの追加で件数は変わり得る。
 runnerの状態と成果物のparseは参照しない。
 安全性と保存記録の扱いは[M4](./m4-run-history.md)と[全体構成](./overview.md#security-concerns)に従う。
@@ -72,7 +71,7 @@ runnerの状態と成果物のparseは参照しない。
 3. Unix ms、local日付、DST、タイムゾーン変更、当日の途中表示と過去の遅着。
 4. 再集計時のfilter保持、SQL値のbound処理。
 5. 日別とtarget別の合計、p50/p95、ランキング順位とtargetフィルタの独立性。
-6. ターミナルだけのworkspace、受信完了の判定、BES再送とGUI併用時の重複排除。
+6. 共通runの一回の集計、BES再送、ビルド結果とprocess終了の独立性。
 
 5,000件の合成recordでworkspace/cmd/outcome/日付の分布、端末/OS、cold/warm、反復回数を残し、初期表示と再filterを測る。
 切り詰めず正しい件数を確認し、支障があれば取得/集計/描画を分けて調べる。

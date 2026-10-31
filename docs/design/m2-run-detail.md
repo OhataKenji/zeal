@@ -1,7 +1,7 @@
 # Zeal 設計 M2: 一回の run の説明
 
 _OhataKenji_
-_Last update: 2026/10/18_
+_Last update: 2026/10/31_
 _Status: Approved_
 
 ## Goal
@@ -21,9 +21,10 @@ phase の区切りとスレッド上の event を示し、観測できる範囲�
 ## Background
 
 run、snapshot、BEP などの共通用語は [overview](./overview.md#background) に従う。
-**BEP** は呼び出し単位のイベント列で、target の結果や test 結果を与える。
+**BEP**(Build Event Protocol)は、Bazelが報告するイベント列である。
+targetとtestの結果を含み、Zeal内のBuild Event Service(**BES**) receiverが受信する。
 **profile** は Bazel の JSON trace 形式の計測記録で、phase の marker とスレッドごとの event を持つ。
-run 全体の終了結果には、Zeal が起動した子プロセスの exit code を使う。
+runの終了結果にはBEPのBuildFinishedのexit codeを使う。
 
 Bazel の loading、analysis、execution は、常に独立した時間帯として観測できるとは限らない。
 Bazel 8 の既定の Skymeld では analysis と execution が重なり、profile の marker は `Evaluate target patterns`、`Load, analyze dependencies and build artifacts`、`Complete build` などになる。
@@ -36,10 +37,10 @@ Bazel server、解析済みの情報、既存出力の維持も速度に関わ�
 
 ## Overview
 
-Send で `build` または `test` を起動し、BEP と profile を run の UUID ディレクトリに残す。
-stdout/stderr は同じ追記用ファイルへ直接書き、ログと timing は client の終了後に表示する。
+SendでBazelを起動し、共通BES receiverがログを含むBEPをrunのUUIDディレクトリに残す。
+profileは任意の計時fileとして保存する。
 
-M2 は SQLite を導入せず、詳細を開くたびに保存した file を parse する。
+入力と結果はSQLiteの元事実から表示し、詳細を開くたびに保存したfileをparseする。
 計算済みの表示データを永続化しないことで、取り込み結果と生 file の整合を管理する状態を増やさない。
 
 profile は全スレッドの event を原形のまま可視化し、加工をスレッドへの集約と metadata の反映に留める。
@@ -48,9 +49,7 @@ BEP や profile が欠損した場合は、利用できるセクションだけ�
 ```mermaid
 flowchart LR
     SEND["Send: build / test"] --> SPAWN["bazel + 観測 flag"]
-    SPAWN -->|"直接追記"| LOG["log.txt"]
-    LOG -->|"client 終了後に読む"| VIEW
-    SPAWN -->|"完了"| FILES["run.json / bep.binpb / profile.gz"]
+    SPAWN -->|"共通BES receiver"| FILES["ログ込みbep.binpb / 任意profile.gz"]
     FILES -->|"詳細を開くたびに parse"| VIEW["結果 / timing / phase の帯"]
 ```
 
@@ -59,15 +58,20 @@ flowchart LR
 ### 起動と保存
 
 M2 では snapshot の query 中か run 中なら Send を disabled にし、実行待ちの queue を持たない。
-成果物は `<app data dir>/ws-<fnv64(正規化した workspace path)>/runs/<uuid>/` に保存する。
+保存先とDBの規則は[M4](./m4-run-history.md)に従う。
 
-- `run.json`：Zeal が書く id、workspace、cmd、target、開始時刻、終了時刻、exit code
-- `log.txt`：子プロセスが直接追記する stdout/stderr の記録
-- `bep.binpb` と `profile.gz`：Bazel が書く生の成果物。Zeal は書き換えない
+- `attempt/<number>/bep.binpb`：receiverが保存するログ込みBuildEvent
+- `profile.gz`：Bazelが書く計時情報
+- `terminal.log`：PTYで取得する端末出力
 
-起動時には次の flag を付ける。
+イベント送信には次のflagを付ける。
 
-- `--build_event_binary_file=<dir>/bep.binpb`
+- `--bes_backend=<自分のreceiver>`
+- `--bes_upload_mode=wait_for_upload_complete`
+- `--bes_proxy=`
+
+計時とtoolの識別には次のflagを付ける。
+
 - `--profile=<dir>/profile.gz`
 - `--experimental_profile_include_primary_output`
 - `--noslim_profile`
@@ -75,28 +79,27 @@ M2 では snapshot の query 中か run 中なら Send を disabled にし、実
 
 対象は Bazel 8.7 以上を目安とし、基準環境は spike を行った Bazel 8.7.0 とする。
 flag や出力形式の version 別の対応表、parser の field 名の読み替えは持たない。
-非対応の flag で起動が失敗した場合も失敗した run として残し、flag を落とした再実行は行わない。
+非対応flagでBEPの結果が届かなければ、履歴の結果は不明とする。flagを落とした自動再実行は行わない。
 
 ### ログの表示
 
-runner は stdout と stderr を同じ追記用ファイルへ接続する。
-UI は client 終了後にファイルを読み、実行中はログを表示しない。
-BEP の tail とログイベントの配信は行わない。
-子孫が残った場合は完了後の追記もあり得るため、詳細を開いた時点の内容を表示する。
+実行中はPTYのConsoleを表示する。
+保存済みのログは、詳細要求時にBEPのProgressをstderr、stdoutの順で取り込み、末尾512 KiBを表示する。
+BEP表示データとログを一度の逐次parseで組み立て、別のログfileへ保存しない。
 実行中の timing は `not available` とする。
 
 ### 表示時の parse
 
-`get_run` のたびに BEP と profile を読み、結果を保存せず返す。
-BEPは一度の逐次decodeで、BEP表示データとProgressの末尾512KiBログを同時に組み立てる。
-BEP表示は8MiBまでとし、上限後もログ末尾のために走査を続ける。
-長さ情報をbuffer確保前に検査し、frameが欠けた場合も読めた部分を不完全と明示する。
-履歴のログはBEPから読み、Consoleの端末出力とは分ける。
+`get_run` でBEPとログを一度に読む。
+`get_run_profile` ではprofileを別途読み、いずれも解析結果を保存しない。
+
+BEP は length-delimited protobuf event として parse し、末尾の frame が欠けた場合も受理できた結果を使う。
 frame は 16 MiB まで読み、長さ prefix の overflow や不正 protobuf も incomplete とする。
 profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error とする。
 
 各成果物の状態(ok / incomplete / missing / parse error)は parse 時に決める。
-上限による解析の中断や部分的な BEP は incomplete とし、理由を詳細画面に出す。
+BEP表示は8 MiBまでとし、項目の省略や部分的なBEPはincompleteとして理由を示す。
+表示上限に達しても後続ログのために走査を続ける。
 
 ### timing と phase の帯
 
@@ -142,7 +145,7 @@ Skymeld で analysis と execution が重なることを注記する。
 ## Caveats
 
 - profile の可視化は計測された event の範囲を示す。記録が少ないことを、処理がなかったことや cache の不調とは解釈しない
-- `run.json` の時刻差は壁時計上の差であり、monotonic な計測値ではない
+- BEPの開始終了時刻の差は壁時計上の差であり、monotonicな計測値ではない
 - 中断や強制終了では成果物が欠損するか、gzip/JSON の末尾が欠け得る
 - 観測 flag 自体に負担がある。profile の採用セットと解析上限の確定は Test Plan の実測を残して行う
 - 観測のために clean、shutdown、別の output base を強制せず、既存の Bazel の状態を維持する

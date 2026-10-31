@@ -1,391 +1,315 @@
-//! Durable observations, independent of process ownership. Acknowledgements
-//! follow the transaction containing both original events and their projection.
-use super::{ErrorKind, RunRecord, Store, StoreError};
-use crate::bep::{Bep, TargetResult, TestResult};
+//! Connection-local event writer. SQL holds only invocation facts and the
+//! current receiving attempt; acknowledgements follow EOF, flush and SQL.
+use super::{ErrorKind, Store, StoreError, database, fail, id};
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
 use prost::Message;
 use rusqlite::{OptionalExtension, params};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 
-pub(super) const SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS build_event(
-        build_id TEXT NOT NULL, invocation_id TEXT NOT NULL, component INTEGER NOT NULL,
-        sequence INTEGER NOT NULL, payload BLOB NOT NULL,
-        PRIMARY KEY(build_id,invocation_id,component,sequence));
-    CREATE INDEX IF NOT EXISTS build_event_invocation ON build_event(invocation_id);
-    CREATE TABLE IF NOT EXISTS observation(
-        id TEXT PRIMARY KEY, workspace TEXT NOT NULL, record TEXT NOT NULL, summary TEXT NOT NULL, complete INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS observation_workspace ON observation(workspace);
-    PRAGMA user_version=2;";
+pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 
-pub const LOG_LIMIT: usize = 512 * 1024;
-const SUMMARY_LIMIT: usize = 8 * 1024 * 1024;
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Observation {
-    pub id: String,
-    pub workspace: String,
-    pub cmd: String,
-    pub target: String,
-    pub started_at: u64,
-    pub finished_at: Option<u64>,
-    pub exit_code: Option<i32>,
-    pub complete: bool,
-    pub bep: Bep,
-    pub log: String,
+#[derive(Default)]
+struct Facts {
+    workspace: Option<PathBuf>,
+    cmd: Option<String>,
+    target: Option<String>,
+    started: Option<i64>,
+    finished: Option<i64>,
+    exit: Option<i32>,
 }
 
-impl Observation {
-    pub fn record(&self) -> RunRecord {
-        RunRecord {
-            id: self.id.clone(),
-            workspace: self.workspace.clone(),
-            cmd: self.cmd.clone(),
-            target: self.target.clone(),
-            started_at: self.started_at,
-            finished_at: self.finished_at,
-            exit_code: self.exit_code,
-            external: true,
-        }
-    }
-
-    /// Pure projection. The saved event bytes retain fields not shown by this UI.
-    #[allow(deprecated)] // Fall back to legacy millisecond timestamps when needed.
-    fn apply(&mut self, event: &bep::BuildEvent) {
-        if let Some(Payload::StructuredCommandLine(command_line)) = &event.payload {
-            crate::bep::project_command_line(command_line, &mut self.bep);
-        }
-        if let Some(Payload::Started(started)) = &event.payload {
-            self.workspace = started.workspace_directory.clone();
-            self.cmd = started.command.clone();
-            self.started_at = millis(started.start_time.as_ref(), started.start_time_millis);
-            self.target = event
-                .children
-                .iter()
-                .filter_map(|id| id.id.as_ref())
-                .filter_map(|id| match id {
-                    Id::Pattern(pattern) | Id::PatternSkipped(pattern) => Some(&pattern.pattern),
-                    _ => None,
-                })
-                .flat_map(|patterns| patterns.iter().cloned())
-                .collect::<Vec<_>>()
-                .join(" ");
-        }
-        if let Some(Payload::Progress(progress)) = &event.payload {
-            self.log.push_str(&progress.stderr);
-            self.log.push_str(&progress.stdout);
-            trim_log(&mut self.log);
-        }
-        if let Some(Payload::OptionsParsed(options)) = &event.payload {
-            self.bep.options = Some(crate::bep::BuildOptions {
-                startup_options: options.startup_options.clone(),
-                explicit_startup_options: options.explicit_startup_options.clone(),
-                cmd_line: options.cmd_line.clone(),
-                explicit_cmd_line: options.explicit_cmd_line.clone(),
-            });
-        }
-        match (
-            event.id.as_ref().and_then(|id| id.id.as_ref()),
-            event.payload.as_ref(),
-        ) {
-            (Some(Id::TargetCompleted(id)), Some(Payload::Completed(result))) => {
-                self.bep.targets.push(TargetResult {
-                    label: id.label.clone(),
-                    ok: result.success,
-                });
-            }
-            (Some(Id::TargetConfigured(id)), Some(Payload::Aborted(_))) => {
-                self.bep.targets.push(TargetResult {
-                    label: id.label.clone(),
-                    ok: false,
-                });
-            }
-            (Some(Id::TestSummary(id)), Some(Payload::TestSummary(summary))) => {
-                self.bep.tests.push(TestResult {
-                    label: id.label.clone(),
-                    status: crate::bep::test_status(summary.overall_status).to_string(),
-                });
-            }
-            _ => {}
-        }
-        if let Some(Payload::Finished(finished)) = &event.payload {
-            self.finished_at = Some(millis(
-                finished.finish_time.as_ref(),
-                finished.finish_time_millis,
-            ));
-            self.exit_code = finished.exit_code.as_ref().map(|exit| exit.code);
-        }
-        self.complete |= event.last_message;
-    }
+#[derive(Debug)]
+pub struct AckRange {
+    pub first: i64,
+    pub last: i64,
 }
 
-pub fn trim_log(log: &mut String) -> bool {
-    if log.len() <= LOG_LIMIT {
-        return false;
-    }
-    let mut start = log.len() - LOG_LIMIT;
-    while !log.is_char_boundary(start) {
-        start += 1;
-    }
-    log.drain(..start);
-    true
+pub struct Receipt {
+    data: PathBuf,
+    stream: bes::StreamId,
+    attempt: Option<i64>,
+    writer: Option<BufWriter<File>>,
+    first: Option<i64>,
+    last: i64,
+    last_message: bool,
+    facts: Facts,
 }
 
-fn millis(time: Option<&prost_types::Timestamp>, fallback: i64) -> u64 {
-    time.map(|t| {
-        t.seconds
-            .saturating_mul(1000)
-            .saturating_add(i64::from(t.nanos) / 1_000_000)
-    })
-    .unwrap_or(fallback)
-    .max(0) as u64
-}
-
-/// Reject gaps and contradictory retries; acknowledge identical retries without
-/// applying their effects twice. Workspaces come from BuildStarted, not the UI.
-#[tracing::instrument(target = "zeal::operations", name = "bes.save_event", skip_all)]
-pub fn save(data: &Path, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreError> {
-    let stream = ordered
-        .stream_id
-        .as_ref()
-        .ok_or_else(|| super::fail(ErrorKind::Invalid))?;
-    if stream.build_id.is_empty()
-        || stream.build_id.len() > 256
-        || stream.invocation_id.len() > 256
-        || ordered.sequence_number < 1
-        || !(1..=3).contains(&stream.component)
-    {
-        return Err(super::fail(ErrorKind::Invalid));
-    }
-    let wrapper = ordered
-        .event
-        .as_ref()
-        .ok_or_else(|| super::fail(ErrorKind::Invalid))?;
-    let event = wrapper
-        .bazel_event
-        .as_ref()
-        .map(|any| {
-            if !any.type_url.ends_with("/build_event_stream.BuildEvent") {
-                return Err(super::fail(ErrorKind::Invalid));
-            }
-            bep::BuildEvent::decode(any.value.as_slice())
-                .map_err(|_| super::fail(ErrorKind::Invalid))
-        })
-        .transpose()?;
-    if event.is_some() {
-        if stream.component != 3 {
-            return Err(super::fail(ErrorKind::Invalid));
+impl Receipt {
+    pub fn begin(data: &Path, stream: &bes::StreamId) -> Result<Self, StoreError> {
+        if stream.build_id.is_empty()
+            || stream.build_id.len() > 256
+            || stream.invocation_id.len() > 256
+            || !(1..=3).contains(&stream.component)
+        {
+            return Err(fail(ErrorKind::Invalid));
         }
-        super::id(&stream.invocation_id)?;
-    }
-    let bytes = ordered.encode_to_vec();
-    let mut store = Store::open(data)?;
-    let tx = store
-        .conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    if event.is_some() {
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT build_id FROM build_event WHERE invocation_id=?1 LIMIT 1",
-                params![stream.invocation_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if existing.is_some_and(|build| build != stream.build_id) {
-            return Err(super::fail(ErrorKind::Conflict));
-        }
-    }
-    let previous: Option<Vec<u8>> = tx.query_row(
-        "SELECT payload FROM build_event WHERE build_id=?1 AND invocation_id=?2 AND component=?3 AND sequence=?4",
-        params![stream.build_id, stream.invocation_id, stream.component, ordered.sequence_number],
-        |row| row.get(0)).optional()?;
-    if let Some(previous) = previous {
-        return if previous == bytes {
-            Ok(())
-        } else {
-            Err(super::fail(ErrorKind::Conflict))
+        let run_id = id(&stream.invocation_id)?;
+        let attempt = {
+            let mut store = Store::open(data)?;
+            let tx = store
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute(
+                "INSERT INTO run(id) VALUES(?1) ON CONFLICT(id) DO NOTHING",
+                [&run_id],
+            )?;
+            let (previous, complete): (i64, bool) = tx.query_row(
+                "SELECT attempt,received_complete FROM run WHERE id=?1",
+                [&run_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let next = if complete {
+                None
+            } else {
+                let next = previous
+                    .checked_add(1)
+                    .ok_or_else(|| fail(ErrorKind::Capacity))?;
+                tx.execute(
+                    "UPDATE run SET attempt=?2 WHERE id=?1 AND received_complete=0",
+                    params![run_id, next],
+                )?;
+                Some(next)
+            };
+            tx.commit()?;
+            next
         };
+        // No Store or SQL transaction survives into file writes.
+        let writer = if let Some(attempt) = attempt {
+            let root = super::securefs::Dir::root(data)?;
+            let dir = root
+                .child("runs", true)?
+                .child(&run_id, true)?
+                .child("attempt", true)?
+                .create_child(&attempt.to_string())?;
+            Some(BufWriter::with_capacity(
+                64 * 1024,
+                dir.file("bep.binpb", true)?,
+            ))
+        } else {
+            None
+        };
+        Ok(Self {
+            data: data.into(),
+            stream: stream.clone(),
+            attempt,
+            writer,
+            first: None,
+            last: 0,
+            last_message: false,
+            facts: Facts::default(),
+        })
     }
-    let last: i64 = tx.query_row(
-        "SELECT coalesce(max(sequence),0) FROM build_event WHERE build_id=?1 AND invocation_id=?2 AND component=?3",
-        params![stream.build_id, stream.invocation_id, stream.component], |row| row.get(0))?;
-    if ordered.sequence_number != last + 1 {
-        return Err(super::fail(ErrorKind::Conflict));
-    }
-    tx.execute(
-        "INSERT INTO build_event VALUES(?1,?2,?3,?4,?5)",
-        params![
-            stream.build_id,
-            stream.invocation_id,
-            stream.component,
-            ordered.sequence_number,
-            bytes
-        ],
-    )?;
-    if let Some(mut event) = event {
-        if let Some(Payload::Started(started)) = &mut event.payload {
-            if started.uuid != stream.invocation_id {
-                return Err(super::fail(ErrorKind::Conflict));
+
+    pub fn append(&mut self, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreError> {
+        if ordered.stream_id.as_ref() != Some(&self.stream)
+            || ordered.sequence_number < 1
+            || ordered.encoded_len() > FRAME_LIMIT
+            || self.first.is_some() && self.last.checked_add(1) != Some(ordered.sequence_number)
+            || self.first.is_none() && self.attempt.is_some() && ordered.sequence_number != 1
+        {
+            return Err(fail(ErrorKind::Conflict));
+        }
+        let wrapper = ordered
+            .event
+            .as_ref()
+            .ok_or_else(|| fail(ErrorKind::Invalid))?;
+        if let Some(any) = &wrapper.bazel_event {
+            if self.last_message {
+                return Err(fail(ErrorKind::Conflict));
             }
-            if !Path::new(&started.workspace_directory).is_absolute()
+            if self.stream.component != 3
+                || !any.type_url.ends_with("/build_event_stream.BuildEvent")
+                || any.value.len() > FRAME_LIMIT
+            {
+                return Err(fail(ErrorKind::Invalid));
+            }
+            let event = bep::BuildEvent::decode(any.value.as_slice())
+                .map_err(|_| fail(ErrorKind::Invalid))?;
+            let started = matches!(event.payload, Some(Payload::Started(_)));
+            self.observe(&event)?;
+            if let Some(writer) = &mut self.writer {
+                // Keep the decoded BuildEvent, including Progress stdout/stderr.
+                let mut bytes = Vec::with_capacity(10);
+                prost::encoding::encode_varint(any.value.len() as u64, &mut bytes);
+                writer.write_all(&bytes)?;
+                writer.write_all(&any.value)?;
+            }
+            if started {
+                self.save(false)?;
+            }
+            self.last_message = event.last_message;
+        }
+        self.first.get_or_insert(ordered.sequence_number);
+        self.last = ordered.sequence_number;
+        Ok(())
+    }
+
+    #[allow(deprecated)]
+    fn observe(&mut self, event: &bep::BuildEvent) -> Result<(), StoreError> {
+        if let Some(Payload::Started(started)) = &event.payload {
+            if id(&started.uuid)? != id(&self.stream.invocation_id)? {
+                return Err(fail(ErrorKind::Conflict));
+            }
+            if self.facts.workspace.is_some()
                 || started.workspace_directory.len() > 16 * 1024
                 || started.command.len() > 64
             {
-                return Err(super::fail(ErrorKind::Invalid));
+                return Err(fail(ErrorKind::Invalid));
             }
-            if let Ok(path) = Path::new(&started.workspace_directory).canonicalize() {
-                started.workspace_directory = path.to_string_lossy().into_owned();
+            let mut target = String::new();
+            for pattern in event
+                .children
+                .iter()
+                .filter_map(|v| v.id.as_ref())
+                .filter_map(|v| match v {
+                    Id::Pattern(p) | Id::PatternSkipped(p) => Some(&p.pattern),
+                    _ => None,
+                })
+                .flatten()
+            {
+                let separator = usize::from(!target.is_empty());
+                if target
+                    .len()
+                    .saturating_add(separator)
+                    .saturating_add(pattern.len())
+                    > 64 * 1024
+                {
+                    return Err(fail(ErrorKind::Invalid));
+                }
+                if separator != 0 {
+                    target.push(' ');
+                }
+                target.push_str(pattern);
             }
+            self.facts.workspace = Some(database::workspace_path(Path::new(
+                &started.workspace_directory,
+            ))?);
+            self.facts.cmd = Some(started.command.clone());
+            self.facts.target = Some(target);
+            self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
         }
-        let saved: Option<String> = tx
-            .query_row(
-                "SELECT summary FROM observation WHERE id=?1",
-                [&stream.invocation_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let mut observation = saved
-            .as_ref()
-            .map(|value| decode(value))
-            .transpose()?
-            .unwrap_or_else(|| Observation {
-                id: stream.invocation_id.clone(),
-                ..Observation::default()
-            });
-        if observation.complete
-            || (!observation.workspace.is_empty()
-                && matches!(event.payload.as_ref(), Some(Payload::Started(_))))
-        {
-            return Err(super::fail(ErrorKind::Conflict));
+        if let Some(Payload::Finished(finished)) = &event.payload {
+            self.facts.finished =
+                millis(finished.finish_time.as_ref(), finished.finish_time_millis);
+            self.facts.exit = finished.exit_code.as_ref().map(|v| v.code);
         }
-        // Bazel may publish progress before BuildStarted. Keep those events;
-        // the observation becomes workspace-visible once BuildStarted arrives.
-        let targets = observation.bep.targets.len();
-        let tests = observation.bep.tests.len();
-        let command_lines =
-            matches!(event.payload, Some(Payload::StructuredCommandLine(_))).then(|| {
-                (
-                    observation.bep.original_command_line.clone(),
-                    observation.bep.canonical_command_line.clone(),
-                )
-            });
-        observation.apply(&event);
-        if observation.target.len() > 64 * 1024 {
-            return Err(super::fail(ErrorKind::Invalid));
-        }
-        let mut summary =
-            serde_json::to_string(&observation).map_err(|_| super::fail(ErrorKind::Corrupt))?;
-        if summary.len() > SUMMARY_LIMIT {
-            observation.bep.targets.truncate(targets);
-            observation.bep.tests.truncate(tests);
-            if let Some((original, canonical)) = command_lines {
-                observation.bep.original_command_line = original;
-                observation.bep.canonical_command_line = canonical;
-            }
-            observation.bep.truncated = true;
-            summary =
-                serde_json::to_string(&observation).map_err(|_| super::fail(ErrorKind::Corrupt))?;
-            if summary.len() > SUMMARY_LIMIT {
-                return Err(super::fail(ErrorKind::Capacity));
-            }
-        }
-        let record = serde_json::to_string(&observation.record())
-            .map_err(|_| super::fail(ErrorKind::Corrupt))?;
-        tx.execute("INSERT INTO observation(id,workspace,record,summary,complete) VALUES(?1,?2,?3,?4,?5)
-            ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,record=excluded.record,summary=excluded.summary,complete=excluded.complete",
-            params![observation.id, observation.workspace, record, summary, observation.complete])?;
+        Ok(())
     }
-    tx.commit()?;
-    Ok(())
+
+    fn save(&self, complete: bool) -> Result<(), StoreError> {
+        let mut store = Store::open(&self.data)?;
+        let tx = store
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let run_id = id(&self.stream.invocation_id)?;
+        let existing: (Option<Vec<u8>>,Option<String>,Option<String>,Option<i64>)=tx.query_row("SELECT w.canonical_path,r.cmd,r.target_raw,r.started_at_ms FROM run r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",[&run_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+        fn conflicts<T: PartialEq>(old: Option<&T>, new: Option<&T>) -> bool {
+            old.zip(new).is_some_and(|(a, b)| a != b)
+        }
+        let path = self
+            .facts
+            .workspace
+            .as_ref()
+            .map(|v| v.as_os_str().as_bytes().to_vec());
+        if conflicts(existing.0.as_ref(), path.as_ref())
+            || conflicts(existing.1.as_ref(), self.facts.cmd.as_ref())
+            || conflicts(existing.2.as_ref(), self.facts.target.as_ref())
+            || conflicts(existing.3.as_ref(), self.facts.started.as_ref())
+        {
+            return Err(fail(ErrorKind::Conflict));
+        }
+        if let Some(attempt) = self.attempt {
+            let current: bool = tx.query_row(
+                "SELECT attempt=?2 AND received_complete=0 FROM run WHERE id=?1",
+                params![run_id, attempt],
+                |r| r.get(0),
+            )?;
+            if !current {
+                return Err(fail(ErrorKind::Conflict));
+            }
+            let ws_id = if let Some(path) = path {
+                tx.execute("INSERT INTO workspace(id,canonical_path) VALUES(?1,?2) ON CONFLICT(canonical_path) DO NOTHING",params![uuid::Uuid::new_v4().to_string(),path])?;
+                tx.query_row(
+                    "SELECT id FROM workspace WHERE canonical_path=?1",
+                    [path],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+            } else {
+                None
+            };
+            let updated=tx.execute("UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=?7,exit_code=?8,received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",params![run_id,attempt,ws_id,self.facts.cmd,self.facts.target,self.facts.started,self.facts.finished,self.facts.exit,complete])?;
+            if updated != 1 {
+                return Err(fail(ErrorKind::Conflict));
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<AckRange, StoreError> {
+        if let Some(writer) = &mut self.writer {
+            writer.flush()?;
+        }
+        self.save(self.last_message)?;
+        Ok(AckRange {
+            first: self.first.ok_or_else(|| fail(ErrorKind::Invalid))?,
+            last: self.last,
+        })
+    }
+    pub fn partial(mut self) -> Result<(), StoreError> {
+        if let Some(writer) = &mut self.writer {
+            writer.flush()?;
+        }
+        self.save(false)
+    }
 }
 
-fn decode(value: &str) -> Result<Observation, StoreError> {
-    serde_json::from_str(value).map_err(|_| super::fail(ErrorKind::Corrupt))
-}
-
-#[tracing::instrument(target = "zeal::operations", name = "detail.observation", skip_all)]
-pub fn get(data: &Path, ws: &Path, id: &str) -> Result<Option<Observation>, StoreError> {
-    read(&Store::open(data)?, &ws.canonicalize()?, id)
-}
-
-pub(super) fn read(store: &Store, ws: &Path, id: &str) -> Result<Option<Observation>, StoreError> {
-    let summary: Option<String> = store
-        .conn
-        .query_row(
-            "SELECT summary FROM observation WHERE id=?1 AND workspace=?2",
-            params![super::id(id)?, ws.to_string_lossy()],
-            |row| row.get(0),
-        )
-        .optional()?;
-    summary.map(|value| decode(&value)).transpose()
-}
-
-pub(super) fn list(store: &Store, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
-    store
-        .conn
-        .prepare("SELECT record FROM observation WHERE workspace=?1 AND complete=1")?
-        .query_map([ws.to_string_lossy()], |row| row.get::<_, String>(0))?
-        .map(|row| serde_json::from_str(&row?).map_err(|_| super::fail(ErrorKind::Corrupt)))
-        .collect()
+fn millis(time: Option<&prost_types::Timestamp>, fallback: i64) -> Option<i64> {
+    time.map(|v| {
+        v.seconds
+            .saturating_mul(1000)
+            .saturating_add(i64::from(v.nanos) / 1_000_000)
+            .max(0)
+    })
+    .or_else(|| (fallback > 0).then_some(fallback))
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
-    use crate::protocol::generated::command_line::command_line_section::SectionType;
-    use crate::protocol::generated::command_line::{ChunkList, CommandLine, CommandLineSection};
-    use bep::build_event::Payload;
-    use bep::build_event_id::{Id, PatternExpandedId, TargetCompletedId};
-    use bep::build_finished::ExitCode;
-    use std::fs;
-    use std::path::PathBuf;
-
-    fn payload(payload: Payload) -> bep::BuildEvent {
-        bep::BuildEvent {
-            payload: Some(payload),
-            ..Default::default()
-        }
-    }
-
-    fn command_line(label: &str, value: String) -> bep::BuildEvent {
-        payload(Payload::StructuredCommandLine(CommandLine {
-            command_line_label: label.into(),
-            sections: vec![CommandLineSection {
-                section_label: "executable".into(),
-                section_type: Some(SectionType::ChunkList(ChunkList { chunk: vec![value] })),
-            }],
-        }))
-    }
-
-    struct Fixture {
-        root: PathBuf,
-        ws: PathBuf,
-        data: PathBuf,
-        id: String,
+    pub struct Fixture {
+        pub root: PathBuf,
+        pub data: PathBuf,
+        pub ws: PathBuf,
+        pub stream: bes::StreamId,
     }
     impl Fixture {
-        fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("zeal-events-{}", uuid::Uuid::new_v4()));
+        pub fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("zeal-receipt-{}", uuid::Uuid::new_v4()));
             let ws = root.join("workspace");
-            fs::create_dir_all(&ws).unwrap();
+            std::fs::create_dir_all(&ws).unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
             Self {
                 data: root.join("data"),
                 root,
-                ws: ws.canonicalize().unwrap(),
-                id: uuid::Uuid::new_v4().to_string(),
+                ws,
+                stream: bes::StreamId {
+                    build_id: id.clone(),
+                    invocation_id: id,
+                    component: 3,
+                },
             }
         }
-        fn event(&self, sequence: i64, event: bep::BuildEvent) -> bes::OrderedBuildEvent {
+        pub fn ordered(&self, sequence: i64, event: bep::BuildEvent) -> bes::OrderedBuildEvent {
             bes::OrderedBuildEvent {
-                stream_id: Some(bes::StreamId {
-                    build_id: "build".into(),
-                    invocation_id: self.id.clone(),
-                    component: 3,
-                }),
+                stream_id: Some(self.stream.clone()),
                 sequence_number: sequence,
                 event: Some(bes::BuildEvent {
                     bazel_event: Some(prost_types::Any {
@@ -396,326 +320,266 @@ mod tests {
                 }),
             }
         }
-        fn start(&self) -> bes::OrderedBuildEvent {
-            self.event(
-                1,
-                bep::BuildEvent {
-                    payload: Some(Payload::Started(bep::BuildStarted {
-                        uuid: self.id.clone(),
-                        command: "run".into(),
-                        workspace_directory: self.ws.to_string_lossy().into_owned(),
-                        start_time_millis: 123,
-                        ..Default::default()
-                    })),
-                    children: vec![bep::BuildEventId {
-                        id: Some(Id::Pattern(PatternExpandedId {
-                            pattern: vec!["//:double".into()],
-                        })),
-                    }],
+        #[allow(deprecated)]
+        pub fn started(&self) -> bep::BuildEvent {
+            bep::BuildEvent {
+                payload: Some(Payload::Started(bep::BuildStarted {
+                    uuid: self.stream.invocation_id.clone(),
+                    workspace_directory: self.ws.to_string_lossy().into_owned(),
+                    command: "build".into(),
+                    start_time_millis: 1000,
                     ..Default::default()
-                },
-            )
+                })),
+                children: vec![bep::BuildEventId {
+                    id: Some(Id::Pattern(bep::build_event_id::PatternExpandedId {
+                        pattern: vec!["//:target".into()],
+                    })),
+                }],
+                ..Default::default()
+            }
+        }
+        #[allow(deprecated)]
+        pub fn finished(&self) -> bep::BuildEvent {
+            bep::BuildEvent {
+                payload: Some(Payload::Finished(bep::BuildFinished {
+                    finish_time_millis: 2000,
+                    exit_code: Some(bep::build_finished::ExitCode {
+                        code: 0,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                last_message: true,
+                ..Default::default()
+            }
+        }
+        pub fn complete(&self) {
+            let mut receipt = Receipt::begin(&self.data, &self.stream).unwrap();
+            receipt.append(&self.ordered(1, self.started())).unwrap();
+            receipt.append(&self.ordered(2, self.finished())).unwrap();
+            receipt.finish().unwrap();
+        }
+        pub fn dir(&self) -> PathBuf {
+            self.data.join("runs").join(&self.stream.invocation_id)
         }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
+            let _ = std::fs::remove_dir_all(&self.root);
         }
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::test_support::Fixture;
+    use super::*;
+    use crate::store::{artifact, list, read_record};
     #[test]
-    fn progress_before_build_started_is_retained_and_bound_to_one_stream() {
+    fn progress_before_started_is_saved_without_workspace_and_completion_is_a_separate_fact() {
         let f = Fixture::new();
-        let progress = f.event(
-            1,
-            payload(Payload::Progress(bep::Progress {
-                stdout: "early output".into(),
-                ..Default::default()
-            })),
-        );
-        save(&f.data, &progress).unwrap();
-        assert!(get(&f.data, &f.ws, &f.id).unwrap().is_none());
-        let mut start = f.start();
-        start.sequence_number = 2;
-        save(&f.data, &start).unwrap();
-        assert_eq!(
-            get(&f.data, &f.ws, &f.id).unwrap().unwrap().log,
-            "early output"
-        );
-        start.sequence_number = 3;
-        assert_eq!(save(&f.data, &start).unwrap_err().kind, ErrorKind::Conflict);
-    }
-
-    #[test]
-    fn bes_options_parsed_projection_survives_saved_history() {
-        let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        let options = payload(Payload::OptionsParsed(bep::OptionsParsed {
-            startup_options: vec!["--batch".into()],
-            explicit_startup_options: vec![],
-            cmd_line: vec!["--jobs=8".into(), "--color=yes".into()],
-            explicit_cmd_line: vec!["--jobs=8".into()],
-            ..Default::default()
-        }));
-        save(&f.data, &f.event(2, options)).unwrap();
-        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(
-            observed.bep.options,
-            Some(crate::bep::BuildOptions {
-                startup_options: vec!["--batch".into()],
-                explicit_startup_options: vec![],
-                cmd_line: vec!["--jobs=8".into(), "--color=yes".into()],
-                explicit_cmd_line: vec!["--jobs=8".into()],
-            })
-        );
-        assert_eq!(
-            get(&f.data, &f.ws, &f.id).unwrap().unwrap().bep.options,
-            observed.bep.options
-        );
-    }
-
-    #[test]
-    fn reported_command_lines_survive_saved_history() {
-        let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        save(
-            &f.data,
-            &f.event(2, command_line("original", "bazel".into())),
-        )
-        .unwrap();
-        save(
-            &f.data,
-            &f.event(3, command_line("canonical", "blaze".into())),
-        )
-        .unwrap();
-        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(observed.bep.original_command_line, Some("bazel".into()));
-        assert_eq!(observed.bep.canonical_command_line, Some("blaze".into()));
-        let reopened = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(reopened.bep, observed.bep);
-    }
-
-    #[test]
-    fn oversized_command_projection_preserves_prior_commands_and_original_events() {
-        let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        save(
-            &f.data,
-            &f.event(2, command_line("original", "bazel".into())),
-        )
-        .unwrap();
-        save(
-            &f.data,
-            &f.event(3, command_line("original", "x".repeat(SUMMARY_LIMIT))),
-        )
-        .unwrap();
-        save(
-            &f.data,
-            &f.event(4, command_line("canonical", "x".repeat(SUMMARY_LIMIT))),
-        )
-        .unwrap();
-        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(observed.bep.original_command_line, Some("bazel".into()));
-        assert_eq!(observed.bep.canonical_command_line, None);
-        assert!(observed.bep.truncated);
-        assert!(serde_json::to_vec(&observed).unwrap().len() <= SUMMARY_LIMIT);
-        let store = Store::open(&f.data).unwrap();
-        assert_eq!(
-            store
-                .conn
-                .query_row("SELECT count(*) FROM build_event", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            4
-        );
-    }
-
-    #[test]
-    fn another_component_or_build_cannot_replace_a_completed_invocation() {
-        let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        let finished = f.event(2, {
-            let mut event = payload(Payload::Finished(bep::BuildFinished {
-                exit_code: Some(ExitCode {
-                    code: 1,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }));
-            event.last_message = true;
-            event
-        });
-        save(&f.data, &finished).unwrap();
-        let mut forged = finished.clone();
-        forged.sequence_number = 1;
-        forged.stream_id.as_mut().unwrap().component = 1;
-        assert_eq!(save(&f.data, &forged).unwrap_err().kind, ErrorKind::Invalid);
-        forged.stream_id.as_mut().unwrap().component = 3;
-        forged.stream_id.as_mut().unwrap().build_id = "different".into();
-        assert_eq!(
-            save(&f.data, &forged).unwrap_err().kind,
-            ErrorKind::Conflict
-        );
-        let mut after_complete = finished.clone();
-        after_complete.sequence_number = 3;
-        assert_eq!(
-            save(&f.data, &after_complete).unwrap_err().kind,
-            ErrorKind::Conflict
-        );
-        save(&f.data, &finished).unwrap(); // The original retry is still valid.
-        assert_eq!(
-            get(&f.data, &f.ws, &f.id).unwrap().unwrap().exit_code,
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn result_projection_is_bounded_without_losing_original_events() {
-        let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        let target = bep::BuildEvent {
-            id: Some(bep::BuildEventId {
-                id: Some(Id::TargetCompleted(TargetCompletedId {
-                    label: "x".repeat(5 * 1024 * 1024),
-                    ..Default::default()
-                })),
-            }),
-            payload: Some(Payload::Completed(bep::TargetComplete {
-                success: true,
-                ..Default::default()
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        let progress = bep::BuildEvent {
+            payload: Some(Payload::Progress(bep::Progress {
+                stdout: "out".into(),
+                stderr: "err".into(),
             })),
             ..Default::default()
         };
-        save(&f.data, &f.event(2, target.clone())).unwrap();
-        save(&f.data, &f.event(3, target)).unwrap();
-        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(observed.bep.targets.len(), 1);
-        assert!(observed.bep.truncated);
-        assert!(serde_json::to_vec(&observed).unwrap().len() <= SUMMARY_LIMIT);
-        let store = Store::open(&f.data).unwrap();
+        receipt.append(&f.ordered(1, progress)).unwrap();
+        assert!(list(&f.data, &f.ws).unwrap().is_empty());
+        receipt.append(&f.ordered(2, f.started())).unwrap();
+        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
+        receipt.append(&f.ordered(3, f.finished())).unwrap();
+        let ack = receipt.finish().unwrap();
+        assert_eq!((ack.first, ack.last), (1, 3));
+        let record = read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert_eq!(
-            store
-                .conn
-                .query_row("SELECT count(*) FROM build_event", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap(),
-            3
+            (record.started_at, record.finished_at, record.exit_code),
+            (Some(1000), Some(2000), Some(0))
         );
+        let file = artifact(&f.data, &f.ws, &record.id, "bep.binpb").unwrap();
+        let len = file.metadata().unwrap().len();
+        let parsed = crate::bep::parse_detail(file, len);
+        assert_eq!(parsed.log, "errout");
+        assert!(!f.dir().join("log.txt").exists());
+        assert!(!f.dir().join("bep.json").exists());
     }
-
     #[test]
-    fn external_events_survive_reopen_and_retries_do_not_duplicate_output() {
+    fn completed_retry_is_noop_and_accepts_contiguous_suffix_without_rewriting_files() {
         let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        let progress = f.event(
-            2,
-            payload(Payload::Progress(bep::Progress {
-                stdout: "hello\n".into(),
-                stderr: String::new(),
-            })),
-        );
-        save(&f.data, &progress).unwrap();
-        save(&f.data, &progress).unwrap();
-        let observation = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(observation.log, "hello\n");
-        assert!(!observation.complete);
-        assert!(super::super::list(&f.data, &f.ws).unwrap().is_empty());
-        // BuildFinished can precede final test/target results: publish only at last_message.
-        save(
-            &f.data,
-            &f.event(3, payload(Payload::Finished(bep::BuildFinished::default()))),
-        )
-        .unwrap();
-        assert!(super::super::list(&f.data, &f.ws).unwrap().is_empty());
-        save(
-            &f.data,
-            &f.event(
-                4,
-                bep::BuildEvent {
-                    last_message: true,
-                    ..Default::default()
-                },
-            ),
-        )
-        .unwrap();
-        assert_eq!(super::super::list(&f.data, &f.ws).unwrap().len(), 1);
-        assert!(get(&f.data, &f.root, &f.id).unwrap().is_none());
+        f.complete();
+        let path = f.dir().join("attempt/1/bep.binpb");
+        let bytes = std::fs::read(&path).unwrap();
+        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
+        retry.append(&f.ordered(2, f.finished())).unwrap();
+        let ack = retry.finish().unwrap();
+        assert_eq!((ack.first, ack.last), (2, 2));
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+        assert!(!f.dir().join("attempt/2").exists());
     }
-
     #[test]
-    fn gaps_and_conflicting_retries_are_not_acknowledged() {
+    fn incomplete_retry_requires_full_send_and_old_started_partial_and_finish_cannot_update_new_attempt()
+     {
         let f = Fixture::new();
-        save(&f.data, &f.start()).unwrap();
-        let gap = f.event(3, bep::BuildEvent::default());
-        assert_eq!(save(&f.data, &gap).unwrap_err().kind, ErrorKind::Conflict);
-        let conflicting = f.event(1, bep::BuildEvent::default());
+        let mut old = Receipt::begin(&f.data, &f.stream).unwrap();
+        let mut newer = Receipt::begin(&f.data, &f.stream).unwrap();
         assert_eq!(
-            save(&f.data, &conflicting).unwrap_err().kind,
+            old.append(&f.ordered(1, f.started())).unwrap_err().kind,
             ErrorKind::Conflict
         );
-        assert!(!get(&f.data, &f.ws, &f.id).unwrap().unwrap().complete);
-    }
-
-    #[test]
-    fn build_completion_does_not_finish_an_owned_program() {
-        let mut f = Fixture::new();
-        let (owned, _) = super::super::create(&f.data, &f.ws, "run", "//:double").unwrap();
-        f.id = owned.id.clone();
-        save(&f.data, &f.start()).unwrap();
-        save(
-            &f.data,
-            &f.event(2, {
-                let mut event = payload(Payload::Finished(bep::BuildFinished {
-                    exit_code: Some(ExitCode {
-                        code: 0,
-                        ..Default::default()
-                    }),
-                    finish_time_millis: 456,
-                    ..Default::default()
-                }));
-                event.last_message = true;
-                event
-            }),
-        )
-        .unwrap();
+        assert_eq!(old.partial().unwrap_err().kind, ErrorKind::Conflict);
         assert_eq!(
-            super::super::list(&f.data, &f.ws).unwrap(),
-            vec![owned.clone()]
+            newer.append(&f.ordered(2, f.finished())).unwrap_err().kind,
+            ErrorKind::Conflict
         );
-        let observed = get(&f.data, &f.ws, &f.id).unwrap().unwrap();
-        assert_eq!(observed.exit_code, Some(0));
-        assert!(observed.complete);
+        newer.append(&f.ordered(1, f.started())).unwrap();
+        let mut latest = Receipt::begin(&f.data, &f.stream).unwrap();
+        latest.append(&f.ordered(1, f.started())).unwrap();
+        latest.append(&f.ordered(2, f.finished())).unwrap();
+        latest.finish().unwrap();
+        assert_eq!(newer.finish().unwrap_err().kind, ErrorKind::Conflict);
         assert_eq!(
-            super::super::read_record(&f.data, &f.ws, &f.id)
+            read_record(&f.data, &f.ws, &f.stream.invocation_id)
                 .unwrap()
                 .exit_code,
-            None
+            Some(0)
         );
     }
-
     #[test]
-    fn version_one_database_migrates_without_losing_history() {
+    fn rejects_identity_gaps_duplicates_and_conflicting_started_even_for_completed_retry() {
         let f = Fixture::new();
-        let (owned, _) = super::super::create(&f.data, &f.ws, "build", "//:app").unwrap();
-        let store = Store::open(&f.data).unwrap();
-        store
-            .conn
-            .execute_batch("DROP TABLE build_event; DROP TABLE observation; PRAGMA user_version=1;")
-            .unwrap();
-        drop(store);
-        save(&f.data, &f.start()).unwrap();
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        assert!(receipt.append(&f.ordered(1, f.started())).is_err());
+        assert!(receipt.append(&f.ordered(3, f.finished())).is_err());
+        let mut wrong = f.ordered(2, f.finished());
+        wrong.stream_id.as_mut().unwrap().build_id = "other".into();
+        assert!(receipt.append(&wrong).is_err());
+        receipt.append(&f.ordered(2, f.finished())).unwrap();
+        receipt.finish().unwrap();
+        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
+        let mut started = f.started();
+        if let Some(Payload::Started(v)) = &mut started.payload {
+            v.command = "test".into();
+        }
         assert_eq!(
-            super::super::read_record(&f.data, &f.ws, &owned.id).unwrap(),
-            owned
+            retry.append(&f.ordered(1, started)).unwrap_err().kind,
+            ErrorKind::Conflict
         );
-        assert_eq!(super::super::list(&f.data, &f.ws).unwrap().len(), 1);
+    }
+    #[test]
+    fn normal_eof_without_last_message_stays_retryable_and_build_finished_absence_is_unknown() {
+        let f = Fixture::new();
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        receipt.finish().unwrap();
+        let mut next = Receipt::begin(&f.data, &f.stream).unwrap();
+        let mut started = f.started();
+        started.last_message = true;
+        next.append(&f.ordered(1, started)).unwrap();
+        next.finish().unwrap();
+        let record = read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert_eq!((record.finished_at, record.exit_code), (None, None));
+        let store = Store::open(&f.data).unwrap();
+        let state: (i64, bool) = store
+            .conn
+            .query_row("SELECT attempt,received_complete FROM run", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(state, (2, true));
     }
 
     #[test]
-    fn log_limit_preserves_unicode_boundaries() {
-        let mut log = "日".repeat(LOG_LIMIT);
-        assert!(trim_log(&mut log));
-        assert!(log.len() <= LOG_LIMIT);
-        assert!(log.chars().all(|ch| ch == '日'));
+    fn flush_failure_and_database_failure_never_return_ack_or_mark_complete() {
+        let f = Fixture::new();
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        let path = f.dir().join("attempt/1/bep.binpb");
+        // A read-only FD deterministically fails when the buffer is flushed.
+        receipt.writer = Some(BufWriter::new(File::open(path).unwrap()));
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        receipt.append(&f.ordered(2, f.finished())).unwrap();
+        assert!(receipt.finish().is_err());
+        let complete: bool = Store::open(&f.data)
+            .unwrap()
+            .conn
+            .query_row("SELECT received_complete FROM run", [], |r| r.get(0))
+            .unwrap();
+        assert!(!complete);
+
+        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
+        retry.append(&f.ordered(1, f.started())).unwrap();
+        retry.append(&f.ordered(2, f.finished())).unwrap();
+        Store::open(&f.data)
+            .unwrap()
+            .conn
+            .pragma_update(None, "user_version", 4)
+            .unwrap();
+        assert_eq!(retry.finish().unwrap_err().kind, ErrorKind::NewerSchema);
+        assert!(
+            !std::fs::read(f.dir().join("attempt/2/bep.binpb"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legal_events_larger_than_display_limit_remain_in_the_event_file() {
+        let f = Fixture::new();
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        receipt
+            .append(&f.ordered(
+                2,
+                bep::BuildEvent {
+                    payload: Some(Payload::OptionsParsed(bep::OptionsParsed {
+                        cmd_line: vec!["x".repeat(crate::bep::DISPLAY_LIMIT + 1)],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        receipt.append(&f.ordered(3, f.finished())).unwrap();
+        // The transport end marker follows the last BEP event in real Bazel.
+        receipt
+            .append(&bes::OrderedBuildEvent {
+                stream_id: Some(f.stream.clone()),
+                sequence_number: 4,
+                event: Some(bes::BuildEvent::default()),
+            })
+            .unwrap();
+        assert_eq!(receipt.finish().unwrap().last, 4);
+        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb").unwrap();
+        let length = file.metadata().unwrap().len();
+        assert!(length > crate::bep::DISPLAY_LIMIT as u64);
+        let parsed = crate::bep::parse_detail(file, length);
+        assert!(parsed.bep.truncated);
+        assert!(parsed.bep.options.is_none());
+        assert!(!parsed.invalid);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn absent_bep_times_stay_unknown_even_when_build_exit_is_known() {
+        let f = Fixture::new();
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        let mut started = f.started();
+        if let Some(Payload::Started(value)) = &mut started.payload {
+            value.start_time_millis = 0;
+        }
+        let mut finished = f.finished();
+        if let Some(Payload::Finished(value)) = &mut finished.payload {
+            value.finish_time_millis = 0;
+        }
+        receipt.append(&f.ordered(1, started)).unwrap();
+        receipt.append(&f.ordered(2, finished)).unwrap();
+        receipt.finish().unwrap();
+        let record = read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert_eq!(
+            (record.started_at, record.finished_at, record.exit_code),
+            (None, None, Some(0))
+        );
     }
 }

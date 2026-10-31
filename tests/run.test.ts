@@ -58,11 +58,22 @@ test("missing and unreadable observations remain distinct without changing a kno
   assert.equal(runStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, null).label, "✓ succeeded");
 });
 
-test("status never paints a partial terminal record as succeeded or failed", () => {
-  assert.equal(runStatus({ ...RECORD, exitCode: 0 }, null).kind, "unknown");
-  assert.equal(runStatus({ ...RECORD, exitCode: 3 }, null).kind, "unknown");
+test("build exit determines outcome even when its finish time was not recorded", () => {
+  assert.equal(runStatus({ ...RECORD, exitCode: 0 }, null).kind, "succeeded");
+  assert.equal(runStatus({ ...RECORD, exitCode: 3 }, null).kind, "failed");
+});
+
+test("missing build exit remains unknown even when its finish time was recorded", () => {
   assert.equal(runStatus({ ...RECORD, finishedAt: 2 }, null).kind, "unknown");
   assert.equal(runStatus(undefined, null).kind, "unknown");
+});
+
+test("an unobserved invocation has no invented input or result", () => {
+  assert.deepEqual(runStatus({ id: "reserved" }, null), {
+    kind: "unknown",
+    label: "? outcome unknown",
+  });
+  assert.equal(runStatus({ id: "reserved" }, "reserved").kind, "running");
 });
 
 test("icon status and description agree when completion races with stop", () => {

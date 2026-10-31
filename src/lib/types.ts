@@ -66,14 +66,13 @@ export interface AppState {
 /** Commands accepted by the run composer. */
 export type RunCmd = "build" | "test" | "run";
 
-/** A persisted or active run record, keyed by its core-generated ID. */
+/** An invocation and the facts observed in its build events. */
 export interface RunRecord {
-  external?: boolean;
   id: string;
-  workspace: string;
-  cmd: string;
-  target: string;
-  startedAt: number;
+  workspace?: string;
+  cmd?: string;
+  target?: string;
+  startedAt?: number;
   finishedAt?: number;
   exitCode?: number;
 }

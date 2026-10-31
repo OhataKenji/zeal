@@ -117,7 +117,13 @@ const PREVIEW_TARGETS = [
   "//...",
 ];
 const dayIndices = Array.from({ length: 30 }).keys();
-const records: RunRecord[] = Array.from(dayIndices, (dayIndex) => {
+type PreviewRecord = RunRecord & {
+  workspace: string;
+  cmd: string;
+  target: string;
+  startedAt: number;
+};
+const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
   const dayDate = new Date(NOW);
   dayDate.setDate(dayDate.getDate() - dayIndex);
   const runCount = (dayIndex * 7 + 3) % 9;
@@ -128,7 +134,6 @@ const records: RunRecord[] = Array.from(dayIndices, (dayIndex) => {
       id: `preview-${dayIndex}-${runIndex}`,
       workspace: WORKSPACE,
       cmd: runIndex % 3 === 1 ? "test" : "build",
-      external: runIndex < 2,
       target: PREVIEW_TARGETS[(dayIndex + runIndex) % PREVIEW_TARGETS.length],
       startedAt,
       // This record has an exit code but no finish time: counted, never timed.
@@ -506,7 +511,7 @@ export function installPreview() {
         case "open_location":
           return;
         case "start_run": {
-          const record: RunRecord = {
+          const record: PreviewRecord = {
             id: `preview-${crypto.randomUUID()}`,
             workspace: WORKSPACE,
             cmd: String(payload?.cmd),
@@ -515,6 +520,7 @@ export function installPreview() {
           };
           records.unshift(record);
           state.running = record.id;
+          state.consoleRun = record.id;
           consoleOutput.set(
             record.id,
             `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.target}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,

@@ -1,4 +1,4 @@
-//! SQLite run summaries. Bazel still writes observations into each run directory.
+//! Bazel invocation facts in SQLite, with event details in local files.
 
 pub mod analytics;
 mod database;

@@ -264,18 +264,12 @@ mod tests {
                 crate::console::read(private, &crate::state::Core::new(), "private-token", 0)
                     .is_err()
             );
-            assert!(crate::store::events::get(private, private, "private-token").is_err());
-            let event = crate::protocol::bes::OrderedBuildEvent {
-                event: Some(crate::protocol::bes::BuildEvent {
-                    bazel_event: Some(prost_types::Any {
-                        type_url: "private-token".into(),
-                        value: b"private-token".to_vec(),
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
+            let stream = crate::protocol::bes::StreamId {
+                build_id: "private-token".into(),
+                invocation_id: "private-token".into(),
+                component: 3,
             };
-            assert!(crate::store::events::save(private, &event).is_err());
+            assert!(crate::store::events::Receipt::begin(private, &stream).is_err());
         });
         provider.force_flush().unwrap();
         provider.shutdown().unwrap();

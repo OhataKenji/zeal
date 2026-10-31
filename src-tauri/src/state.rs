@@ -95,6 +95,8 @@ pub struct ConsoleSession {
 
 pub struct CoreState {
     pub bes_error: Option<String>,
+    /// Only this process's bound receiver may be used for a new Bazel child.
+    pub bes_endpoint: Option<String>,
     pub workspace: Option<PathBuf>,
     pub bazel: Option<PathBuf>,
     /// The latest fully built snapshot; swapped atomically per fetch.
@@ -138,6 +140,7 @@ impl Core {
         Core {
             state: Mutex::new(CoreState {
                 bes_error: None,
+                bes_endpoint: None,
                 workspace: None,
                 bazel: None,
                 snapshot: None,

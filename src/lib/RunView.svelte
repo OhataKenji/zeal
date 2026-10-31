@@ -14,8 +14,7 @@
   } = $props();
   const selectedRun = $derived(view.selectedRun);
   const record = $derived(
-    view.detail?.record ?? view.runs.find((run) => run.id === selectedRun)
-      ?? (view.console?.id === selectedRun ? view.console : undefined),
+    view.detail?.record ?? view.runs.find((run) => run.id === selectedRun),
   );
   const running = $derived(view.state?.running === selectedRun);
   const profile = $derived(sectionData(view.profile ?? undefined));
@@ -91,9 +90,6 @@
       <button type="button" class="button" onclick={reload}>Retry</button>
     </div>
   {/if}
-  {#if record?.external && record.cmd === "run"}
-    <p class="run-notice">Build events from a terminal. Program input, output and exit status remain in that terminal.</p>
-  {/if}
 
   <div
     class="run-panel"
@@ -120,14 +116,13 @@
             {#if record}
               <dl class="run-details">
                 <dt>Command</dt>
-                <dd><code>bazel {record.cmd} {record.target}</code></dd>
-                <dt>Source</dt><dd>{record.external ? "Terminal / BES" : "Zeal"}</dd>
+                <dd>{#if record.cmd}<code>bazel {record.cmd} {record.target ?? "(target not recorded)"}</code>{:else}Not recorded{/if}</dd>
                 <dt>Workspace</dt>
-                <dd><code>{record.workspace}</code></dd>
+                <dd><code>{record.workspace ?? "Not recorded"}</code></dd>
                 <dt>Run ID</dt>
                 <dd><code>{record.id}</code></dd>
                 <dt>Started</dt>
-                <dd>{new Date(record.startedAt).toLocaleString()}</dd>
+                <dd>{record.startedAt === undefined ? "Not recorded" : new Date(record.startedAt).toLocaleString()}</dd>
                 <dt>Finished</dt>
                 <dd>
                   {record.finishedAt === undefined
@@ -136,7 +131,7 @@
                 </dd>
                 <dt>Exit code</dt>
                 <dd>{record.exitCode ?? "Unknown"}</dd>
-                {#if record.finishedAt !== undefined}<dt>Wall time</dt>
+                {#if record.startedAt !== undefined && record.finishedAt !== undefined}<dt>Wall time</dt>
                   <dd>
                     {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
                   </dd>{/if}

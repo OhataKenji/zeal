@@ -82,7 +82,9 @@ impl Drop for Capture {
 
 #[tracing::instrument(target = "zeal::operations", name = "bazel.spawn", skip_all)]
 pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, Capture)> {
-    let mut log = OpenOptions::new().append(true).open(dir.join("log.txt"))?;
+    let mut log = OpenOptions::new()
+        .append(true)
+        .open(dir.join("terminal.log"))?;
     let size = Winsize {
         ws_row: 24,
         ws_col: 80,
@@ -217,7 +219,7 @@ mod tests {
     struct Fixture {
         root: std::path::PathBuf,
         dir: std::path::PathBuf,
-        record: store::RunRecord,
+        id: String,
         child: Child,
         capture: Capture,
         core: Core,
@@ -228,27 +230,28 @@ mod tests {
             let ws = root.join("workspace");
             let data = root.join("data");
             std::fs::create_dir_all(&ws).unwrap();
-            let (record, dir) = store::create(&data, &ws, "run", "//:test").unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            let dir = store::reserve_invocation(&data, &id).unwrap();
             let (child, control, capture) =
                 spawn(Command::new("sh").args(["-c", script]), &dir).unwrap();
             let core = Core::new();
             {
                 let mut st = core.state.lock().unwrap();
-                st.run = Some(record.id.clone().into());
+                st.run = Some(id.clone().into());
                 st.run_pgid = Some(child.id() as i32);
                 st.run_terminal = Some(control);
             }
             Self {
                 root,
                 dir,
-                record,
+                id,
                 child,
                 capture,
                 core,
             }
         }
         fn output(&self) -> String {
-            std::fs::read_to_string(self.dir.join("log.txt")).unwrap()
+            std::fs::read_to_string(self.dir.join("terminal.log")).unwrap()
         }
         fn wait_for(&self, text: &str) {
             let until = Instant::now() + Duration::from_secs(5);
@@ -262,10 +265,7 @@ mod tests {
             }
         }
         fn send(&self, data: &[u8]) {
-            assert_eq!(
-                write(&self.core, &self.record.id, data).unwrap(),
-                data.len()
-            );
+            assert_eq!(write(&self.core, &self.id, data).unwrap(), data.len());
         }
         fn finish(&mut self) -> i32 {
             let until = Instant::now() + Duration::from_secs(5);
@@ -340,12 +340,12 @@ mod tests {
         );
         f.wait_for("ready>");
         assert!(write(&f.core, "old-run", b"999\n").is_err());
-        resize(&f.core, &f.record.id, 120, 40).unwrap();
+        resize(&f.core, &f.id, 120, 40).unwrap();
         f.send(b"21\r");
         assert_eq!(f.finish(), 0);
         assert!(f.output().contains("40 120"));
         assert!(f.output().contains("answer=42"));
-        assert!(write(&f.core, &f.record.id, b"late").is_err());
+        assert!(write(&f.core, &f.id, b"late").is_err());
     }
 
     #[test]
