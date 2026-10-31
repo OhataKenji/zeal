@@ -90,12 +90,11 @@ fn read_body(reader: &mut Reader<impl BufRead>, rule: &mut RawRule) {
             Ok(Event::Empty(e)) => match e.name().as_ref() {
                 b"rule-output" => push_output(reader, &e, rule),
                 b"label" => {
-                    if let (Some(n), Some(v)) = (
+                    rule.label_attrs.extend(label_attribute(
+                        reader,
+                        &e,
                         attr_value(reader, &e, "name"),
-                        attr_value(reader, &e, "value"),
-                    ) {
-                        rule.label_attrs.push((n, v));
-                    }
+                    ));
                 }
                 _ => {}
             },
@@ -120,11 +119,11 @@ fn read_children(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == b"label" => {
-                if let (Some(n), Some(v)) = (name.as_deref(), attr_value(reader, &e, "value"))
-                    && !n.is_empty()
-                {
-                    rule.label_attrs.push((n.to_string(), v));
-                }
+                rule.label_attrs.extend(label_attribute(
+                    reader,
+                    &e,
+                    name.as_ref().filter(|name| !name.is_empty()).cloned(),
+                ));
             }
             Ok(Event::End(e)) if e.name().as_ref() == tag => break,
             Ok(Event::Eof) | Err(_) => break,
@@ -132,6 +131,14 @@ fn read_children(
         }
         buf.clear();
     }
+}
+
+fn label_attribute(
+    reader: &Reader<impl BufRead>,
+    element: &BytesStart,
+    name: Option<String>,
+) -> Option<(String, String)> {
+    Some((name?, attr_value(reader, element, "value")?))
 }
 
 fn push_output(reader: &Reader<impl BufRead>, e: &BytesStart, rule: &mut RawRule) {
