@@ -8,6 +8,8 @@ rust-version = "1.90"
 
 [lints.clippy]
 cognitive_complexity = "warn"
+excessive_nesting = "warn"
+too_many_lines = "warn"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
