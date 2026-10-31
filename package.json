@@ -10,7 +10,6 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "node --test tests/*.test.ts",
-    "test:browser": "playwright test",
     "format": "oxfmt",
     "lint": "oxlint",
     "tauri": "tauri"
@@ -24,7 +23,6 @@
     "phosphor-svelte": "^3.1.1"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tauri-apps/cli": "^2.12.2",
     "@tsconfig/svelte": "^5.0.8",

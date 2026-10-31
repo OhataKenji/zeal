@@ -16,9 +16,9 @@ use std::io;
 #[cfg(test)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::Command;
 #[cfg(test)]
 use std::process::Stdio;
-use std::process::{Child, Command};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,11 +47,58 @@ pub fn start(
     target: &str,
     arguments: &str,
 ) -> Result<RunRecord, String> {
-    let LaunchedRun {
-        record: rec,
-        mut child,
-        capture,
-    } = launch(&core, data, cmd, target, arguments)?;
+    validate_cmd(cmd)?;
+    validate_target(target)?;
+    let arguments = parse_arguments(arguments)?;
+    let mut st = core.state.lock().expect("application state lock poisoned");
+    let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
+        return Err("no workspace or bazel".to_string());
+    };
+    if st.ingest_running || st.run.is_some() {
+        return Err("bazel is busy".to_string());
+    }
+    let endpoint = receiver_endpoint(&st)?;
+    // Held across the record write and the spawn, so that the busy check above
+    // and the slot below stay one atomic step, without a `starting` flag.
+    // The record exists before bazel does; a failing store prevents the spawn.
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = store::reserve_invocation(data, &id).map_err(|e| e.to_string())?;
+    let rec = RunRecord {
+        id,
+        workspace: None,
+        cmd: None,
+        target: None,
+        started_at: None,
+        finished_at: None,
+        exit_code: None,
+    };
+    // Its own process group: a stop reaches bazel and whatever it started.
+    let (mut child, terminal, capture) = match crate::terminal::spawn(
+        Command::new(&bazel)
+            .args(argv(cmd, target, &arguments, &dir, endpoint, &rec.id))
+            .current_dir(&ws),
+        &dir,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = store::abort_reservation(data, &rec.id);
+            return Err(format!("failed to spawn {}: {e}", bazel.display()));
+        }
+    };
+    st.run = Some(ActiveRun {
+        id: rec.id.clone().into(),
+        terminal,
+        pgid: Some(child.id() as i32),
+        stopping: false,
+        stop_started: None,
+    });
+    st.console = Some(ConsoleSession {
+        id: rec.id.clone().into(),
+        workspace: ws,
+        finished: false,
+    });
+    st.run_note = None;
+    drop(st);
     core.emit(&app);
 
     let id = rec.id.clone();
@@ -83,80 +130,6 @@ pub fn start(
         }
     });
     Ok(rec)
-}
-
-/// Process ownership returned separately from UI notification and observation.
-struct LaunchedRun {
-    record: RunRecord,
-    child: Child,
-    capture: crate::terminal::Capture,
-}
-
-/// Validate before touching storage, then reserve, spawn and publish atomically.
-fn launch(
-    core: &Core,
-    data: &Path,
-    cmd: &str,
-    target: &str,
-    arguments: &str,
-) -> Result<LaunchedRun, String> {
-    validate_cmd(cmd)?;
-    validate_target(target)?;
-    let arguments = parse_arguments(arguments)?;
-    let mut st = core.state.lock().expect("application state lock poisoned");
-    let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
-        return Err("no workspace or bazel".to_string());
-    };
-    if st.ingest_running || st.run.is_some() {
-        return Err("bazel is busy".to_string());
-    }
-    let endpoint = receiver_endpoint(&st)?;
-    // Held across the record write and the spawn, so that the busy check above
-    // and the slot below stay one atomic step, without a `starting` flag.
-    // The record exists before bazel does; a failing store prevents the spawn.
-    let id = uuid::Uuid::new_v4().to_string();
-    let dir = store::reserve_invocation(data, &id).map_err(|e| e.to_string())?;
-    let rec = RunRecord {
-        id,
-        workspace: None,
-        cmd: None,
-        target: None,
-        started_at: None,
-        finished_at: None,
-        exit_code: None,
-    };
-    // Its own process group: a stop reaches bazel and whatever it started.
-    let (child, terminal, capture) = match crate::terminal::spawn(
-        Command::new(&bazel)
-            .args(argv(cmd, target, &arguments, &dir, endpoint, &rec.id))
-            .current_dir(&ws),
-        &dir,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = store::abort_reservation(data, &rec.id);
-            return Err(format!("failed to spawn {}: {e}", bazel.display()));
-        }
-    };
-    st.run = Some(ActiveRun {
-        id: rec.id.clone().into(),
-        terminal,
-        pgid: Some(child.id() as i32),
-        stopping: false,
-        stop_started: None,
-    });
-    st.console = Some(ConsoleSession {
-        id: rec.id.clone().into(),
-        workspace: ws,
-        finished: false,
-    });
-    st.run_note = None;
-    drop(st);
-    Ok(LaunchedRun {
-        record: rec,
-        child,
-        capture,
-    })
 }
 
 /// A capture failure must stop the still-owned child before its output blocks.
@@ -632,480 +605,223 @@ mod tests {
         assert!(state.console.is_none());
     }
 
-    /// A real local process boundary. The fixed script only records its argv;
-    /// production input is never interpolated into shell source.
-    struct LaunchFixture {
-        temp: LogDir,
-        ws: std::path::PathBuf,
-        data: std::path::PathBuf,
-        core: Arc<Core>,
-    }
-
-    impl LaunchFixture {
-        fn new() -> Self {
-            let temp = LogDir::new();
-            let ws = temp.0.join("workspace");
-            fs::create_dir(&ws).unwrap();
-            let core = Arc::new(Core::new());
-            let mut state = core.state.lock().unwrap();
-            state.workspace = Some(ws.clone());
-            state.bes_endpoint = Some("grpc://127.0.0.1:12345".into());
-            drop(state);
-            let fixture = Self {
-                data: temp.0.join("data 日本語"),
-                temp,
-                ws,
-                core,
-            };
-            fixture.executable("#!/bin/sh\nprintf '%s\\000' \"$@\" > argv.bin\n");
-            fixture
-        }
-
-        fn executable(&self, source: &str) {
-            use std::os::unix::fs::PermissionsExt;
-            let path = self.temp.0.join("bazel executable");
-            fs::write(&path, source).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-            self.core.state.lock().unwrap().bazel = Some(path);
-        }
-
-        fn try_launch(&self, cmd: &str, target: &str, arguments: &str) -> Result<OwnedRun, String> {
-            launch(&self.core, &self.data, cmd, target, arguments).map(|process| OwnedRun {
-                process,
-                core: self.core.clone(),
-            })
-        }
-
-        fn launch(&self, cmd: &str, target: &str, arguments: &str) -> OwnedRun {
-            self.try_launch(cmd, target, arguments).unwrap()
-        }
-
-        fn recorded_arguments(&self) -> Vec<String> {
-            let recorded = fs::read(self.ws.join("argv.bin")).unwrap();
-            recorded
-                .strip_suffix(&[0])
-                .unwrap()
-                .split(|byte| *byte == 0)
-                .map(|word| String::from_utf8(word.to_vec()).unwrap())
-                .collect()
-        }
-    }
-
-    /// Own the child through polling and unwinding. No timed-out worker can
-    /// retain it after the test moves on.
-    struct OwnedRun {
-        process: LaunchedRun,
-        core: Arc<Core>,
-    }
-
-    impl OwnedRun {
-        async fn finish(&mut self, deadline: Instant) -> io::Result<i32> {
-            let exit = wait_for_child(self, deadline).await;
-            self.process.capture.finish()?;
-            let mut state = self.core.state.lock().unwrap();
-            finish_console(&mut state, &self.process.record.id);
-            apply_reap(&mut state, &self.process.record.id, &exit);
-            exit
-        }
-
-        fn output(&self, data: &Path) -> String {
-            use std::io::Read;
-            let mut output = String::new();
-            store::live_artifact(data, &self.process.record.id, "terminal.log")
-                .unwrap()
-                .read_to_string(&mut output)
-                .unwrap();
-            output
-        }
-    }
-
-    async fn wait_for_child(run: &mut OwnedRun, deadline: Instant) -> io::Result<i32> {
-        let mut status = run.process.child.try_wait()?;
-        while status.is_none() && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            status = run.process.child.try_wait()?;
-        }
-        if let Some(status) = status {
-            return Ok(status.code().unwrap_or(-1));
-        }
-        terminate_child(&mut run.process.child);
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "child deadline expired",
-        ))
-    }
-
-    fn terminate_child(child: &mut Child) {
-        if matches!(child.try_wait(), Ok(None)) {
-            let _ = signal_group(child.id() as i32, Signal::KILL);
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-
-    impl Drop for OwnedRun {
-        fn drop(&mut self) {
-            terminate_child(&mut self.process.child);
-            let _ = self.process.capture.finish();
-        }
-    }
-
+    /// Uses only a temporary workspace, rc file, data directory and Bazel root.
+    /// The rc deliberately points at another backend and an invalid Unix proxy.
     #[tokio::test]
-    async fn launch_preserves_program_arguments_without_shell_expansion() {
-        let fixture = LaunchFixture::new();
-        let mut run = fixture.launch(
-            "run",
-            "//:app",
-            r#"--config dev -- "two words" '' $HOME '$(touch injected)' `id` ; | > * '#'"#,
-        );
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(5))
-                .await
-                .unwrap(),
-            0
-        );
-        let arguments = fixture.recorded_arguments();
-        let target = arguments.iter().position(|word| word == "//:app").unwrap();
-        assert_eq!(arguments[0], "run");
-        assert!(
-            arguments[..target].contains(&format!("--invocation_id={}", run.process.record.id))
-        );
-        assert_eq!(
-            &arguments[target + 1..],
-            [
-                "--config",
-                "dev",
-                "--",
-                "two words",
-                "",
-                "$HOME",
-                "$(touch injected)",
-                "`id`",
-                ";",
-                "|",
-                ">",
-                "*",
-                "#"
-            ]
-        );
-        assert!(!fixture.ws.join("injected").exists());
-    }
-
-    #[tokio::test]
-    async fn launch_rejects_unclosed_quotes_without_side_effects_and_allows_retry() {
-        let fixture = LaunchFixture::new();
-        let error = fixture
-            .try_launch("run", "//:app", "'unfinished")
-            .err()
-            .expect("invalid input must fail");
-        assert!(error.contains("Unclosed quote"));
-        assert!(!fixture.data.exists());
-        assert!(!fixture.ws.join("argv.bin").exists());
-        assert!(fixture.core.state.lock().unwrap().run.is_none());
-        assert!(fixture.core.state.lock().unwrap().console.is_none());
-
-        let mut run = fixture.launch("run", "//:app", "-- 'corrected value'");
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(5))
-                .await
-                .unwrap(),
-            0
-        );
-        let arguments = fixture.recorded_arguments();
-        assert_eq!(
-            &arguments[arguments.len() - 3..],
-            ["//:app", "--", "corrected value"]
-        );
-    }
-
-    #[tokio::test]
-    async fn launch_rejects_nul_without_side_effects_and_allows_retry() {
-        let fixture = LaunchFixture::new();
-        let error = fixture
-            .try_launch("run", "//:app", "-- bad\0value")
-            .err()
-            .expect("NUL input must fail");
-        assert!(error.contains("NUL"));
-        assert!(!fixture.data.exists());
-        assert!(!fixture.ws.join("argv.bin").exists());
-        assert!(fixture.core.state.lock().unwrap().run.is_none());
-        assert!(fixture.core.state.lock().unwrap().console.is_none());
-
-        let mut run = fixture.launch("run", "//:app", "-- corrected");
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(5))
-                .await
-                .unwrap(),
-            0
-        );
-        let arguments = fixture.recorded_arguments();
-        assert_eq!(
-            &arguments[arguments.len() - 3..],
-            ["//:app", "--", "corrected"]
-        );
-    }
-
-    #[tokio::test]
-    async fn child_deadline_kills_and_reaps_the_owned_process() {
-        let fixture = LaunchFixture::new();
-        fixture.executable("#!/bin/sh\nexec /bin/sleep 30\n");
-        let mut run = fixture.launch("build", "//:app", "");
-        assert_eq!(
-            run.finish(Instant::now()).await.unwrap_err().kind(),
-            io::ErrorKind::TimedOut
-        );
-        assert!(run.process.child.try_wait().unwrap().is_some());
-        assert!(fixture.core.state.lock().unwrap().run.is_none());
-    }
-
-    #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary; may download dependencies"]
-    async fn real_bazel_gui_build_uses_config() {
+    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    async fn real_bazel_gui_flags_build_test_and_run_with_input() {
         let fixture = GuiBazelFixture::new().await;
-        fixture.config("arguments", "--define=message=hello");
-        let mut run = fixture
-            .base
-            .launch("build", "//:double", "--config=arguments");
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(60))
-                .await
-                .unwrap(),
-            0,
-            "{}",
-            run.output(&fixture.base.data)
-        );
-        let record =
-            store::read_record(&fixture.base.data, &fixture.base.ws, &run.process.record.id)
-                .unwrap();
-        assert_eq!(record.target.as_deref(), Some("//:double"));
-        assert_eq!(record.exit_code, Some(0));
-        let configured = fs::read_to_string(fixture.base.ws.join("bazel-bin/double.py")).unwrap();
-        assert!(configured.contains("CONFIG=hello"));
-        assert!(
-            store::artifact(
-                &fixture.base.data,
-                &fixture.base.ws,
-                &record.id,
-                "profile.gz"
-            )
-            .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary; may download dependencies"]
-    async fn real_bazel_gui_test_uses_filter() {
-        let fixture = GuiBazelFixture::new().await;
-        let mut run = fixture
-            .base
-            .launch("test", "//:check", "--test_filter='suite one'");
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(60))
-                .await
-                .unwrap(),
-            0,
-            "{}",
-            run.output(&fixture.base.data)
-        );
-        let record =
-            store::read_record(&fixture.base.data, &fixture.base.ws, &run.process.record.id)
-                .unwrap();
-        assert_eq!(record.cmd.as_deref(), Some("test"));
-        assert_eq!(record.exit_code, Some(0));
-        let log =
-            fs::read_to_string(fixture.base.ws.join("bazel-testlogs/check/test.log")).unwrap();
-        assert!(log.contains("FILTER=<suite one>"), "{log}");
-    }
-
-    #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary; may download dependencies"]
-    async fn real_bazel_gui_run_preserves_program_arguments() {
-        let fixture = GuiBazelFixture::new().await;
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let mut run = fixture.base.launch(
-            "run",
-            "//:double",
-            r#"-- "two words" '' '$HOME;$(touch injected)' `id` | > * '#'"#,
-        );
-        let record = wait_for_gui_build(&fixture, &mut run, deadline).await;
-        assert_eq!(
-            record.exit_code,
-            Some(0),
-            "build finishes before program input"
-        );
-        assert!(run.process.child.try_wait().unwrap().is_none());
-        crate::terminal::write(&fixture.base.core, &record.id, b"21\n").unwrap();
-        assert_eq!(run.finish(deadline).await.unwrap(), 23);
-        let output = run.output(&fixture.base.data);
-        let reported = output
-            .lines()
-            .find_map(|line| line.strip_prefix("ARGV="))
-            .expect("program reports its argv");
-        let received: Vec<String> = serde_json::from_str(reported).unwrap();
-        assert_eq!(
-            received,
-            [
-                "two words",
-                "",
-                "$HOME;$(touch injected)",
-                "`id`",
-                "|",
-                ">",
-                "*",
-                "#"
-            ]
-        );
-        assert!(output.contains("42"), "{output}");
-        assert!(!fixture.base.ws.join("injected").exists());
-        assert_eq!(
-            store::read_record(&fixture.base.data, &fixture.base.ws, &record.id)
-                .unwrap()
-                .exit_code,
-            Some(0)
-        );
-        assert!(fixture.base.core.state.lock().unwrap().run.is_none());
-        assert_saved_console(&fixture.base.data, &fixture.base.core, &record.id, &output);
-    }
-
-    #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary; may download dependencies"]
-    async fn real_bazel_gui_rejects_missing_config_value() {
-        let fixture = GuiBazelFixture::new().await;
-        let mut run = fixture.base.launch("build", "//:double", "--config");
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(30))
-                .await
-                .unwrap(),
-            2
-        );
-        assert!(
-            run.output(&fixture.base.data)
-                .contains("Expected value after --config")
-        );
-        assert!(fixture.base.core.state.lock().unwrap().run.is_none());
-        assert!(
-            store::read_record(&fixture.base.data, &fixture.base.ws, &run.process.record.id)
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary; may download dependencies"]
-    async fn real_bazel_gui_rejects_missing_filter_value() {
-        let fixture = GuiBazelFixture::new().await;
-        let mut run = fixture.base.launch("test", "//:check", "--test_filter");
-        assert_eq!(
-            run.finish(Instant::now() + Duration::from_secs(30))
-                .await
-                .unwrap(),
-            2
-        );
-        assert!(
-            run.output(&fixture.base.data)
-                .contains("Expected value after --test_filter")
-        );
-        assert!(fixture.base.core.state.lock().unwrap().run.is_none());
-        assert!(
-            store::read_record(&fixture.base.data, &fixture.base.ws, &run.process.record.id)
-                .is_err()
-        );
+        check_gui_run(&fixture, "build", "//:double").await;
+        check_gui_run(&fixture, "test", "//:check").await;
+        check_gui_run(&fixture, "run", "//:double").await;
+        assert_eq!(store::list(&fixture.data, &fixture.ws).unwrap().len(), 3);
     }
 
     struct GuiBazelFixture {
-        base: LaunchFixture,
+        temp: LogDir,
+        ws: std::path::PathBuf,
+        data: std::path::PathBuf,
+        bazel: String,
+        endpoint: String,
         server: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
     }
-
     impl Drop for GuiBazelFixture {
         fn drop(&mut self) {
             self.server.abort();
         }
     }
-
     impl GuiBazelFixture {
         async fn new() -> Self {
-            let base = LaunchFixture::new();
             let bazel = std::env::var("ZEAL_TEST_BAZEL").expect("ZEAL_TEST_BAZEL");
-            let startup = shlex::try_join([
-                bazel.as_str(),
-                "--batch",
-                "--nosystem_rc",
-                "--nohome_rc",
-                &format!("--output_user_root={}", base.temp.0.join("bazel").display()),
-            ])
-            .unwrap();
-            base.executable(&format!("#!/bin/sh\nexec {startup} \"$@\"\n"));
-            fs::write(
-                base.ws.join("WORKSPACE"),
-                "workspace(name='zeal_gui_test')\n",
-            )
-            .unwrap();
-            fs::write(base.ws.join(".bazelrc"), "build --enable_bzlmod=false\nbuild --enable_workspace=true\nbuild --incompatible_autoload_externally=\nbuild --host_platform=//:host\nbuild --platforms=//:host\nbuild --spawn_strategy=local\nbuild --bes_timeout=10s\nbuild --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
-            fs::write(base.ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
-            fs::write(base.ws.join("binary.bzl"), r#"def _binary(ctx):
-    out=ctx.actions.declare_file(ctx.label.name+'.py')
-    source='#!/usr/bin/env python3\nimport json,sys\nprint("CONFIG=%s")\nprint("ARGV="+json.dumps(sys.argv[1:],separators=(",",":")))\nprint(int(input())*2)\nraise SystemExit(23)\n' % ctx.var.get('message','unset')
-    ctx.actions.write(out,source,is_executable=True)
-    return [DefaultInfo(executable=out)]
-def _check(ctx):
-    out=ctx.actions.declare_file(ctx.label.name+'.sh')
-    ctx.actions.write(out,'#!/bin/sh\nprintf "FILTER=<%s>\\n" "$TESTBRIDGE_TEST_ONLY"\n',is_executable=True)
-    return [DefaultInfo(executable=out)]
-binary=rule(implementation=_binary,executable=True)
-check_test=rule(implementation=_check,test=True)
-"#).unwrap();
+            let temp = LogDir::new();
+            let ws = temp.0.join("workspace");
+            let data = temp.0.join("data");
+            fs::create_dir(&ws).unwrap();
+            fs::write(ws.join("WORKSPACE"), "workspace(name='zeal_gui_test')\n").unwrap();
+            fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
+            fs::write(ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
+            fs::write(ws.join("binary.bzl"), "def _binary(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.py')\n    ctx.actions.write(out,'#!/usr/bin/env python3\\nprint(int(input())*2)\\nraise SystemExit(23)\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary=rule(implementation=_binary,executable=True)\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let endpoint = format!("grpc://{}", listener.local_addr().unwrap());
-            base.core.state.lock().unwrap().bes_endpoint = Some(endpoint);
-            let server = tokio::spawn(crate::bes::serve(listener, base.data.clone()));
-            Self { base, server }
+            let address = listener.local_addr().unwrap();
+            let endpoint = format!("grpc://{address}");
+            let server = tokio::spawn(crate::bes::serve(listener, data.clone()));
+            Self {
+                temp,
+                ws,
+                data,
+                bazel,
+                endpoint,
+                server,
+            }
         }
+        fn command(&self, cmd: &str, target: &str, dir: &Path, id: &str) -> Command {
+            let mut command = Command::new(&self.bazel);
+            command
+                .current_dir(&self.ws)
+                .args(["--batch", "--nosystem_rc", "--nohome_rc"])
+                .arg(format!(
+                    "--output_user_root={}",
+                    self.temp.0.join("bazel").display()
+                ))
+                .args(argv(cmd, target, &[], dir, &self.endpoint, id))
+                .args([
+                    "--enable_bzlmod=false",
+                    "--enable_workspace=true",
+                    "--incompatible_autoload_externally=",
+                    "--host_platform=//:host",
+                    "--platforms=//:host",
+                    "--spawn_strategy=local",
+                    "--bes_timeout=10s",
+                ]);
+            command
+        }
+    }
 
-        fn config(&self, name: &str, flags: &str) {
-            use std::io::Write;
-            let mut rc = fs::OpenOptions::new()
-                .append(true)
-                .open(self.base.ws.join(".bazelrc"))
-                .unwrap();
-            writeln!(rc, "build:{name} {flags}").unwrap();
+    async fn check_gui_run(fixture: &GuiBazelFixture, cmd: &'static str, target: &str) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = store::reserve_invocation(&fixture.data, &id).unwrap();
+        let mut command = fixture.command(cmd, target, &dir, &id);
+        let (child, terminal, capture) = crate::terminal::spawn(&mut command, &dir).unwrap();
+        let core = Arc::new(Core::new());
+        {
+            let mut state = core.state.lock().unwrap();
+            state.workspace = Some(fixture.ws.clone());
+            state.console = Some(ConsoleSession {
+                id: id.clone().into(),
+                workspace: fixture.ws.clone(),
+                finished: false,
+            });
+            state.run = Some(ActiveRun {
+                id: id.clone().into(),
+                terminal,
+                pgid: Some(child.id() as i32),
+                stopping: false,
+                stop_started: None,
+            });
         }
+        let (release, input) = mpsc::sync_channel(1);
+        let owner_core = core.clone();
+        let owner_id = id.clone();
+        let process = tokio::task::spawn_blocking(move || {
+            complete_gui_run(
+                child,
+                capture,
+                owner_core,
+                owner_id,
+                (cmd == "run").then_some(input),
+            )
+        });
+        if cmd == "run" {
+            wait_for_gui_build(fixture, &id, &dir, &process).await;
+            crate::terminal::resize(&core, &id, 100, 30).unwrap();
+            release.send(()).unwrap();
+        }
+        let code = tokio::time::timeout(Duration::from_secs(60), process)
+            .await
+            .unwrap()
+            .unwrap();
+        let output = fs::read_to_string(dir.join("terminal.log")).unwrap();
+        assert_eq!(code, if cmd == "run" { 23 } else { 0 }, "{cmd}: {output}");
+        let record = store::read_record(&fixture.data, &fixture.ws, &id).unwrap();
+        assert_eq!(record.cmd.as_deref(), Some(cmd));
+        assert_eq!(record.target.as_deref(), Some(target));
+        assert_eq!(
+            record.exit_code,
+            Some(0),
+            "program exit must not replace build exit"
+        );
+        assert!(record.finished_at.is_some());
+        assert!(store::artifact(&fixture.data, &fixture.ws, &id, "bep.binpb").is_ok());
+        assert!(store::artifact(&fixture.data, &fixture.ws, &id, "profile.gz").is_ok());
+        assert!(core.state.lock().unwrap().run.is_none());
+        assert_saved_console(&fixture.data, &core, &id, &output);
+    }
+
+    /// Completed consoles expose durable bytes even when reopened, but reject new input.
+    fn assert_saved_console(data: &Path, core: &Core, id: &str, output: &str) {
+        let console =
+            serde_json::to_value(crate::console::read(data, core, id, 0).unwrap()).unwrap();
+        assert_eq!(
+            console["done"], true,
+            "final terminal bytes must already be saved"
+        );
+        let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
+        assert_eq!(String::from_utf8(bytes).unwrap(), output);
+        let reopened =
+            serde_json::to_value(crate::console::read(data, core, id, 0).unwrap()).unwrap();
+        assert_eq!(reopened, console);
+        assert!(crate::terminal::write(core, id, b"late input").is_err());
+    }
+
+    fn complete_gui_run(
+        mut child: std::process::Child,
+        mut capture: crate::terminal::Capture,
+        core: Arc<Core>,
+        id: String,
+        input: Option<mpsc::Receiver<()>>,
+    ) -> i32 {
+        let _group = GroupGuard(child.id() as i32);
+        if let Some(input) = input {
+            input
+                .recv_timeout(Duration::from_secs(30))
+                .expect("BEP completes before stdin");
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "program still waits for input"
+            );
+            crate::terminal::write(&core, &id, b"21\n").unwrap();
+        }
+        let exit = observe_process(
+            &core,
+            &id,
+            || Ok(child.try_wait()?.map(|status| status.code().unwrap_or(-1))),
+            STOP_GRACE,
+            STOP_CONFIRM,
+        );
+        capture.finish().unwrap();
+        {
+            let mut state = core.state.lock().unwrap();
+            finish_console(&mut state, &id);
+            apply_reap(&mut state, &id, &exit);
+        }
+        exit.unwrap()
     }
 
     async fn wait_for_gui_build(
         fixture: &GuiBazelFixture,
-        run: &mut OwnedRun,
-        deadline: Instant,
-    ) -> RunRecord {
-        let id = &run.process.record.id;
-        let mut record = store::read_record(&fixture.base.data, &fixture.base.ws, id);
-        while !record
-            .as_ref()
-            .is_ok_and(|record| record.finished_at.is_some())
-        {
-            assert!(
-                run.process.child.try_wait().unwrap().is_none(),
-                "Bazel ended before BEP receipt: {}",
-                run.output(&fixture.base.data)
-            );
-            assert!(
-                Instant::now() < deadline,
-                "BEP receipt deadline: {}",
-                run.output(&fixture.base.data)
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            record = store::read_record(&fixture.base.data, &fixture.base.ws, id);
-        }
-        record.unwrap()
+        id: &str,
+        dir: &Path,
+        process: &tokio::task::JoinHandle<i32>,
+    ) {
+        tokio::time::timeout(
+            Duration::from_secs(25),
+            wait_for_gui_build_receipt(fixture, id, dir, process),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "BES did not finalize before stdin: {error}; {}",
+                fs::read_to_string(dir.join("terminal.log")).unwrap()
+            )
+        });
     }
 
-    /// Completed consoles expose durable bytes, but reject new input.
-    fn assert_saved_console(data: &Path, core: &Core, id: &str, output: &str) {
-        let console =
-            serde_json::to_value(crate::console::read(data, core, id, 0).unwrap()).unwrap();
-        assert_eq!(console["done"], true);
-        let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
-        assert_eq!(String::from_utf8(bytes).unwrap(), output);
-        assert!(crate::terminal::write(core, id, b"late input").is_err());
+    async fn wait_for_gui_build_receipt(
+        fixture: &GuiBazelFixture,
+        id: &str,
+        dir: &Path,
+        process: &tokio::task::JoinHandle<i32>,
+    ) {
+        while !store::read_record(&fixture.data, &fixture.ws, id)
+            .is_ok_and(|record| record.exit_code == Some(0))
+        {
+            assert!(
+                !process.is_finished(),
+                "Bazel ended before recording the build: {}",
+                fs::read_to_string(dir.join("terminal.log")).unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     #[test]
