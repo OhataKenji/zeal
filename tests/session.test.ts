@@ -318,6 +318,24 @@ test("stop is offered only while a run is live and not already stopping", async 
   await stopping;
 });
 
+test("a confirmed build result leaves the live program and Console controls active", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, running: RECORD.id });
+  h.session.openConsole(COMPLETED.record);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(canStop(h.view), true);
+  assert.equal(h.view.state?.running, RECORD.id);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
+  const stopping = h.session.stop();
+  pendingRequest(h, "stop_run").reply.resolve(undefined);
+  await stopping;
+  assert.equal(h.view.consoleOpen, true);
+});
+
 test("stop failure is surfaced and leaves the run in flight", async () => {
   const h = harness();
   await h.session.init();
@@ -352,21 +370,22 @@ test("full artifacts are read only after the run finishes", async () => {
   assert.equal(h.view.detail?.log.status, "ok");
 });
 
-test("run completing before start response immediately selects its All view", async () => {
+test("run completing before start response retains its Console without reading unknown history", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("build", "//:app");
-  h.emit("app-state", { ...IDLE, running: RECORD.id });
-  h.emit("app-state", IDLE);
-  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: RECORD.id });
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
   await started;
   assert.equal(h.view.state?.running, null);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, RECORD.id);
-  assert.equal(h.view.initialRunTab, "All");
-  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
-  await settle();
-  assert.deepEqual(h.view.detail, COMPLETED);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.console?.id, RECORD.id);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
 });
 
 test("start response before the running event reconciles state without reading active observations", async () => {
@@ -664,25 +683,25 @@ test("leaving Console keeps the process and prevents automatic navigation", asyn
   assert.equal(h.view.selectedRun, null);
 });
 
-test("process completion selects All immediately, before history finishes loading", async () => {
+test("process completion retains Console while history is still unknown", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");
-  h.emit("app-state", { ...IDLE, running: RECORD.id });
-  pendingRequest(h, "start_run").reply.resolve(RECORD);
+  h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: RECORD.id });
+  pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
   await started;
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
   assert.equal(h.view.consoleOpen, true);
-  h.emit("app-state", IDLE);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, RECORD.id);
-  assert.equal(h.view.initialRunTab, "All");
-  assert.equal(h.view.detailLoading, true);
-  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
-  await settle();
-  assert.deepEqual(h.view.detail, COMPLETED);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(h.view.console?.id, RECORD.id);
+  assert.equal(canStop(h.view), false);
+  assert.equal(
+    h.pending.some((call) => call.command === "get_run"),
+    false,
+  );
 });
 
-test("the live run stays in the list so its row can reopen the Console", async () => {
+test("observed live runs remain in the workspace list", async () => {
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, running: RECORD.id });
@@ -749,22 +768,36 @@ test("openConsole on a finished run lands on its detail view", async () => {
   assert.equal(h.view.detail?.record.id, RECORD.id);
 });
 
-test("a run finishing while its reopened Console is shown selects its All view", async () => {
+test("a completed Console can be reopened after viewing its build details", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("run", "//:app");
-  h.emit("app-state", { ...IDLE, running: RECORD.id });
-  pendingRequest(h, "start_run").reply.resolve(RECORD);
-  await started;
-  h.session.selectRun(null);
-  h.session.openConsole(RECORD);
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  h.session.openConsole({ id: RECORD.id });
   assert.equal(h.view.consoleOpen, true);
-  h.emit("app-state", IDLE);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedRun, RECORD.id);
-  assert.equal(h.view.initialRunTab, "All");
-  assert.equal(h.view.detailLoading, true);
-  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  h.session.selectRun(RECORD.id);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
+  h.session.openConsole(COMPLETED.record);
+  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.selectedRun, null);
+  assert.equal(canStop(h.view), false);
+  assert.equal(h.view.console?.id, RECORD.id);
+});
+
+test("workspace changes revoke a completed Console and discard its pending detail response", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
+  h.session.openConsole({ id: RECORD.id });
+  h.session.selectRun(RECORD.id);
+  h.emit("app-state", { ...IDLE, workspace: "/other" });
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.view.console, null);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.detail, null);
+  assert.equal(h.view.profile, null);
+  assert.equal(h.view.selectedRun, null);
 });

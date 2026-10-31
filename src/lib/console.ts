@@ -21,6 +21,7 @@ export function createConsole(
   let offset = 0;
   let disposed = false;
   let done = false;
+  let running = true;
   let reading = false;
   let writing = false;
   let pending = new Uint8Array();
@@ -42,10 +43,10 @@ export function createConsole(
   }
 
   async function flush() {
-    if (disposed || done || writing || !pending.length) return;
+    if (disposed || done || !running || writing || !pending.length) return;
     writing = true;
     try {
-      while (!disposed && !done && pending.length) {
+      while (!disposed && !done && running && pending.length) {
         const data = Array.from(pending.subarray(0, 8192));
         const count = await transport.invoke<number>("write_console", { id, data });
         if (disposed) return;
@@ -62,7 +63,7 @@ export function createConsole(
   }
 
   function input(bytes: Uint8Array) {
-    if (disposed || done) return;
+    if (disposed || done || !running) return;
     if (pending.length + bytes.length > 1024 * 1024) {
       setError("write", "Terminal input is busy; paste a smaller selection.");
       return;
@@ -98,7 +99,7 @@ export function createConsole(
   }
 
   async function resize(cols: number, rows: number) {
-    if (disposed || done) return;
+    if (disposed || done || !running) return;
     try {
       await transport.invoke("resize_console", { id, cols, rows });
       setError("resize", null);
@@ -108,6 +109,10 @@ export function createConsole(
   }
 
   return {
+    setRunning(active: boolean) {
+      running = active;
+      if (!active) pending = new Uint8Array();
+    },
     input,
     poll,
     resize,

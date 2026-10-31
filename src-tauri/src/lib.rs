@@ -54,6 +54,7 @@ fn open_workspace(
             return Err("cannot change workspace while bazel is busy".to_string());
         }
         store::analytics::refresh_timezone();
+        st.console = None;
         st.workspace = Some(ws.clone());
         st.bazel = bazel;
         // A different workspace has no shared snapshot with the previous one.
@@ -115,16 +116,10 @@ async fn read_console(
     id: String,
     offset: u64,
 ) -> Result<console::Output, String> {
-    let (ws, running) = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        (
-            st.workspace.clone().ok_or("no workspace")?,
-            st.run.as_deref() == Some(&id),
-        )
-    };
+    let core = core.inner().clone();
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        console::read(&data, &ws, &id, offset, running).map_err(|e| e.to_string())
+        console::read(&data, &core, &id, offset).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "terminal read worker failed".to_string())?

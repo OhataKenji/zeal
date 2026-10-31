@@ -115,6 +115,12 @@ workspaceの移動は別workspaceとして扱う。
 履歴の自動整理も行わず、手動整理は全Zealと残存processを停止した後に行う。
 DBとsidecarの手動初期化では全workspaceの要約を失い、成果物からは復元しない。
 
+### Consoleの寿命
+
+process終了後も最後のConsoleを保持して末尾を読み、詳細画面から戻って端末出力を確認できる。
+終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
+stdin、resize、停止は現在のprocessだけを操作する。
+
 ## Security Concerns
 
 保存領域は所有者を確認してdirを0700、新規DBとlogを0600にする。
