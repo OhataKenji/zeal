@@ -214,6 +214,8 @@ pub fn reserve_invocation(data: &Path, run_id: &str) -> Result<PathBuf, StoreErr
 }
 
 const SELECT: &str = "SELECT r.id,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.exit_code FROM run r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
+/// [`list`] returns at most this many records, newest first.
+pub const LIST_LIMIT: usize = 100;
 fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord> {
     fn time(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Option<u64>> {
         row.get::<_, Option<i64>>(column)?
@@ -247,7 +249,9 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
     let store = Store::open(data)?;
     Ok(store
         .conn
-        .prepare(&format!("{SELECT} ORDER BY r.started_at_ms DESC,r.id"))?
+        .prepare(&format!(
+            "{SELECT} ORDER BY r.started_at_ms DESC,r.id LIMIT {LIST_LIMIT}"
+        ))?
         .query_map([ws.as_os_str().as_bytes()], |r| row_record(r, &ws))?
         .collect::<Result<_, _>>()?)
 }
@@ -408,6 +412,30 @@ mod tests {
         );
         fs::remove_dir_all(f.dir()).unwrap();
         assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
+    }
+    #[test]
+    fn list_returns_at_most_list_limit_newest_records() {
+        let f = Fixture::new();
+        f.complete();
+        let store = Store::open(&f.data).unwrap();
+        let ws_id: String = store
+            .conn
+            .query_row("SELECT id FROM workspace", [], |r| r.get(0))
+            .unwrap();
+        for i in 0..LIST_LIMIT {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO run(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
+                    params![uuid::Uuid::new_v4().to_string(), ws_id, 2000 + i as i64],
+                )
+                .unwrap();
+        }
+        drop(store);
+        let runs = list(&f.data, &f.ws).unwrap();
+        assert_eq!(runs.len(), LIST_LIMIT);
+        assert_eq!(runs[0].started_at, Some(2000 + LIST_LIMIT as u64 - 1));
+        assert!(runs.iter().all(|run| run.id != f.stream.invocation_id));
     }
     #[test]
     fn reservation_collision_abort_and_live_output_do_not_require_observed_workspace() {

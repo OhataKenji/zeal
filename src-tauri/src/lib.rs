@@ -142,7 +142,7 @@ async fn read_console(
     .map_err(|_| "terminal read worker failed".to_string())?
 }
 
-/// Runs of the open workspace, newest first.
+/// Runs of the open workspace, newest first, at most [`store::LIST_LIMIT`].
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "runs.list", skip_all)]
 fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
