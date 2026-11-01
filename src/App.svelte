@@ -93,7 +93,6 @@
 
   async function setArgumentsOpen(open: boolean) {
     argumentsOpen = open;
-    dropdownOpen = false;
     await tick();
     if (argumentsOpen === open) {
       (open ? argumentsInput : argumentsToggle)?.focus();

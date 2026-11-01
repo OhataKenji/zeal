@@ -283,11 +283,15 @@ pub fn exit_stop(core: &Core) {
         }
         st.run.as_ref().map(|run| run.id.clone())
     };
-    let Some(id) = id else { return; };
+    let Some(id) = id else {
+        return;
+    };
     let deadline = Instant::now() + EXIT_GRACE;
     loop {
         let st = core.state.lock().expect("application state lock poisoned");
-        if !still_held(&st, &id) { return; }
+        if !still_held(&st, &id) {
+            return;
+        }
         if st.run.as_ref().is_some_and(|run| run.pgid.is_none()) {
             wait_for_save(core, st, &id);
             return;

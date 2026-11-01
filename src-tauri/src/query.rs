@@ -349,15 +349,13 @@ fn capture_head(pipe: &mut impl Read, cap: usize) -> (Vec<u8>, bool) {
 fn capture_tail(pipe: &mut impl Read, cap: usize) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > cap {
-                    buf.drain(..buf.len() - cap);
-                }
-            }
+    while let Ok(n) = pipe.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > cap {
+            buf.drain(..buf.len() - cap);
         }
     }
     buf
@@ -612,9 +610,10 @@ mod tests {
         }
         let panicking = core.clone();
         let owner = thread::spawn(move || {
+            let emit = || ();
             let _slot = QuerySlot {
                 core: &panicking,
-                emit: || {},
+                emit,
             };
             panic!("injected worker panic");
         });
