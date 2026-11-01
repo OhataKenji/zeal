@@ -1,6 +1,6 @@
 //! Shared application state held by the Rust core.
 
-use crate::snapshot::{Meta, Snapshot};
+use crate::snapshot::Snapshot;
 use serde::Serialize;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -19,10 +19,10 @@ pub struct AppStateDto {
     pub bazel: Option<String>,
     /// "idle" | "running": whether a query ingestion is in flight.
     pub ingest: &'static str,
-    /// Identity of the current snapshot, kept across failed refreshes. The UI
-    /// fetches the full snapshot through `get_snapshot` only when this changes,
-    /// so events never carry target data.
-    pub snapshot_id: Option<Meta>,
+    /// `fetched_at` of the current snapshot, kept across failed refreshes. The
+    /// UI fetches the full snapshot through `get_snapshot` only when this
+    /// changes, so events never carry target data.
+    pub snapshot_id: Option<u64>,
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
@@ -191,7 +191,10 @@ impl Core {
                 .map(|p| p.to_string_lossy().into_owned()),
             bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
             ingest: if st.ingest_running { "running" } else { "idle" },
-            snapshot_id: st.snapshot.as_ref().map(|snapshot| snapshot.meta.clone()),
+            snapshot_id: st
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.meta.fetched_at),
             last_error: st.last_error.clone(),
             running: st.run.as_ref().map(|run| run.id.clone()),
             console_run: st.console_run().cloned(),
@@ -265,7 +268,7 @@ mod tests {
         let json = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(
             json["snapshotId"],
-            serde_json::json!({ "fetchedAt": 1, "status": "partial" }),
+            serde_json::json!(1),
             "the event names the snapshot; its data goes through get_snapshot"
         );
         assert!(json.get("snapshot").is_none());

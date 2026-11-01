@@ -8,7 +8,6 @@ import type {
   RunRecord,
   Section,
   Snapshot,
-  SnapshotMeta,
 } from "./types.ts";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
@@ -92,10 +91,8 @@ export function canStop(view: SessionView): boolean {
 }
 
 /** Compares snapshot identity carried by state events and by loaded data. */
-function sameMeta(a: SnapshotMeta | null | undefined, b: SnapshotMeta | null | undefined) {
-  return (
-    (a?.fetchedAt ?? null) === (b?.fetchedAt ?? null) && (a?.status ?? null) === (b?.status ?? null)
-  );
+function sameSnapshot(a: number | null | undefined, b: number | null | undefined) {
+  return (a ?? null) === (b ?? null);
 }
 
 /**
@@ -111,7 +108,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let detailGeneration = 0;
   let profileGeneration = 0;
   let snapshotGeneration = 0;
-  let snapshotRequested: SnapshotMeta | null = null;
+  let snapshotRequested: number | null = null;
   let unlisten: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
@@ -143,7 +140,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   // that identity changes, not on every state event.
   async function loadSnapshot() {
     // Manual calls re-check in-flight state that acceptState already guards.
-    if (snapshotRequested && sameMeta(view.state?.snapshotId, snapshotRequested)) return;
+    if (snapshotRequested && sameSnapshot(view.state?.snapshotId, snapshotRequested)) return;
     snapshotRequested = view.state?.snapshotId ?? null;
     const generation = ++snapshotGeneration;
     update({ snapshotLoading: true, snapshotError: null });
@@ -294,8 +291,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
-    const wantMeta = state.snapshotId;
-    if (!wantMeta) {
+    const wantId = state.snapshotId;
+    if (wantId === null) {
       // Defensive: the core drops its snapshot only on a workspace switch,
       // which the reset above already clears.
       if (view.snapshot || view.snapshotError || snapshotRequested) {
@@ -304,10 +301,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         update({ snapshot: null, snapshotLoading: false, snapshotError: null });
       }
     } else if (
-      // A fetch for this meta may already be in flight; re-issuing would
+      // A fetch for this id may already be in flight; re-issuing would
       // duplicate the transfer this split exists to avoid.
-      !sameMeta(wantMeta, view.snapshot?.meta) &&
-      !sameMeta(wantMeta, snapshotRequested)
+      !sameSnapshot(wantId, view.snapshot?.meta.fetchedAt) &&
+      !sameSnapshot(wantId, snapshotRequested)
     ) {
       void loadSnapshot();
     }

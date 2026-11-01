@@ -148,7 +148,7 @@ const state: AppState = {
   workspace: WORKSPACE,
   bazel: "8.7.0",
   ingest: "idle",
-  snapshotId: SNAPSHOT.meta,
+  snapshotId: SNAPSHOT.meta.fetchedAt,
   lastError: null,
   running: null,
   stopping: false,
@@ -369,7 +369,7 @@ export function installPreview() {
       previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
     open_workspace: () => {
       state.workspace = WORKSPACE;
-      state.snapshotId = SNAPSHOT.meta;
+      state.snapshotId = SNAPSHOT.meta.fetchedAt;
       currentSnapshot = SNAPSHOT;
       return structuredClone(state);
     },
