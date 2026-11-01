@@ -55,7 +55,8 @@ flowchart TD
 ```
 
 データは二系統に分かれる。
-構造データのうち静的な部分(target・依存・file)は `bazel query` の結果を起動のたびに取り込み、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
+構造データのうち target の一覧は起動時に `bazel query --output=label_kind` で取得し、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
+属性、依存、file は target を選んだときに XML query で取得する([Target の段階的な取得](./target-loading.md))。
 観測データは run ごとの BEP と profile に残す。
 runのevent fileは詳細表示のたびに一度parseし、入力、BEP時刻、build exitはSQLiteの共通run表に保存する。
 phase の集計値や parse 結果は DB に保存しない。
@@ -164,7 +165,7 @@ content は target / run / analytics の3状態で、sidebar の tree と runs�
 ## Caveats
 
 - Bazel の version 差は flag と出力形式の単位で現れる。v1 は 8.7 以上を目安にし、観測 flag が受理されない環境は対象外として、発生したら Zeal 側のバグとして対応する。成果物の欠損は detail なしとして扱う。
-- `bazel query` は大きい repo で遅くなり得る。snapshot 取り込みは grpc で実測 warm 約 56ms / cold 約 19s で、起動ごとの取り直しは実用範囲。
+- `bazel query` は大きい repo で遅くなり得る。grpc/grpc でのツリー用 query は warm 時の中央値 194ms だった。cold 時の所要時間と画面表示までの時間は別に測る。
 - bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。実行中はConsoleを表示する。
 - workspace を移動・rename するとルートパスが変わり、履歴は新規 workspace として分断される。
 - 初版は同一 workspace で Zeal を二重起動しない前提で試す。取り込み中など bazel 呼び出しの待ちの間は Send が最大で query の timeout 分待たされ得る。

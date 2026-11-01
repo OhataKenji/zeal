@@ -1,16 +1,14 @@
-//! The in-memory snapshot: the four structures the UI renders.
+//! The target index and the relationships fetched for one selected target.
 //!
-//! - **targets**: label, package, name, rule class, BUILD location
-//! - **edges**: directed dependency edges (from, to, attribute name)
-//! - **files**: (workspace-relative path, owner label, role); role is the
-//!   attribute name on the input side and `out` on the output side
-//! - **meta**: fetch time and status
+//! The index has labels and rule classes. A detail query builds a temporary
+//! full snapshot, then retains only the selected rule's edges and files.
 
 use crate::label;
 use crate::label::LabelParts;
 use crate::xml::ParsedQuery;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::io::BufRead;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,6 +70,93 @@ pub struct Snapshot {
     pub targets: Vec<Target>,
     pub edges: Vec<Edge>,
     pub files: Vec<FileEntry>,
+}
+
+/// The small workspace-wide index sent to the tree and search UI.
+#[derive(Clone, Debug, Serialize)]
+pub struct TargetIndex {
+    pub meta: Meta,
+    pub targets: Vec<Target>,
+}
+
+/// Relationships for one selected target, derived from a fresh scoped query.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDetail {
+    pub target: Target,
+    pub edges: Vec<Edge>,
+    pub files: Vec<FileEntry>,
+    pub status: Status,
+}
+
+/// Parse Bazel's `<rule class> rule <label>` lines without XML attributes.
+#[tracing::instrument(target = "zeal::operations", name = "query.label_kind_parse", skip_all)]
+pub fn parse_label_kind(input: impl BufRead) -> Result<Vec<Target>, String> {
+    let mut targets = Vec::new();
+    for line in input.lines() {
+        let line = line.map_err(|_| "could not read target list".to_string())?;
+        let (rule_class, label) = line
+            .rsplit_once(" rule ")
+            .ok_or_else(|| "invalid target list output".to_string())?;
+        if rule_class.is_empty() || !label.starts_with("//") {
+            return Err("invalid target list output".to_string());
+        }
+        let label = label::canonical(label);
+        let LabelParts { package, name } = label::split(&label);
+        targets.push(Target {
+            label,
+            pkg: package,
+            name,
+            rule_class: rule_class.to_string(),
+            location: None,
+        });
+    }
+    Ok(targets)
+}
+
+/// Build the list generation held by the core until refresh.
+#[tracing::instrument(target = "zeal::operations", name = "snapshot.index_build", skip_all)]
+#[must_use]
+pub fn build_index(mut targets: Vec<Target>, status: Status) -> TargetIndex {
+    targets.sort_by(|a, b| a.label.cmp(&b.label));
+    targets.dedup_by(|a, b| a.label == b.label);
+    TargetIndex {
+        meta: Meta {
+            fetched_at: fetched_at(),
+            status,
+        },
+        targets,
+    }
+}
+
+/// Keep only facts visible in the selected target's details pane.
+#[must_use]
+pub fn select_detail(snapshot: Snapshot, label: &str) -> Option<TargetDetail> {
+    let target = snapshot
+        .targets
+        .into_iter()
+        .find(|target| target.label == label)?;
+    Some(TargetDetail {
+        target,
+        edges: snapshot
+            .edges
+            .into_iter()
+            .filter(|edge| edge.from == label || edge.to == label)
+            .collect(),
+        files: snapshot
+            .files
+            .into_iter()
+            .filter(|file| file.owner == label)
+            .collect(),
+        status: snapshot.meta.status,
+    })
+}
+
+fn fetched_at() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Build a snapshot from parsed rules. Labels are canonicalized before being
@@ -147,10 +232,7 @@ pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
 
     Snapshot {
         meta: Meta {
-            fetched_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
+            fetched_at: fetched_at(),
             status,
         },
         targets,
@@ -165,6 +247,55 @@ mod tests {
     use crate::xml;
     use std::collections::HashMap;
     use std::io::Cursor;
+
+    #[test]
+    fn label_kind_builds_only_tree_targets() {
+        let targets = parse_label_kind(Cursor::new(
+            "cc_test rule //app:test\njava_library rule //app/lib\n",
+        ))
+        .unwrap();
+        let index = build_index(targets, Status::Ok);
+        assert_eq!(index.targets.len(), 2);
+        assert_eq!(index.targets[0].label, "//app/lib:lib");
+        assert_eq!(index.targets[0].rule_class, "java_library");
+        assert_eq!(index.targets[1].label, "//app:test");
+        assert!(index.targets.iter().all(|target| target.location.is_none()));
+        let json = serde_json::to_value(index).unwrap();
+        assert!(json.get("edges").is_none());
+        assert!(json.get("files").is_none());
+        assert!(parse_label_kind(Cursor::new("not a rule\n")).is_err());
+    }
+
+    #[test]
+    fn selected_detail_excludes_other_targets_relationships() {
+        let query = xml::parse_query(Cursor::new(
+            r#"<query>
+              <rule class="r" name="//app:chosen">
+                <list name="deps"><label value="//app:dep"/></list>
+                <list name="srcs"><label value="//app:input.txt"/></list>
+                <rule-output name="//app:out.txt"/>
+              </rule>
+              <rule class="r" name="//app:user"><list name="deps"><label value="//app:chosen"/></list></rule>
+              <rule class="r" name="//app:other">
+                <list name="deps"><label value="//app:else"/></list>
+                <list name="srcs"><label value="//app:other.txt"/></list>
+              </rule>
+              <source-file name="//app:input.txt"/>
+              <source-file name="//app:other.txt"/>
+            </query>"#,
+        ));
+        let detail = select_detail(build(&query, Status::Ok), "//app:chosen").unwrap();
+        assert_eq!(detail.edges.len(), 2);
+        assert!(
+            detail
+                .edges
+                .iter()
+                .all(|edge| edge.from == "//app:chosen" || edge.to == "//app:chosen")
+        );
+        assert_eq!(detail.files.len(), 2);
+        assert!(detail.files.iter().all(|file| file.owner == "//app:chosen"));
+        assert_eq!(detail.target.label, "//app:chosen");
+    }
 
     fn fixture_rules() -> xml::ParsedQuery {
         let xml = std::fs::read_to_string(concat!(

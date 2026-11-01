@@ -2,7 +2,16 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { AppState, Profile, RunRecord, Snapshot, Target } from "./lib/types";
+import type {
+  AppState,
+  Edge,
+  FileEntry,
+  Profile,
+  RunRecord,
+  Target,
+  TargetDetail,
+  TargetIndex,
+} from "./lib/types";
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
@@ -71,7 +80,7 @@ const SOURCE_FILES = [
   "SourceSpan.java",
   "Diagnostics.java",
 ];
-const SNAPSHOT: Snapshot = {
+const FULL_DATA: TargetIndex & { edges: Edge[]; files: FileEntry[] } = {
   meta: { fetchedAt: NOW, status: "ok" },
   targets: [
     target(PARSER),
@@ -108,6 +117,10 @@ const SNAPSHOT: Snapshot = {
       role: "out",
     })),
   ],
+};
+const SNAPSHOT: TargetIndex = {
+  meta: FULL_DATA.meta,
+  targets: FULL_DATA.targets.map((item) => ({ ...item, location: null })),
 };
 const PREVIEW_TARGETS = [
   "//app:server",
@@ -156,8 +169,9 @@ const state: AppState = {
   stopping: false,
   runNote: null,
   query: "idle",
+  detailQuery: "idle",
 };
-let currentSnapshot: Snapshot | null = SNAPSHOT;
+let currentSnapshot: TargetIndex | null = SNAPSHOT;
 const consoleOutput = new Map<string, string>();
 const consoleInput = new Map<string, string>();
 function span(name: string, ts: number, dur: number) {
@@ -356,6 +370,20 @@ export function installPreview() {
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
     get_snapshot: () => structuredClone(currentSnapshot),
+    get_target_detail: (payload): TargetDetail => {
+      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
+        throw new Error("Target list changed; select the target again");
+      }
+      const label = String(payload?.label);
+      const selected = FULL_DATA.targets.find((item) => item.label === label);
+      if (!selected) throw new Error("Target not found");
+      return structuredClone({
+        target: selected,
+        edges: FULL_DATA.edges.filter((edge) => edge.from === label || edge.to === label),
+        files: FULL_DATA.files.filter((file) => file.owner === label),
+        status: "ok",
+      });
+    },
     list_runs: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
     resize_console: () => {},

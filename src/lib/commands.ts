@@ -4,6 +4,7 @@
 export const COMMANDS = {
   getState: "get_state",
   getSnapshot: "get_snapshot",
+  getTargetDetail: "get_target_detail",
   openWorkspace: "open_workspace",
   refresh: "refresh",
   openLocation: "open_location",

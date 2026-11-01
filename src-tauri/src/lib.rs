@@ -40,19 +40,44 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
-/// The current workspace snapshot. Events carry only `snapshot_fetched_at`,
+/// The current workspace target index. Events carry only `snapshot_fetched_at`,
 /// so the UI requests this once per change instead of on every state push.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.get", skip_all)]
 #[tauri::command]
 async fn get_snapshot(
     core: State<'_, Arc<Core>>,
-) -> Result<Option<Arc<snapshot::Snapshot>>, String> {
+) -> Result<Option<Arc<snapshot::TargetIndex>>, String> {
     Ok(core
         .state
         .lock()
         .expect("application state lock poisoned")
         .snapshot
         .clone())
+}
+
+/// Load relationships for one target in the current target-list generation.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "target.detail.request", skip_all)]
+async fn get_target_detail(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    label: String,
+    fetched_at: u64,
+) -> Result<snapshot::TargetDetail, String> {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        ingest::target_detail(app, core, &label, fetched_at)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("target detail worker failed".to_string())
+        }
+    }
 }
 
 /// Open a directory as the Bazel workspace: validate it, resolve bazel, and
@@ -383,6 +408,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_snapshot,
+            get_target_detail,
             read_console,
             write_console,
             resize_console,

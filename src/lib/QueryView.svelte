@@ -62,7 +62,7 @@
   import { Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
-  import { createIndex, labelTarget, querySearchTargets } from "./search";
+  import { createIndex, labelTarget } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
@@ -80,23 +80,15 @@
     type Expr,
     type QueryState,
   } from "./query";
-  import type { Snapshot } from "./types";
+  import type { TargetIndex } from "./types";
 
-  let { snap }: { snap: Snapshot | null } = $props();
+  let { snap }: { snap: TargetIndex | null } = $props();
 
   const searchIndex = $derived(
-    snap ? createIndex(querySearchTargets(snap)) : null,
+    snap ? createIndex(snap.targets) : null,
   );
-  // attr-name args search the attribute names the snapshot's edges carry.
-  const attrIndex = $derived(
-    snap
-      ? createIndex(
-          [...new Set(snap.edges.map((e) => e.attr))]
-            .sort()
-            .map((attr) => labelTarget(attr, "attr")),
-        )
-      : null,
-  );
+  // Attribute names remain free text; the tree index carries no attributes.
+  const attrIndex = null;
   // kind()'s pattern arg searches a wildcard-test hint plus every rule class
   // in the snapshot.
   const kindIndex = $derived(

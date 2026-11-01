@@ -7,7 +7,8 @@ import type {
   RunDetail,
   RunRecord,
   Section,
-  Snapshot,
+  TargetDetail,
+  TargetIndex,
   TargetScope,
 } from "./types.ts";
 
@@ -22,10 +23,13 @@ export interface SessionView {
   console: RunRecord | null;
   consoleOpen: boolean;
   state: AppState | null;
-  /** Full snapshot for `state.snapshotFetchedAt`; loaded separately from events. */
-  snapshot: Snapshot | null;
+  /** Tree and search data for `state.snapshotFetchedAt`. */
+  snapshot: TargetIndex | null;
   snapshotLoading: boolean;
   snapshotError: string | null;
+  selectedTarget: string | null;
+  targetDetail: TargetDetail | null;
+  targetDetailError: string | null;
   ready: boolean;
   starting: boolean;
   opening: boolean;
@@ -50,6 +54,9 @@ export function emptyView(): SessionView {
     snapshot: null,
     snapshotLoading: false,
     snapshotError: null,
+    selectedTarget: null,
+    targetDetail: null,
+    targetDetailError: null,
     ready: false,
     starting: false,
     opening: false,
@@ -80,6 +87,7 @@ export function canSend(view: SessionView, target: string): boolean {
     view.state.ingest === "idle" &&
     !view.state.running &&
     view.state.query !== "running" &&
+    view.state.detailQuery !== "running" &&
     targetError(target) === null
   );
 }
@@ -106,6 +114,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let profileGeneration = 0;
   let snapshotGeneration = 0;
   let snapshotRequested: number | null = null;
+  let targetGeneration = 0;
+  let targetRequestInFlight = false;
   let unlisten: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
@@ -145,6 +155,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   // The DTO carries only the snapshot's fetchedAt; its data is fetched when
   // that timestamp changes, not on every state event.
+  function acceptLoadedSnapshot(snapshot: TargetIndex | null) {
+    snapshotRequested = null;
+    update({ snapshot, snapshotLoading: false, snapshotError: null, targetDetailError: null });
+    if (view.selectedTarget && !snapshot?.targets.some((t) => t.label === view.selectedTarget)) {
+      selectTarget(null);
+      return;
+    }
+    requestTargetDetail();
+  }
+
   async function loadSnapshot() {
     // Manual calls re-check in-flight state that acceptState already guards.
     if (snapshotRequested !== null && view.state?.snapshotFetchedAt === snapshotRequested) return;
@@ -152,10 +172,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++snapshotGeneration;
     update({ snapshotLoading: true, snapshotError: null });
     try {
-      const snapshot = await transport.invoke<Snapshot | null>(COMMANDS.getSnapshot);
+      const snapshot = await transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot);
       if (generation === snapshotGeneration) {
-        snapshotRequested = null;
-        update({ snapshot, snapshotLoading: false, snapshotError: null });
+        acceptLoadedSnapshot(snapshot);
       }
     } catch (error) {
       if (generation === snapshotGeneration) {
@@ -163,9 +182,78 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         update({
           snapshotLoading: false,
           snapshotError: `Could not load the workspace snapshot: ${String(error)}`,
+          ...(view.selectedTarget ? { targetDetailError: "Could not load the target list" } : {}),
         });
       }
     }
+  }
+
+  function targetBusy(): boolean {
+    const state = view.state;
+    return !!(
+      !view.ready ||
+      view.opening ||
+      view.starting ||
+      !state?.workspace ||
+      !state.bazel ||
+      state.ingest === "running" ||
+      state.running ||
+      state.query === "running" ||
+      state.detailQuery === "running"
+    );
+  }
+
+  function requestTargetDetail() {
+    const label = view.selectedTarget;
+    const snapshot = view.snapshot;
+    const state = view.state;
+    if (
+      !label ||
+      disposed ||
+      !snapshot ||
+      view.targetDetail !== null ||
+      view.targetDetailError !== null ||
+      targetRequestInFlight ||
+      targetBusy() ||
+      snapshot.meta.fetchedAt !== state?.snapshotFetchedAt
+    ) {
+      return;
+    }
+    const generation = targetGeneration;
+    const fetchedAt = snapshot.meta.fetchedAt;
+    targetRequestInFlight = true;
+    void (async () => {
+      try {
+        const detail = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
+          label,
+          fetchedAt,
+        });
+        if (detail.target.label !== label) {
+          throw new Error("Target detail does not match the selected label");
+        }
+        if (generation === targetGeneration) {
+          update({ targetDetail: detail, targetDetailError: null });
+        }
+      } catch (error) {
+        if (generation === targetGeneration) {
+          update({ targetDetailError: String(error) });
+        }
+      } finally {
+        targetRequestInFlight = false;
+        if (generation !== targetGeneration) requestTargetDetail();
+      }
+    })();
+  }
+
+  function selectTarget(label: string | null) {
+    if (label === view.selectedTarget && !view.targetDetailError) return;
+    ++targetGeneration;
+    update({
+      selectedTarget: label,
+      targetDetail: null,
+      targetDetailError: null,
+    });
+    requestTargetDetail();
   }
 
   async function loadDetail() {
@@ -269,13 +357,22 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (disposed) return;
     const before = view.state;
     const resumed = !view.ready;
+    const workspaceChanged = state.workspace !== before?.workspace;
+    const scopeChanged =
+      JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
+    const contextChanged = workspaceChanged || scopeChanged;
     ++stateRevision;
-    if (state.workspace !== before?.workspace) {
+    if (workspaceChanged) {
       ++listGeneration;
       ++detailGeneration;
       ++profileGeneration;
+    }
+    if (contextChanged) {
       ++snapshotGeneration;
+      ++targetGeneration;
       snapshotRequested = null;
+    }
+    if (workspaceChanged) {
       update({
         console: null,
         consoleOpen: false,
@@ -291,6 +388,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         snapshot: null,
         snapshotLoading: false,
         snapshotError: null,
+        selectedTarget: null,
+        targetDetail: null,
+        targetDetailError: null,
+      });
+    } else if (scopeChanged) {
+      update({
+        snapshot: null,
+        snapshotLoading: false,
+        snapshotError: null,
+        selectedTarget: null,
+        targetDetail: null,
+        targetDetailError: null,
       });
     }
     update({
@@ -298,6 +407,25 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
+    syncTargetData(state, before, contextChanged);
+    if (resumed || workspaceChanged || state.running !== before?.running) {
+      void loadRuns();
+    }
+    if (!resumed && (!before?.running || before.running === state.running)) return;
+    const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
+    if (!selectCompletedConsole(completed) && (resumed || view.selectedRun === completed)) {
+      loadSelected();
+    }
+  }
+
+  function syncTargetData(state: AppState, before: AppState | null, contextChanged: boolean) {
+    if (!contextChanged && state.snapshotFetchedAt !== before?.snapshotFetchedAt) {
+      ++targetGeneration;
+      update({
+        targetDetail: null,
+        targetDetailError: null,
+      });
+    }
     const wantFetchedAt = state.snapshotFetchedAt;
     if (wantFetchedAt === null) {
       // Defensive: the core drops its snapshot only on a workspace switch,
@@ -307,6 +435,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         ++snapshotGeneration;
         update({ snapshot: null, snapshotLoading: false, snapshotError: null });
       }
+      if (view.selectedTarget) selectTarget(null);
     } else if (
       // A fetch for this snapshot may already be in flight; re-issuing would
       // duplicate the transfer this split exists to avoid.
@@ -315,14 +444,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     ) {
       void loadSnapshot();
     }
-    if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
-      void loadRuns();
-    }
-    if (!resumed && (!before?.running || before.running === state.running)) return;
-    const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
-    if (!selectCompletedConsole(completed) && (resumed || view.selectedRun === completed)) {
-      loadSelected();
-    }
+    requestTargetDetail();
   }
 
   function dispose() {
@@ -388,6 +510,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
       update({ starting: false });
+      requestTargetDetail();
       if (!disposed && workspace === view.state?.workspace && view.ready) {
         if (!selectCompletedConsole(startedRun)) loadSelected();
       }
@@ -411,7 +534,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.starting ||
       view.state?.running ||
       view.state?.ingest === "running" ||
-      view.state?.query === "running"
+      view.state?.query === "running" ||
+      view.state?.detailQuery === "running"
     ) {
       throw new Error(
         "Wait for the current Bazel operation to finish before changing the workspace",
@@ -424,6 +548,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (revision === stateRevision) acceptState(state);
     } finally {
       update({ opening: false });
+      requestTargetDetail();
     }
   }
 
@@ -434,7 +559,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.opening ||
       view.state?.running ||
       view.state?.ingest === "running" ||
-      view.state?.query === "running"
+      view.state?.query === "running" ||
+      view.state?.detailQuery === "running"
     ) {
       return;
     }
@@ -458,5 +584,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadProfile,
     loadRuns,
     loadSnapshot,
+    selectTarget,
   };
 }

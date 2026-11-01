@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ancestorsOf, buildTree, flatten, relations, splitLabel } from "../src/lib/model.ts";
-import type { Snapshot } from "../src/lib/types.ts";
+import type { TargetDetail, TargetIndex } from "../src/lib/types.ts";
 
 test("target tree lists packages and rules without input or output files", () => {
-  const snapshot: Snapshot = {
+  const snapshot: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: [
       {
@@ -14,12 +14,6 @@ test("target tree lists packages and rules without input or output files", () =>
         ruleClass: "cc_test",
         location: null,
       },
-    ],
-    edges: [],
-    files: [
-      { path: "app/parser_test.cc", owner: "//app:parser_test", role: "srcs" },
-      { path: "data/test.json", owner: "//app:parser_test", role: "data" },
-      { path: "app/parser_test", owner: "//app:parser_test", role: "out" },
     ],
   };
   const rows = flatten(buildTree(snapshot), new Set(["app"]));
@@ -35,7 +29,7 @@ test("target tree lists packages and rules without input or output files", () =>
 });
 
 test("revealing a target expands every ancestor and keeps other branches open", () => {
-  const snapshot: Snapshot = {
+  const snapshot: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: ["//app/lib/deep:parser", "//other:lib", "//:root"].map((label) => ({
       label,
@@ -43,8 +37,6 @@ test("revealing a target expands every ancestor and keeps other branches open", 
       ruleClass: "cc_library",
       location: null,
     })),
-    edges: [],
-    files: [],
   };
   const tree = buildTree(snapshot);
   const expanded = new Set(["other"]);
@@ -62,11 +54,14 @@ test("revealing a target expands every ancestor and keeps other branches open", 
 });
 
 test("reverse dependencies group unique attributes under each direct user", () => {
-  const snapshot: Snapshot = {
-    meta: { fetchedAt: 0, status: "ok" },
-    targets: [
-      { label: "//app:lib", pkg: "app", name: "lib", ruleClass: "cc_library", location: null },
-    ],
+  const detail: TargetDetail = {
+    target: {
+      label: "//app:lib",
+      pkg: "app",
+      name: "lib",
+      ruleClass: "cc_library",
+      location: null,
+    },
     edges: [
       { from: "//app:z", to: "//app:lib", attr: "srcs" },
       { from: "//app:a", to: "//app:lib", attr: "deps" },
@@ -75,25 +70,23 @@ test("reverse dependencies group unique attributes under each direct user", () =
       { from: "//app:indirect", to: "//app:z", attr: "deps" },
     ],
     files: [],
+    status: "ok",
   };
-  assert.deepEqual(relations(snapshot, "//app:lib")?.usedBy, [
+  assert.deepEqual(relations(detail).usedBy, [
     { label: "//app:a", attrs: ["deps"] },
     { label: "//app:z", attrs: ["hdrs", "srcs"] },
   ]);
 });
 
 test("forward attributes retain rule and file inputs under their original names", () => {
-  const snapshot: Snapshot = {
-    meta: { fetchedAt: 0, status: "ok" },
-    targets: [
-      {
-        label: "//app:generated",
-        pkg: "app",
-        name: "generated",
-        ruleClass: "genrule",
-        location: null,
-      },
-    ],
+  const detail: TargetDetail = {
+    target: {
+      label: "//app:generated",
+      pkg: "app",
+      name: "generated",
+      ruleClass: "genrule",
+      location: null,
+    },
     edges: [
       { from: "//app:generated", to: "//app:inputs", attr: "srcs" },
       { from: "//app:generated", to: "//app:inputs", attr: "srcs" },
@@ -107,8 +100,9 @@ test("forward attributes retain rule and file inputs under their original names"
       { owner: "//app:generated", path: "app/generated.txt", role: "out" },
       { owner: "//other:target", path: "other/input.txt", role: "srcs" },
     ],
+    status: "ok",
   };
-  const result = relations(snapshot, "//app:generated");
+  const result = relations(detail);
   assert.deepEqual(result?.attributes, [
     { name: "srcs", labels: ["//app:inputs"], files: ["app/input.txt"] },
     { name: "data", labels: [], files: ["app/runtime.txt"] },

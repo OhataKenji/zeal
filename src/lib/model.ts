@@ -1,4 +1,4 @@
-import type { FileEntry, Snapshot, Target } from "./types";
+import type { FileEntry, Target, TargetDetail, TargetIndex } from "./types";
 
 /** Splits a Bazel label into package and target name. */
 export function splitLabel(label: string): { pkg: string; name: string } {
@@ -40,7 +40,7 @@ export interface DirNode {
 }
 
 /** Builds the package tree from target package paths. */
-export function buildTree(snap: Snapshot): DirNode {
+export function buildTree(index: TargetIndex): DirNode {
   const nodes = new Map<string, DirNode>();
   const mk = (path: string): DirNode => ({
     path,
@@ -60,7 +60,7 @@ export function buildTree(snap: Snapshot): DirNode {
     return n;
   };
 
-  for (const target of snap.targets) {
+  for (const target of index.targets) {
     ensure(target.pkg).rules.push(target);
   }
 
@@ -146,11 +146,10 @@ export interface Relations {
   outputs: FileEntry[];
 }
 
-/** Returns direct target relationships, or null if the label is unknown. */
-export function relations(snap: Snapshot, label: string): Relations | null {
-  const target = snap.targets.find((t) => t.label === label);
-  if (!target) return null;
-
+/** Returns direct relationships from the selected target's detail. */
+export function relations(detail: TargetDetail): Relations {
+  const { target } = detail;
+  const label = target.label;
   const attributes = new Map<string, { labels: Set<string>; files: Set<string> }>();
   function attribute(name: string) {
     let value = attributes.get(name);
@@ -162,7 +161,7 @@ export function relations(snap: Snapshot, label: string): Relations | null {
   }
   for (const name of ["srcs", "data", "deps"]) attribute(name);
   const usedBy = new Map<string, Set<string>>();
-  for (const e of snap.edges) {
+  for (const e of detail.edges) {
     if (e.from === label) {
       attribute(e.attr).labels.add(e.to);
     }
@@ -172,7 +171,7 @@ export function relations(snap: Snapshot, label: string): Relations | null {
       attrs.add(e.attr);
     }
   }
-  for (const file of snap.files) {
+  for (const file of detail.files) {
     if (file.owner === label && file.role !== "out") {
       attribute(file.role).files.add(file.path);
     }
@@ -188,6 +187,6 @@ export function relations(snap: Snapshot, label: string): Relations | null {
     usedBy: [...usedBy]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([label, attrs]) => ({ label, attrs: [...attrs].sort() })),
-    outputs: snap.files.filter((f) => f.owner === label && f.role === "out"),
+    outputs: detail.files.filter((f) => f.owner === label && f.role === "out"),
   };
 }

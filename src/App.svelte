@@ -37,7 +37,7 @@
   const st = $derived(app.state);
   const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
-  const known = $derived(new Set(snap?.targets.map((t) => t.label) ?? []));
+  const selected = $derived(app.view.selectedTarget);
 
   function retryTargets() {
     if (app.view.snapshotError) void getSession().loadSnapshot();
@@ -46,7 +46,6 @@
 
   let analyticsOpen = $state(false);
   let queryOpen = $state(false);
-  let selected = $state<string | null>(null);
   let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<RunCmd>("build");
@@ -63,7 +62,8 @@
       app.view.opening ||
       !!st?.running ||
       st?.ingest === "running" ||
-      st?.query === "running",
+      st?.query === "running" ||
+      st?.detailQuery === "running",
   );
   const running = $derived(!!st?.running);
   const actionLabel = $derived(
@@ -148,21 +148,9 @@
     analyticsOpen = false;
     queryOpen = false;
     getSession().selectRun(null);
-    selected = label;
+    getSession().selectTarget(label);
     if (label) targetField = label;
   }
-
-  // Keep a valid selection across refreshes and workspace switches.
-  $effect(() => {
-    if (!snap) {
-      selected = null;
-      return;
-    }
-    if (!selected || !known.has(selected)) {
-      selected = snap.targets[0]?.label ?? null;
-      if (selected) targetField = selected;
-    }
-  });
 </script>
 
 {#snippet targetPane(state: AppState)}
@@ -327,12 +315,32 @@
         <QueryView {snap} />
       {/key}
     {:else if snap && selected}
-      <TargetView
-        {snap}
-        label={selected}
-        wsRoot={workspace}
-        onselect={select}
-      />
+      {#if app.view.targetDetail?.target.label === selected}
+        {#if app.view.targetDetail.status === "partial"}
+          <Notice tone="warning">Some target details could not be loaded.</Notice>
+        {/if}
+        {#key `${selected}:${snap.meta.fetchedAt}`}
+          <TargetView
+            index={snap}
+            detail={app.view.targetDetail}
+            wsRoot={workspace}
+            onselect={select}
+          />
+        {/key}
+      {:else if app.view.targetDetailError}
+        <Notice tone="error" onaction={() =>
+          app.view.snapshotError
+            ? void getSession().loadSnapshot()
+            : getSession().selectTarget(selected)}>
+          Could not load target details: {app.view.targetDetailError}
+        </Notice>
+      {:else}
+        <p class="dim">
+          {st?.ingest === "running" || st?.query === "running" || st?.running
+            ? "Waiting for Bazel…"
+            : "Loading target details…"}
+        </p>
+      {/if}
     {:else if snap}
       <p class="dim">Select a target in the tree</p>
     {:else if state.ingest !== "running" && !app.view.snapshotLoading && (app.view.snapshotError || state.lastError)}

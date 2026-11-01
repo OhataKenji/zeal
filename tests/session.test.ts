@@ -15,12 +15,27 @@ const IDLE: AppState = {
   stopping: false,
   runNote: null,
   query: "idle",
+  detailQuery: "idle",
 };
 const SNAPSHOT = {
   meta: { fetchedAt: 1, status: "ok" as const },
   targets: [],
-  edges: [],
-  files: [],
+};
+const TARGETS = {
+  ...SNAPSHOT,
+  targets: ["//app:first", "//app:second"].map((label) => ({
+    label,
+    pkg: "app",
+    name: label.split(":")[1],
+    ruleClass: "cc_library",
+    location: null,
+  })),
+};
+const TARGET_DETAIL = {
+  target: { ...TARGETS.targets[0], location: { file: "/workspace/app/BUILD", line: 3 } },
+  edges: [{ from: "//app:second", to: "//app:first", attr: "deps" }],
+  files: [{ owner: "//app:first", path: "app/first.cc", role: "srcs" }],
+  status: "ok" as const,
 };
 const RECORD: RunRecord = {
   id: "run-a",
@@ -335,7 +350,7 @@ test("a late profile response or error cannot replace a newer selection", async 
   assert.equal(h.view.profileLoading, false);
 });
 
-test("Send waits for listeners, then rejects busy ingestion, a live run, a stopping run and a running query", async () => {
+test("Send waits for listeners and rejects every active Bazel operation", async () => {
   const h = harness();
   assert.equal(canSend(h.view, "//:app"), false);
   await h.session.init();
@@ -348,6 +363,8 @@ test("Send waits for listeners, then rejects busy ingestion, a live run, a stopp
   h.emit("app-state", { ...IDLE, running: RECORD.id, stopping: true });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", { ...IDLE, query: "running" });
+  assert.equal(canSend(h.view, "//:app"), false);
+  h.emit("app-state", { ...IDLE, detailQuery: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", IDLE);
   assert.equal(canSend(h.view, "//:app"), true);
@@ -495,6 +512,175 @@ test("a failed snapshot fetch is surfaced and retried by the next event", async 
   await settle();
   assert.deepEqual(h.view.snapshot, SNAPSHOT);
   assert.equal(h.view.snapshotError, null);
+});
+
+test("target details load only after selection and use the current index generation", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+  assert.equal(h.view.selectedTarget, null);
+
+  h.session.selectTarget("//app:first");
+  assert.deepEqual(pendingRequest(h, "get_target_detail").args, {
+    label: "//app:first",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+  assert.equal(h.view.targetDetail, null);
+  assert.equal(h.view.targetDetailError, null);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.deepEqual(h.view.targetDetail, TARGET_DETAIL);
+});
+
+test("rapid target clicks keep only the latest result", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  h.session.selectTarget("//app:first");
+  h.session.selectTarget("//app:second");
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(h.view.targetDetail, null);
+  assert.deepEqual(lastPendingRequest(h, "get_target_detail").args, {
+    label: "//app:second",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+  lastPendingRequest(h, "get_target_detail").reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+  assert.equal(h.view.targetDetail?.target.label, "//app:second");
+});
+
+test("target detail waits for the Bazel slot and resumes on the idle event", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt, running: RECORD.id });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  h.session.selectTarget("//app:first");
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+  assert.equal(h.view.targetDetailError, null);
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.deepEqual(h.view.targetDetail, TARGET_DETAIL);
+});
+
+test("scope and index changes discard an old target detail", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  h.session.selectTarget("//app:first");
+  const old = pendingRequest(h, "get_target_detail");
+  h.emit("app-state", {
+    ...IDLE,
+    scope: { include: ["//other/..."] },
+    snapshotFetchedAt: null,
+  });
+  old.reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(h.view.selectedTarget, null);
+  assert.equal(h.view.targetDetail, null);
+
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  lastPendingRequest(h, "get_snapshot").reply.resolve({
+    ...TARGETS,
+    meta: { ...TARGETS.meta, fetchedAt: 2 },
+  });
+  await settle();
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+});
+
+test("a refreshed index replaces an in-flight detail with the new generation", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  h.session.selectTarget("//app:first");
+  const old = pendingRequest(h, "get_target_detail");
+
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  lastPendingRequest(h, "get_snapshot").reply.resolve({
+    ...TARGETS,
+    meta: { ...TARGETS.meta, fetchedAt: 2 },
+  });
+  await settle();
+  assert.equal(h.view.targetDetail, null);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+
+  old.reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.deepEqual(lastPendingRequest(h, "get_target_detail").args, {
+    label: "//app:first",
+    fetchedAt: 2,
+  });
+  assert.equal(h.view.targetDetail, null);
+  lastPendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(h.view.targetDetail?.target.label, "//app:first");
+});
+
+test("a target detail failure has an explicit retry", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  h.session.selectTarget("//app:first");
+  pendingRequest(h, "get_target_detail").reply.reject(new Error("query failed"));
+  await settle();
+  assert.match(h.view.targetDetailError ?? "", /query failed/);
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  h.session.selectTarget("//app:first");
+  assert.equal(requestCount(h, "get_target_detail"), 2);
+});
+
+test("a successful target-list retry resumes the selected detail", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+  h.session.selectTarget("//app:first");
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  lastPendingRequest(h, "get_snapshot").reply.reject(new Error("list failed"));
+  await settle();
+  assert.match(h.view.targetDetailError ?? "", /target list/);
+  void h.session.loadSnapshot();
+  lastPendingRequest(h, "get_snapshot").reply.resolve({
+    ...TARGETS,
+    meta: { ...TARGETS.meta, fetchedAt: 2 },
+  });
+  await settle();
+  assert.equal(h.view.targetDetailError, null);
+  assert.equal(requestCount(h, "get_target_detail"), 2);
+});
+
+test("changing Scope preserves the selected run", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  h.session.selectRun(RECORD.id);
+  h.emit("app-state", { ...IDLE, scope: { include: ["//other/..."] } });
+  assert.equal(h.view.selectedRun, RECORD.id);
+  assert.deepEqual(h.view.runs, [RECORD]);
 });
 
 test("Send passes the target through unchanged and ignores whitespace and duplicate starts", async () => {

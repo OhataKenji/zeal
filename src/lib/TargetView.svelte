@@ -1,41 +1,36 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
-  import type { Snapshot } from "./types";
+  import type { TargetDetail, TargetIndex } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
   import { openLocation } from "./state.svelte";
 
   let {
-    snap,
-    label,
+    index,
+    detail,
     wsRoot,
     onselect,
   }: {
-    snap: Snapshot;
-    label: string;
+    index: TargetIndex;
+    detail: TargetDetail;
     wsRoot: string;
     onselect: (label: string) => void;
   } = $props();
-  const rel = $derived(relations(snap, label));
+  const rel = $derived(relations(detail));
+  const target = $derived(rel.target);
   const reverseAttrs = $derived(
     new Map(
-      rel?.usedBy.map((used) => [
+      rel.usedBy.map((used) => [
         used.label,
         used.attrs.filter((attr) => attr !== "deps" && attr !== "data").join(", "),
-      ]) ?? [],
+      ]),
     ),
   );
   const targets = $derived(
-    new Map(snap.targets.map((target) => [target.label, target])),
+    new Map(index.targets.map((target) => [target.label, target])),
   );
   let query = $state("");
   const expanded = new SvelteSet<string>();
-  $effect(() => {
-    void label;
-    void wsRoot;
-    query = "";
-    expanded.clear();
-  });
   function matches(value: string) {
     return value.toLowerCase().includes(query.toLowerCase());
   }
@@ -102,8 +97,6 @@
   </div>
 {/snippet}
 
-{#if rel}
-  {@const target = rel.target}
   <header class="target-head">
     <span class="badge">{target.ruleClass}</span>
     <h1>{target.label}</h1>
@@ -170,4 +163,3 @@
       </p>
     </dd>
   </dl>
-{:else}<p class="dim">{label} is not in the snapshot</p>{/if}

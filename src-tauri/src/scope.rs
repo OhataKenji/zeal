@@ -25,16 +25,22 @@ impl Scope {
         Ok(Self { include })
     }
 
-    /// Quote the scope accepted at the IPC or persistence boundary.
-    pub fn query(&self) -> String {
+    /// Rule labels and kinds needed by the target tree.
+    pub fn rules_query(&self) -> String {
         let selected = self
             .include
             .iter()
             .map(|p| format!("\"{p}\""))
             .collect::<Vec<_>>()
             .join(" union ");
+        format!("kind(\"rule\", ({selected}))")
+    }
+
+    /// Rules and source files needed to classify target relationships.
+    pub fn query(&self) -> String {
         format!(
-            "let selected = kind(\"rule\", ({selected})) in $selected union kind(\"source file\", deps($selected, 1))"
+            "let selected = {} in $selected union kind(\"source file\", deps($selected, 1))",
+            self.rules_query()
         )
     }
 }
@@ -87,6 +93,10 @@ mod tests {
         assert_eq!(
             scope.query(),
             "let selected = kind(\"rule\", (\"//a:all\" union \"//b/...\")) in $selected union kind(\"source file\", deps($selected, 1))"
+        );
+        assert_eq!(
+            scope.rules_query(),
+            "kind(\"rule\", (\"//a:all\" union \"//b/...\"))"
         );
     }
 
