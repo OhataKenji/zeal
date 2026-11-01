@@ -1,0 +1,246 @@
+.list li {
+  padding: 3px 0;
+  display: flex;
+  gap: 8px;
+}
+
+.tree {
+  font: 12px/1.6 var(--mono);
+}
+
+.tree .row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  padding: 4px 8px;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tree .row:hover {
+  background: var(--accent);
+}
+
+.tree .row.selected {
+  font-weight: 600;
+  background: var(--accent);
+  color: var(--foreground);
+  box-shadow: inset 2px 0 var(--primary);
+}
+
+.target-head {
+  padding: 28px 0 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.target-head .badge {
+  margin-bottom: 12px;
+}
+
+.attributes-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 0 12px;
+}
+
+.attributes-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ws-prompt {
+  padding: 40px 12px;
+  display: flex;
+  gap: 10px;
+  flex-direction: column;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.ws-prompt label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.ws-prompt .scope-patterns {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  font-family: var(--mono);
+}
+
+.scope-help {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.ws-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.app-error {
+  margin: 0;
+  padding: 8px 14px;
+}
+
+.tree .row svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.tree .row.test svg {
+  color: var(--warning);
+}
+
+.tree .dir {
+  font-weight: 650;
+}
+
+.tree .dir svg {
+  color: var(--muted-foreground);
+}
+
+.tree .row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree .row small {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  margin-left: auto;
+  padding-left: 4px;
+}
+
+.target-head h1 {
+  font: 600 24px/1.4 var(--mono);
+  letter-spacing: -0.7px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.source-location {
+  display: block;
+  max-width: 100%;
+  margin-top: 10px;
+  font: 11px var(--mono);
+  color: var(--muted-foreground);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.relation-filter {
+  position: relative;
+  width: 220px;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.relation-filter .input {
+  padding-left: 32px;
+}
+
+.relation-filter > svg {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  color: var(--muted-foreground);
+}
+
+.relations dt small {
+  display: block;
+  font: 10px var(--mono);
+  color: var(--muted-foreground);
+  margin-top: 6px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  padding: 5px 9px;
+  font: 12px var(--mono);
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+button.chip {
+  cursor: pointer;
+}
+
+button.chip:hover {
+  background: var(--accent);
+  border-color: var(--ring);
+}
+
+.chip small {
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+
+.chip.file.local {
+  background: var(--muted);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+
+.chip.file {
+  border-color: transparent;
+  border-radius: 4px;
+}
+
+.chip.more {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+@media (max-width: 800px) {
+  .target-head h1 {
+    font-size: 18px;
+  }
+
+  .tree .row small {
+    display: none;
+  }
+
+  .attributes-head {
+    flex-wrap: wrap;
+  }
+
+  .relations {
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 0 12px;
+  }
+}

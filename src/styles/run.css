@@ -1,0 +1,289 @@
+.run-command-block {
+  margin-top: 20px;
+}
+
+.run-arguments-heading,
+.run-command-block h4 {
+  margin: 0 0 12px;
+  font: 400 12px var(--font-sans);
+}
+
+.run-arguments-heading {
+  margin: 20px 0 12px;
+}
+
+.run-command-code {
+  display: block;
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  font: 12px/1.6 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.run-collapsible summary {
+  cursor: pointer;
+  font: 400 12px var(--font-sans);
+  padding: 8px 0;
+}
+
+.run-row {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--foreground);
+  font: 12px var(--mono);
+  cursor: pointer;
+  padding: 10px 8px;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+
+.run-command {
+  font: 600 12px var(--font-sans);
+}
+
+.run-target {
+  display: block;
+  margin: 6px 0 0 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--mono);
+}
+
+.run-row .run-label time {
+  margin-left: auto;
+  font: 11px var(--font-sans);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.run-row .run-label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: 12px var(--mono);
+  color: var(--foreground);
+}
+
+.run-row.selected {
+  background: var(--accent);
+  box-shadow: inset 2px 0 var(--primary);
+  font-weight: 650;
+}
+
+.content.run-content {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.run-content > .warn,
+.run-content > .dim {
+  margin: 0;
+  padding: 5px 20px;
+  font-size: 11px;
+}
+
+.run-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--foreground);
+}
+
+.run-page code {
+  font: 12px var(--mono);
+}
+
+.run-summary {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.run-summary h1 {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.7px;
+  line-height: 1.3;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.success {
+  color: var(--success);
+}
+
+.failed {
+  color: var(--destructive);
+}
+
+.run-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--muted);
+  border-radius: var(--radius-lg);
+}
+
+.panel-loading {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.run-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 0 24px 24px;
+}
+
+.run-section {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.run-panel:not(.run-all) > .run-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-all .log-panel {
+  height: clamp(180px, 32vh, 320px);
+}
+
+.run-notice {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--background);
+  color: var(--foreground);
+  border-left: 2px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.panel-empty {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  padding: 25px 0;
+  margin: 0;
+}
+
+.log-panel {
+  flex: 1;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.run-log {
+  flex: 1;
+  min-height: 100px;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  white-space: pre;
+  overflow: auto;
+}
+
+.run-log::selection,
+.run-log ::selection {
+  background: var(--terminal-selection);
+}
+
+.console-container {
+  height: 100%;
+  min-height: 0;
+}
+
+.console-container[hidden] {
+  display: none;
+}
+
+.panel-heading {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 20px 0 12px;
+}
+
+.panel-heading span {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  margin-left: 7px;
+}
+
+.result-list {
+  margin: 0 0 24px;
+  padding: 0;
+  list-style: none;
+}
+
+.result-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+  font-size: 12px;
+}
+
+.result-list li code {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.result-list li > span:last-child {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.run-details dd {
+  overflow-wrap: anywhere;
+}
+
+.run-row:hover {
+  background: var(--accent);
+}
+
+.run-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1050px) {
+  .run-header {
+    gap: 14px;
+  }
+}
+
+@media (max-width: 800px) {
+  .run-header {
+    padding: 18px;
+  }
+
+  .run-panel {
+    padding: 0 16px 16px;
+  }
+}

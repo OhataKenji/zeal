@@ -1,0 +1,189 @@
+.trace-axis {
+  height: 26px;
+  overflow: hidden;
+  background: var(--muted);
+}
+
+.trace-axis canvas {
+  display: block;
+  height: 26px;
+}
+
+.trace-axis canvas,
+.trace-viewport canvas {
+  font: 11px var(--mono);
+}
+
+.trace-phase-row {
+  height: 24px;
+  position: relative;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.trace-phase-row > span {
+  display: inline-block;
+  padding-left: 12px;
+  font-size: 11px;
+  line-height: 19px;
+  color: var(--muted-foreground);
+}
+
+.trace-phases {
+  position: absolute;
+  top: 0;
+  height: 19px;
+  overflow: hidden;
+}
+
+.trace-phase {
+  position: absolute;
+  height: 19px;
+  line-height: 19px;
+  padding-left: 3px;
+  border-right: 1px solid var(--background);
+  font: 11px/19px var(--font-sans);
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.trace-viewport {
+  height: clamp(260px, 52vh, 620px);
+  overflow: auto;
+}
+
+.trace-scroll-content {
+  position: relative;
+}
+
+.trace-horizontal-scroll {
+  height: 14px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  background: var(--muted);
+}
+
+.trace-horizontal-scroll > div {
+  height: 1px;
+}
+
+.trace-horizontal-scroll::-webkit-scrollbar {
+  height: 14px;
+}
+
+.trace-horizontal-scroll::-webkit-scrollbar-thumb {
+  min-width: 24px;
+  border: 3px solid var(--muted);
+  border-radius: var(--radius-lg);
+  background: var(--muted-foreground);
+}
+
+.trace-horizontal-scroll::-webkit-scrollbar-track {
+  background: var(--muted);
+}
+
+.trace-viewport canvas {
+  position: sticky;
+  top: 0;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+
+.trace-viewport canvas:active {
+  cursor: grabbing;
+}
+
+.trace-thread-labels {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.trace-thread-labels button {
+  position: absolute;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  padding: 0 7px;
+  font: 500 11px/20px var(--font-sans);
+  text-align: left;
+  color: var(--foreground);
+  background: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.trace-thread-labels button > span {
+  color: var(--muted-foreground);
+  margin-right: 3px;
+}
+
+.trace-counter-label {
+  position: absolute;
+  width: 100%;
+  padding: 3px 12px;
+  font: 11px/14px var(--mono);
+  color: var(--muted-foreground);
+}
+
+.trace-counter-label span {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.trace-thread-labels small {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+  margin-left: 6px;
+}
+
+.trace-raw {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 8px;
+}
+
+.trace-raw pre {
+  font: 12px/1.6 var(--mono);
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0 0;
+}
+
+.profile-view {
+  min-width: 0;
+}
+
+.trace-chart {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.trace-inspector-heading {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 20px 0 12px;
+}
+
+.trace-event-title {
+  font: 600 12px/1.6 var(--mono);
+  margin: 16px 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.trace-inspector > .dim {
+  font-size: 12px;
+  line-height: 1.6;
+}
