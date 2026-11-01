@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  analyticsDateError,
   createAnalytics,
   emptyAnalytics,
   fmtMs,
@@ -139,5 +140,98 @@ test("errors remove stale data and retry preserves requested conditions", async 
   h.calls[1].resolve(RESULT);
   await retry;
   assert.equal(h.view.error, null);
+  assert.equal(h.view.data?.days[0].count, 2);
+});
+test("equal dates and optional endpoints still query the core", async () => {
+  const h = harness();
+  const sameDay = { ...RESULT.filter, start: RESULT.filter.end };
+  const equal = h.model.load(sameDay);
+  assert.equal(analyticsDateError(h.view.filter), null);
+  assert.deepEqual(h.calls[0].args, { filter: sameDay });
+  h.calls[0].resolve({ ...RESULT, filter: sameDay });
+  await equal;
+  const noStart = { ...RESULT.filter, start: null };
+  const optionalStart = h.model.load(noStart);
+  assert.deepEqual(h.calls[1].args, { filter: noStart });
+  h.calls[1].resolve(RESULT);
+  await optionalStart;
+  const noEnd = { ...RESULT.filter, end: null };
+  const optionalEnd = h.model.load(noEnd);
+  assert.deepEqual(h.calls[2].args, { filter: noEnd });
+  h.calls[2].resolve(RESULT);
+  await optionalEnd;
+});
+test("reversed dates retain all filters and clear charts without querying, including refresh", async () => {
+  const h = harness();
+  const initial = h.model.load();
+  h.calls[0].resolve(RESULT);
+  await initial;
+  const filter = {
+    ...RESULT.filter,
+    start: "2026-03-31",
+    cmd: "test" as const,
+    outcome: "failed" as const,
+    target: "//:app",
+  };
+  await h.model.load(filter);
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.view.filter, filter);
+  assert.equal(h.view.data, null);
+  assert.equal(h.view.loading, false);
+  assert.equal(h.view.error, null);
+  assert.equal(
+    analyticsDateError(h.view.filter),
+    "The start date must be on or before the end date.",
+  );
+  await h.model.load();
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.view.filter, filter);
+});
+test("a pending success cannot replace reversed dates", async () => {
+  const h = harness();
+  const success = h.model.load();
+  const filter = { ...RESULT.filter, start: "2026-03-31" };
+  await h.model.load(filter);
+  h.calls[0].resolve(RESULT);
+  await success;
+  assert.deepEqual(h.view.filter, filter);
+  assert.equal(h.view.data, null);
+  assert.equal(h.view.loading, false);
+  assert.equal(h.view.error, null);
+  assert.ok(analyticsDateError(h.view.filter));
+});
+test("a pending failure cannot replace reversed dates", async () => {
+  const h = harness();
+  const failure = h.model.load(RESULT.filter);
+  const filter = { ...RESULT.filter, start: "2026-03-31" };
+  await h.model.load(filter);
+  h.calls[0].reject(new Error("stale failure"));
+  await failure;
+  assert.deepEqual(h.view.filter, filter);
+  assert.equal(h.view.data, null);
+  assert.equal(h.view.loading, false);
+  assert.equal(h.view.error, null);
+  assert.ok(analyticsDateError(h.view.filter));
+});
+test("correcting either reversed endpoint clears validation and resumes loading", async () => {
+  const h = harness();
+  await h.model.load({ ...RESULT.filter, start: "2026-03-31" });
+  const earlierStart = h.model.load(RESULT.filter);
+  assert.equal(analyticsDateError(h.view.filter), null);
+  assert.equal(h.view.loading, true);
+  assert.deepEqual(h.calls[0].args, { filter: RESULT.filter });
+  h.calls[0].resolve(RESULT);
+  await earlierStart;
+  assert.equal(h.view.data?.days[0].count, 2);
+  await h.model.load({ ...RESULT.filter, start: "2026-03-31" });
+  const filter = { ...h.view.filter, end: "2026-03-31" };
+  const laterEnd = h.model.load(filter);
+  assert.equal(analyticsDateError(h.view.filter), null);
+  assert.equal(h.view.loading, true);
+  assert.deepEqual(h.calls[1].args, { filter });
+  h.calls[1].resolve({ ...RESULT, filter });
+  await laterEnd;
+  assert.equal(h.view.error, null);
+  assert.equal(h.view.loading, false);
   assert.equal(h.view.data?.days[0].count, 2);
 });

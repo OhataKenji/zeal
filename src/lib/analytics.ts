@@ -50,6 +50,13 @@ export function emptyAnalytics(): AnalyticsView {
   };
 }
 
+/** Explains reversed dates; missing dates still use the core's defaults. */
+export function analyticsDateError(filter: Pick<AnalyticsFilter, "start" | "end">): string | null {
+  return filter.start !== null && filter.end !== null && filter.start > filter.end
+    ? "The start date must be on or before the end date."
+    : null;
+}
+
 /**
  * Creates a workspace-scoped analytics query. New requests supersede older
  * responses, and disposal ignores any response from the previous workspace.
@@ -63,6 +70,11 @@ export function createAnalytics(
   let disposed = false;
   async function load(filter = view.filter) {
     const request = ++generation;
+    if (analyticsDateError(filter)) {
+      view = { filter: { ...filter }, data: null, loading: false, error: null };
+      changed(view);
+      return;
+    }
     // Keep the previous charts visible while the reload runs; an error
     // still drops stale data so it never sits next to an error banner.
     view = { filter: { ...filter }, data: view.data, loading: true, error: null };

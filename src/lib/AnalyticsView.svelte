@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import {
+    analyticsDateError,
     createAnalytics,
     emptyAnalytics,
     fmtMs,
@@ -24,6 +25,7 @@
     void runs;
     if (controller) void controller.load();
   });
+  const dateError = $derived(analyticsDateError(view.filter));
   const data = $derived(view.data);
   const max = $derived(Math.max(1, ...(data?.days.map((d) => d.count) ?? [])));
   const maxTotal = $derived(
@@ -42,22 +44,33 @@
 <section class="analytics">
   <h1>Analytics</h1>
   <div class="filters">
-    <label
-      >Start date <input
-        type="date"
-        aria-label="Start date"
-        value={view.filter.start ?? ""}
-        onchange={(e) => filter({ start: e.currentTarget.value || null })}
-      /></label
-    >
-    <label
-      >End date <input
-        type="date"
-        aria-label="End date"
-        value={view.filter.end ?? ""}
-        onchange={(e) => filter({ end: e.currentTarget.value || null })}
-      /></label
-    >
+    <div class="date-filters">
+      <label
+        >Start date <input
+          type="date"
+          aria-label="Start date"
+          aria-invalid={!!dateError}
+          aria-describedby={dateError ? "analytics-date-error" : undefined}
+          value={view.filter.start ?? ""}
+          onchange={(e) => filter({ start: e.currentTarget.value || null })}
+        /></label
+      >
+      <label
+        >End date <input
+          type="date"
+          aria-label="End date"
+          aria-invalid={!!dateError}
+          aria-describedby={dateError ? "analytics-date-error" : undefined}
+          value={view.filter.end ?? ""}
+          onchange={(e) => filter({ end: e.currentTarget.value || null })}
+        /></label
+      >
+      {#if dateError}
+        <p id="analytics-date-error" class="error date-error" role="alert">
+          {dateError}
+        </p>
+      {/if}
+    </div>
     <label
       >Command <select
         aria-label="Command"
@@ -369,6 +382,18 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .date-filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .date-error {
+    flex-basis: 100%;
+    margin: 0;
   }
 
   .filters label {
