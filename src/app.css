@@ -254,7 +254,6 @@ button:disabled {
 .composer-search {
   position: relative;
   min-width: 0;
-  display: flex;
 }
 
 .search-input .search-dropdown {
