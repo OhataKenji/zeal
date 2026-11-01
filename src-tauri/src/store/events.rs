@@ -166,12 +166,34 @@ impl Receipt {
     }
 
     fn save(&self, complete: bool) -> Result<(), StoreError> {
+        struct StoredFacts {
+            workspace: Option<Vec<u8>>,
+            cmd: Option<String>,
+            target: Option<String>,
+            started: Option<i64>,
+            finished: Option<i64>,
+            exit: Option<i32>,
+        }
+
         let mut store = Store::open(&self.data)?;
         let tx = store
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let run_id = id(&self.stream.invocation_id)?;
-        let existing: (Option<Vec<u8>>,Option<String>,Option<String>,Option<i64>)=tx.query_row("SELECT w.canonical_path,r.cmd,r.target_raw,r.started_at_ms FROM run r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",[&run_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+        let existing = tx.query_row(
+            "SELECT w.canonical_path,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.exit_code FROM run r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
+            [&run_id],
+            |r| {
+                Ok(StoredFacts {
+                    workspace: r.get(0)?,
+                    cmd: r.get(1)?,
+                    target: r.get(2)?,
+                    started: r.get(3)?,
+                    finished: r.get(4)?,
+                    exit: r.get(5)?,
+                })
+            },
+        )?;
         fn conflicts<T: PartialEq>(old: Option<&T>, new: Option<&T>) -> bool {
             old.zip(new).is_some_and(|(a, b)| a != b)
         }
@@ -180,10 +202,12 @@ impl Receipt {
             .workspace
             .as_ref()
             .map(|v| v.as_os_str().as_bytes().to_vec());
-        if conflicts(existing.0.as_ref(), path.as_ref())
-            || conflicts(existing.1.as_ref(), self.facts.cmd.as_ref())
-            || conflicts(existing.2.as_ref(), self.facts.target.as_ref())
-            || conflicts(existing.3.as_ref(), self.facts.started.as_ref())
+        if conflicts(existing.workspace.as_ref(), path.as_ref())
+            || conflicts(existing.cmd.as_ref(), self.facts.cmd.as_ref())
+            || conflicts(existing.target.as_ref(), self.facts.target.as_ref())
+            || conflicts(existing.started.as_ref(), self.facts.started.as_ref())
+            || conflicts(existing.finished.as_ref(), self.facts.finished.as_ref())
+            || conflicts(existing.exit.as_ref(), self.facts.exit.as_ref())
         {
             return Err(fail(ErrorKind::Conflict));
         }
@@ -212,7 +236,7 @@ impl Receipt {
         }
         let ws_id = save_workspace(tx, path)?;
         let updated = tx.execute(
-            "UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=?7,exit_code=?8,received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
+            "UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=coalesce(finished_at_ms,?7),exit_code=coalesce(exit_code,?8),received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
             params![run_id,attempt,ws_id,self.facts.cmd,self.facts.target,self.facts.started,self.facts.finished,self.facts.exit,complete],
         )?;
         if updated != 1 {
@@ -463,6 +487,89 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), bytes);
         assert!(!f.dir().join("attempt/2").exists());
     }
+
+    fn finished(exit_code: i32, seconds: i64) -> bep::BuildEvent {
+        bep::BuildEvent {
+            payload: Some(Payload::Finished(bep::BuildFinished {
+                finish_time: Some(prost_types::Timestamp { seconds, nanos: 0 }),
+                exit_code: Some(bep::build_finished::ExitCode {
+                    code: exit_code,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            last_message: true,
+            ..Default::default()
+        }
+    }
+
+    fn save_partial_result(f: &Fixture, exit_code: i32) {
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        receipt
+            .append(&f.ordered(2, finished(exit_code, 2)))
+            .unwrap();
+        receipt.partial().unwrap();
+    }
+
+    fn assert_partial_retry_preserves_result(exit_code: i32) {
+        let f = Fixture::new();
+        save_partial_result(&f, exit_code);
+        let known = read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert_eq!(
+            (known.finished_at, known.exit_code),
+            (Some(2000), Some(exit_code))
+        );
+
+        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
+        retry.append(&f.ordered(1, f.started())).unwrap();
+        assert_eq!(
+            read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap(),
+            known
+        );
+        retry.partial().unwrap();
+        assert_eq!(
+            read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap(),
+            known
+        );
+    }
+
+    #[test]
+    fn partial_retry_preserves_known_success() {
+        assert_partial_retry_preserves_result(0);
+    }
+
+    #[test]
+    fn partial_retry_preserves_known_failure() {
+        assert_partial_retry_preserves_result(1);
+    }
+
+    fn assert_retry_rejects_conflicting_result(exit_code: i32, seconds: i64) {
+        let f = Fixture::new();
+        save_partial_result(&f, 0);
+        let known = read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
+        retry.append(&f.ordered(1, f.started())).unwrap();
+        retry
+            .append(&f.ordered(2, finished(exit_code, seconds)))
+            .unwrap();
+        assert_eq!(retry.finish().unwrap_err().kind, ErrorKind::Conflict);
+        assert_eq!(
+            read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap(),
+            known
+        );
+    }
+
+    #[test]
+    fn retry_rejects_conflicting_exit_code() {
+        assert_retry_rejects_conflicting_result(1, 2);
+    }
+
+    #[test]
+    fn retry_rejects_conflicting_finish_time() {
+        assert_retry_rejects_conflicting_result(0, 3);
+    }
+
     #[test]
     fn incomplete_retry_requires_full_send_and_old_started_partial_and_finish_cannot_update_new_attempt()
      {
