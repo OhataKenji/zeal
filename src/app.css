@@ -268,6 +268,14 @@ button:disabled {
   overflow: auto;
 }
 
+/* The builder's target field is a narrow arg slot; long labels still need
+   room, so the dropdown outgrows its input like an editor completion popup. */
+.query-target-search .search-dropdown {
+  right: auto;
+  width: min(560px, calc(100vw - 64px));
+  min-width: 100%;
+}
+
 .search-dropdown {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
