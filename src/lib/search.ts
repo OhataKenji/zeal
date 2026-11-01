@@ -31,16 +31,12 @@ export function querySearchTargets(snap: Snapshot): Target[] {
   for (const e of snap.edges) {
     if (e.to.startsWith("@")) external.add(e.to);
   }
-  return [
-    ...snap.targets,
-    ...[...external].map((label): Target => ({
-      label,
-      pkg: "",
-      name: "",
-      ruleClass: "external",
-      location: null,
-    })),
-  ];
+  return [...snap.targets, ...[...external].map((label) => labelTarget(label, "external"))];
+}
+
+/** A label-only candidate, for indexes over strings that are not targets. */
+export function labelTarget(label: string, ruleClass: string): Target {
+  return { label, pkg: "", name: "", ruleClass, location: null };
 }
 
 /**

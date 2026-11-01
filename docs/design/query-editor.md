@@ -196,7 +196,8 @@ Code に未適用の編集があっても確認せず捨てる。再入力コス
 target pattern の入力は実行時の target 選択と同じ fuzzy find(`search.ts` + `SearchDropdown`)で補完する。
 候補は snapshot の `targets` に加え、dep edge の `to` に現れる `@`/`@@` 始まりの外部 repo label(`@maven//`、`@pip//` 等)を含める。workspace が宣言した外部依存は `targets` に載らないためである。
 手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
-attribute 名と `kind` の pattern は引き続き datalist で補完する。
+`kind` の pattern も同じ fuzzy find で、候補は `.*_test rule` に snapshot の rule class を加えたものを使う。
+attribute 名だけは引き続き datalist で補完する。
 
 ## Alternatives Considered
 

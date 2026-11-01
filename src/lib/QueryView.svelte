@@ -61,7 +61,7 @@
   import { Check, Copy } from "phosphor-svelte";
   import { onDestroy } from "svelte";
   import { app } from "./state.svelte";
-  import { createIndex, querySearchTargets } from "./search";
+  import { createIndex, labelTarget, querySearchTargets } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
@@ -85,7 +85,6 @@
   let { snap }: { snap: Snapshot | null } = $props();
 
   const attrsId = "query-attrs";
-  const kindsId = "query-kinds";
 
   const searchIndex = $derived(
     snap ? createIndex(querySearchTargets(snap)) : null,
@@ -93,12 +92,18 @@
   const attrOptions = $derived(
     [...new Set((snap?.edges ?? []).map((e) => e.attr))].sort(),
   );
-  const kindOptions = $derived([
-    ".*_test rule",
-    ...[...new Set((snap?.targets ?? []).map((t) => t.ruleClass))]
-      .sort()
-      .map((rc) => (rc.endsWith("file") ? rc : `${rc} rule`)),
-  ]);
+  // kind()'s pattern arg searches the same candidates the old datalist held:
+  // a wildcard-test hint plus every rule class in the snapshot.
+  const kindIndex = $derived(
+    createIndex(
+      [
+        ".*_test rule",
+        ...[...new Set((snap?.targets ?? []).map((t) => t.ruleClass))]
+          .sort()
+          .map((rc) => (rc.endsWith("file") ? rc : `${rc} rule`)),
+      ].map((label) => labelTarget(label, "kind")),
+    ),
+  );
   // Serialized forms of the examples, for the aria-current highlight. The mock
   // only marks an example current under default flags and Builder mode.
   const exampleTexts = new Map(
@@ -452,19 +457,14 @@
                 {errors}
                 {literalEditors}
                 {searchIndex}
+                {kindIndex}
                 {attrsId}
-                {kindsId}
                 context="Root"
               />
             </div>
             <datalist id={attrsId}>
               {#each attrOptions as attr (attr)}
                 <option value={attr}></option>
-              {/each}
-            </datalist>
-            <datalist id={kindsId}>
-              {#each kindOptions as pattern (pattern)}
-                <option value={pattern}></option>
               {/each}
             </datalist>
           </div>

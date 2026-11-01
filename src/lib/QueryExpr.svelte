@@ -9,6 +9,7 @@
     moveIndex,
     optionId,
     search,
+    type Match,
   } from "./search";
   import type { Target } from "./types";
   import {
@@ -28,16 +29,16 @@
     errors,
     literalEditors,
     searchIndex,
+    kindIndex,
     attrsId,
-    kindsId,
     context = "Root",
   }: {
     node: Expr;
     errors: Map<string, string>;
     literalEditors: Set<number>;
     searchIndex: SnapshotKey<Target> | null;
+    kindIndex: SnapshotKey<Target> | null;
     attrsId: string;
-    kindsId: string;
     context?: string;
   } = $props();
 
@@ -62,6 +63,31 @@
     targetOpen && targetMatches.length > 0 ? optionId(activeIdx) : undefined,
   );
 
+  // One key contract for every fuzzy combobox: arrows open/move, Enter picks,
+  // Escape closes — keyAction decides the intent, this applies it.
+  function comboKey(
+    e: KeyboardEvent,
+    ui: { open: boolean; index: number },
+    matches: Match[],
+    pick: (value: string) => void,
+  ): { open: boolean; index: number } {
+    if (e.isComposing) return ui;
+    const action = keyAction(ui, e.key, matches);
+    switch (action.kind) {
+      case "move":
+        e.preventDefault();
+        return { open: true, index: action.index };
+      case "pick":
+        e.preventDefault();
+        pick(action.value);
+        return { open: false, index: 0 };
+      case "close":
+        return { open: false, index: ui.index };
+      default:
+        return ui;
+    }
+  }
+
   function pickTarget(value: string) {
     if (node.kind === "target") node.text = value;
     targetOpen = false;
@@ -69,29 +95,36 @@
   }
 
   function targetKey(e: KeyboardEvent) {
-    if (e.isComposing) return;
-    const action = keyAction(
+    const ui = comboKey(
+      e,
       { open: targetOpen, index: activeIdx },
-      e.key,
       targetMatches,
+      pickTarget,
     );
-    switch (action.kind) {
-      case "move":
-        e.preventDefault();
-        targetOpen = true;
-        targetIndex = action.index;
-        break;
-      case "pick":
-        e.preventDefault();
-        pickTarget(action.value);
-        break;
-      case "close":
-        targetOpen = false;
-        break;
-      case "none":
-        break;
-    }
+    targetOpen = ui.open;
+    targetIndex = ui.index;
   }
+
+  // kind()'s pattern arg gets the same combobox over rule-class candidates.
+  let kindOpen = $state(false);
+  let kindSel = $state(0);
+  const kindArgI = $derived(
+    node.kind === "call" && node.fn === "kind"
+      ? FUNCTIONS.kind.args.findIndex((a) => a.name === "pattern")
+      : -1,
+  );
+  const kindPattern = $derived(
+    node.kind === "call" && kindArgI >= 0
+      ? scalarValue(node.args[kindArgI])
+      : "",
+  );
+  const kindMatches = $derived(
+    kindIndex ? search(kindIndex, kindPattern) : [],
+  );
+  const kindActiveIdx = $derived(moveIndex(kindSel, 0, kindMatches.length));
+  const kindActiveOpt = $derived(
+    kindOpen && kindMatches.length > 0 ? optionId(kindActiveIdx) : undefined,
+  );
 
   function fieldError(i: number): string | undefined {
     return errors.get(`${node.id}:${i}`);
@@ -111,9 +144,8 @@
     return call.args[i] as Expr;
   }
 
-  function datalist(fn: string, arg: ArgSpec): string | undefined {
+  function datalist(arg: ArgSpec): string | undefined {
     if (arg.name === "name" || arg.name === "attr_name") return attrsId;
-    if (arg.name === "pattern" && fn === "kind") return kindsId;
     return undefined;
   }
 
@@ -307,7 +339,7 @@
               {literalEditors}
               {searchIndex}
               {attrsId}
-              {kindsId}
+              {kindIndex}
               context="{node.fn} {arg.name}"
             />
           {:else}
@@ -316,24 +348,71 @@
               <label for={fieldId(i)}
                 >{arg.name}{arg.optional ? " (optional)" : ""}</label
               >
-              <input
-                id={fieldId(i)}
-                type="text"
-                autocomplete="off"
-                spellcheck="false"
-                list={datalist(node.fn, arg)}
-                placeholder={placeholder(arg)}
-                inputmode={arg.type === "int" ? "numeric" : undefined}
-                aria-label="{node.fn} {arg.name}"
-                class:query-invalid={!!argError}
-                value={scalarValue(call.args[i])}
-                oninput={(e) => {
-                  call.args[i] =
-                    arg.optional && e.currentTarget.value === ""
-                      ? null
-                      : e.currentTarget.value;
-                }}
-              />
+              {#if node.fn === "kind" && arg.name === "pattern"}
+                <div class="query-target-search">
+                  <input
+                    id={fieldId(i)}
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    role="combobox"
+                    aria-expanded={kindOpen && !!kindIndex}
+                    aria-controls={kindOpen && kindIndex ? LIST_ID : undefined}
+                    aria-autocomplete="list"
+                    aria-activedescendant={kindActiveOpt}
+                    placeholder={placeholder(arg)}
+                    aria-label="{node.fn} {arg.name}"
+                    class:query-invalid={!!argError}
+                    value={scalarValue(call.args[i])}
+                    oninput={(e) => {
+                      call.args[i] = e.currentTarget.value;
+                      kindSel = 0;
+                      kindOpen = e.currentTarget.value !== "";
+                    }}
+                    onkeydown={(e) => {
+                      const ui = comboKey(
+                        e,
+                        { open: kindOpen, index: kindActiveIdx },
+                        kindMatches,
+                        (v) => (call.args[i] = v),
+                      );
+                      kindOpen = ui.open;
+                      kindSel = ui.index;
+                    }}
+                    onblur={() => (kindOpen = false)}
+                  />
+                  {#if kindOpen && kindIndex}
+                    <SearchDropdown
+                      matches={kindMatches}
+                      index={kindActiveIdx}
+                      onpick={(v) => {
+                        call.args[i] = v;
+                        kindOpen = false;
+                        kindSel = 0;
+                      }}
+                    />
+                  {/if}
+                </div>
+              {:else}
+                <input
+                  id={fieldId(i)}
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  list={datalist(arg)}
+                  placeholder={placeholder(arg)}
+                  inputmode={arg.type === "int" ? "numeric" : undefined}
+                  aria-label="{node.fn} {arg.name}"
+                  class:query-invalid={!!argError}
+                  value={scalarValue(call.args[i])}
+                  oninput={(e) => {
+                    call.args[i] =
+                      arg.optional && e.currentTarget.value === ""
+                        ? null
+                        : e.currentTarget.value;
+                  }}
+                />
+              {/if}
               {#if argError}<p class="query-field-err">{argError}</p>{/if}
             </div>
           {/if}
@@ -359,7 +438,7 @@
             {literalEditors}
             {searchIndex}
             {attrsId}
-            {kindsId}
+            {kindIndex}
             context="left"
           />
         </div>
@@ -371,7 +450,7 @@
             {literalEditors}
             {searchIndex}
             {attrsId}
-            {kindsId}
+            {kindIndex}
             context="right"
           />
         </div>
