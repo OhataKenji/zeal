@@ -231,17 +231,6 @@
             size={10}
           />{/if} Runs
       </button>
-      {#if state.consoleRun ?? state.running}
-        {@const consoleId = (state.consoleRun ?? state.running)!}
-        <button
-          class="analytics-link"
-          class:active={app.view.consoleOpen}
-          onclick={() => getSession().openConsole(
-            app.view.console?.id === consoleId
-              ? app.view.console
-              : { id: consoleId },
-          )}>Console</button>
-      {/if}
       <button
         class="analytics-link"
         class:active={analyticsOpen && !app.view.selectedRun}
