@@ -125,6 +125,9 @@
   let controller = $state<ReturnType<typeof createQuery> | null>(null);
   let graphUrl = $state<string | null>(null);
   let graphError = $state<string | null>(null);
+  let graphZoom = $state(1);
+  let graphDialog = $state<HTMLDialogElement>();
+  let graphCanvas = $state<HTMLDivElement>();
   let viewEl = $state<HTMLElement>();
 
   $effect(() => {
@@ -265,6 +268,7 @@
     );
     return () => {
       abandon();
+      if (graphDialog?.open) graphDialog.close();
       if (graphUrl) {
         URL.revokeObjectURL(graphUrl);
         graphUrl = null;
@@ -576,19 +580,73 @@
             {:else if graphError}
               <pre class="query-raw">{stored.stdout}</pre>
             {:else if graphUrl}
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex (Native scroll container needs focus for keyboard scrolling.) -->
-              <div
-                class="query-graph-viewport"
-                role="region"
-                aria-label="Query dependency graph"
-                tabindex="0"
-              >
-                <img
-                  class="query-graph"
-                  src={graphUrl}
-                  alt="Dependency graph for the query"
-                />
+              <div class="query-graph-actions">
+                <button
+                  type="button"
+                  class="button"
+                  onclick={() => {
+                    graphZoom = 1;
+                    graphDialog?.showModal();
+                    graphCanvas?.focus();
+                  }}>Open viewer</button
+                >
               </div>
+              <img
+                class="query-graph"
+                src={graphUrl}
+                alt="Dependency graph for the query"
+              />
+              <dialog
+                class="query-graph-dialog"
+                aria-label="Query dependency graph viewer"
+                bind:this={graphDialog}
+              >
+                <div class="query-graph-toolbar">
+                  <span>Graph</span>
+                  <button
+                    type="button"
+                    class="button"
+                    aria-label="Zoom out"
+                    disabled={graphZoom <= 0.25}
+                    onclick={() => (graphZoom = Math.max(0.25, graphZoom - 0.25))}
+                    >−</button
+                  >
+                  <button
+                    type="button"
+                    class="button"
+                    title="Reset to original size"
+                    onclick={() => (graphZoom = 1)}
+                    >{Math.round(graphZoom * 100)}%</button
+                  >
+                  <button
+                    type="button"
+                    class="button"
+                    aria-label="Zoom in"
+                    disabled={graphZoom >= 4}
+                    onclick={() => (graphZoom = Math.min(4, graphZoom + 0.25))}
+                    >+</button
+                  >
+                  <button
+                    type="button"
+                    class="button"
+                    onclick={() => graphDialog?.close()}>Close</button
+                  >
+                </div>
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll container needs focus for keyboard scrolling.) -->
+                <div
+                  class="query-graph-canvas"
+                  role="region"
+                  aria-label="Graph canvas"
+                  tabindex="0"
+                  bind:this={graphCanvas}
+                >
+                  <img
+                    src={graphUrl}
+                    alt="Dependency graph for the query"
+                    style:zoom={graphZoom}
+                  />
+                </div>
+              </dialog>
             {:else if stored.stdout.trim() === ""}
               <p class="query-empty">No graph output.</p>
             {:else}

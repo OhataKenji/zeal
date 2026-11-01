@@ -1729,18 +1729,62 @@ button.chip:hover {
   overflow-x: auto;
 }
 
-.query-graph-viewport {
-  max-height: 60vh;
-  overflow: auto;
-}
-
-.query-graph-viewport:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
+.query-graph-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .query-graph {
   display: block;
+  max-width: 100%;
+  max-height: 60vh;
+}
+
+.query-graph-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  width: calc(100vw - 32px);
+  height: calc(100vh - 32px);
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.query-graph-dialog::backdrop {
+  background: #0009;
+}
+
+.query-graph-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.query-graph-toolbar span {
+  margin-right: auto;
+}
+
+.query-graph-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.query-graph-canvas:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.query-graph-canvas img {
+  display: block;
+  margin: auto;
 }
 
 .query-empty {
