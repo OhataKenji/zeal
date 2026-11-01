@@ -8,6 +8,7 @@ mod profile;
 mod protocol;
 mod runargs;
 mod runner;
+mod scope;
 mod snapshot;
 mod state;
 mod store;
@@ -61,7 +62,9 @@ fn open_workspace(
     app: AppHandle,
     core: State<Arc<Core>>,
     path: String,
+    scope: scope::Scope,
 ) -> Result<AppStateDto, String> {
+    let scope = scope.validated()?;
     let ws = expand_home(path.trim());
     if !ws.is_dir() {
         return Err(format!("not a directory: {}", ws.display()));
@@ -80,6 +83,7 @@ fn open_workspace(
         store::analytics::refresh_timezone();
         st.console = None;
         st.workspace = Some(ws.clone());
+        st.scope = scope.clone();
         st.bazel = bazel;
         // A different workspace has no shared snapshot with the previous one.
         st.snapshot = None;
@@ -89,7 +93,7 @@ fn open_workspace(
         st.run_note = None;
     }
     if let Ok(dir) = app.path().app_data_dir() {
-        workspace::save(&dir, &ws);
+        workspace::save(&dir, &ws, &scope);
     }
     ingest::request(app.clone(), core.inner().clone())?;
     Ok(core.dto())
@@ -306,12 +310,13 @@ fn expand_home(path: &str) -> PathBuf {
 fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
     // Reopen the last workspace, if it is still a workspace.
     if let Ok(dir) = app.path().app_data_dir()
-        && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(w))
+        && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(&w.path))
     {
         {
             let mut st = core.state.lock().expect("application state lock poisoned");
             store::analytics::refresh_timezone();
-            st.workspace = Some(ws);
+            st.workspace = Some(ws.path);
+            st.scope = ws.scope;
             st.bazel = workspace::resolve_bazel();
         }
         let _ = ingest::request(app.handle().clone(), core);

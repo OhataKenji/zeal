@@ -518,11 +518,12 @@
 
   {#if st === null}
     <div class="content dim">loading…</div>
-  {:else if st.workspace === null || switchingWs}
+  {:else if st.workspace === null || st.scope.include.length === 0 || switchingWs}
     <div class="content">
       <WorkspacePrompt
         initial={st.workspace ?? ""}
-        onclose={st.workspace ? () => (switchingWs = false) : undefined}
+        initialScope={st.scope}
+        onclose={st.workspace && st.scope.include.length > 0 ? () => (switchingWs = false) : undefined}
       />
       {#if st.workspace && st.bazel === null}
         <p class="error">bazelisk / bazel not found on PATH</p>

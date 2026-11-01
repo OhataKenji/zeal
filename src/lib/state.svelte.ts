@@ -1,3 +1,4 @@
+import type { TargetScope } from "./types.ts";
 import { COMMANDS } from "./commands.ts";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -51,8 +52,8 @@ export function connect() {
 }
 
 /** Opens a workspace through the current session. */
-export function openWorkspace(path: string) {
-  return session.openWorkspace(path);
+export function openWorkspace(path: string, scope: TargetScope) {
+  return session.openWorkspace(path, scope);
 }
 
 /** Requests a workspace refresh through the current session. */

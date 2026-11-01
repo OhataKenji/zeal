@@ -4,6 +4,7 @@ import { canSend, canStop, createSession, emptyView, type Transport } from "../s
 import type { AppState, Profile, RunDetail, RunRecord, Section } from "../src/lib/types.ts";
 
 const IDLE: AppState = {
+  scope: { include: ["//app/..."], exclude: [] },
   workspace: "/workspace",
   bazel: "/bin/bazel",
   ingest: "idle",
@@ -850,7 +851,7 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, running: RECORD.id });
-  await assert.rejects(h.session.openWorkspace("/other"), /Bazel/);
+  await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
   assert.equal(
     h.pending.some((call) => call.command === "open_workspace"),
     false,
@@ -1094,4 +1095,19 @@ test("workspace changes revoke a completed Console and discard its pending detai
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
   assert.equal(h.view.selectedRun, null);
+});
+
+test("workspace opening sends all include and exclude patterns to the core", async () => {
+  const h = harness();
+  await h.session.init();
+  const scope = {
+    include: ["//services/payments/...", "//libs/money/...", "//tools:generator"],
+    exclude: ["//services/payments/legacy/..."],
+  };
+  const opened = h.session.openWorkspace("/other", scope);
+  const request = pendingRequest(h, "open_workspace");
+  assert.deepEqual(request.args, { path: "/other", scope });
+  request.reply.resolve({ ...IDLE, workspace: "/other", scope });
+  await opened;
+  assert.deepEqual(h.view.state?.scope, scope);
 });

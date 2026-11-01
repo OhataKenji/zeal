@@ -15,6 +15,7 @@ pub struct AppStateDto {
     pub bes_error: Option<String>,
     /// Workspace root path, if one is open.
     pub workspace: Option<String>,
+    pub scope: crate::scope::Scope,
     /// Resolved bazel executable, if found on PATH.
     pub bazel: Option<String>,
     /// "idle" | "running": whether a query ingestion is in flight.
@@ -133,6 +134,7 @@ pub struct CoreState {
     /// Only this process's bound receiver may be used for a new Bazel child.
     pub bes_endpoint: Option<String>,
     pub workspace: Option<PathBuf>,
+    pub scope: crate::scope::Scope,
     pub bazel: Option<PathBuf>,
     /// The latest fully built snapshot; swapped atomically per fetch.
     pub snapshot: Option<Arc<Snapshot>>,
@@ -168,6 +170,7 @@ impl Core {
                 bes_error: None,
                 bes_endpoint: None,
                 workspace: None,
+                scope: crate::scope::Scope::default(),
                 bazel: None,
                 snapshot: None,
                 last_error: None,
@@ -185,6 +188,7 @@ impl Core {
         let st = self.state.lock().expect("application state lock poisoned");
         AppStateDto {
             bes_error: st.bes_error.clone(),
+            scope: st.scope.clone(),
             workspace: st
                 .workspace
                 .as_ref()
