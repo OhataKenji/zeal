@@ -182,6 +182,8 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 ノード数は `--graph:node_limit` で切り詰められ得る。切り詰めは stderr の WARNING として結果欄に出す。
 
 実装ではレイアウトを Graphviz(`@viz-js/viz` の wasm)に任せ、自前のレイアウトは持たない。
+レイアウトは同期 API なので Web Worker で実行し、30秒を超えたら worker を terminate して失敗として出す。
+古い描画要求は破棄せず待たず、worker ごと殺して次の描画に回す。
 
 ### 例と補完
 

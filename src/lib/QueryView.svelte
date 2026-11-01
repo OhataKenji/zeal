@@ -1,11 +1,58 @@
 <script lang="ts" module>
-  import type { Viz } from "@viz-js/viz";
+  import VizWorker from "./viz-worker?worker";
 
-  // The Graphviz wasm is only fetched when a graph result is rendered, and the
-  // module promise is shared across remounts.
-  let vizInstance: Promise<Viz> | undefined;
-  function loadViz() {
-    return (vizInstance ??= import("@viz-js/viz").then((m) => m.instance()));
+  // The Graphviz wasm is only fetched when a graph result is rendered. The
+  // worker is shared across remounts; a hung layout is abandoned by
+  // terminating it, which also drops the next render's warm instance.
+  let vizWorker: Worker | undefined;
+  let vizBusy = false;
+  const VIZ_TIMEOUT = 30_000;
+
+  function renderDot(
+    dot: string,
+    ok: (svg: string) => void,
+    fail: (error: string) => void,
+  ): () => void {
+    if (vizBusy) {
+      vizWorker?.terminate();
+      vizWorker = undefined;
+      vizBusy = false;
+    }
+    const w = (vizWorker ??= new VizWorker());
+    vizBusy = true;
+    const timer = setTimeout(() => {
+      kill();
+      fail("Graphviz could not lay out this result within 30s.");
+    }, VIZ_TIMEOUT);
+    w.onmessage = (e) => {
+      settle();
+      const d = e.data as { svg?: string; error?: string };
+      if (d.error) fail(d.error);
+      else ok(d.svg ?? "");
+    };
+    w.onerror = (e) => {
+      settle();
+      fail(e.message || "the graph renderer crashed");
+    };
+    function settle() {
+      clearTimeout(timer);
+      vizBusy = false;
+      w.onmessage = null;
+      w.onerror = null;
+    }
+    function kill() {
+      settle();
+      if (vizWorker === w) {
+        w.terminate();
+        vizWorker = undefined;
+      }
+    }
+    w.postMessage(dot);
+    // Abandoning a render means killing the worker: the queued DOT would
+    // otherwise delay the next layout by whatever time it still needs.
+    return () => {
+      if (vizBusy && vizWorker === w) kill();
+    };
   }
 </script>
 
@@ -93,6 +140,9 @@
   onDestroy(() => {
     clearTimeout(fbTimer);
     clearTimeout(copyTimer);
+    vizWorker?.terminate();
+    vizWorker = undefined;
+    vizBusy = false;
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
 
@@ -202,31 +252,19 @@
     const dot = graphDot;
     graphError = null;
     if (!dot) return;
-    let cancelled = false;
-    loadViz()
-      .then((viz) => {
-        if (cancelled) return;
-        let svg: string;
-        try {
-          svg = viz.renderString(dot, { format: "svg" });
-        } catch (e) {
-          if (!cancelled)
-            graphError = `Graphviz could not render this result: ${String(e)}`;
-          return;
-        }
-        if (!cancelled)
-          graphUrl = URL.createObjectURL(
-            new Blob([svg], { type: "image/svg+xml" }),
-          );
-      })
-      .catch((e) => {
-        // Let a later render retry: a rejected promise must not be cached.
-        vizInstance = undefined;
-        if (!cancelled)
-          graphError = `Could not load the graph renderer: ${String(e)}`;
-      });
+    const abandon = renderDot(
+      dot,
+      (svg) => {
+        graphUrl = URL.createObjectURL(
+          new Blob([svg], { type: "image/svg+xml" }),
+        );
+      },
+      (error) => {
+        graphError = error;
+      },
+    );
     return () => {
-      cancelled = true;
+      abandon();
       if (graphUrl) {
         URL.revokeObjectURL(graphUrl);
         graphUrl = null;
