@@ -327,18 +327,6 @@ mod tests {
         }
     }
 
-    fn started(id: &str, workspace: &std::path::Path) -> bep::BuildEvent {
-        bep::BuildEvent {
-            payload: Some(bep::build_event::Payload::Started(bep::BuildStarted {
-                uuid: id.into(),
-                workspace_directory: workspace.to_string_lossy().into_owned(),
-                command: "build".into(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-    }
-
     fn observed_receiver(fixture: &Fixture, seen: Arc<Mutex<Vec<Option<i32>>>>) -> Receiver {
         let data = fixture.data.clone();
         let workspace = fixture.ws.clone();
@@ -429,39 +417,51 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_append_keeps_admission_until_queued_save_finishes() {
+    fn cancelled_append_keeps_admission_until_queued_write_finishes() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
             .build()
             .unwrap();
-        runtime.block_on(async {
-            let temp = Temp::new();
-            let receiver = silent_receiver(temp.0.join("data"));
-            let (release, wait) = std::sync::mpsc::channel();
-            let blocker = tokio::task::spawn_blocking(move || wait.recv().unwrap());
-            let session = Session {
-                receipt: None,
-                _permit: receiver.admit().unwrap(),
-                history_changed: receiver.history_changed.clone(),
-            };
-            let id = uuid::Uuid::new_v4().to_string();
-            let event = ordered(&id, 1, started(&id, &temp.0));
-            let rpc = tokio::spawn(session.append(receiver.data.clone(), event));
-            tokio::task::yield_now().await;
-            rpc.abort();
-            assert!(matches!(rpc.await, Err(error) if error.is_cancelled()));
-            assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
-            release.send(()).unwrap();
-            blocker.await.unwrap();
-            let _permits = tokio::time::timeout(
-                Duration::from_secs(5),
-                receiver.sessions.acquire_many(MAX_SESSIONS as u32),
-            )
-            .await
-            .unwrap()
-            .unwrap();
+        runtime.block_on(check_cancelled_append_admission());
+    }
+
+    async fn check_cancelled_append_admission() {
+        let temp = Temp::new();
+        let receiver = silent_receiver(temp.0.join("data"));
+        let (release, wait) = std::sync::mpsc::channel();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            started_tx.send(()).unwrap();
+            wait.recv().unwrap();
         });
+        started_rx.await.unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let event = ordered(&id, 1, bep::BuildEvent::default());
+        let receipt = Receipt::begin(&receiver.data, event.stream_id.as_ref().unwrap()).unwrap();
+        let session = Session {
+            receipt: Some(receipt),
+            _permit: receiver.admit().unwrap(),
+            history_changed: receiver.history_changed.clone(),
+        };
+        // Queue the blocking write before cancelling the async caller.
+        let mut rpc = Box::pin(session.append(receiver.data.clone(), event));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(rpc.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        drop(rpc);
+        assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
+        release.send(()).unwrap();
+        blocker.await.unwrap();
+        let _permits = tokio::time::timeout(
+            Duration::from_secs(5),
+            receiver.sessions.acquire_many(MAX_SESSIONS as u32),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     }
 
     #[test]
