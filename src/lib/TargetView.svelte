@@ -156,7 +156,7 @@
     <dt>rdeps<small>depth=1 · current Scope</small></dt>
     <dd>
       {#if rel.usedBy.length === 0}
-        <span class="dim">No reverse dependencies found in the current Scope.</span>
+        <span class="dim">None in current Scope.</span>
       {:else}
         {@render labels(
           rel.usedBy.map((used) => used.label),
@@ -166,8 +166,7 @@
         )}
       {/if}
       <p class="dim">
-        Expand Scope in the workspace target patterns to look for dependents
-        outside the current Scope.
+        Expand target patterns to check more targets.
       </p>
     </dd>
   </dl>
