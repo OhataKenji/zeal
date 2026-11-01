@@ -39,9 +39,14 @@
   onMount(connect);
 
   const st = $derived(app.state);
-  const snap = $derived(app.view.snapshot ?? null);
+  const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const known = $derived(new Set(snap?.targets.map((t) => t.label) ?? []));
+
+  function retryTargets() {
+    if (app.view.snapshotError) void getSession().loadSnapshot();
+    else refresh();
+  }
 
   let analyticsOpen = $state(false);
   let selected = $state<string | null>(null);
@@ -228,7 +233,7 @@
           <button
             type="button"
             class="button"
-            onclick={app.view.snapshotError ? getSession().loadSnapshot : refresh}
+            onclick={retryTargets}
             >retry</button
           >
         {:else}
@@ -383,7 +388,7 @@
       <button
         type="button"
         class="button"
-        onclick={app.view.snapshotError ? getSession().loadSnapshot : refresh}
+        onclick={retryTargets}
         >retry</button
       >
     {/if}

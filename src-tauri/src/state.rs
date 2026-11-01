@@ -245,20 +245,14 @@ mod tests {
 
     #[test]
     fn the_dto_names_the_snapshot_without_carrying_its_data() {
-        use crate::snapshot::{Meta, Status, Target};
+        use crate::snapshot::{Meta, Status};
 
         let snapshot = Snapshot {
             meta: Meta {
                 fetched_at: 1,
                 status: Status::Partial,
             },
-            targets: vec![Target {
-                label: "//a:b".into(),
-                pkg: "a".into(),
-                name: "b".into(),
-                rule_class: "rule".into(),
-                location: None,
-            }],
+            targets: Vec::new(),
             edges: Vec::new(),
             files: Vec::new(),
         };
