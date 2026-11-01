@@ -1,13 +1,16 @@
 <script lang="ts">
   import type { Bep, Section } from "../types";
-  import { sectionData, sectionMessage } from "../run";
+  import { sectionData, sectionMessage, sectionNoticeTone } from "../run";
+  import Notice from "../Notice.svelte";
 
   let { section }: { section: Section<Bep> | undefined } = $props();
   const bep = $derived(sectionData(section));
 </script>
 
 <h2 class="panel-heading">Targets {#if bep}<span>{bep.targets.length}</span>{/if}</h2>
-{#if section && section.status !== "ok"}<p class="run-notice">{sectionMessage(section)}</p>{/if}
+{#if section && section.status !== "ok"}<Notice tone={sectionNoticeTone(section)}
+    >{sectionMessage(section)}</Notice
+  >{/if}
 {#if bep}
   {#if bep.targets.length}
     <ul class="result-list">
@@ -19,7 +22,6 @@
 {/if}
 
 <h2 class="panel-heading">Tests {#if bep}<span>{bep.tests.length}</span>{/if}</h2>
-{#if section && section.status !== "ok"}<p class="run-notice">{sectionMessage(section)}</p>{/if}
 {#if bep}
   {#if bep.tests.length}
     <ul class="result-list">

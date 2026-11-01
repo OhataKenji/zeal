@@ -147,12 +147,13 @@
         id={fieldId("text")}
         aria-label="{context} target pattern"
         placeholder="Fuzzy :all / //pkg:target"
-        invalid={!!textError}
+        aria-invalid={!!textError}
+        aria-describedby={textError ? `${fieldId("text")}-error` : undefined}
         index={searchIndex}
         value={target.text}
         oninput={(v) => (target.text = v)}
       />
-      {#if textError}<p class="query-field-err">{textError}</p>{/if}
+      {#if textError}<p class="field-error" id={`${fieldId("text")}-error`}>{textError}</p>{/if}
     </div>
   </div>
 {:else if node.kind === "call"}
@@ -209,7 +210,8 @@
                   id={fieldId(i)}
                   aria-label="{node.fn} {arg.name}"
                   placeholder={placeholder(arg)}
-                  invalid={!!argError}
+                  aria-invalid={!!argError}
+                  aria-describedby={argError ? `${fieldId(i)}-error` : undefined}
                   index={idx}
                   hints={[]}
                   value={scalarValue(call.args[i])}
@@ -225,7 +227,8 @@
                   placeholder={placeholder(arg)}
                   inputmode={arg.type === "int" ? "numeric" : undefined}
                   aria-label="{node.fn} {arg.name}"
-                  class:query-invalid={!!argError}
+                  aria-invalid={!!argError}
+                  aria-describedby={argError ? `${fieldId(i)}-error` : undefined}
                   value={scalarValue(call.args[i])}
                   oninput={(e) => {
                     call.args[i] =
@@ -235,7 +238,7 @@
                   }}
                 />
               {/if}
-              {#if argError}<p class="query-field-err">{argError}</p>{/if}
+              {#if argError}<p class="field-error" id={`${fieldId(i)}-error`}>{argError}</p>{/if}
             </div>
           {/if}
         </div>

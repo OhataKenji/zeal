@@ -38,7 +38,7 @@ test("LogPanel displays the available log and its section status", async (t) => 
       });
       assert.match(html, /incomplete — event tail is missing/);
       assert.match(html, /saved prefix/);
-      assert.match(html, /class="run-notice"/);
+      assert.match(html, /class="notice notice--warning" role="status"/);
       assert.match(html, /aria-label="Build stdout and stderr"/);
     });
 
@@ -51,18 +51,19 @@ test("LogPanel displays the available log and its section status", async (t) => 
     await t.test("complete logs have no warning", () => {
       const html = output({ status: "ok", data: "complete output" });
       assert.match(html, /complete output/);
-      assert.doesNotMatch(html, /run-notice|Loading build log/);
+      assert.doesNotMatch(html, /class="notice|Loading build log/);
     });
 
     await t.test("an outstanding log request shows the existing loading message", () => {
       const html = output(undefined, true);
       assert.match(html, /Loading build log…/);
-      assert.doesNotMatch(html, /run-notice|aria-label="Build stdout and stderr"/);
+      assert.doesNotMatch(html, /class="notice|aria-label="Build stdout and stderr"/);
     });
 
     await t.test("an unreadable log shows its error without inventing log content", () => {
       const html = output({ status: "read_error", note: "permission denied" });
       assert.match(html, /read error — permission denied/);
+      assert.match(html, /class="notice notice--error" role="alert"/);
       assert.doesNotMatch(html, /aria-label="Build stdout and stderr"|Loading build log/);
     });
   } finally {

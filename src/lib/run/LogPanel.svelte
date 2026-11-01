@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Section } from "../types";
-  import { sectionData, sectionMessage } from "../run";
+  import { sectionData, sectionMessage, sectionNoticeTone } from "../run";
+  import Notice from "../Notice.svelte";
   import { logSpans } from "../log";
   import { TERMINAL_TEXT_STYLE } from "../terminal_style";
 
@@ -14,7 +15,7 @@
 
 <h2 class="panel-heading">Logs</h2>
 {#if section && section.status !== "ok"}
-  <p class="run-notice">{sectionMessage(section)}</p>
+  <Notice tone={sectionNoticeTone(section)}>{sectionMessage(section)}</Notice>
 {/if}
 {#if log !== null}
   <div class="log-panel">

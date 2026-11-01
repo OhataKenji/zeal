@@ -85,7 +85,7 @@
   overflow: hidden;
 }
 
-.run-content > .warn,
+.run-content > .notice,
 .run-content > .dim {
   margin: 0;
   padding: 5px 20px;
@@ -167,16 +167,6 @@
 
 .run-all .log-panel {
   height: clamp(180px, 32vh, 320px);
-}
-
-.run-notice {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 12px;
-  background: var(--background);
-  color: var(--foreground);
-  border-left: 2px solid var(--border);
-  overflow-wrap: anywhere;
 }
 
 .panel-empty {

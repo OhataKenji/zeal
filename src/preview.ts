@@ -145,6 +145,7 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
   });
 }).flat();
 const state: AppState = {
+  besReady: true,
   scope: { include: ["//app/..."] },
   workspace: WORKSPACE,
   bazel: "8.7.0",

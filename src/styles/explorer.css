@@ -93,11 +93,6 @@
   gap: 8px;
 }
 
-.app-error {
-  margin: 0;
-  padding: 8px 14px;
-}
-
 .tree .row svg {
   flex-shrink: 0;
   color: var(--muted-foreground);

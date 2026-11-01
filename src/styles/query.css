@@ -167,14 +167,8 @@
   accent-color: var(--primary);
 }
 
-.query-view :is(input, select, textarea).query-invalid {
+.query-view :is(input, select, textarea)[aria-invalid="true"] {
   border-color: var(--destructive);
-}
-
-.query-field-err {
-  font-size: 11.5px;
-  color: var(--destructive);
-  margin: 2px 0 0;
 }
 
 .query-expr-card {
@@ -458,21 +452,8 @@
   font-size: 12.5px;
 }
 
-.query-code-warning {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+.query-code-body > .notice {
   margin-top: 8px;
-  font-size: 12px;
-  color: var(--foreground);
-  background: var(--muted);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
-}
-
-.query-code-warning.is-error {
-  color: var(--destructive);
 }
 
 .query-results-head .query-results-count {
@@ -481,33 +462,8 @@
   margin-left: auto;
 }
 
-.query-strip {
-  font-size: 12px;
-  padding: 8px 12px;
+.query-panel > .notice {
   margin: 8px 0 0;
-  border-left: 2px solid var(--border);
-}
-
-.query-strip.is-error {
-  color: var(--destructive);
-}
-
-.query-strip.is-warn {
-  color: var(--warning);
-  background: var(--warning-muted);
-  border-left: 0;
-  border-radius: var(--radius-md);
-}
-
-.query-strip p {
-  margin: 0;
-}
-
-.query-strip pre {
-  margin: 6px 0 0;
-  font: 11.5px/1.5 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .query-results-body {

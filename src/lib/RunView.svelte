@@ -1,8 +1,9 @@
 <script lang="ts">
   import RunHeader from "./RunHeader.svelte";
   import type { SessionView } from "./session";
-  import { runStatus, sectionData, sectionMessage } from "./run";
+  import { runStatus, sectionData, sectionMessage, sectionNoticeTone } from "./run";
   import LogPanel from "./run/LogPanel.svelte";
+  import Notice from "./Notice.svelte";
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./run/TargetsPanel.svelte";
   import { formatOptions } from "./run/options";
@@ -80,10 +81,7 @@
   </RunHeader>
 
   {#if view.detailError}
-    <div class="run-notice error">
-      Could not load run details: {view.detailError}
-      <button type="button" class="button" onclick={reload}>Retry</button>
-    </div>
+    <Notice tone="error" onaction={reload}>Could not load run details: {view.detailError}</Notice>
   {/if}
 
   <div
@@ -180,7 +178,9 @@
               {:else if view.detailLoading}
                 <p class="panel-empty">Loading arguments…</p>
               {:else if view.detail}
-                <p class="run-notice">{sectionMessage(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)}</p>
+                <Notice tone={sectionNoticeTone(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)} announce={active !== "All"}
+                  >{sectionMessage(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)}</Notice
+                >
               {/if}
             {/if}
           {:else}
@@ -191,14 +191,13 @@
             {:else if view.profileLoading}<p class="panel-empty" role="status">
                 Loading profile…
               </p>
-            {:else if view.profileError}<div class="run-notice error">
-                Could not load timing data: {view.profileError}
-                <button type="button" class="button" onclick={reloadProfile}>Retry</button>
-              </div>
+            {:else if view.profileError}<Notice tone="error" onaction={reloadProfile}
+                >Could not load timing data: {view.profileError}</Notice
+              >
             {:else if view.profile}
-              {#if view.profile.status !== "ok"}<p class="run-notice">
-                  {sectionMessage(view.profile)}
-                </p>{/if}
+              {#if view.profile.status !== "ok"}<Notice tone={sectionNoticeTone(view.profile)}
+                  >{sectionMessage(view.profile)}</Notice
+                >{/if}
               {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
             {/if}
           {/if}

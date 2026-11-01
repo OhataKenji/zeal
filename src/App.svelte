@@ -20,6 +20,7 @@
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import RunStatus from "./lib/RunStatus.svelte";
+  import Notice from "./lib/Notice.svelte";
   import RunView from "./lib/RunView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
@@ -200,12 +201,8 @@
         {:else if state.ingest === "running" || app.view.snapshotLoading}
           <p class="dim">Loading targets…</p>
         {:else if app.view.snapshotError || state.lastError}
-          <p class="error">{app.view.snapshotError ?? state.lastError?.summary}</p>
-          <button
-            type="button"
-            class="button"
-            onclick={retryTargets}
-            >retry</button
+          <Notice tone="error" onaction={retryTargets}
+            >{app.view.snapshotError ?? state.lastError?.summary}</Notice
           >
         {:else}
           <p class="dim">—</p>
@@ -278,9 +275,8 @@
             </li>
           {/each}
         </ul>
-        {#if app.view.runsError}<p class="error">{app.view.runsError}</p>
-          <button type="button" class="button" onclick={getSession().loadRuns}
-            >retry</button
+        {#if app.view.runsError}<Notice tone="error" onaction={getSession().loadRuns}
+            >{app.view.runsError}</Notice
           >
         {/if}
       </div>
@@ -305,20 +301,17 @@
     {/if}
     {#if !app.view.consoleOpen}
     {#if snap?.meta.status === "partial"}
-      <p class="warn">
+      <Notice tone="warning">
         Skipped some packages (exit {state.lastError?.exitCode ?? "?"}) —
         partial results from
         {new Date(snap.meta.fetchedAt).toLocaleTimeString()}
-      </p>
+      </Notice>
     {:else if snap && (state.lastError || app.view.snapshotError)}
-      <p class="warn">
+      <Notice tone="warning" onaction={app.view.snapshotError ? getSession().loadSnapshot : undefined}>
         Refresh failed — showing the snapshot from {new Date(
           snap.meta.fetchedAt,
         ).toLocaleTimeString()} ({state.lastError?.summary ?? app.view.snapshotError})
-      </p>
-      {#if app.view.snapshotError}
-        <button type="button" class="button" onclick={getSession().loadSnapshot}>retry</button>
-      {/if}
+      </Notice>
     {/if}
     {#if state.ingest === "running" || app.view.snapshotLoading}
       <p class="dim">Loading targets…</p>
@@ -343,19 +336,13 @@
     {:else if snap}
       <p class="dim">Select a target in the tree</p>
     {:else if state.ingest !== "running" && !app.view.snapshotLoading && (app.view.snapshotError || state.lastError)}
-      <p class="error">
+      <Notice tone="error" announce={collapsed.targets} onaction={retryTargets}>
         {#if app.view.snapshotError}
           {app.view.snapshotError}
         {:else}
           Failed to load targets: {state.lastError?.summary}
         {/if}
-      </p>
-      <button
-        type="button"
-        class="button"
-        onclick={retryTargets}
-        >retry</button
-      >
+      </Notice>
     {/if}
     {/if}
   </main>
@@ -396,7 +383,7 @@
         </button>
       {/if}
     </div>
-    <div class="composer">
+    <div class="composer" class:composer-invalid={!!inputError}>
       <select class="select" aria-label="Bazel command" bind:value={cmd}>
         <option>build</option>
         <option>test</option>
@@ -406,6 +393,8 @@
         <SearchInput
           class="input composer-target"
           aria-label="Target label or pattern"
+          aria-invalid={!!inputError}
+          aria-describedby={inputError ? "composer-target-error" : undefined}
           placeholder="Fuzzy :all / //pkg:target"
           {index}
           value={targetField}
@@ -461,12 +450,12 @@
       </button>
     </div>
   </div>
-  {#if app.view.error}<p class="app-error error" role="alert">
-      {app.view.error}
-    </p>{/if}
-  {#if st?.runNote}<p class="app-error warn" role="status">{st.runNote}</p>{/if}
-  {#if st?.besError}<p class="app-error warn" role="status">BES receiver: {st.besError}</p>{/if}
-  {#if inputError}<p class="app-error error" role="status">{inputError}</p>{/if}
+  {#if app.view.error}<Notice tone="error">{app.view.error}</Notice>{/if}
+  {#if st?.runNote}<Notice tone="error">{st.runNote}</Notice>{/if}
+  {#if st?.besError}<Notice tone={st.besReady ? "warning" : "error"}
+      >BES receiver: {st.besError}</Notice
+    >{/if}
+  {#if inputError}<p class="field-error composer-error" id="composer-target-error" role="status">{inputError}</p>{/if}
 
   {#if st === null}
     <div class="content dim">loading…</div>
@@ -478,7 +467,7 @@
         onclose={st.workspace ? () => (switchingWs = false) : undefined}
       />
       {#if st.workspace && st.bazel === null}
-        <p class="error">bazelisk / bazel not found on PATH</p>
+        <Notice tone="error">bazelisk / bazel not found on PATH</Notice>
       {/if}
     </div>
   {:else}

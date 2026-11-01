@@ -57,6 +57,7 @@
 </script>
 
 <script lang="ts">
+  import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
@@ -439,24 +440,18 @@
             <textarea
               id="query-code-input"
               aria-label="Bazel query expression"
+              aria-invalid={!!codeError}
+              aria-describedby={codeWarning ? "query-code-message" : undefined}
               spellcheck="false"
               autocomplete="off"
               bind:value={draft}
               oninput={() => (codeError = null)}
             ></textarea>
             {#if codeWarning}
-              <div class="query-code-warning" class:is-error={!!codeError}>
-                <span
-                  >{codeError ??
-                    "The edited query differs from the Builder expression."}</span
-                >
-                <button
-                  type="button"
-                  class="button"
-                  onclick={revertToBuilder}
-                  >Revert to last Builder</button
-                >
-              </div>
+              <Notice id="query-code-message" tone={codeError ? "error" : "warning"}
+                onaction={revertToBuilder} actionLabel="Revert to last Builder"
+                >{codeError ?? "The edited query differs from the Builder expression."}</Notice
+              >
             {/if}
           </div>
         {/if}
@@ -521,29 +516,25 @@
           <span class="query-results-count">{resultCount}</span>
         </div>
         {#if qstate.error}
-          <p class="query-strip is-error" role="alert">{qstate.error}</p>
+          <Notice tone="error">{qstate.error}</Notice>
         {/if}
         {#if failedOutput && !runningThisView}
-          <div class="query-strip is-error" role="alert">
+          <Notice tone="error">
             <p>{failedOutput.summary}</p>
             {#if failedOutput.tail}<pre>{failedOutput.tail}</pre>{/if}
-          </div>
+          </Notice>
         {/if}
         {#if graphWarn && !stored?.truncated}
-          <pre class="query-strip is-warn">{graphWarn}</pre>
+          <Notice tone="warning"><pre>{graphWarn}</pre></Notice>
         {/if}
         {#if stored?.truncated && !failedOutput && !runningThisView}
-          <p
-            class="query-strip"
-            class:is-error={resultView === "graph"}
-            class:is-warn={resultView !== "graph"}
-          >
+          <Notice tone={resultView === "graph" ? "error" : "warning"}>
             {#if resultView === "graph"}Bazel truncated the graph output — it
               cannot be rendered.{:else}Bazel truncated this output.{/if}
-          </p>
+          </Notice>
         {/if}
         {#if graphError}
-          <p class="query-strip is-error" role="alert">{graphError}</p>
+          <Notice tone="error">{graphError}</Notice>
         {/if}
         <div class="query-results-body">
           {#if runningThisView}

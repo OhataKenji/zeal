@@ -164,6 +164,19 @@
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 25%, transparent);
 }
 
+.composer.composer-invalid {
+  border-color: var(--destructive);
+}
+
+.composer.composer-invalid:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--destructive) 25%, transparent);
+}
+
+.composer-error {
+  margin: 0;
+  padding: 5px 14px;
+}
+
 .arguments-toggle {
   margin-right: 4px;
   border-left-color: var(--border);

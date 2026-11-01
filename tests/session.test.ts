@@ -4,6 +4,7 @@ import { canSend, canStop, createSession, emptyView, type Transport } from "../s
 import type { AppState, Profile, RunDetail, RunRecord, Section } from "../src/lib/types.ts";
 
 const IDLE: AppState = {
+  besReady: false,
   scope: { include: ["//app/..."] },
   workspace: "/workspace",
   bazel: "/bin/bazel",

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { openWorkspace } from "./state.svelte";
+  import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
 
   let {
@@ -81,5 +82,5 @@
       <button class="button" type="button" onclick={onclose} disabled={busy}>cancel</button>
     {/if}
   </div>
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}<Notice tone="error">{error}</Notice>{/if}
 </form>

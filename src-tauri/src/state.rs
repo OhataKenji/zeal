@@ -13,6 +13,8 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "camelCase")]
 pub struct AppStateDto {
     pub bes_error: Option<String>,
+    /// Whether the receiver can accept a new Bazel run.
+    pub bes_ready: bool,
     /// Workspace root path, if one is open.
     pub workspace: Option<String>,
     pub scope: crate::scope::Scope,
@@ -205,6 +207,7 @@ impl Core {
         let st = self.state.lock().expect("application state lock poisoned");
         AppStateDto {
             bes_error: st.bes_error.clone(),
+            bes_ready: st.bes_endpoint.is_some(),
             scope: st.scope.clone(),
             workspace: st
                 .workspace
@@ -242,6 +245,30 @@ impl Default for Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dto_reports_bes_readiness_independently_of_its_message() {
+        let core = Core::new();
+        assert_eq!(serde_json::to_value(core.dto()).unwrap()["besReady"], false);
+
+        {
+            let mut st = core.state.lock().unwrap();
+            st.bes_endpoint = Some("grpc://127.0.0.1:12345".to_string());
+            st.bes_error = Some("preferred port occupied".to_string());
+        }
+        let available = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(available["besReady"], true);
+        assert_eq!(available["besError"], "preferred port occupied");
+
+        {
+            let mut st = core.state.lock().unwrap();
+            st.bes_endpoint = None;
+            st.bes_error = Some("receiver stopped".to_string());
+        }
+        let unavailable = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(unavailable["besReady"], false);
+        assert_eq!(unavailable["besError"], "receiver stopped");
+    }
 
     #[test]
     fn dto_reports_the_stopping_run_and_its_note() {
