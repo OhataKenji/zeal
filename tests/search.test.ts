@@ -6,7 +6,6 @@ import {
   createIndex,
   keyAction,
   moveIndex,
-  navKey,
   optionId,
   querySearchTargets,
   search,
@@ -180,20 +179,6 @@ test("an index keeps answering its own queries, and another array makes another 
     search(other, "only_here").map((match) => match.target.label),
     ["//other:only_here"],
   );
-});
-
-test("navKey maps fuzzy-finder chords to arrows and leaves other keys alone", () => {
-  const mods = { ctrlKey: true, metaKey: false, altKey: false };
-  assert.equal(navKey({ key: "k", ...mods }), "ArrowUp");
-  assert.equal(navKey({ key: "p", ...mods }), "ArrowUp");
-  assert.equal(navKey({ key: "j", ...mods }), "ArrowDown");
-  assert.equal(navKey({ key: "n", ...mods }), "ArrowDown");
-  // Letters, bare modifiers and other chords pass through for normal editing.
-  assert.equal(navKey({ key: "k", ...mods, ctrlKey: false }), "k");
-  assert.equal(navKey({ key: "k", ...mods, metaKey: true }), "k");
-  assert.equal(navKey({ key: "k", ...mods, altKey: true }), "k");
-  assert.equal(navKey({ key: "a", ...mods }), "a");
-  assert.equal(navKey({ key: "ArrowUp", ...mods }), "ArrowUp");
 });
 
 test("moveIndex moves and clamps inside the list", () => {

@@ -98,22 +98,6 @@ export function moveIndex(index: number, delta: number, length: number): number 
   return Math.min(Math.max(index + delta, 0), length - 1);
 }
 
-/**
- * Translates fuzzy-finder chords into arrow keys before `keyAction` sees them:
- * Ctrl-p/k move up, Ctrl-n/j move down. Callers must `preventDefault` whenever
- * the result differs from `event.key` — on macOS the native Ctrl-k binding is
- * kill-to-end-of-line and Ctrl-j inserts a newline, both of which wipe the
- * field mid-typing.
- */
-export function navKey(
-  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey">,
-): string {
-  if (!event.ctrlKey || event.metaKey || event.altKey) return event.key;
-  if (event.key === "k" || event.key === "p") return "ArrowUp";
-  if (event.key === "j" || event.key === "n") return "ArrowDown";
-  return event.key;
-}
-
 /** Keyboard actions returned to the dropdown for its current match list. */
 export type KeyAction =
   | { kind: "move"; index: number }

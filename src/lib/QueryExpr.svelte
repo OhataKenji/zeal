@@ -7,7 +7,6 @@
     keyAction,
     LIST_ID,
     moveIndex,
-    navKey,
     optionId,
     search,
   } from "./search";
@@ -71,13 +70,9 @@
 
   function targetKey(e: KeyboardEvent) {
     if (e.isComposing) return;
-    const key = navKey(e);
-    // A mapped chord is navigation intent; swallowing it also blocks macOS's
-    // kill-to-end-of-line even when the dropdown has nothing to select.
-    if (key !== e.key) e.preventDefault();
     const action = keyAction(
       { open: targetOpen, index: activeIdx },
-      key,
+      e.key,
       targetMatches,
     );
     switch (action.kind) {
@@ -252,8 +247,11 @@
           value={target.text}
           oninput={(e) => {
             target.text = e.currentTarget.value;
+            // Editing to empty (Ctrl-k, select-all+Delete) must not collapse
+            // the node into a hole and unmount this very input.
+            if (target.text === "") literalEditors.add(node.id);
             targetIndex = 0;
-            targetOpen = e.currentTarget.value !== "";
+            targetOpen = target.text !== "";
           }}
           onkeydown={targetKey}
           onblur={() => (targetOpen = false)}
