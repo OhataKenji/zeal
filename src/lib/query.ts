@@ -690,36 +690,43 @@ export function codeDiverged(root: Expr, draft: string): boolean {
   return draft.trim() !== (s.ok ? s.text.trim() : "");
 }
 
+// Ordered like the bazel query guide: single-function queries first (what X
+// needs, how it connects, who needs X), then existence enumeration, then the
+// composite idioms (diffs) and plumbing.
 const PRESETS: Record<string, { expr: string; desc: string }> = {
-  commonDeps: {
-    expr: "(deps(//app:server) intersect deps(//tools:cli))",
-    desc: "Shared dependencies",
-  },
-  rdepsKind: {
-    expr: 'kind(".*_test rule", rdeps(//..., //app/lib:parser))',
-    desc: "Reverse deps filtered by kind",
-  },
   deps: { expr: "deps(//app:server)", desc: "Transitive dependencies" },
   somepath: {
     expr: "somepath(//app:server, //app/lib:parser)",
     desc: "One path between two targets",
   },
-  onlyServer: {
-    expr: "(deps(//app:server) except deps(//tools:cli))",
-    desc: "Dependencies unique to one target",
+  allpaths: {
+    expr: "allpaths(//app:server, //app/lib:parser)",
+    desc: "Every path between two targets",
   },
-  smallTestSources: {
-    expr: 'labels(srcs, attr(size, "^small$", //app/...))',
-    desc: "Filter by attribute, then get srcs",
+  rdeps: {
+    expr: "rdeps(//..., //app/lib:parser)",
+    desc: "Reverse dependencies",
+  },
+  kindTests: {
+    expr: 'kind(".*_test rule", //app/...)',
+    desc: "Find targets by rule kind",
   },
   suiteTests: { expr: "tests(//app:all_tests)", desc: "Expand test suites" },
   rdepsTests: {
     expr: "tests(rdeps(//..., //app/lib:parser))",
     desc: "Tests that depend on a target",
   },
-  allpaths: {
-    expr: "allpaths(//app:server, //app/lib:parser)",
-    desc: "Every path between two targets",
+  smallTestSources: {
+    expr: 'labels(srcs, attr(size, "^small$", //app/...))',
+    desc: "Filter by attribute, then get srcs",
+  },
+  onlyServer: {
+    expr: "(deps(//app:server) except deps(//tools:cli))",
+    desc: "Dependencies unique to one target",
+  },
+  commonDeps: {
+    expr: "(deps(//app:server) intersect deps(//tools:cli))",
+    desc: "Shared dependencies",
   },
   buildfiles: {
     expr: "buildfiles(deps(//app:server))",
@@ -728,15 +735,16 @@ const PRESETS: Record<string, { expr: string; desc: string }> = {
 };
 
 const EXAMPLE_LABELS: Record<string, string> = {
-  commonDeps: "deps ∩ deps",
-  rdepsKind: "rdeps + kind",
   deps: "deps",
   somepath: "somepath",
-  onlyServer: "deps − deps",
-  smallTestSources: "attr → labels",
+  allpaths: "allpaths",
+  rdeps: "rdeps",
+  kindTests: "kind *_test",
   suiteTests: "tests",
   rdepsTests: "rdeps → tests",
-  allpaths: "allpaths",
+  smallTestSources: "attr → labels",
+  onlyServer: "deps − deps",
+  commonDeps: "deps ∩ deps",
   buildfiles: "buildfiles",
 };
 

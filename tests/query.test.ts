@@ -243,15 +243,16 @@ test("constructors fill schema defaults and defaultNodeFor covers every kind", (
 });
 
 const EXPECTED: Record<string, string> = {
-  commonDeps: "(deps(//app:server) intersect deps(//tools:cli))",
-  rdepsKind: 'kind(".*_test rule", rdeps(//..., //app/lib:parser))',
   deps: "deps(//app:server)",
   somepath: "somepath(//app:server, //app/lib:parser)",
-  onlyServer: "(deps(//app:server) except deps(//tools:cli))",
-  smallTestSources: 'labels(srcs, attr(size, "^small$", //app/...))',
+  allpaths: "allpaths(//app:server, //app/lib:parser)",
+  rdeps: "rdeps(//..., //app/lib:parser)",
+  kindTests: 'kind(".*_test rule", //app/...)',
   suiteTests: "tests(//app:all_tests)",
   rdepsTests: "tests(rdeps(//..., //app/lib:parser))",
-  allpaths: "allpaths(//app:server, //app/lib:parser)",
+  smallTestSources: 'labels(srcs, attr(size, "^small$", //app/...))',
+  onlyServer: "(deps(//app:server) except deps(//tools:cli))",
+  commonDeps: "(deps(//app:server) intersect deps(//tools:cli))",
   buildfiles: "buildfiles(deps(//app:server))",
 };
 
