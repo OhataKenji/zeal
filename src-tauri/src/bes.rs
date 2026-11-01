@@ -454,8 +454,9 @@ mod tests {
             assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
             release.send(()).unwrap();
             blocker.await.unwrap();
+            // Parallel store tests share a process-wide lock; allow their disk I/O to finish.
             let _permits = tokio::time::timeout(
-                Duration::from_secs(5),
+                Duration::from_secs(30),
                 receiver.sessions.acquire_many(MAX_SESSIONS as u32),
             )
             .await
