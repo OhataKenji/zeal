@@ -576,11 +576,19 @@
             {:else if graphError}
               <pre class="query-raw">{stored.stdout}</pre>
             {:else if graphUrl}
-              <img
-                class="query-graph"
-                src={graphUrl}
-                alt="Dependency graph for the query"
-              />
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex (Native scroll container needs focus for keyboard scrolling.) -->
+              <div
+                class="query-graph-viewport"
+                role="region"
+                aria-label="Query dependency graph"
+                tabindex="0"
+              >
+                <img
+                  class="query-graph"
+                  src={graphUrl}
+                  alt="Dependency graph for the query"
+                />
+              </div>
             {:else if stored.stdout.trim() === ""}
               <p class="query-empty">No graph output.</p>
             {:else}
