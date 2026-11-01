@@ -18,9 +18,10 @@
   let include = $state(untrack(() => initialScope.include.join("\n")));
   let error = $state<string | null>(null);
   let busy = $state(false);
+  const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
 
   async function submit() {
-    if (busy || !path.trim() || include.trim() === "") return;
+    if (!canSubmit) return;
     const close = onclose;
     busy = true;
     error = null;
@@ -73,7 +74,7 @@
     <button
       class="button button-primary"
       type="submit"
-      disabled={busy || path.trim() === "" || include.trim() === ""}>open</button
+      disabled={!canSubmit}>open</button
     >
     {#if onclose}
       <button class="button" type="button" onclick={onclose} disabled={busy}>cancel</button>

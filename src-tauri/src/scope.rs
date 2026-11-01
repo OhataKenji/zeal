@@ -27,19 +27,16 @@ impl Scope {
 
     /// Quote the scope accepted at the IPC or persistence boundary.
     pub fn query(&self) -> String {
-        let selected = union(&self.include);
+        let selected = self
+            .include
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(" union ");
         format!(
             "let selected = kind(\"rule\", ({selected})) in $selected union kind(\"source file\", deps($selected, 1))"
         )
     }
-}
-
-fn union(patterns: &[String]) -> String {
-    patterns
-        .iter()
-        .map(|p| format!("\"{p}\""))
-        .collect::<Vec<_>>()
-        .join(" union ")
 }
 
 fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
