@@ -13,7 +13,7 @@
 </script>
 
 <h2 class="panel-heading">Logs</h2>
-{#if section && section.status !== "ok" && section.status !== "incomplete"}
+{#if section && section.status !== "ok"}
   <p class="run-notice">{sectionMessage(section)}</p>
 {/if}
 {#if log !== null}
