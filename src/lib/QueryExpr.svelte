@@ -5,9 +5,7 @@
   import SearchInput from "./SearchInput.svelte";
   import type { Target } from "./types";
   import {
-    defaultNodeFor,
     FUNCTIONS,
-    isExprHole,
     KIND_GROUPS,
     kindOf,
     switchKind,
@@ -19,7 +17,6 @@
   let {
     node = $bindable(),
     errors,
-    literalEditors,
     searchIndex,
     kindIndex,
     attrIndex,
@@ -27,7 +24,6 @@
   }: {
     node: Expr;
     errors: Map<string, string>;
-    literalEditors: Set<number>;
     searchIndex: SnapshotKey<Target> | null;
     kindIndex: SnapshotKey<Target> | null;
     attrIndex: SnapshotKey<Target> | null;
@@ -36,9 +32,6 @@
 
   let wrap = $state<HTMLElement>();
 
-  // An empty target is an unfilled expression slot until the user picks
-  // "Target pattern" — the mark lives in `literalEditors`, not in the Expr.
-  const hole = $derived(isExprHole(node, literalEditors));
   const kind = $derived(kindOf(node));
   const textError = $derived(errors.get(`${node.id}:text`));
 
@@ -97,21 +90,10 @@
     });
   }
 
-  // The hole selector always replaces the node; the node itself carries
-  // nothing, so there is no switchKind carry-over.
-  function chooseKind(e: Event) {
-    const value = (e.currentTarget as HTMLSelectElement).value;
-    const next = defaultNodeFor(value);
-    if (next.kind === "target") literalEditors.add(next.id);
-    node = next;
-    focusFirst();
-  }
-
   function changeKind(e: Event) {
     const value = (e.currentTarget as HTMLSelectElement).value;
     if (value === kind) return;
     const next = switchKind(node, value);
-    if (next.kind === "target") literalEditors.add(next.id);
     // call→call and binary→binary keep the node id: refocus the selector.
     const sameId = next.id === node.id;
     node = next;
@@ -150,26 +132,7 @@
   </select>
 {/snippet}
 
-{#if hole}
-  <div
-    class="query-atom-row query-hole-row"
-    data-node-id={node.id}
-    data-kind="target"
-    bind:this={wrap}
-  >
-    <select
-      class="query-hole-select"
-      class:query-invalid={!!textError}
-      aria-label="Choose an expression for {context}"
-      value=""
-      onchange={chooseKind}
-    >
-      <option value="" disabled>Choose expression…</option>
-      {@render kindOptions()}
-    </select>
-    {#if textError}<p class="query-field-err">Choose an expression</p>{/if}
-  </div>
-{:else if node.kind === "target"}
+{#if node.kind === "target"}
   {@const target = node as Extract<Expr, { kind: "target" }>}
   <div
     class="query-atom-row"
@@ -187,12 +150,7 @@
         invalid={!!textError}
         index={searchIndex}
         value={target.text}
-        oninput={(v) => {
-          target.text = v;
-          // Editing to empty (Ctrl-k, select-all+Delete) must not collapse
-          // the node into a hole and unmount this very input.
-          if (v === "") literalEditors.add(node.id);
-        }}
+        oninput={(v) => (target.text = v)}
       />
       {#if textError}<p class="query-field-err">{textError}</p>{/if}
     </div>
@@ -234,7 +192,6 @@
                 (value: Expr) => (call.args[i] = value)
               }
               {errors}
-              {literalEditors}
               {searchIndex}
               {attrIndex}
               {kindIndex}
@@ -300,7 +257,6 @@
           <QueryExpr
             bind:node={node.left}
             {errors}
-            {literalEditors}
             {searchIndex}
             {attrIndex}
             {kindIndex}
@@ -312,7 +268,6 @@
           <QueryExpr
             bind:node={node.right}
             {errors}
-            {literalEditors}
             {searchIndex}
             {attrIndex}
             {kindIndex}

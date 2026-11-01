@@ -1490,15 +1490,6 @@ button.chip:hover {
   padding: 0;
 }
 
-.query-hole-row {
-  display: block;
-}
-
-.query-hole-row .query-hole-select {
-  width: min(240px, 100%);
-  min-width: 0;
-}
-
 .query-kind-select {
   width: calc(21ch + 44px);
   min-width: 0;

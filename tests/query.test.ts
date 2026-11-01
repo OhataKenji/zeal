@@ -9,9 +9,6 @@ import {
   defaultNodeFor,
   emptyQueryState,
   EXAMPLES,
-  FUNCTIONS,
-  isExprHole,
-  keyFor,
   KIND_GROUPS,
   kindOf,
   makeCall,
@@ -56,139 +53,28 @@ function targetNode(v: Expr | string | null): Extract<Expr, { kind: "target" }> 
   return v;
 }
 
-test("the catalog holds the 16 supported functions with their schemas", () => {
-  assert.deepEqual(FUNCTIONS, {
-    deps: {
-      signature: "deps(expr[, depth])",
-      args: [
-        { name: "expr", type: "expr" },
-        { name: "depth", type: "int", optional: true, min: 0 },
-      ],
-      wrapArg: 0,
-      help: "Returns the transitive dependencies of expr, including expr itself.",
-    },
-    rdeps: {
-      signature: "rdeps(universe, expr[, depth])",
-      args: [
-        { name: "universe", type: "expr", default: "//..." },
-        { name: "expr", type: "expr" },
-        { name: "depth", type: "int", optional: true, min: 0 },
-      ],
-      wrapArg: 1,
-      help: "Finds reverse dependencies of expr within universe and its transitive dependencies.",
-    },
-    somepath: {
-      signature: "somepath(from, to)",
-      args: [
-        { name: "from", type: "expr" },
-        { name: "to", type: "expr" },
-      ],
-      wrapArg: 0,
-      help: "Finds one dependency path between from and to.",
-    },
-    allpaths: {
-      signature: "allpaths(from, to)",
-      args: [
-        { name: "from", type: "expr" },
-        { name: "to", type: "expr" },
-      ],
-      wrapArg: 0,
-      help: "Returns all targets on dependency paths between from and to.",
-    },
-    kind: {
-      signature: "kind(pattern, expr)",
-      args: [
-        { name: "pattern", type: "word", default: ".*_test rule" },
-        { name: "expr", type: "expr" },
-      ],
-      wrapArg: 1,
-      help: "Filters targets by a regular expression on target kind.",
-    },
-    filter: {
-      signature: "filter(pattern, expr)",
-      args: [
-        { name: "pattern", type: "word", default: "//app/" },
-        { name: "expr", type: "expr" },
-      ],
-      wrapArg: 1,
-      help: "Filters targets by a regular expression on their labels.",
-    },
-    attr: {
-      signature: "attr(name, pattern, expr)",
-      args: [
-        { name: "name", type: "word", default: "size" },
-        { name: "pattern", type: "word", default: "^small$" },
-        { name: "expr", type: "expr" },
-      ],
-      wrapArg: 2,
-      help: "Filters attribute values by a regular expression. List attributes such as tags are matched as strings in [value, ...] form.",
-    },
-    labels: {
-      signature: "labels(attr_name, expr)",
-      args: [
-        { name: "attr_name", type: "word", default: "srcs" },
-        { name: "expr", type: "expr" },
-      ],
-      wrapArg: 1,
-      help: "Returns targets referenced by a label-valued attribute such as srcs, deps, or data.",
-    },
-    tests: {
-      signature: "tests(expr)",
-      args: [{ name: "expr", type: "expr" }],
-      wrapArg: 0,
-      help: "Selects test rules and expands test_suite targets into individual tests, applying the suite's tags and size filters.",
-    },
-    buildfiles: {
-      signature: "buildfiles(expr)",
-      args: [{ name: "expr", type: "expr" }],
-      wrapArg: 0,
-      help: "Returns BUILD files defining the targets' packages and their loaded .bzl files.",
-    },
-    loadfiles: {
-      signature: "loadfiles(expr)",
-      args: [{ name: "expr", type: "expr" }],
-      wrapArg: 0,
-      help: "Returns .bzl files loaded by the packages of expr.",
-    },
-    executables: {
-      signature: "executables(expr)",
-      args: [{ name: "expr", type: "expr" }],
-      wrapArg: 0,
-      help: "Returns executable, non-test rule targets in expr.",
-    },
-    siblings: {
-      signature: "siblings(expr)",
-      args: [{ name: "expr", type: "expr" }],
-      wrapArg: 0,
-      help: "Returns targets in the same packages as expr.",
-    },
-    same_pkg_direct_rdeps: {
-      signature: "same_pkg_direct_rdeps(expr)",
-      args: [{ name: "expr", type: "expr" }],
-      wrapArg: 0,
-      help: "Returns targets in the same packages that directly depend on expr.",
-    },
-    some: {
-      signature: "some(expr[, count])",
-      args: [
-        { name: "expr", type: "expr" },
-        { name: "count", type: "int", optional: true, min: 1 },
-      ],
-      wrapArg: 0,
-      help: "Returns up to count arbitrarily chosen targets from expr.",
-    },
-    visible: {
-      signature: "visible(predicate, input)",
-      args: [
-        { name: "predicate", type: "expr" },
-        { name: "input", type: "expr" },
-      ],
-      wrapArg: 1,
-      help: "Returns targets in input that are visible to every target in predicate.",
-    },
+for (const [fn, expected] of Object.entries({
+  deps: "deps(//a:b)",
+  rdeps: "rdeps(//..., //a:b)",
+  somepath: 'somepath(//a:b, "")',
+  allpaths: 'allpaths(//a:b, "")',
+  kind: 'kind(".*_test rule", //a:b)',
+  filter: 'filter("//app/", //a:b)',
+  attr: 'attr(size, "^small$", //a:b)',
+  labels: "labels(srcs, //a:b)",
+  tests: "tests(//a:b)",
+  buildfiles: "buildfiles(//a:b)",
+  loadfiles: "loadfiles(//a:b)",
+  executables: "executables(//a:b)",
+  siblings: "siblings(//a:b)",
+  same_pkg_direct_rdeps: "same_pkg_direct_rdeps(//a:b)",
+  some: "some(//a:b)",
+  visible: 'visible("", //a:b)',
+})) {
+  test(`${fn} serializes its default arguments in signature order`, () => {
+    assert.equal(text(makeCall(fn, target("//a:b"))), expected);
   });
-  assert.equal(Object.keys(FUNCTIONS).length, 16);
-});
+}
 
 test("kind groups list target, every function, then the set operations", () => {
   const fnNames = [
@@ -516,7 +402,7 @@ test("commandLine quotes the expr, mirrors the executed argv and appends flags",
   );
 });
 
-test("queryArgv and keyFor carry flags and the chosen view", () => {
+test("queryArgv carries flags and the chosen view", () => {
   // The Raw view asks the core for --output=label; Graph for --output=graph.
   assert.deepEqual(queryArgv("deps(//a)", "raw", { noImplicit: true, noTool: false }), {
     expr: "deps(//a)",
@@ -530,17 +416,9 @@ test("queryArgv and keyFor carry flags and the chosen view", () => {
     noImplicitDeps: true,
     noToolDeps: true,
   });
-  assert.equal(keyFor("deps(//a)", "raw", { noImplicit: true, noTool: false }), "10|raw|deps(//a)");
-  assert.equal(keyFor("deps(//a)", "raw", { noImplicit: true, noTool: true }), "11|raw|deps(//a)");
 });
 
-test("isExprHole and codeDiverged mirror the mock's editor state checks", () => {
-  const hole = target("");
-  assert.equal(isExprHole(hole, new Set()), true);
-  assert.equal(isExprHole(hole, new Set([hole.id])), false);
-  assert.equal(isExprHole(target("//a"), new Set()), false);
-  assert.equal(isExprHole(parseOk("deps(//a)"), new Set()), false);
-
+test("codeDiverged mirrors the mock's editor state check", () => {
   const deps = parseOk("deps(//a)");
   assert.equal(codeDiverged(deps, "deps(//a)"), false);
   assert.equal(codeDiverged(deps, "  deps(//a)\n"), false);
@@ -603,11 +481,7 @@ test("run invokes run_query and stores the reply under the chosen view", async (
   await pending;
   assert.equal(h.state.running, false);
   assert.equal(h.state.error, null);
-  assert.deepEqual(h.state.results.raw, {
-    ...OUTPUT,
-    key: keyFor("deps(//a)", "raw", FLAGS),
-  });
-  assert.equal(h.state.results.graph, undefined);
+  assert.deepEqual(h.state.result, OUTPUT);
 });
 
 test("a non-zero exitCode is stored as a result, not an error", async () => {
@@ -622,8 +496,8 @@ test("a non-zero exitCode is stored as a result, not an error", async () => {
   await pending;
   assert.equal(h.state.running, false);
   assert.equal(h.state.error, null);
-  assert.equal(h.state.results.raw?.exitCode, 7);
-  assert.equal(h.state.results.raw?.stderrTail, "ERROR: no such target");
+  assert.equal(h.state.result?.exitCode, 7);
+  assert.equal(h.state.result?.stderrTail, "ERROR: no such target");
 });
 
 test("invoke failures land in error and leave results empty", async () => {
@@ -633,13 +507,13 @@ test("invoke failures land in error and leave results empty", async () => {
   await pending;
   assert.equal(h.state.running, false);
   assert.match(h.state.error ?? "", /busy/);
-  assert.deepEqual(h.state.results, {});
+  assert.equal(h.state.result, null);
   // Retrying clears the error once the reply lands.
   const retry = h.runner.run("deps(//a)", "raw", FLAGS);
   assert.equal(h.state.error, null);
   h.calls[1].resolve(OUTPUT);
   await retry;
-  assert.equal(h.state.results.raw?.exitCode, 0);
+  assert.equal(h.state.result?.exitCode, 0);
 });
 
 test("a second run while one is in flight is ignored", async () => {
@@ -650,28 +524,85 @@ test("a second run while one is in flight is ignored", async () => {
   assert.equal(h.calls.length, 1);
   h.calls[0].resolve(OUTPUT);
   await first;
-  assert.equal(h.state.results.raw?.key, keyFor("deps(//a)", "raw", FLAGS));
-  assert.equal(h.state.results.graph, undefined);
+  assert.deepEqual(h.state.result, OUTPUT);
 });
 
-test("each view stores its own result under its own key", async () => {
+test("changing output clears the only result and does not run a query", async () => {
   const h = harness();
-  const rawRun = h.runner.run("deps(//a)", "raw", FLAGS);
+  const raw = h.runner.run("deps(//a)", "raw", FLAGS);
   h.calls[0].resolve(OUTPUT);
-  await rawRun;
-  const graphRun = h.runner.run("deps(//a)", "graph", FLAGS);
-  h.calls[1].resolve({ ...OUTPUT, stdout: "digraph {}" });
-  await graphRun;
-  assert.equal(h.state.results.raw?.stdout, "//a:b\n");
-  assert.equal(h.state.results.graph?.stdout, "digraph {}");
-  // Staleness: a stored key matches only the same expr, view and flags.
-  assert.equal(h.state.results.raw?.key, keyFor("deps(//a)", "raw", FLAGS));
-  assert.notEqual(
-    h.state.results.raw?.key,
-    keyFor("deps(//a)", "raw", { noImplicit: false, noTool: false }),
-  );
-  assert.notEqual(h.state.results.raw?.key, keyFor("deps(//a)", "graph", FLAGS));
-  assert.notEqual(h.state.results.raw?.key, keyFor("deps(//b)", "raw", FLAGS));
+  await raw;
+  assert.deepEqual(h.state.result, OUTPUT);
+  h.runner.clear();
+  assert.equal(h.state.result, null);
+  assert.equal(h.calls.length, 1);
+  const graph = h.runner.run("deps(//a)", "graph", FLAGS);
+  const graphOutput = { ...OUTPUT, stdout: "digraph {}" };
+  h.calls[1].resolve(graphOutput);
+  await graph;
+  assert.deepEqual(h.state.result, graphOutput);
+  h.runner.clear();
+  assert.equal(h.state.result, null);
+  assert.equal(h.calls.length, 2);
+});
+
+test("editing during a run discards its reply without releasing the busy slot", async () => {
+  const h = harness();
+  const pending = h.runner.run("deps(//a)", "raw", FLAGS);
+  h.runner.clear();
+  h.runner.clear();
+  assert.equal(h.state.running, true);
+  await h.runner.run("deps(//b)", "graph", FLAGS);
+  assert.equal(h.calls.length, 1);
+  h.calls[0].resolve(OUTPUT);
+  await pending;
+  assert.equal(h.state.running, false);
+  assert.equal(h.state.result, null);
+  assert.equal(h.state.error, null);
+  const next = h.runner.run("deps(//b)", "graph", FLAGS);
+  h.calls[1].resolve(OUTPUT);
+  await next;
+  assert.deepEqual(h.state.result, OUTPUT);
+});
+
+test("editing during a run discards its late error", async () => {
+  const h = harness();
+  const pending = h.runner.run("deps(//a)", "raw", FLAGS);
+  h.runner.clear();
+  h.calls[0].reject(new Error("old query failed"));
+  await pending;
+  assert.equal(h.state.running, false);
+  assert.equal(h.state.result, null);
+  assert.equal(h.state.error, null);
+});
+
+test("a new run drops the old result even when the invocation fails", async () => {
+  const h = harness();
+  const first = h.runner.run("deps(//a)", "raw", FLAGS);
+  h.calls[0].resolve(OUTPUT);
+  await first;
+  const next = h.runner.run("deps(//a)", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  h.calls[1].reject(new Error("bazel is busy"));
+  await next;
+  assert.equal(h.state.result, null);
+  assert.match(h.state.error ?? "", /busy/);
+  h.runner.clear();
+  assert.equal(h.state.error, null);
+  assert.equal(h.calls.length, 2);
+});
+
+test("dispose ignores a late failure and all further changes", async () => {
+  const h = harness();
+  const pending = h.runner.run("deps(//a)", "raw", FLAGS);
+  h.runner.dispose();
+  const disposedState = h.state;
+  h.runner.clear();
+  h.calls[0].reject(new Error("late failure"));
+  await pending;
+  await h.runner.run("deps(//b)", "graph", FLAGS);
+  assert.equal(h.state, disposedState);
+  assert.equal(h.calls.length, 1);
 });
 
 test("dispose drops a late reply and ignores further calls", async () => {
@@ -682,7 +613,7 @@ test("dispose drops a late reply and ignores further calls", async () => {
   // is simply discarded.
   h.calls[0].resolve(OUTPUT);
   await pending;
-  assert.deepEqual(h.state.results, {});
+  assert.equal(h.state.result, null);
   const after = h.runner.run("deps(//a)", "raw", FLAGS);
   await after;
   assert.equal(h.calls.length, 1);

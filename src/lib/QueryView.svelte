@@ -59,7 +59,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { Check, Copy } from "phosphor-svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
   import { createIndex, labelTarget, querySearchTargets } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
@@ -72,7 +72,6 @@
     defaultNodeFor,
     emptyQueryState,
     EXAMPLES,
-    keyFor,
     parse,
     serialize,
     validate,
@@ -111,9 +110,6 @@
         )
       : null,
   );
-  // Nodes that are empty targets render as holes unless their id was marked a
-  // literal input when the kind selector picked "Target pattern".
-  const literalEditors = new Set<number>();
   let root = $state<Expr>(
     EXAMPLES[0]?.build() ?? defaultNodeFor("target"),
   );
@@ -167,6 +163,13 @@
     mode === "code" && (diverged || codeError !== null),
   );
 
+  $effect.pre(() => {
+    void exprText;
+    void resultView;
+    void flags;
+    untrack(() => controller?.clear());
+  });
+
   // Runs serialize with build/test and ingest in the core; the reason text
   // doubles as the disabled-Run explanation.
   const busyReason = $derived.by((): string | null => {
@@ -191,16 +194,8 @@
           : null)),
   );
 
-  const currentKey = $derived(
-    exprText.trim() === "" ? null : keyFor(exprText, resultView, flags),
-  );
-  // Editing the query clears the result rather than marking it stale: only a
-  // result fetched under the current inputs is shown.
-  const stored = $derived(
-    currentKey !== null && qstate.results[resultView]?.key === currentKey
-      ? qstate.results[resultView]
-      : undefined,
-  );
+  // Editing the query clears the result rather than marking it stale.
+  const stored = $derived(qstate.result);
   // Only one run is ever in flight; which view started it does not matter —
   // either pane may as well show the spinner.
   const runningThisView = $derived(qstate.running);
@@ -309,17 +304,6 @@
     root = parsed.expr;
     codeError = null;
     mode = "builder";
-  }
-
-  // A view whose result is missing or fetched under another key runs on
-  // entry, under the same gates as the Run button. A gated switch does not
-  // retry: pressing Run once the slot frees is explicit and simpler.
-  function setResultView(view: "raw" | "graph") {
-    if (view === resultView) return;
-    resultView = view;
-    const s = qstate.results[view];
-    const key = exprText.trim() === "" ? null : keyFor(exprText, view, flags);
-    if (canRun && key !== null && s?.key !== key) run();
   }
 
   function run() {
@@ -439,7 +423,6 @@
               <QueryExpr
                 bind:node={root}
                 {errors}
-                {literalEditors}
                 {searchIndex}
                 {kindIndex}
                 {attrIndex}
@@ -522,13 +505,13 @@
               type="button"
               role="tab"
               aria-selected={resultView === "raw"}
-              onclick={() => setResultView("raw")}>Raw</button
+              onclick={() => (resultView = "raw")}>Raw</button
             >
             <button
               type="button"
               role="tab"
               aria-selected={resultView === "graph"}
-              onclick={() => setResultView("graph")}>Graph</button
+              onclick={() => (resultView = "graph")}>Graph</button
             >
           </div>
           <span class="query-results-count">{resultCount}</span>

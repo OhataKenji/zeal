@@ -7,7 +7,7 @@ _Status: Draft_
 ## Goal
 
 Bazel query の概念をなんとなく知っているが、毎回構文を手打ちするのが面倒な利用者が、query を組み立てられるようにする。
-エディタは [mock](../mock/query-editor.html) の形に従う。
+ブラウザ preview で実装を確認する。HTML mock は初期検討の記録として残す。
 grammar をそのまま UI に写し、関数名・引数名・演算子を独自の呼称で隠さない。
 PRD のシナリオ1・3を支える機能で、query の見方は [m1](./m1-targets.md) の snapshot と揃える。
 
@@ -32,7 +32,6 @@ PRD のシナリオ1・3を支える機能で、query の見方は [m1](./m1-tar
 用語を以下に定める。
 
 - **式ノード**：式の木の1要素。種別は target pattern、関数呼び出し(call)、二項演算(binary)の3種
-- **expression hole**：種別が決まっていない空の `expr` 位置
 - **kind selector**：各式ノードの先頭にある、式の種別を切り替える select。Target pattern・全関数・`intersect`/`union`/`except` を列挙する
 - **Builder / Code**：編集モード。Builder は GUI で組み立て、Code は文字列を直接編集する
 - **snapshot**・**run**：[overview](./overview.md#background) に従う。本機能の ad-hoc query は snapshot 取り込みとは別の `bazel query` 呼び出しである
@@ -46,10 +45,10 @@ command 生成に関わる flag は二つ。
 Builder は操作の列ではなく、式の木をそのまま編集するエディタである。
 内部表現は grammar に沿った再帰的な AST である。
 組み立ては外側から進める。
-`intersect` を選ぶと左右に hole が現れ、それぞれで `deps` を選び、その引数に target を入れる。
+intersect を選ぶと左右に空の target 入力が現れ、それぞれの kind selector で deps を選び、その引数に target を入れる。
 
 各式ノードの先頭に kind selector を一つだけ置く。
-空の hole でも完成した式でも、入口は常にこの select である。
+空の式も target 入力欄と kind selector を表示する。
 削除や置換のボタンは置かない。
 undo/redo も持たない。間違えた式は選び直すか Code で直す。
 
@@ -70,7 +69,7 @@ flowchart LR
 
 ### 式ノードのデータモデル
 
-内部表現は mock と同じ3種のノードである。
+内部表現は target・call・binary の3種のノードである。
 `set`・`let`・`$name` は対象外なので、変数の scope 追跡や word 列の編集機構は持たない。
 
 - **target**：`text` を持つ target pattern。serialize 時に word 規則で quote する
@@ -78,7 +77,7 @@ flowchart LR
 - **binary**：`op`(`intersect`/`union`/`except`)と `left`・`right` の式ノードを持つ
 
 関数は catalog で schema 化する。
-各関数は signature、引数の並び(名前・型・省略可否・既定値・`int` の最小値)、主要 `expr` 引数を指す `wrapArg`、説明文を持つ。
+各関数は signature、引数の並び(名前・型・省略可否・既定値・`int` の最小値)、主要 `expr` 引数を指す `wrapArg` を持つ。
 `deps`、`rdeps`、`somepath`、`allpaths`、`kind`、`filter`、`attr`、`labels`、`tests`、`buildfiles`、`loadfiles`、`executables`、`siblings`、`same_pkg_direct_rdeps`、`some`、`visible` を収録する。
 表示・検証・serialize はすべてこの catalog を唯一の情報源とする。
 この一覧は説明用であり、正本は実装の catalog である。
@@ -90,7 +89,7 @@ catalog は対象 version(Bazel 8.7 以上)の query ドキュメントから手
 ### 組み立て順序と kind selector
 
 編集は外側の式から内側へ進める。
-expression hole には「Choose expression…」として全種別を並べ、完成した式にも同じ一覧を持つ kind selector を置く。
+空の式は target 入力欄と kind selector を表示し、完成した式と同じ一覧から種別を選べる。入力を空にしても入力欄は消えない。
 
 種別の切り替えは二段階に分ける。
 関数→別の関数では、旧関数の `wrapArg` が指す `expr` 引数を新関数の `wrapArg` の位置へ移し、残りの引数は同名・同型のものだけ移す。
@@ -123,7 +122,7 @@ serialize は AST から query 文字列を作る純粋関数とする。
 ### 検証
 
 検証は欄ごとに行う。
-全規則は mock の `validate` を正とし、主要なものを以下に示す。
+検証規則は実装の validate を正とし、主要なものを以下に示す。
 
 - 必須の `expr` 欄が空、または省略不可の `int` が未入力：「Required」
 - `int` 引数が整数でない、schema の `min`(`depth` は 0、`count` は 1)未満、または 2^31-1 を超える：エラー
@@ -132,7 +131,7 @@ serialize は AST から query 文字列を作る純粋関数とする。
 欄エラーがあっても serialize は試み、失敗する場合はその旨を command の欄に出す。
 生成式そのものの表示は持たず、command 表示が式を内包する。
 エラーがある間は Run と Copy command を無効にする。
-前回実行済みの結果とその Copy output は触らない。
+式・flag・出力形式を変更すると結果と実行エラーを消す。
 Code モードには欄エラーがないため、式が空の間だけ Run と Copy command を無効にする。
 
 ### Builder ⇄ Code の往復
@@ -159,18 +158,18 @@ serialize は `binary` に常に括弧を付け、記号表記を単語形に正
 実行は overview の直列化規則に従い、query・run・取り込みのいずれかが実行中なら新しい query を拒否し、理由つきで Run を無効にする。
 timeout(目安5分)は snapshot 取り込みと同じ規則を適用する。v1 には Stop を置かない(worse is better)。実行中の query は timeout で終わるかアプリ終了時にグループごと kill されるだけである。
 busy 中の呼び出しはアプリ側で拒否し、外部の bazel が lock を持っている場合は `--noblock_for_lock` で即座に失敗する。
-見方の切り替えやプリセット選択による自動実行も、同じ検証・直列化・`-` 拒否の経路を通る。
+出力形式の切り替えやプリセット選択では実行しない。Run ボタンまたは Cmd/Ctrl+Enter で明示的に実行する。
 `--keep_going` は付けない。部分結果を知る手段がないため、早く失敗して式を直させる方が扱いやすい。
 
 query が非0終了した場合は、結果欄に exit code と stderr の末尾を表示する。
-同じ見方の前回結果は新しい結果で置き換わる。失敗も結果として保持する。
-query や flag が実行時の値から変わると結果はクリアされる(stale 表示は持たない)。
+結果は一件だけ保持し、新しい実行を始めると前回結果を消す。非0終了も結果として表示する。
+式・flag・出力形式を変更すると結果と実行エラーを消す。実行中に変更した場合は、その実行の遅れた応答も表示しない。
 
 ### 結果の見方
 
 結果は Raw と Graph の二つの見方だけを提供する。
-実行は現在選択中の見方について行い、見方ごとに結果を保持する。
-もう一方の見方に切り替えたとき、同じ query・flag の結果が未取得ならその見方の query を実行する。
+実行は現在選択中の出力形式で行い、結果は一件だけ保持する。
+出力形式を切り替えたら結果を消し、次の Run を待つ。前の形式に戻しても結果は復元しない。
 
 - **Raw**：`--output=label` の1行1label テキスト。件数の多い結果の表示は保証範囲に含めない
 - **Graph**：`--output=graph` の DOT を Graphviz で描画し、SVG を `<img>` の blob URL で表示する。v1 では rule class や target の詳細は出さない
@@ -242,14 +241,15 @@ mock の fixture は実在しない label のみを使う。
 
 ## Test Plan
 
-- serialize / parse の roundtrip golden test を、mock の Examples 一式に対して行う
+- serialize / parse の roundtrip golden test を、実装の Examples 一式に対して行う
 - catalog の全関数について、signature 順の serialize と optional 引数の省略を確認する
 - `quoteWord` の境界：keyword、空白を含む word、`-`・`*` 始まり、両 quote 種を含む word
 - 検証：空の必須 `expr`、`int` の `min`、2^31-1 超過、`-`・`*` 始まりの word で欄エラーが出ること
 - kind selector の切替：`deps`→`rdeps` で `expr` が保たれ `universe` に既定値が入ること、`deps`→`somepath` で `expr` が `from` に移ること、`intersect`→`union` で左右が保たれること
 - Code の parse：括弧、左結合、`^`/`+`/`-` が AST に戻ること。`set`・`let`・`$name` を含む式が Builder に戻らないこと
 - flag の組み合わせで生成 command が変わること
-- 実行経路：検証エラー中の Run 無効、非0終了で exit code と stderr が出ること、実行中の拒否、入力変更で結果がクリアされること
+- 実行経路：検証エラー中の Run 無効、非0終了の表示、同時実行の拒否、式・flag・出力形式の変更時の結果消去、変更後・dispose 後の応答破棄、出力形式を切り替えても Run まで実行されないこと
+- 空の式にも target 入力欄があり、入力を全削除しても同じ欄で編集を続けられること
 - **smoke**：Bazel 8.7以上の小さな repo で catalog 全16関数を実行し、signature・既定値・受理可否を確かめる
 - **smoke**：`--nograph:factored`・`--graph:node_limit` の flag 組と、SVG の `<img>` 表示を実機で確かめる
 - **spike**：`aquery` の出力形式から action/artifact の表が作れるかを調べる
@@ -259,9 +259,9 @@ mock の fixture は実在しない label のみを使う。
 
 Builder で `deps(//app:server) intersect deps(//tools:cli)` を組み立てる手順は次のとおりである。
 
-1. ルートの kind selector で `intersect` を選ぶ。`left`・`right` に expression hole が現れる
-2. `left` の hole で `deps` を選び、引数 `expr` に `//app:server` を入力する
-3. `right` の hole で `deps` を選び、引数 `expr` に `//tools:cli` を入力する
+1. ルートの kind selector で `intersect` を選ぶ。`left`・`right` に空の target 入力が現れる
+2. `left` の kind selector で `deps` を選び、引数 `expr` に `//app:server` を入力する
+3. `right` の kind selector で `deps` を選び、引数 `expr` に `//tools:cli` を入力する
 
 生成される command は次の形になる。
 

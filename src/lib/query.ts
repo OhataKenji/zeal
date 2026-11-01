@@ -35,14 +35,13 @@ export interface ArgSpec {
 
 /**
  * Catalog entry for one query function: the display signature, the argument
- * schema, the `expr` slot that receives the wrapped expression when the kind
- * selector switches functions (`wrapArg`), and a help sentence.
+ * schema, and the `expr` slot that receives the wrapped expression when the kind
+ * selector switches functions (`wrapArg`).
  */
 export interface FnSpec {
   signature: string;
   args: ArgSpec[];
   wrapArg: number;
-  help: string;
 }
 
 /** Explainer the view shows next to the `rdeps` universe argument. */
@@ -61,7 +60,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "depth", type: "int", optional: true, min: 0 },
     ],
     wrapArg: 0,
-    help: "Returns the transitive dependencies of expr, including expr itself.",
   },
   rdeps: {
     signature: "rdeps(universe, expr[, depth])",
@@ -71,7 +69,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "depth", type: "int", optional: true, min: 0 },
     ],
     wrapArg: 1,
-    help: "Finds reverse dependencies of expr within universe and its transitive dependencies.",
   },
   somepath: {
     signature: "somepath(from, to)",
@@ -80,7 +77,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "to", type: "expr" },
     ],
     wrapArg: 0,
-    help: "Finds one dependency path between from and to.",
   },
   allpaths: {
     signature: "allpaths(from, to)",
@@ -89,7 +85,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "to", type: "expr" },
     ],
     wrapArg: 0,
-    help: "Returns all targets on dependency paths between from and to.",
   },
   kind: {
     signature: "kind(pattern, expr)",
@@ -98,7 +93,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "expr", type: "expr" },
     ],
     wrapArg: 1,
-    help: "Filters targets by a regular expression on target kind.",
   },
   filter: {
     signature: "filter(pattern, expr)",
@@ -107,7 +101,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "expr", type: "expr" },
     ],
     wrapArg: 1,
-    help: "Filters targets by a regular expression on their labels.",
   },
   attr: {
     signature: "attr(name, pattern, expr)",
@@ -117,7 +110,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "expr", type: "expr" },
     ],
     wrapArg: 2,
-    help: "Filters attribute values by a regular expression. List attributes such as tags are matched as strings in [value, ...] form.",
   },
   labels: {
     signature: "labels(attr_name, expr)",
@@ -126,43 +118,36 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "expr", type: "expr" },
     ],
     wrapArg: 1,
-    help: "Returns targets referenced by a label-valued attribute such as srcs, deps, or data.",
   },
   tests: {
     signature: "tests(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
-    help: "Selects test rules and expands test_suite targets into individual tests, applying the suite's tags and size filters.",
   },
   buildfiles: {
     signature: "buildfiles(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
-    help: "Returns BUILD files defining the targets' packages and their loaded .bzl files.",
   },
   loadfiles: {
     signature: "loadfiles(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
-    help: "Returns .bzl files loaded by the packages of expr.",
   },
   executables: {
     signature: "executables(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
-    help: "Returns executable, non-test rule targets in expr.",
   },
   siblings: {
     signature: "siblings(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
-    help: "Returns targets in the same packages as expr.",
   },
   same_pkg_direct_rdeps: {
     signature: "same_pkg_direct_rdeps(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
-    help: "Returns targets in the same packages that directly depend on expr.",
   },
   some: {
     signature: "some(expr[, count])",
@@ -171,7 +156,6 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "count", type: "int", optional: true, min: 1 },
     ],
     wrapArg: 0,
-    help: "Returns up to count arbitrarily chosen targets from expr.",
   },
   visible: {
     signature: "visible(predicate, input)",
@@ -180,17 +164,12 @@ export const FUNCTIONS: Record<string, FnSpec> = {
       { name: "input", type: "expr" },
     ],
     wrapArg: 1,
-    help: "Returns targets in input that are visible to every target in predicate.",
   },
 };
 
 let nextNodeId = 1;
 
-/**
- * Creates a target-pattern node. Empty text is the expression hole a fresh
- * slot starts as; the view decides whether it renders as a hole or a literal
- * input via its literalEditors set (see `isExprHole`).
- */
+/** Creates a target-pattern node; a new slot starts with empty text. */
 export function target(text = ""): Expr {
   return { id: nextNodeId++, kind: "target", text };
 }
@@ -353,16 +332,6 @@ export function queryArgv(
     noImplicitDeps: flags.noImplicit,
     noToolDeps: flags.noTool,
   };
-}
-
-/**
- * Identity of one stored result: the flag bits, the result view, and the
- * expression text — the mock's `currentKey` with the view folded in, since
- * each view keeps its own result. The view shows a stored result only while
- * its key matches `keyFor` of the current inputs.
- */
-export function keyFor(expr: string, view: "raw" | "graph", flags: CommandFlags): string {
-  return `${flags.noImplicit ? "1" : "0"}${flags.noTool ? "1" : "0"}|${view}|${expr}`;
 }
 
 interface Token {
@@ -673,14 +642,6 @@ export function switchKind(node: Expr, kind: string): Expr {
 }
 
 /**
- * Whether a node renders as an unfilled expression slot: an empty target the
- * view has not marked as a literal text input (its `literalEditors` set).
- */
-export function isExprHole(n: Expr, literalEditors: ReadonlySet<number>): boolean {
-  return n.kind === "target" && n.text === "" && !literalEditors.has(n.id);
-}
-
-/**
  * Whether a Code-mode draft differs from the Builder expression, mirroring
  * the mock's diverged check: trimmed draft vs. trimmed serialization, with an
  * unserializable tree comparing as the empty string.
@@ -800,50 +761,45 @@ export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
-/** A finished run's output bound to the `keyFor` key it ran under. */
-export interface Stored extends QueryOutput {
-  key: string;
-}
-
 /**
- * Execution state pushed to the view on every change. The view shows a stored
- * result only while its `key` matches `keyFor` of the current inputs — editing
- * the query clears the display rather than marking it stale.
- * The controller only tracks its own in-flight run — the view owns the global
- * busy picture and combines both.
+ * Execution state pushed to the view on every change. Only the latest result
+ * is retained. The controller tracks its own in-flight run; the view combines
+ * it with the global busy state.
  */
 export interface QueryState {
   running: boolean;
   error: string | null;
-  results: { raw?: Stored; graph?: Stored };
+  result: QueryOutput | null;
 }
 
 /** The state before any run: nothing in flight, no results. */
 export function emptyQueryState(): QueryState {
-  return { running: false, error: null, results: {} };
+  return { running: false, error: null, result: null };
 }
 
 /**
  * Creates a query runner scoped to one editor. `run` invokes `run_query` with
- * the `queryArgv` arguments and stores the reply under the chosen view keyed
- * by `keyFor`; a second `run` while one is in flight is ignored — the core
- * serializes bazel work, and the view decides when to call again. Errors
- * thrown by `invoke` (busy/spawn class) land in `error`; a non-zero exitCode
- * is data, not an error. Replies arriving after `dispose()` or after being
- * superseded are dropped via a generation counter; a run still in flight at
- * `dispose()` finishes on its own — there is no stop in v1 — and its result
- * is simply discarded.
+ * the `queryArgv` arguments and keeps only the latest result; a second `run`
+ * while one is in flight is ignored — the core serializes bazel work, and the
+ * view decides when to call again. Errors thrown by `invoke` (busy/spawn
+ * class) land in `error`; a non-zero exitCode is data, not an error. Starting
+ * a run clears the previous result and error. `clear` drops the stored result
+ * and error and invalidates the in-flight response — an edited query never
+ * shows a reply fetched for older inputs — without releasing the running
+ * slot. Responses arriving after `dispose()` are dropped entirely; a run
+ * still in flight finishes on its own — there is no stop in v1.
  */
 export function createQuery(
   t: Transport,
   changed: (s: QueryState) => void,
 ): {
   run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void>;
+  clear(): void;
   dispose(): void;
 } {
   let state = emptyQueryState();
-  let generation = 0;
   let disposed = false;
+  let acceptResult = false;
   function update(patch: Partial<QueryState>) {
     if (disposed) return;
     state = { ...state, ...patch };
@@ -851,24 +807,21 @@ export function createQuery(
   }
   async function run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void> {
     if (disposed || state.running) return;
-    const request = ++generation;
-    const key = keyFor(expr, view, flags);
-    update({ running: true, error: null });
+    acceptResult = true;
+    update({ running: true, error: null, result: null });
     try {
-      const output = await t.invoke<QueryOutput>(COMMANDS.runQuery, queryArgv(expr, view, flags));
-      if (disposed || request !== generation) return;
-      const stored: Stored = { ...output, key };
-      const results = { ...state.results };
-      results[view] = stored;
-      update({ running: false, results });
+      const result = await t.invoke<QueryOutput>(COMMANDS.runQuery, queryArgv(expr, view, flags));
+      update({ running: false, result: acceptResult ? result : null });
     } catch (error) {
-      if (disposed || request !== generation) return;
-      update({ running: false, error: String(error) });
+      update({ running: false, error: acceptResult ? String(error) : null });
     }
+  }
+  function clear() {
+    acceptResult = false;
+    update({ result: null, error: null });
   }
   function dispose() {
     disposed = true;
-    ++generation;
   }
-  return { run, dispose };
+  return { run, clear, dispose };
 }
