@@ -400,7 +400,7 @@
 
 <section class="query-view" bind:this={viewEl}>
   <aside class="query-rail">
-    <h2 class="query-rail-heading">Examples</h2>
+    <h2 class="query-rail-heading">Example</h2>
     <div class="query-examples">
       {#each EXAMPLES as example (example.id)}
         <button
@@ -410,13 +410,10 @@
           onclick={() => loadExample(example.id)}
         >
           <code>{example.name}</code>
-          {#if example.desc}<span class="query-ex-desc">{example.desc}</span>{/if}
+          <span class="query-ex-desc">{example.desc}</span>
         </button>
       {/each}
     </div>
-    <p class="query-conn-note">
-      Runs a <code>bazel query</code> against the open workspace
-    </p>
   </aside>
   <div class="query-main">
     <div class="query-content">

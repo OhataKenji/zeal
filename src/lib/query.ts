@@ -690,14 +690,20 @@ export function codeDiverged(root: Expr, draft: string): boolean {
   return draft.trim() !== (s.ok ? s.text.trim() : "");
 }
 
-const PRESETS: Record<string, { expr: string; desc?: string }> = {
+const PRESETS: Record<string, { expr: string; desc: string }> = {
   commonDeps: {
     expr: "(deps(//app:server) intersect deps(//tools:cli))",
     desc: "Shared dependencies",
   },
-  rdepsKind: { expr: 'kind(".*_test rule", rdeps(//..., //app/lib:parser))' },
-  deps: { expr: "deps(//app:server)" },
-  somepath: { expr: "somepath(//app:server, //app/lib:parser)" },
+  rdepsKind: {
+    expr: 'kind(".*_test rule", rdeps(//..., //app/lib:parser))',
+    desc: "Reverse deps filtered by kind",
+  },
+  deps: { expr: "deps(//app:server)", desc: "Transitive dependencies" },
+  somepath: {
+    expr: "somepath(//app:server, //app/lib:parser)",
+    desc: "One path between two targets",
+  },
   onlyServer: {
     expr: "(deps(//app:server) except deps(//tools:cli))",
     desc: "Dependencies unique to one target",
@@ -707,9 +713,18 @@ const PRESETS: Record<string, { expr: string; desc?: string }> = {
     desc: "Filter by attribute, then get srcs",
   },
   suiteTests: { expr: "tests(//app:all_tests)", desc: "Expand test suites" },
-  rdepsTests: { expr: "tests(rdeps(//..., //app/lib:parser))" },
-  allpaths: { expr: "allpaths(//app:server, //app/lib:parser)" },
-  buildfiles: { expr: "buildfiles(deps(//app:server))" },
+  rdepsTests: {
+    expr: "tests(rdeps(//..., //app/lib:parser))",
+    desc: "Tests that depend on a target",
+  },
+  allpaths: {
+    expr: "allpaths(//app:server, //app/lib:parser)",
+    desc: "Every path between two targets",
+  },
+  buildfiles: {
+    expr: "buildfiles(deps(//app:server))",
+    desc: "BUILD and .bzl files in the deps",
+  },
 };
 
 const EXAMPLE_LABELS: Record<string, string> = {
@@ -732,7 +747,7 @@ const EXAMPLE_LABELS: Record<string, string> = {
 export const EXAMPLES: ReadonlyArray<{
   id: string;
   name: string;
-  desc?: string;
+  desc: string;
   build: () => Expr;
 }> = Object.keys(PRESETS).map((id) => ({
   id,
