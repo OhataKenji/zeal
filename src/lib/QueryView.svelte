@@ -224,7 +224,6 @@
       ? `${rawLines.length} target${rawLines.length === 1 ? "" : "s"}`
       : "",
   );
-  const canCopyOutput = $derived(!!stored && stored.stdout !== "");
   // A successful graph run can still drop nodes (`--graph:node_limit`); bazel
   // only says so on stderr.
   const graphWarn = $derived.by(() => {
@@ -362,25 +361,14 @@
   }
 
   // The icon flips to a check for a moment, like GitHub code blocks.
-  let copiedCmd = $state(false);
+  let copied = $state<"command" | "output" | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  async function copyCommand() {
-    try {
-      await navigator.clipboard.writeText(command);
-      copiedCmd = true;
-      clearTimeout(copyTimer);
-      copyTimer = setTimeout(() => (copiedCmd = false), 1500);
-    } catch {
-      setFeedback(
-        "Clipboard access is unavailable — copy the displayed text manually.",
-      );
-    }
-  }
-
-  async function copyText(text: string, okMsg: string) {
+  async function copyToClipboard(text: string, which: "command" | "output") {
     try {
       await navigator.clipboard.writeText(text);
-      setFeedback(okMsg);
+      copied = which;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copied = null), 1500);
     } catch {
       setFeedback(
         "Clipboard access is unavailable — copy the displayed text manually.",
@@ -518,9 +506,11 @@
               aria-label="Copy command"
               title="Copy command"
               disabled={!valid}
-              onclick={() => void copyCommand()}
+              onclick={() => void copyToClipboard(command, "command")}
             >
-              {#if copiedCmd}<Check size={14} />{:else}<Copy size={14} />{/if}
+              {#if copied === "command"}<Check size={14} />{:else}<Copy
+                  size={14}
+                />{/if}
             </button>
           </div>
           <div class="query-flags">
@@ -536,15 +526,6 @@
               {#if runBlockReason}
                 <span class="query-busy dim">{runBlockReason}</span>
               {/if}
-              <button
-                type="button"
-                class="button"
-                disabled={!canCopyOutput}
-                onclick={() => {
-                  if (stored) void copyText(stored.stdout, "Output copied");
-                }}
-                >Copy output</button
-              >
               <button
                 type="button"
                 class="button button-primary"
@@ -577,7 +558,7 @@
           <span class="query-results-count">{resultCount}</span>
         </div>
         {#if stale}
-          <p class="query-stale">Query changed — showing previous results</p>
+          <p class="query-stale">Stale results</p>
         {/if}
         {#if qstate.error}
           <p class="query-strip is-error" role="alert">{qstate.error}</p>
@@ -612,7 +593,22 @@
               {#if rawLines.length === 0}
                 <p class="query-empty">No targets matched.</p>
               {:else}
-                <pre class="query-raw">{rawShown.join("\n")}</pre>
+                <div class="query-raw-wrap">
+                  <pre class="query-raw">{rawShown.join("\n")}</pre>
+                  <button
+                    type="button"
+                    class="query-copy"
+                    aria-label="Copy output"
+                    title="Copy output"
+                    onclick={() => {
+                      if (stored) void copyToClipboard(stored.stdout, "output");
+                    }}
+                  >
+                    {#if copied === "output"}<Check size={14} />{:else}<Copy
+                        size={14}
+                      />{/if}
+                  </button>
+                </div>
                 {#if rawMore > 0}
                   <p class="query-empty">
                     … {rawMore.toLocaleString()} more lines not shown.

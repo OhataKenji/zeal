@@ -1754,10 +1754,18 @@ button.chip:hover {
   overflow-x: auto;
 }
 
+.query-raw-wrap {
+  position: relative;
+}
+
 .query-raw {
   margin: 0;
-  font: 12.5px/1.6 var(--mono);
+  background: var(--muted);
+  border-radius: var(--radius-md);
+  padding: 12px 44px 12px 16px;
+  font: 12px/1.6 var(--mono);
   white-space: pre;
+  overflow-x: auto;
 }
 
 .query-graph {
