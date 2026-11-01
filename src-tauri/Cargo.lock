@@ -2731,7 +2731,7 @@ checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
 dependencies = [
  "base64 0.23.1",
  "indexmap 2.14.2",
- "quick-xml 0.42.0",
+ "quick-xml",
  "serde",
  "time",
 ]
@@ -3017,15 +3017,6 @@ name = "protoc-bin-vendored-win32"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "263a3f48f01e7309e857138bd47f785585b4a005e8e56c6d2824ce91195999c3"
-
-[[package]]
-name = "quick-xml"
-version = "0.38.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "quick-xml"
@@ -5606,7 +5597,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "protoc-bin-vendored",
- "quick-xml 0.38.4",
+ "quick-xml",
  "reqwest",
  "rusqlite",
  "rustix",

@@ -25,6 +25,7 @@
 //! were read — a rule truncated mid-body keeps the attributes that arrived.
 
 use quick_xml::Reader;
+use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 use std::io::BufRead;
 
@@ -58,16 +59,16 @@ pub fn parse_query<R: BufRead>(input: R) -> ParsedQuery {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if e.name().as_ref() == b"rule" => {
-                let mut rule = raw_rule(&reader, &e);
+            Ok(Event::Start(e)) if e.name().as_ref() == "rule" => {
+                let mut rule = raw_rule(&e);
                 read_body(&mut reader, &mut rule);
                 parsed.rules.push(rule);
             }
-            Ok(Event::Empty(e)) if e.name().as_ref() == b"rule" => {
-                parsed.rules.push(raw_rule(&reader, &e));
+            Ok(Event::Empty(e)) if e.name().as_ref() == "rule" => {
+                parsed.rules.push(raw_rule(&e));
             }
-            Ok(Event::Start(e) | Event::Empty(e)) if e.name().as_ref() == b"source-file" => {
-                if let Some(label) = attr_value(&reader, &e, "name") {
+            Ok(Event::Start(e) | Event::Empty(e)) if e.name().as_ref() == "source-file" => {
+                if let Some(label) = attr_value(&e, "name") {
                     parsed.source_files.push(label);
                 }
             }
@@ -80,11 +81,11 @@ pub fn parse_query<R: BufRead>(input: R) -> ParsedQuery {
 }
 
 /// `<rule ...>` was opened: read its attributes into a fresh RawRule.
-fn raw_rule(reader: &Reader<impl BufRead>, e: &BytesStart) -> RawRule {
+fn raw_rule(e: &BytesStart) -> RawRule {
     RawRule {
-        label: attr_value(reader, e, "name").unwrap_or_default(),
-        rule_class: attr_value(reader, e, "class").unwrap_or_default(),
-        location: attr_value(reader, e, "location").and_then(|l| parse_location(&l)),
+        label: attr_value(e, "name").unwrap_or_default(),
+        rule_class: attr_value(e, "class").unwrap_or_default(),
+        location: attr_value(e, "location").and_then(|l| parse_location(&l)),
         ..Default::default()
     }
 }
@@ -95,21 +96,18 @@ fn read_body(reader: &mut Reader<impl BufRead>, rule: &mut RawRule) {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"rule-output" => push_output(reader, &e, rule),
-                tag => read_children(reader, tag, attr_value(reader, &e, "name"), rule),
+                "rule-output" => push_output(&e, rule),
+                tag => read_children(reader, tag, attr_value(&e, "name"), rule),
             },
             Ok(Event::Empty(e)) => match e.name().as_ref() {
-                b"rule-output" => push_output(reader, &e, rule),
-                b"label" => {
-                    rule.label_attrs.extend(label_attribute(
-                        reader,
-                        &e,
-                        attr_value(reader, &e, "name"),
-                    ));
+                "rule-output" => push_output(&e, rule),
+                "label" => {
+                    rule.label_attrs
+                        .extend(label_attribute(&e, attr_value(&e, "name")));
                 }
                 _ => {}
             },
-            Ok(Event::End(e)) if e.name().as_ref() == b"rule" => break,
+            Ok(Event::End(e)) if e.name().as_ref() == "rule" => break,
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
@@ -122,16 +120,15 @@ fn read_body(reader: &mut Reader<impl BufRead>, rule: &mut RawRule) {
 /// do not care about (rule-input, scalar values) are consumed and ignored.
 fn read_children(
     reader: &mut Reader<impl BufRead>,
-    tag: &[u8],
+    tag: &str,
     name: Option<String>,
     rule: &mut RawRule,
 ) {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == b"label" => {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == "label" => {
                 rule.label_attrs.extend(label_attribute(
-                    reader,
                     &e,
                     name.as_ref().filter(|name| !name.is_empty()).cloned(),
                 ));
@@ -144,26 +141,21 @@ fn read_children(
     }
 }
 
-fn label_attribute(
-    reader: &Reader<impl BufRead>,
-    element: &BytesStart,
-    name: Option<String>,
-) -> Option<(String, String)> {
-    Some((name?, attr_value(reader, element, "value")?))
+fn label_attribute(element: &BytesStart, name: Option<String>) -> Option<(String, String)> {
+    Some((name?, attr_value(element, "value")?))
 }
 
-fn push_output(reader: &Reader<impl BufRead>, e: &BytesStart, rule: &mut RawRule) {
-    if let Some(v) = attr_value(reader, e, "name") {
+fn push_output(e: &BytesStart, rule: &mut RawRule) {
+    if let Some(v) = attr_value(e, "name") {
         rule.outputs.push(v);
     }
 }
 
-fn attr_value(reader: &Reader<impl BufRead>, e: &BytesStart, key: &'static str) -> Option<String> {
+fn attr_value(e: &BytesStart, key: &'static str) -> Option<String> {
     e.try_get_attribute(key)
         .ok()
         .flatten()
-        .and_then(|a| a.decode_and_unescape_value(reader.decoder()).ok())
-        .map(|c| c.into_owned())
+        .and_then(|a| unescape(&a.value).ok().map(|value| value.into_owned()))
 }
 
 /// `location` is `path:line:column`; keep file and line.
@@ -206,6 +198,15 @@ mod tests {
             .into_iter()
             .collect()
         );
+    }
+
+    #[test]
+    fn preserves_attribute_whitespace_and_unescapes_entities() {
+        let xml = "<query><rule name=\"//app:é&amp;&#x41;\" class=\"a\tb\nc\"/></query>";
+        let parsed = parse_query(Cursor::new(xml));
+
+        assert_eq!(parsed.rules[0].label, "//app:é&A");
+        assert_eq!(parsed.rules[0].rule_class, "a\tb\nc");
     }
 
     #[test]
