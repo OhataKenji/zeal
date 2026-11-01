@@ -125,8 +125,6 @@
   let noImplicit = $state(DEFAULT_FLAGS.noImplicit);
   let noTool = $state(DEFAULT_FLAGS.noTool);
   let resultView = $state<"raw" | "graph">("raw");
-  // The result view the in-flight run belongs to; cleared when it settles.
-  let runningView = $state<"raw" | "graph" | null>(null);
   let feedback = $state("");
   let fbTimer: ReturnType<typeof setTimeout> | undefined;
   let qstate = $state<QueryState>(emptyQueryState());
@@ -139,9 +137,6 @@
     const next = createQuery({ invoke }, (s) => (qstate = s));
     controller = next;
     return next.dispose;
-  });
-  $effect(() => {
-    if (!qstate.running) runningView = null;
   });
   onDestroy(() => {
     clearTimeout(fbTimer);
@@ -208,7 +203,9 @@
       ? qstate.results[resultView]
       : undefined,
   );
-  const runningThisView = $derived(qstate.running && runningView === resultView);
+  // Only one run is ever in flight; which view started it does not matter —
+  // either pane may as well show the spinner.
+  const runningThisView = $derived(qstate.running);
   const failedOutput = $derived.by(() => {
     if (!stored) return null;
     if (stored.timedOut)
@@ -329,7 +326,6 @@
 
   function run() {
     if (!canRun) return;
-    runningView = resultView;
     void controller?.run(exprText, resultView, flags);
   }
 
