@@ -7,7 +7,7 @@ _Status: Draft_
 ## Goal
 
 Bazel query の概念をなんとなく知っているが、毎回構文を手打ちするのが面倒な利用者が、query を組み立てられるようにする。
-ブラウザ preview で実装を確認する。HTML mock は初期検討の記録として残す。
+ブラウザ preview で実装を確認する。
 grammar をそのまま UI に写し、関数名・引数名・演算子を独自の呼称で隠さない。
 PRD のシナリオ1・3を支える機能で、query の見方は [m1](./m1-targets.md) の snapshot と揃える。
 
@@ -237,8 +237,6 @@ attribute 名も同じ fuzzy find で、候補は snapshot の edge が持つ属
 
 query と結果には workspace の構造情報が含まれるが、local のまま扱い、外部へ送信しない。
 共通方針は [overview](./overview.md#privacy-concerns) に従う。
-mock の fixture は実在しない label のみを使う。
-
 ## Test Plan
 
 - serialize / parse の roundtrip golden test を、実装の Examples 一式に対して行う
