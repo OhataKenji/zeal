@@ -153,14 +153,22 @@
         target.pkg,
       )}
     </dd>
-    <dt>rdeps<small>depth=1</small></dt>
+    <dt>rdeps<small>depth=1 · current Scope</small></dt>
     <dd>
-      {@render labels(
-        rel.usedBy.map((used) => used.label),
-        "rdeps",
-        target.pkg,
-        reverseAttrs,
-      )}
+      {#if rel.usedBy.length === 0}
+        <span class="dim">No reverse dependencies found in the current Scope.</span>
+      {:else}
+        {@render labels(
+          rel.usedBy.map((used) => used.label),
+          "rdeps",
+          target.pkg,
+          reverseAttrs,
+        )}
+      {/if}
+      <p class="dim">
+        Expand Scope in the workspace target patterns to look for dependents
+        outside the current Scope.
+      </p>
     </dd>
   </dl>
 {:else}<p class="dim">{label} is not in the snapshot</p>{/if}
