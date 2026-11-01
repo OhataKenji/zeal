@@ -18,6 +18,7 @@
     keyAction,
     LIST_ID,
     moveIndex,
+    navKey,
     optionId,
     search,
   } from "./lib/search";
@@ -104,9 +105,13 @@
 
   function composerKey(event: KeyboardEvent) {
     if (event.isComposing) return;
+    const key = navKey(event);
+    // A mapped chord is navigation intent; swallowing it also blocks macOS's
+    // kill-to-end-of-line even when the dropdown has nothing to select.
+    if (key !== event.key) event.preventDefault();
     const action = keyAction(
       { open: dropdownOpen, index: activeIndex },
-      event.key,
+      key,
       matches,
     );
     switch (action.kind) {
