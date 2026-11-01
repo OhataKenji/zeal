@@ -54,6 +54,7 @@
       disabled={busy}
     />
   </label>
+  <p class="warn">Do not open an untrusted repository.</p>
   <label>
     target patterns
     <textarea
