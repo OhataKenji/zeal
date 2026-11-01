@@ -9,10 +9,9 @@ export interface Match {
 }
 
 /**
- * Builds the index over `targets`. Every `app-state` event carries a new snapshot
- * object, so the component derives a fresh index on each state change — a
- * handful per run — rather than once per fetch; typing then only searches the
- * index it holds.
+ * Builds the index over `targets`. The session swaps the snapshot in only when
+ * its meta changes, so the component derives a fresh index once per fetch;
+ * typing then only searches the index it holds.
  */
 export function createIndex(targets: Target[]): SnapshotKey<Target> {
   return fuzzysort.snapshot(targets, { key: "label" });

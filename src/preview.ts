@@ -148,12 +148,13 @@ const state: AppState = {
   workspace: WORKSPACE,
   bazel: "8.7.0",
   ingest: "idle",
-  snapshot: SNAPSHOT,
+  snapshotMeta: SNAPSHOT.meta,
   lastError: null,
   running: null,
   stopping: false,
   runNote: null,
 };
+let currentSnapshot: Snapshot | null = SNAPSHOT;
 const consoleOutput = new Map<string, string>();
 const consoleInput = new Map<string, string>();
 function span(name: string, ts: number, dur: number) {
@@ -344,12 +345,14 @@ export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
   if (new URLSearchParams(location.search).get("preview") === "empty") {
     state.workspace = null;
-    state.snapshot = null;
+    state.snapshotMeta = null;
+    currentSnapshot = null;
   }
   // Every command the app invokes needs a handler; the Record type makes a
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
+    get_snapshot: () => structuredClone(currentSnapshot),
     list_runs: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
     resize_console: () => {},
@@ -366,7 +369,8 @@ export function installPreview() {
       previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
     open_workspace: () => {
       state.workspace = WORKSPACE;
-      state.snapshot = SNAPSHOT;
+      state.snapshotMeta = SNAPSHOT.meta;
+      currentSnapshot = SNAPSHOT;
       return structuredClone(state);
     },
     refresh: () => void emit("app-state", structuredClone(state)),

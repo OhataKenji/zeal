@@ -1,6 +1,6 @@
 //! Shared application state held by the Rust core.
 
-use crate::snapshot::Snapshot;
+use crate::snapshot::{Meta, Snapshot};
 use serde::Serialize;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -19,9 +19,10 @@ pub struct AppStateDto {
     pub bazel: Option<String>,
     /// "idle" | "running": whether a query ingestion is in flight.
     pub ingest: &'static str,
-    /// The current snapshot. Kept across failed refreshes. The DTO carries the
-    /// `Arc` so that an emit clones a pointer, not the whole snapshot.
-    pub snapshot: Option<Arc<Snapshot>>,
+    /// Identity of the current snapshot, kept across failed refreshes. The UI
+    /// fetches the full snapshot through `get_snapshot` only when this changes,
+    /// so events never carry target data.
+    pub snapshot_meta: Option<Meta>,
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
@@ -190,7 +191,7 @@ impl Core {
                 .map(|p| p.to_string_lossy().into_owned()),
             bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
             ingest: if st.ingest_running { "running" } else { "idle" },
-            snapshot: st.snapshot.clone(),
+            snapshot_meta: st.snapshot.as_ref().map(|snapshot| snapshot.meta.clone()),
             last_error: st.last_error.clone(),
             running: st.run.as_ref().map(|run| run.id.clone()),
             console_run: st.console_run().cloned(),
@@ -240,26 +241,33 @@ mod tests {
     }
 
     #[test]
-    fn the_dto_serializes_the_snapshot_unchanged() {
-        use crate::snapshot::{Meta, Status};
+    fn the_dto_names_the_snapshot_without_carrying_its_data() {
+        use crate::snapshot::{Meta, Status, Target};
 
         let snapshot = Snapshot {
             meta: Meta {
                 fetched_at: 1,
-                status: Status::Ok,
+                status: Status::Partial,
             },
-            targets: Vec::new(),
+            targets: vec![Target {
+                label: "//a:b".into(),
+                pkg: "a".into(),
+                name: "b".into(),
+                rule_class: "rule".into(),
+                location: None,
+            }],
             edges: Vec::new(),
             files: Vec::new(),
         };
-        let expected = serde_json::to_value(&snapshot).unwrap();
         let core = Core::new();
         core.state.lock().unwrap().snapshot = Some(Arc::new(snapshot));
 
         let json = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(
-            json["snapshot"], expected,
-            "the Arc must not change the JSON"
+            json["snapshotMeta"],
+            serde_json::json!({ "fetchedAt": 1, "status": "partial" }),
+            "the event names the snapshot; its data goes through get_snapshot"
         );
+        assert!(json.get("snapshot").is_none());
     }
 }

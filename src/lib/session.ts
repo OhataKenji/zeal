@@ -1,6 +1,15 @@
 import { COMMANDS } from "./commands.ts";
 import { targetError } from "./target.ts";
-import type { AppState, Profile, RunCmd, RunDetail, RunRecord, Section } from "./types.ts";
+import type {
+  AppState,
+  Profile,
+  RunCmd,
+  RunDetail,
+  RunRecord,
+  Section,
+  Snapshot,
+  SnapshotMeta,
+} from "./types.ts";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
 export interface Transport {
@@ -13,6 +22,10 @@ export interface SessionView {
   console: RunRecord | null;
   consoleOpen: boolean;
   state: AppState | null;
+  /** Full snapshot for `state.snapshotMeta`; loaded separately from events. */
+  snapshot: Snapshot | null;
+  snapshotLoading: boolean;
+  snapshotError: string | null;
   ready: boolean;
   starting: boolean;
   opening: boolean;
@@ -34,6 +47,9 @@ export function emptyView(): SessionView {
     console: null,
     consoleOpen: false,
     state: null,
+    snapshot: null,
+    snapshotLoading: false,
+    snapshotError: null,
     ready: false,
     starting: false,
     opening: false,
@@ -75,6 +91,13 @@ export function canStop(view: SessionView): boolean {
   return !!(view.ready && view.state?.running && !view.state.stopping);
 }
 
+/** Compares snapshot identity carried by state events and by loaded data. */
+function sameMeta(a: SnapshotMeta | null | undefined, b: SnapshotMeta | null | undefined) {
+  return (
+    (a?.fetchedAt ?? null) === (b?.fetchedAt ?? null) && (a?.status ?? null) === (b?.status ?? null)
+  );
+}
+
 /**
  * Creates a workspace session that rejects stale requests. Call `dispose()`
  * to invalidate pending responses and remove its event subscription.
@@ -87,6 +110,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let listing = false;
   let detailGeneration = 0;
   let profileGeneration = 0;
+  let snapshotGeneration = 0;
+  let snapshotRequested: SnapshotMeta | null = null;
   let unlisten: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
@@ -111,6 +136,31 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       }
     } finally {
       listing = false;
+    }
+  }
+
+  // The DTO carries only the snapshot's identity; its data is fetched when
+  // that identity changes, not on every state event.
+  async function loadSnapshot() {
+    // Manual calls re-check in-flight state that acceptState already guards.
+    if (snapshotRequested && sameMeta(view.state?.snapshotMeta, snapshotRequested)) return;
+    snapshotRequested = view.state?.snapshotMeta ?? null;
+    const generation = ++snapshotGeneration;
+    update({ snapshotLoading: true, snapshotError: null });
+    try {
+      const snapshot = await transport.invoke<Snapshot | null>(COMMANDS.getSnapshot);
+      if (generation === snapshotGeneration) {
+        snapshotRequested = null;
+        update({ snapshot, snapshotLoading: false, snapshotError: null });
+      }
+    } catch (error) {
+      if (generation === snapshotGeneration) {
+        snapshotRequested = null;
+        update({
+          snapshotLoading: false,
+          snapshotError: `Could not load the workspace snapshot: ${String(error)}`,
+        });
+      }
     }
   }
 
@@ -220,6 +270,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ++listGeneration;
       ++detailGeneration;
       ++profileGeneration;
+      ++snapshotGeneration;
+      snapshotRequested = null;
       update({
         console: null,
         consoleOpen: false,
@@ -232,6 +284,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         profile: null,
         profileLoading: false,
         profileError: null,
+        snapshot: null,
+        snapshotLoading: false,
+        snapshotError: null,
       });
     }
     update({
@@ -239,6 +294,23 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
+    const wantMeta = state.snapshotMeta;
+    if (!wantMeta) {
+      // Defensive: the core drops its snapshot only on a workspace switch,
+      // which the reset above already clears.
+      if (view.snapshot || view.snapshotError || snapshotRequested) {
+        snapshotRequested = null;
+        ++snapshotGeneration;
+        update({ snapshot: null, snapshotLoading: false, snapshotError: null });
+      }
+    } else if (
+      // A fetch for this meta may already be in flight; re-issuing would
+      // duplicate the transfer this split exists to avoid.
+      !sameMeta(wantMeta, view.snapshot?.meta) &&
+      !sameMeta(wantMeta, snapshotRequested)
+    ) {
+      void loadSnapshot();
+    }
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
@@ -378,5 +450,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadDetail,
     loadProfile,
     loadRuns,
+    loadSnapshot,
   };
 }
