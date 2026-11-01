@@ -69,21 +69,6 @@
     return arg.name === "pattern" ? "regex" : "word";
   }
 
-  function argIncluded(spec: ArgSpec, value: Expr | string | null): boolean {
-    return (
-      !spec.optional || (value !== null && value !== undefined && value !== "")
-    );
-  }
-
-  // A comma separates two rendered argument slots; trailing optional slots that
-  // are unset get no comma, matching the mock's updateArgumentSeparators.
-  function showComma(specs: ArgSpec[], values: (Expr | string | null)[], i: number) {
-    return (
-      argIncluded(specs[i], values[i]) &&
-      specs.some((_, j) => j > i && argIncluded(specs[j], values[j]))
-    );
-  }
-
   function focusFirst() {
     void tick().then(() => {
       if (!wrap) return;
@@ -273,9 +258,6 @@
               />
               {#if argError}<p class="query-field-err">{argError}</p>{/if}
             </div>
-          {/if}
-          {#if showComma(schema.args, call.args, i)}
-            <span class="query-arg-comma">,</span>
           {/if}
         </div>
       {/each}

@@ -1429,18 +1429,8 @@ button.chip:hover {
 
 .query-call-arg {
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 4px;
-  align-items: end;
-}
-
-.query-call-arg > .query-arg-head {
-  grid-column: 1 / -1;
-}
-
-.query-call-arg > .query-arg-comma {
-  grid-column: 2;
+  display: flex;
+  flex-direction: column;
 }
 
 .query-call-arg.is-expr-simple {
@@ -1468,11 +1458,6 @@ button.chip:hover {
 
 .query-call-arg.is-int .query-arg input[type="text"] {
   max-width: 120px;
-}
-
-.query-arg-comma {
-  font: 12px var(--mono);
-  color: var(--muted-foreground);
 }
 
 .query-atom-row {
