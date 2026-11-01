@@ -104,15 +104,6 @@
       ].map((label) => labelTarget(label, "kind")),
     ),
   );
-  // Serialized forms of the examples, for the aria-current highlight. The mock
-  // only marks an example current under default flags and Builder mode.
-  const exampleTexts = new Map(
-    EXAMPLES.map((ex) => {
-      const s = serialize(ex.build());
-      return [ex.id, s.ok ? s.text : null] as const;
-    }),
-  );
-
   // Nodes that are empty targets render as holes unless their id was marked a
   // literal input when the kind selector picked "Target pattern".
   const literalEditors = new Set<number>();
@@ -391,15 +382,6 @@
     }
   }
 
-  function exampleCurrent(id: string): boolean {
-    return (
-      mode === "builder" &&
-      noImplicit === DEFAULT_FLAGS.noImplicit &&
-      noTool === DEFAULT_FLAGS.noTool &&
-      builderOk &&
-      builderText === exampleTexts.get(id)
-    );
-  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -412,7 +394,6 @@
         <button
           type="button"
           class="query-example"
-          aria-current={exampleCurrent(example.id) ? "true" : undefined}
           onclick={() => loadExample(example.id)}
         >
           <code>{example.name}</code>

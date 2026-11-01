@@ -1250,12 +1250,6 @@ button.chip:hover {
   background: var(--accent);
 }
 
-.query-example[aria-current] {
-  background: var(--accent);
-  font-weight: 600;
-  box-shadow: inset 2px 0 var(--primary);
-}
-
 .query-example code {
   font-size: 12px;
 }
