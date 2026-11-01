@@ -1,4 +1,4 @@
-//! Fast target-list ingestion and on-demand scoped XML target details.
+//! Fast target-list ingestion and on-demand XML details for one target.
 //!
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-run refresh is kept.
@@ -73,8 +73,7 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     Ok(())
 }
 
-/// Requery the current Scope after a target is selected. The index guards the
-/// requested label and generation; the full XML stays local to this call.
+/// Query the selected target. The index guards its label and generation.
 #[tracing::instrument(target = "zeal::operations", name = "target.detail", skip_all)]
 pub fn target_detail(
     app: AppHandle,
@@ -123,7 +122,7 @@ fn acquire_detail(
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
-    let query = st.scope.query();
+    let query = crate::scope::target_query(label)?;
     st.detail_query_running = true;
     Ok((ws, bazel, query))
 }
@@ -299,7 +298,7 @@ mod tests {
         let (ws, bazel, query) = acquire_detail(&core, "//app:chosen", 7).unwrap();
         assert_eq!(ws, PathBuf::from("/ws"));
         assert_eq!(bazel, PathBuf::from("/bin/bazel"));
-        assert_eq!(query, crate::scope::Scope::default().query());
+        assert_eq!(query, crate::scope::target_query("//app:chosen").unwrap());
         assert!(core.state.lock().unwrap().detail_query_running);
         assert!(acquire_detail(&core, "//app:chosen", 7).is_err());
     }

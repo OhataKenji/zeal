@@ -20,7 +20,7 @@ PRD の狙いは「Bazel に詳しい人が捉えている対象と関係を、G
 ## Background
 
 Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目標は [PRD](../prd.md)、画面の形は [wireframe mock](../mock/)に定まっている。
-画面と操作の設計基準は mock 冒頭の「残ったもの」表である: tree、関係4行(deps / data / used by / files)、composer、run、runs、target 欄。
+画面と操作の設計基準は mock 冒頭の「残ったもの」表である: tree、target の属性と入出力ファイル、composer、run、runs、target 欄。
 この文書群は、これらの要素を実データで成立させるための設計を書く。
 
 用語を以下に定める。

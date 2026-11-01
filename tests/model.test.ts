@@ -53,31 +53,6 @@ test("revealing a target expands every ancestor and keeps other branches open", 
   assert.ok(flatten(tree, new Set()).some((row) => row.label === "//:root"));
 });
 
-test("reverse dependencies group unique attributes under each direct user", () => {
-  const detail: TargetDetail = {
-    target: {
-      label: "//app:lib",
-      pkg: "app",
-      name: "lib",
-      ruleClass: "cc_library",
-      location: null,
-    },
-    edges: [
-      { from: "//app:z", to: "//app:lib", attr: "srcs" },
-      { from: "//app:a", to: "//app:lib", attr: "deps" },
-      { from: "//app:z", to: "//app:lib", attr: "hdrs" },
-      { from: "//app:z", to: "//app:lib", attr: "srcs" },
-      { from: "//app:indirect", to: "//app:z", attr: "deps" },
-    ],
-    files: [],
-    status: "ok",
-  };
-  assert.deepEqual(relations(detail).usedBy, [
-    { label: "//app:a", attrs: ["deps"] },
-    { label: "//app:z", attrs: ["hdrs", "srcs"] },
-  ]);
-});
-
 test("forward attributes retain rule and file inputs under their original names", () => {
   const detail: TargetDetail = {
     target: {
@@ -91,7 +66,6 @@ test("forward attributes retain rule and file inputs under their original names"
       { from: "//app:generated", to: "//app:inputs", attr: "srcs" },
       { from: "//app:generated", to: "//app:inputs", attr: "srcs" },
       { from: "//app:generated", to: "//tools:compiler", attr: "tools" },
-      { from: "//other:target", to: "//app:inputs", attr: "deps" },
     ],
     files: [
       { owner: "//app:generated", path: "app/input.txt", role: "srcs" },

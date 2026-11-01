@@ -79,7 +79,7 @@ pub struct TargetIndex {
     pub targets: Vec<Target>,
 }
 
-/// Relationships for one selected target, derived from a fresh scoped query.
+/// Attributes and files for one selected target, derived from its own query.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetDetail {
@@ -141,7 +141,7 @@ pub fn select_detail(snapshot: Snapshot, label: &str) -> Option<TargetDetail> {
         edges: snapshot
             .edges
             .into_iter()
-            .filter(|edge| edge.from == label || edge.to == label)
+            .filter(|edge| edge.from == label)
             .collect(),
         files: snapshot
             .files
@@ -285,13 +285,8 @@ mod tests {
             </query>"#,
         ));
         let detail = select_detail(build(&query, Status::Ok), "//app:chosen").unwrap();
-        assert_eq!(detail.edges.len(), 2);
-        assert!(
-            detail
-                .edges
-                .iter()
-                .all(|edge| edge.from == "//app:chosen" || edge.to == "//app:chosen")
-        );
+        assert_eq!(detail.edges.len(), 1);
+        assert!(detail.edges.iter().all(|edge| edge.from == "//app:chosen"));
         assert_eq!(detail.files.len(), 2);
         assert!(detail.files.iter().all(|file| file.owner == "//app:chosen"));
         assert_eq!(detail.target.label, "//app:chosen");
@@ -364,7 +359,7 @@ mod tests {
         )));
         // `data` pointing at a rule is an edge, not a file.
         assert!(edges.contains(&("//app/lib:parser", "//app:grammars", "data")));
-        // Non-deps/data attrs still become edges (used by shows the attr name).
+        // Non-deps/data attrs still become edges with their attribute name.
         assert!(edges.contains(&("//app:app", "//tools:launcher", "tools")));
         assert!(edges.contains(&("//app/lib:parser_test", "//app/lib:parser", "deps")));
 

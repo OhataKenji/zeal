@@ -18,14 +18,6 @@
   } = $props();
   const rel = $derived(relations(detail));
   const target = $derived(rel.target);
-  const reverseAttrs = $derived(
-    new Map(
-      rel.usedBy.map((used) => [
-        used.label,
-        used.attrs.filter((attr) => attr !== "deps" && attr !== "data").join(", "),
-      ]),
-    ),
-  );
   const targets = $derived(
     new Map(index.targets.map((target) => [target.label, target])),
   );
@@ -39,7 +31,7 @@
   }
 </script>
 
-{#snippet labels(values: string[], id: string, pkg: string, attrs?: Map<string, string>)}
+{#snippet labels(values: string[], id: string, pkg: string)}
   {@const filtered = values.filter(matches)}
   <div class="chips">
     {#each expanded.has(id) || query ? filtered : filtered.slice(0, 12) as value (value)}
@@ -49,7 +41,6 @@
           <span>{displayLabel(value, pkg)}</span><small
             >{target.ruleClass}</small
           >
-          {#if attrs?.get(value)}<small>{attrs.get(value)}</small>{/if}
         </button>
       {:else}<span class="chip" title={value}>{displayLabel(value, pkg)}</span
         >{/if}
@@ -145,21 +136,5 @@
         "outs",
         target.pkg,
       )}
-    </dd>
-    <dt>rdeps<small>depth=1 · current Scope</small></dt>
-    <dd>
-      {#if rel.usedBy.length === 0}
-        <span class="dim">None in current Scope.</span>
-      {:else}
-        {@render labels(
-          rel.usedBy.map((used) => used.label),
-          "rdeps",
-          target.pkg,
-          reverseAttrs,
-        )}
-      {/if}
-      <p class="dim">
-        Expand target patterns to check more targets.
-      </p>
     </dd>
   </dl>
