@@ -129,7 +129,8 @@ serialize は AST から query 文字列を作る純粋関数とする。
 - `int` 引数が整数でない、schema の `min`(`depth` は 0、`count` は 1)未満、または 2^31-1 を超える：エラー
 - target pattern や関数の `word` 引数が `-`・`*` で始まる、制御文字を含む、両 quote 種を含む：エラー
 
-欄エラーがあっても serialize は試み、失敗する場合はその旨を生成 query と command の欄に出す。
+欄エラーがあっても serialize は試み、失敗する場合はその旨を command の欄に出す。
+生成式そのものの表示は持たず、command 表示が式を内包する。
 エラーがある間は Run と Copy command を無効にする。
 前回実行済みの結果とその Copy output は触らない。
 Code モードには欄エラーがないため、式が空の間だけ Run と Copy command を無効にする。

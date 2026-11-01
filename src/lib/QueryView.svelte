@@ -103,9 +103,6 @@
   const errors = $derived(
     mode === "builder" ? validate(root) : new Map<string, string>(),
   );
-  const generated = $derived(
-    serialized.ok ? serialized.text : `(serialize error) ${serialized.error}`,
-  );
   const command = $derived(
     mode === "builder" && !serialized.ok
       ? `(serialize error) ${serialized.error}`
@@ -429,10 +426,6 @@
                 <option value={pattern}></option>
               {/each}
             </datalist>
-            <div class="query-gen">
-              <p class="query-gen-label">Generated query</p>
-              <pre><code>{generated}</code></pre>
-            </div>
           </div>
         {:else}
           <div class="query-code-body">
@@ -467,7 +460,7 @@
         <div class="query-shared">
           <details class="query-command-details" open>
             <summary>Command</summary>
-            <p class="query-command-line"><code>{command}</code></p>
+            <pre class="query-command-pre"><code>{command}</code></pre>
           </details>
           <div class="query-flags">
             <label class="query-check">
