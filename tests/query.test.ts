@@ -495,23 +495,23 @@ test("commandLine quotes the expr, mirrors the executed argv and appends flags",
   const on: CommandFlags = { noImplicit: true, noTool: false };
   assert.equal(
     commandLine(q, "raw", on),
-    "bazel query 'deps(//a)' --output=label --noimplicit_deps",
+    "bazel --noblock_for_lock query 'deps(//a)' --output=label --noimplicit_deps",
   );
   assert.equal(
     commandLine(q, "raw", { noImplicit: true, noTool: true }),
-    "bazel query 'deps(//a)' --output=label --noimplicit_deps --notool_deps",
+    "bazel --noblock_for_lock query 'deps(//a)' --output=label --noimplicit_deps --notool_deps",
   );
   assert.equal(
     commandLine(q, "graph", { noImplicit: false, noTool: false }),
-    "bazel query 'deps(//a)' --output=graph --nograph:factored",
+    "bazel --noblock_for_lock query 'deps(//a)' --output=graph --nograph:factored",
   );
   assert.equal(
     commandLine(q, "graph", { noImplicit: false, noTool: true }),
-    "bazel query 'deps(//a)' --output=graph --nograph:factored --notool_deps",
+    "bazel --noblock_for_lock query 'deps(//a)' --output=graph --nograph:factored --notool_deps",
   );
   assert.equal(
     commandLine("a'b", "raw", { noImplicit: false, noTool: false }),
-    "bazel query 'a'\\''b' --output=label",
+    "bazel --noblock_for_lock query 'a'\\''b' --output=label",
   );
 });
 
@@ -557,7 +557,6 @@ const OUTPUT: QueryOutput = {
   truncated: false,
   stderrTail: "",
   timedOut: false,
-  stopped: false,
 };
 
 function harness() {
@@ -595,7 +594,6 @@ test("run invokes run_query and stores the reply under the chosen view", async (
   const h = harness();
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
   assert.equal(h.state.running, true);
-  assert.equal(h.state.stopping, false);
   assert.equal(h.state.error, null);
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].command, "run_query");
@@ -675,41 +673,16 @@ test("each view stores its own result under its own key", async () => {
   assert.notEqual(h.state.results.raw?.key, keyFor("deps(//b)", "raw", FLAGS));
 });
 
-test("stop invokes stop_query and holds stopping until the reply lands", async () => {
-  const h = harness();
-  const pending = h.runner.run("deps(//a)", "raw", FLAGS);
-  const stopping = h.runner.stop();
-  assert.equal(h.state.stopping, true);
-  assert.equal(h.calls.length, 2);
-  assert.equal(h.calls[1].command, "stop_query");
-  h.calls[1].resolve(undefined);
-  await stopping;
-  assert.equal(h.state.stopping, true);
-  h.calls[0].resolve({ ...OUTPUT, stopped: true });
-  await pending;
-  assert.equal(h.state.running, false);
-  assert.equal(h.state.stopping, false);
-  assert.equal(h.state.results.raw?.stopped, true);
-});
-
-test("stop is a no-op when nothing is in flight", async () => {
-  const h = harness();
-  await h.runner.stop();
-  assert.equal(h.calls.length, 0);
-});
-
-test("dispose drops a late reply, stops the query, and ignores further calls", async () => {
+test("dispose drops a late reply and ignores further calls", async () => {
   const h = harness();
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
   h.runner.dispose();
-  // The discarded run's result is dropped anyway; stop_query frees the slot.
-  assert.equal(h.calls.length, 2);
-  assert.equal(h.calls[1].command, "stop_query");
-  h.calls[1].resolve(undefined);
+  // The in-flight query finishes on its own (no stop in v1); its late reply
+  // is simply discarded.
   h.calls[0].resolve(OUTPUT);
   await pending;
   assert.deepEqual(h.state.results, {});
   const after = h.runner.run("deps(//a)", "raw", FLAGS);
   await after;
-  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls.length, 1);
 });

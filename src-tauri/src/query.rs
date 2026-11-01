@@ -2,16 +2,16 @@
 //!
 //! Distinct from ingest's fixed `bazel query //...` snapshot fetch: the
 //! expression and the output format come from the editor. Execution holds the
-//! same serialized bazel slot as ingest and run, stops the same way (SIGINT,
-//! then SIGKILL after a grace), and keeps bounded output: the first bytes of
-//! stdout and the tail of stderr.
+//! same serialized bazel slot as ingest and run, and keeps bounded output:
+//! the first bytes of stdout and the tail of stderr.
 //!
-//! Stop is best-effort: a killed group whose exit cannot be confirmed still
-//! releases the slot, marked stopped with no exit code.
+//! There is no stop: a running query ends by exit, by the timeout kill, or by
+//! the app exit killing its group. A group whose exit cannot be confirmed
+//! still releases the slot, reported with no exit code.
 
 use crate::ingest::QUERY_TIMEOUT;
 use crate::runner::signal_group;
-use crate::state::{Core, CoreState};
+use crate::state::Core;
 use rustix::process::Signal;
 use serde::Serialize;
 use std::io::Read;
@@ -36,11 +36,8 @@ const STDOUT_CAP: usize = 4 * 1024 * 1024;
 /// stderr keeps only its tail: bazel writes its errors there.
 const STDERR_TAIL: usize = 8 * 1024;
 
-/// Time SIGINT gets to end the query before its group is killed.
-const STOP_INT_GRACE: Duration = Duration::from_secs(3);
-
 /// Time SIGKILL gets to end the query before its exit is called unconfirmed.
-const STOP_CONFIRM: Duration = Duration::from_secs(2);
+const KILL_CONFIRM: Duration = Duration::from_secs(2);
 
 /// When the exit is unconfirmed, the reader join is bounded: a descendant
 /// still holding a pipe must not delay the slot's release.
@@ -71,8 +68,6 @@ pub struct QueryOutput {
     pub stderr_tail: String,
     /// The deadline passed and the group was killed.
     pub timed_out: bool,
-    /// A stop was requested or the exit could not be confirmed.
-    pub stopped: bool,
 }
 
 /// Arguments after the bazel executable. The expression is one `Command::arg`:
@@ -80,6 +75,9 @@ pub struct QueryOutput {
 /// reject it) and no `--keep_going` (partial results would be unusable).
 fn argv(expr: &str, output: &str, no_implicit: bool, no_tool: bool) -> Vec<String> {
     let mut args = vec![
+        // A startup flag, before the subcommand: a bazel already holding the
+        // server lock fails this client immediately instead of looking hung.
+        "--noblock_for_lock".to_string(),
         "query".to_string(),
         expr.to_string(),
         format!("--output={output}"),
@@ -142,15 +140,14 @@ pub fn run(
 ) -> Result<QueryOutput, String> {
     validate_expr(expr)?;
     validate_output(output)?;
-    let (ws, bazel, generation) = acquire(&core)?;
+    let (ws, bazel) = acquire(&core)?;
     // Constructed before anything else can panic: unwinding releases the slot.
     let _slot = QuerySlot {
         core: &core,
-        generation,
         emit: || core.emit(&app),
     };
     core.emit(&app);
-    // Its own process group: a stop reaches bazel and whatever it started.
+    // Its own process group: the timeout kill and app exit reach descendants.
     let mut child = match Command::new(&bazel)
         .args(argv(expr, output, no_implicit, no_tool))
         .current_dir(&ws)
@@ -164,12 +161,10 @@ pub fn run(
         Err(e) => return Err(format!("failed to spawn {}: {e}", bazel.display())),
     };
     let pgid = child.id() as i32;
-    {
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        if st.query_gen == generation {
-            st.query_pgid = Some(pgid);
-        }
-    }
+    core.state
+        .lock()
+        .expect("application state lock poisoned")
+        .query_pgid = Some(pgid);
     // stdout and stderr are drained concurrently so the child never blocks on
     // a full pipe; each reader sends its capture once, at end of stream.
     let (out_tx, out_rx) = mpsc::channel();
@@ -182,15 +177,7 @@ pub fn run(
     thread::spawn(move || {
         let _ = err_tx.send(capture_tail(&mut err_pipe, STDERR_TAIL));
     });
-    let observed = observe(
-        &mut child,
-        pgid,
-        &core,
-        QUERY_TIMEOUT,
-        STOP_INT_GRACE,
-        STOP_CONFIRM,
-        POLL,
-    );
+    let observed = observe(&mut child, pgid, &core, QUERY_TIMEOUT, KILL_CONFIRM, POLL);
     // An unconfirmed exit means the child's fate is unknown: spawn a detached
     // reaper so it cannot linger as a zombie after the slot is released.
     if observed.unconfirmed {
@@ -220,15 +207,13 @@ pub fn run(
         truncated,
         stderr_tail,
         timed_out: observed.timed_out,
-        stopped: observed.stopped,
     })
 }
 
 /// Take the serialized bazel slot for this query: reject while a run, an
 /// ingest or another query holds it, and require an open workspace with a
-/// resolved bazel. The generation stamps the hold so a stale worker cannot
-/// release a successor's slot.
-fn acquire(core: &Core) -> Result<(PathBuf, PathBuf, u64), String> {
+/// resolved bazel.
+fn acquire(core: &Core) -> Result<(PathBuf, PathBuf), String> {
     let mut st = core.state.lock().expect("application state lock poisoned");
     if st.bazel_busy() {
         return Err("bazel is busy; run the query after it finishes".to_string());
@@ -238,37 +223,7 @@ fn acquire(core: &Core) -> Result<(PathBuf, PathBuf, u64), String> {
     };
     st.query_running = true;
     st.query_pgid = None;
-    st.query_stopping = false;
-    st.query_stop_started = None;
-    st.query_gen += 1;
-    Ok((ws, bazel, st.query_gen))
-}
-
-/// Stop the ad-hoc query in flight: SIGINT to its process group; the worker
-/// escalates to SIGKILL after the grace. Does nothing when no query is held
-/// or a stop is already accepted, so the slot is never held by a stop.
-pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
-    begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
-    core.emit(&app);
-    Ok(())
-}
-
-/// The first accepted stop flags the query, fixes the escalation start and
-/// SIGINTs the group. Only the worker's wait loop can escalate or reap. The
-/// flag is set even before the pgid lands (acquire → spawn window): `observe`
-/// delivers the INT on its first poll, so the request is never lost.
-/// Shared with `runner::exit_stop` so app exit applies the same request once.
-pub(crate) fn begin_stop(st: &mut CoreState) {
-    if !st.query_running || st.query_stopping {
-        return;
-    }
-    st.query_stopping = true;
-    st.query_stop_started = Some(Instant::now());
-    if let Some(pgid) = st.query_pgid
-        && let Err(e) = signal_group(pgid, Signal::INT)
-    {
-        log::warn!("SIGINT to query group failed: {e}");
-    }
+    Ok((ws, bazel))
 }
 
 /// How supervising the query child ended.
@@ -277,29 +232,25 @@ struct Observed {
     exit: Option<i32>,
     /// The deadline passed; the group was killed.
     timed_out: bool,
-    /// A stop was requested, or the exit could not be confirmed.
-    stopped: bool,
     /// `wait` failed or the group outlived SIGKILL's confirm window.
     unconfirmed: bool,
 }
 
-/// Poll the child and apply the stop/timeout escalation under the same lock.
-/// Once try_wait reaps the child, its process group is revoked immediately:
-/// the pid is no longer ours to signal.
+/// Poll the child until it exits or the deadline passes; the deadline sends
+/// the group straight to SIGKILL, then allows a short confirm window before
+/// calling the exit unconfirmed. Once `try_wait` reaps the child, its process
+/// group is revoked immediately: the pid is no longer ours to signal.
 #[tracing::instrument(target = "zeal::operations", name = "query.wait", skip_all)]
 fn observe(
     child: &mut Child,
     pgid: i32,
     core: &Core,
     deadline: Duration,
-    stop_grace: Duration,
     kill_confirm: Duration,
     poll: Duration,
 ) -> Observed {
     let end = Instant::now() + deadline;
-    let mut sigint_at: Option<Instant> = None;
-    let mut killed_at: Option<Instant> = None;
-    let mut timed_out = false;
+    let mut confirm_end = None;
     loop {
         let mut st = core.state.lock().expect("application state lock poisoned");
         match child.try_wait() {
@@ -309,10 +260,7 @@ fn observe(
                 }
                 return Observed {
                     exit: status.code(),
-                    timed_out,
-                    // A query that finished cleanly despite an accepted stop
-                    // is a normal success, not a stopped one.
-                    stopped: st.query_stopping && status.code() != Some(0),
+                    timed_out: confirm_end.is_some(),
                     unconfirmed: false,
                 };
             }
@@ -325,41 +273,25 @@ fn observe(
                 }
                 return Observed {
                     exit: None,
-                    timed_out,
-                    stopped: true,
+                    timed_out: confirm_end.is_some(),
                     unconfirmed: true,
                 };
             }
         }
         let now = Instant::now();
-        if st.query_stopping && sigint_at.is_none() {
-            // The requester signals too; this second INT is harmless and
-            // covers a stop flag left without a delivered signal.
-            if let Err(e) = signal_group(pgid, Signal::INT) {
-                log::warn!("SIGINT to query group failed: {e}");
-            }
-            sigint_at = Some(st.query_stop_started.unwrap_or(now));
-        }
-        if now >= end {
-            timed_out = true;
-        }
-        let kill_due = timed_out || sigint_at.is_some_and(|at| at.elapsed() >= stop_grace);
-        if kill_due && killed_at.is_none() {
+        if confirm_end.is_none() && now >= end {
             if let Err(e) = signal_group(pgid, Signal::KILL) {
                 log::warn!("SIGKILL to query group failed: {e}");
             }
-            killed_at = Some(now);
+            confirm_end = Some(now + kill_confirm);
         }
-        if let Some(killed) = killed_at
-            && killed.elapsed() >= kill_confirm
-        {
+        if confirm_end.is_some_and(|until| now >= until) {
             if st.query_pgid == Some(pgid) {
                 st.query_pgid = None;
             }
             return Observed {
                 exit: None,
-                timed_out,
-                stopped: true,
+                timed_out: true,
                 unconfirmed: true,
             };
         }
@@ -368,11 +300,11 @@ fn observe(
     }
 }
 
-/// A panic in the worker must release the query slot. A successor's hold —
-/// marked by a newer generation — is never touched.
+/// A panic in the worker must release the query slot. Only the holder can
+/// release it: nothing outside `run` clears `query_running`, so the worker
+/// still running provably owns the slot.
 struct QuerySlot<'a, F: Fn()> {
     core: &'a Core,
-    generation: u64,
     emit: F,
 }
 
@@ -383,23 +315,14 @@ impl<F: Fn()> Drop for QuerySlot<'_, F> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if st.query_gen == self.generation {
-            clear_query(&mut st);
-        }
+        st.query_running = false;
+        st.query_pgid = None;
         drop(st);
         // Avoid a second panic from an event emission while unwinding.
         if !thread::panicking() {
             (self.emit)();
         }
     }
-}
-
-/// Clear the query slot: nothing is in flight, nothing is ours to signal.
-fn clear_query(st: &mut CoreState) {
-    st.query_running = false;
-    st.query_pgid = None;
-    st.query_stopping = false;
-    st.query_stop_started = None;
 }
 
 /// Keep the first `cap` bytes of the stream and drain the rest: the child
@@ -458,6 +381,7 @@ fn drain<T>(rx: &mpsc::Receiver<T>, unconfirmed: bool) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::CoreState;
     use std::io::{BufRead, BufReader};
 
     /// Best-effort SIGKILL of the test's group, so a failed assertion cannot
@@ -501,32 +425,55 @@ mod tests {
         st.query_pgid = Some(pgid);
     }
 
-    /// The first stop request, the way `stop` applies it.
-    fn request_stop(core: &Core) {
-        begin_stop(&mut core.state.lock().unwrap());
-    }
-
     #[test]
     fn argv_has_the_expression_the_output_and_the_flag_switches() {
         assert_eq!(
             argv("deps(//a:b)", "label", false, false),
-            ["query", "deps(//a:b)", "--output=label"].map(String::from)
+            [
+                "--noblock_for_lock",
+                "query",
+                "deps(//a:b)",
+                "--output=label"
+            ]
+            .map(String::from)
         );
         assert_eq!(
             argv("//...", "graph", false, false),
-            ["query", "//...", "--output=graph", "--nograph:factored"].map(String::from)
+            [
+                "--noblock_for_lock",
+                "query",
+                "//...",
+                "--output=graph",
+                "--nograph:factored"
+            ]
+            .map(String::from)
         );
         assert_eq!(
             argv("//a:b", "label", true, false),
-            ["query", "//a:b", "--output=label", "--noimplicit_deps"].map(String::from)
+            [
+                "--noblock_for_lock",
+                "query",
+                "//a:b",
+                "--output=label",
+                "--noimplicit_deps"
+            ]
+            .map(String::from)
         );
         assert_eq!(
             argv("//a:b", "label", false, true),
-            ["query", "//a:b", "--output=label", "--notool_deps"].map(String::from)
+            [
+                "--noblock_for_lock",
+                "query",
+                "//a:b",
+                "--output=label",
+                "--notool_deps"
+            ]
+            .map(String::from)
         );
         assert_eq!(
             argv("//a:b", "graph", true, true),
             [
+                "--noblock_for_lock",
                 "query",
                 "//a:b",
                 "--output=graph",
@@ -602,71 +549,18 @@ mod tests {
             st.query_running = false;
         }
 
-        let (ws, bazel, generation) = acquire(&core).unwrap();
+        let (ws, bazel) = acquire(&core).unwrap();
         assert_eq!(ws, PathBuf::from("/ws"));
         assert_eq!(bazel, PathBuf::from("/bin/bazel"));
         let st = core.state.lock().unwrap();
         assert!(st.query_running);
         assert!(st.query_pgid.is_none());
-        assert!(!st.query_stopping);
-        assert_eq!(st.query_gen, generation);
         drop(st);
         assert!(acquire(&core).is_err(), "a held query rejects the next");
     }
 
-    /// SIGINT ends a group that honours it; no KILL is needed and the exit is
-    /// confirmed.
-    #[test]
-    fn a_stop_signals_the_group_and_observes_the_exit() {
-        let (mut child, pgid, _guard) = sleeping("echo ready; sleep 60");
-        wait_ready(&mut child);
-        let core = Core::new();
-        held(&core, pgid);
-        request_stop(&core);
-        let observed = observe(
-            &mut child,
-            pgid,
-            &core,
-            Duration::from_secs(30),
-            STOP_INT_GRACE,
-            STOP_CONFIRM,
-            Duration::from_millis(10),
-        );
-        assert!(observed.stopped);
-        assert!(!observed.timed_out);
-        assert!(!observed.unconfirmed);
-        assert!(core.state.lock().unwrap().query_pgid.is_none());
-    }
-
-    /// A group that ignores SIGINT is killed after the grace; its exit by
-    /// signal is still a confirmed exit.
-    #[test]
-    fn an_ignoring_group_is_killed_after_the_grace() {
-        let (mut child, pgid, _guard) = sleeping("trap '' INT; echo ready; sleep 60");
-        wait_ready(&mut child);
-        let core = Core::new();
-        held(&core, pgid);
-        request_stop(&core);
-        let grace = Duration::from_millis(50);
-        let started = Instant::now();
-        let observed = observe(
-            &mut child,
-            pgid,
-            &core,
-            Duration::from_secs(30),
-            grace,
-            Duration::from_secs(5),
-            Duration::from_millis(10),
-        );
-        assert!(started.elapsed() >= grace, "the grace was skipped");
-        assert!(observed.stopped);
-        assert!(!observed.unconfirmed, "the kill itself is confirmed");
-        assert!(observed.exit.is_none(), "a signal death has no code");
-        assert!(core.state.lock().unwrap().query_pgid.is_none());
-    }
-
     /// The deadline sends the group straight to SIGKILL and marks the result
-    /// timed out; it is not a requested stop.
+    /// timed out; the kill is a confirmed exit.
     #[test]
     fn the_deadline_kills_the_group_and_marks_timed_out() {
         let (mut child, pgid, _guard) = sleeping("echo ready; sleep 60");
@@ -678,77 +572,56 @@ mod tests {
             pgid,
             &core,
             Duration::from_millis(50),
-            STOP_INT_GRACE,
             Duration::from_secs(5),
             Duration::from_millis(10),
         );
         assert!(observed.timed_out);
-        assert!(!observed.stopped, "a timeout is not a requested stop");
         assert!(!observed.unconfirmed);
         assert!(observed.exit.is_none(), "a signal death has no code");
     }
 
-    /// A panic must release the slot; a stale worker must not clear the
-    /// generation a successor took.
+    /// A clean exit before the deadline is not reported as a timeout.
     #[test]
-    fn panic_releases_the_slot_but_never_a_successors() {
+    fn a_clean_exit_is_not_a_timeout() {
+        let (mut child, pgid, _guard) = sleeping("echo ready; sleep 0.05");
+        wait_ready(&mut child);
+        let core = Core::new();
+        held(&core, pgid);
+        let observed = observe(
+            &mut child,
+            pgid,
+            &core,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        );
+        assert!(!observed.timed_out);
+        assert!(!observed.unconfirmed);
+        assert_eq!(observed.exit, Some(0));
+        assert!(core.state.lock().unwrap().query_pgid.is_none());
+    }
+
+    /// A panic must release the slot: the next acquire may proceed.
+    #[test]
+    fn panic_releases_the_slot() {
         let core = Arc::new(Core::new());
         {
             let mut st = core.state.lock().unwrap();
             st.query_running = true;
             st.query_pgid = Some(i32::MAX);
-            st.query_stopping = true;
-            st.query_gen = 7;
         }
         let panicking = core.clone();
         let owner = thread::spawn(move || {
             let _slot = QuerySlot {
                 core: &panicking,
-                generation: 7,
                 emit: || {},
             };
             panic!("injected worker panic");
         });
         assert!(owner.join().is_err());
-        {
-            let st = core.state.lock().unwrap();
-            assert!(!st.query_running);
-            assert!(st.query_pgid.is_none());
-            assert!(!st.query_stopping);
-            assert!(st.query_stop_started.is_none());
-        }
-        // A successor took the freed slot; the stale worker's guard is a no-op.
-        {
-            let mut st = core.state.lock().unwrap();
-            st.query_running = true;
-            st.query_pgid = Some(42);
-            st.query_gen = 8;
-        }
-        let stale = core.clone();
-        let owner = thread::spawn(move || {
-            let _slot = QuerySlot {
-                core: &stale,
-                generation: 7,
-                emit: || {},
-            };
-            panic!("stale worker panic");
-        });
-        assert!(owner.join().is_err());
         let st = core.state.lock().unwrap();
-        assert!(st.query_running, "the successor's slot stands");
-        assert_eq!(st.query_pgid, Some(42));
-    }
-
-    /// A stop requested before the pgid lands still flags the query: the
-    /// worker's wait loop delivers the INT itself.
-    #[test]
-    fn a_stop_before_the_pgid_lands_still_flags_the_query() {
-        let core = Core::new();
-        core.state.lock().unwrap().query_running = true;
-        request_stop(&core);
-        let st = core.state.lock().unwrap();
-        assert!(st.query_stopping);
-        assert!(st.query_stop_started.is_some());
+        assert!(!st.query_running);
+        assert!(st.query_pgid.is_none());
     }
 
     /// The wire shape the frontend's `QueryOutput` consumes.
@@ -760,13 +633,11 @@ mod tests {
             truncated: false,
             stderr_tail: "oops".to_string(),
             timed_out: false,
-            stopped: false,
         })
         .unwrap();
         assert_eq!(json["exitCode"], 2);
         assert_eq!(json["stderrTail"], "oops");
         assert_eq!(json["timedOut"], false);
-        assert_eq!(json["stopped"], false);
         assert!(json.get("stderr_tail").is_none());
     }
 

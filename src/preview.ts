@@ -155,11 +155,9 @@ const state: AppState = {
   stopping: false,
   runNote: null,
   query: "idle",
-  queryStopping: false,
 };
 let currentSnapshot: Snapshot | null = SNAPSHOT;
 const consoleOutput = new Map<string, string>();
-let pendingQuery: { finish: (result: unknown) => void } | null = null;
 const consoleInput = new Map<string, string>();
 function span(name: string, ts: number, dur: number) {
   return {
@@ -406,39 +404,18 @@ export function installPreview() {
         truncated: false,
         stderrTail: "",
         timedOut: false,
-        stopped: false,
       };
       // The reply lands only when the (mock) query finishes, so the
-      // preview's running/stopping states behave like the real slot.
+      // preview's busy state behaves like the real slot.
       state.query = "running";
       void emit("app-state", structuredClone(state));
       return new Promise((resolve) => {
-        const finish = (result: unknown) => {
-          if (pendingQuery === null) return;
-          pendingQuery = null;
+        setTimeout(() => {
           state.query = "idle";
-          state.queryStopping = false;
           void emit("app-state", structuredClone(state));
-          resolve(result);
-        };
-        pendingQuery = { finish };
-        setTimeout(() => finish(finished), 800);
+          resolve(finished);
+        }, 800);
       });
-    },
-    stop_query: () => {
-      if (state.query === "running") {
-        state.queryStopping = true;
-        void emit("app-state", structuredClone(state));
-        pendingQuery?.finish({
-          exitCode: null,
-          stdout: "",
-          truncated: false,
-          stderrTail: "",
-          timedOut: false,
-          stopped: true,
-        });
-      }
-      return;
     },
   };
   mockIPC(

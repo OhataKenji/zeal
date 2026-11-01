@@ -39,9 +39,6 @@ pub struct AppStateDto {
     pub run_note: Option<String>,
     /// "idle" | "running": whether an ad-hoc editor query is in flight.
     pub query: &'static str,
-    /// A stop was accepted for the query; it stays until the query leaves the
-    /// slot, however it ends.
-    pub query_stopping: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -155,15 +152,8 @@ pub struct CoreState {
     /// Ad-hoc editor query in flight (the "query" DTO field; distinct from
     /// ingest's `bazel query //...` snapshot fetch).
     pub query_running: bool,
-    /// Process group of the query child (its pid), for stop signaling.
+    /// Process group of the query child (its pid), so app exit can kill it.
     pub query_pgid: Option<i32>,
-    /// A stop was accepted: SIGINT sent, escalation runs inside the worker.
-    pub query_stopping: bool,
-    /// First query stop request; the child owner applies its escalation
-    /// deadlines.
-    pub query_stop_started: Option<std::time::Instant>,
-    /// Generation guard: a given-up worker must not clear a successor's slot.
-    pub query_gen: u64,
 }
 
 impl CoreState {
@@ -205,9 +195,6 @@ impl Core {
                 run_note: None,
                 query_running: false,
                 query_pgid: None,
-                query_stopping: false,
-                query_stop_started: None,
-                query_gen: 0,
             }),
             run_finished: Condvar::new(),
         }
@@ -235,7 +222,6 @@ impl Core {
             stopping: st.run.as_ref().is_some_and(|run| run.stopping),
             run_note: st.run_note.clone(),
             query: if st.query_running { "running" } else { "idle" },
-            query_stopping: st.query_stopping,
         }
     }
 
@@ -302,16 +288,13 @@ mod tests {
         let core = Core::new();
         let idle = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(idle["query"], "idle");
-        assert_eq!(idle["queryStopping"], false);
 
         {
             let mut st = core.state.lock().unwrap();
             st.query_running = true;
-            st.query_stopping = true;
         }
         let json = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(json["query"], "running");
-        assert_eq!(json["queryStopping"], true);
     }
 
     #[test]

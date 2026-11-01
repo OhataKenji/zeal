@@ -157,8 +157,6 @@
     if (!stored) return null;
     if (stored.timedOut)
       return { summary: "Query timed out.", tail: stored.stderrTail };
-    if (stored.stopped)
-      return { summary: "Query stopped before it finished.", tail: stored.stderrTail };
     if (stored.exitCode !== 0)
       return {
         summary: `Query failed${stored.exitCode === null ? "" : ` (exit ${stored.exitCode})`}.`,
@@ -303,10 +301,6 @@
       !CTRL_REJECT.test(draft) &&
       new TextEncoder().encode(draft).length <= 100_000
     );
-  }
-
-  function stop() {
-    void controller?.stop();
   }
 
   function loadExample(id: string) {
@@ -506,17 +500,6 @@
                 }}
                 >Copy output</button
               >
-              {#if qstate.running}
-                <button
-                  type="button"
-                  class="button"
-                  disabled={qstate.stopping || st?.queryStopping}
-                  onclick={stop}
-                  >{qstate.stopping || st?.queryStopping
-                    ? "Stopping…"
-                    : "Stop"}</button
-                >
-              {/if}
               <button
                 type="button"
                 class="button button-primary"

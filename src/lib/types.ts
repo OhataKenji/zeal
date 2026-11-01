@@ -70,7 +70,6 @@ export interface AppState {
   runNote: string | null;
   // An ad-hoc query-editor `bazel query`, distinct from a run or snapshot ingest.
   query: "idle" | "running";
-  queryStopping: boolean;
 }
 
 /** Commands accepted by the run composer. */

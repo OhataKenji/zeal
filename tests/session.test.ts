@@ -14,7 +14,6 @@ const IDLE: AppState = {
   stopping: false,
   runNote: null,
   query: "idle",
-  queryStopping: false,
 };
 const SNAPSHOT = {
   meta: { fetchedAt: 1, status: "ok" as const },

@@ -169,15 +169,6 @@ async fn run_query(
     }
 }
 
-/// Stop the ad-hoc query in flight: SIGINT to its process group, then SIGKILL
-/// if it does not exit. Does nothing when no query is held or a stop is
-/// already in flight.
-#[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "query.stop", skip_all)]
-fn stop_query(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
-    query::stop(app, core.inner().clone())
-}
-
 #[tauri::command]
 fn write_console(core: State<Arc<Core>>, id: String, data: Vec<u8>) -> Result<usize, String> {
     terminal::write(&core, &id, &data)
@@ -400,7 +391,6 @@ pub fn run() {
             start_run,
             stop_run,
             run_query,
-            stop_query,
             list_runs,
             get_analytics,
             get_run,

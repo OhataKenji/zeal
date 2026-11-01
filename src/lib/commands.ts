@@ -14,7 +14,6 @@ export const COMMANDS = {
   startRun: "start_run",
   stopRun: "stop_run",
   runQuery: "run_query",
-  stopQuery: "stop_query",
   readConsole: "read_console",
   writeConsole: "write_console",
   resizeConsole: "resize_console",

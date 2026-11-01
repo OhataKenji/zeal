@@ -156,7 +156,8 @@ serialize は `binary` に常に括弧を付け、記号表記を単語形に正
 
 この Run は composer の run(build・test)ではなく、snapshot 取り込みと同種の `bazel query` 呼び出しである。
 実行は overview の直列化規則に従い、query・run・取り込みのいずれかが実行中なら新しい query を拒否し、理由つきで Run を無効にする。
-timeout(目安5分)と中断(SIGINT→SIGKILL)は snapshot 取り込みと同じ規則を適用し、実行中は Stop で止められる。
+timeout(目安5分)は snapshot 取り込みと同じ規則を適用する。v1 には Stop を置かない(worse is better)。実行中の query は timeout で終わるかアプリ終了時にグループごと kill されるだけである。
+busy 中の呼び出しはアプリ側で拒否し、外部の bazel が lock を持っている場合は `--noblock_for_lock` で即座に失敗する。
 見方の切り替えやプリセット選択による自動実行も、同じ検証・直列化・`-` 拒否の経路を通る。
 `--keep_going` は付けない。部分結果を知る手段がないため、早く失敗して式を直させる方が扱いやすい。
 
@@ -206,6 +207,8 @@ label・attribute 名・`kind` の pattern の入力には、snapshot の target
 
 ## Caveats
 
+- 実行中の query を途中で止める手段はない。重い query は timeout まで bazel server を占有する
+
 - parse は対応構文の subset のみを扱う。subset 外の query は Builder に戻せず、Code のまま使う
 - serialize の括弧付けと表記の正規化により、Builder 経由後の query 文字列は手書きと見た目が変わる
 - Raw は先頭5000行まで表示する。巨大な結果は core 側でも先頭4MiBで切り詰め、truncated を出す
@@ -220,7 +223,7 @@ label・attribute 名・`kind` の pattern の入力には、snapshot の target
 - 画面の command 文字列(`'...'`)は表示と Copy command 用であり、実行経路ではない
 - 最終的な1引数が `-` で始まる場合は core 側でも実行を拒否する([m3](./m3-find-and-run.md) と同じ規則)
 - 結果の label・DOT は workspace 由来の文字列であり、text として表示する。Graphviz の SVG 出力は DOM に埋め込まず、blob URL の `<img>` で表示する(svg の script・外部参照を封じる)
-- 式は任意の `bazel query` を表せるため、高コストな query は bazel server の時間とメモリを消費する。既存の timeout と中断の規則に従う
+- 式は任意の `bazel query` を表せるため、高コストな query は bazel server の時間とメモリを消費する。timeout とアプリ終了時の kill で上限を設ける
 
 ## Privacy Concerns
 

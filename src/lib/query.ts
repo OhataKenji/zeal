@@ -328,7 +328,7 @@ export function commandLine(
   output: "raw" | "graph",
   flags: CommandFlags,
 ): string {
-  return `bazel query ${shellQuote(exprText)} --output=${
+  return `bazel --noblock_for_lock query ${shellQuote(exprText)} --output=${
     output === "graph" ? "graph --nograph:factored" : "label"
   }${flags.noImplicit ? " --noimplicit_deps" : ""}${flags.noTool ? " --notool_deps" : ""}`;
 }
@@ -763,7 +763,6 @@ export interface QueryOutput {
   truncated: boolean;
   stderrTail: string;
   timedOut: boolean;
-  stopped: boolean;
 }
 
 /** IPC boundary the query runner uses to call the core. */
@@ -784,14 +783,13 @@ export interface Stored extends QueryOutput {
  */
 export interface QueryState {
   running: boolean;
-  stopping: boolean;
   error: string | null;
   results: { raw?: Stored; graph?: Stored };
 }
 
 /** The state before any run: nothing in flight, no results. */
 export function emptyQueryState(): QueryState {
-  return { running: false, stopping: false, error: null, results: {} };
+  return { running: false, error: null, results: {} };
 }
 
 /**
@@ -800,17 +798,16 @@ export function emptyQueryState(): QueryState {
  * by `keyFor`; a second `run` while one is in flight is ignored — the core
  * serializes bazel work, and the view decides when to call again. Errors
  * thrown by `invoke` (busy/spawn class) land in `error`; a non-zero exitCode
- * is data, not an error. `stop` invokes `stop_query`. Replies arriving after
- * `dispose()` or after being superseded are dropped via a generation counter;
- * a run still in flight at `dispose()` is also stopped — its result would be
- * dropped anyway, and the slot should not stay held by a discarded query.
+ * is data, not an error. Replies arriving after `dispose()` or after being
+ * superseded are dropped via a generation counter; a run still in flight at
+ * `dispose()` finishes on its own — there is no stop in v1 — and its result
+ * is simply discarded.
  */
 export function createQuery(
   t: Transport,
   changed: (s: QueryState) => void,
 ): {
   run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void>;
-  stop(): Promise<void>;
   dispose(): void;
 } {
   let state = emptyQueryState();
@@ -825,32 +822,22 @@ export function createQuery(
     if (disposed || state.running) return;
     const request = ++generation;
     const key = keyFor(expr, view, flags);
-    update({ running: true, stopping: false, error: null });
+    update({ running: true, error: null });
     try {
       const output = await t.invoke<QueryOutput>(COMMANDS.runQuery, queryArgv(expr, view, flags));
       if (disposed || request !== generation) return;
       const stored: Stored = { ...output, key };
       const results = { ...state.results };
       results[view] = stored;
-      update({ running: false, stopping: false, results });
+      update({ running: false, results });
     } catch (error) {
       if (disposed || request !== generation) return;
-      update({ running: false, stopping: false, error: String(error) });
-    }
-  }
-  async function stop(): Promise<void> {
-    if (disposed || !state.running || state.stopping) return;
-    update({ stopping: true });
-    try {
-      await t.invoke(COMMANDS.stopQuery);
-    } catch (error) {
-      if (!disposed) update({ stopping: false, error: String(error) });
+      update({ running: false, error: String(error) });
     }
   }
   function dispose() {
     disposed = true;
     ++generation;
-    if (state.running) void t.invoke(COMMANDS.stopQuery).catch(() => {});
   }
-  return { run, stop, dispose };
+  return { run, dispose };
 }
