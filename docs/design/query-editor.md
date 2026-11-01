@@ -237,6 +237,7 @@ attribute 名も同じ fuzzy find で、候補は snapshot の edge が持つ属
 
 query と結果には workspace の構造情報が含まれるが、local のまま扱い、外部へ送信しない。
 共通方針は [overview](./overview.md#privacy-concerns) に従う。
+
 ## Test Plan
 
 - serialize / parse の roundtrip golden test を、実装の Examples 一式に対して行う
