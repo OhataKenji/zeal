@@ -19,14 +19,16 @@ impl Scope {
         Ok(Self { include, exclude })
     }
 
-    /// All tokens are validated and quoted; patterns cannot introduce operators.
+    /// Quote the scope accepted at the IPC or persistence boundary.
     pub fn query(&self) -> Result<String, String> {
-        let scope = self.clone().validated()?;
-        let includes = union(&scope.include);
-        let selected = if scope.exclude.is_empty() {
+        if self.include.is_empty() {
+            return Err("include at least one target pattern".to_string());
+        }
+        let includes = union(&self.include);
+        let selected = if self.exclude.is_empty() {
             includes
         } else {
-            format!("({includes}) except ({})", union(&scope.exclude))
+            format!("({includes}) except ({})", union(&self.exclude))
         };
         Ok(format!(
             "let selected = kind(\"rule\", ({selected})) in $selected union kind(\"source file\", deps($selected, 1))"
@@ -49,10 +51,12 @@ fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
         if pattern.is_empty() {
             continue;
         }
-        if !valid_pattern(pattern) {
-            return Err(format!(
-                "invalid target pattern: {pattern}; use //package/..., //package:all, or //package:target"
-            ));
+        if !pattern.starts_with("//")
+            || pattern
+                .chars()
+                .any(|c| c == '"' || c == '\\' || c.is_control())
+        {
+            return Err("target patterns must start with // and contain no double quotes, backslashes, or control characters".to_string());
         }
         normalized.push(pattern.to_string());
     }
@@ -61,54 +65,40 @@ fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
     Ok(normalized)
 }
 
-fn valid_pattern(pattern: &str) -> bool {
-    let Some(rest) = pattern.strip_prefix("//") else {
-        return false;
-    };
-    if !rest
-        .bytes()
-        .all(|c| c.is_ascii_alphanumeric() || b"_-/.:+*=,@~".contains(&c))
-    {
-        return false;
-    }
-    if rest == "..." {
-        return true;
-    }
-    if let Some(package) = rest.strip_suffix("/...") {
-        return valid_path(package) && !package.contains(':') && !package.contains('*');
-    }
-    match rest.split_once(':') {
-        Some((package, target)) => {
-            (package.is_empty() || valid_path(package))
-                && !package.contains('*')
-                && (target == "*" || valid_path(target))
-                && !target.contains(':')
-                && (target == "*" || !target.contains('*'))
-        }
-        None => valid_path(rest) && !rest.contains('*'),
-    }
-}
-
-fn valid_path(path: &str) -> bool {
-    !path.is_empty()
-        && path
-            .split('/')
-            .all(|p| !p.is_empty() && p != "." && p != ".." && p != "...")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn multiple_patterns_are_combined_before_exclusions() {
+    fn normalizes_both_lists_at_the_boundary() {
         let scope = Scope {
-            include: vec![" //b/... ".into(), "//a:all".into(), "//b/...".into()],
-            exclude: vec!["//b/old/...".into()],
+            include: vec![
+                " //b/... ".into(),
+                "".into(),
+                "//a:all".into(),
+                "//b/...".into(),
+            ],
+            exclude: vec![
+                " //b/old/... ".into(),
+                " ".into(),
+                "//a:skip".into(),
+                "//b/old/...".into(),
+            ],
         }
         .validated()
         .unwrap();
         assert_eq!(scope.include, ["//a:all", "//b/..."]);
+        assert_eq!(scope.exclude, ["//a:skip", "//b/old/..."]);
+    }
+
+    #[test]
+    fn multiple_patterns_are_combined_before_exclusions() {
+        let scope = Scope {
+            include: vec!["//a:all".into(), "//b/...".into()],
+            exclude: vec!["//b/old/...".into()],
+        }
+        .validated()
+        .unwrap();
         assert_eq!(
             scope.query().unwrap(),
             "let selected = kind(\"rule\", ((\"//a:all\" union \"//b/...\") except (\"//b/old/...\"))) in $selected union kind(\"source file\", deps($selected, 1))"
@@ -126,25 +116,56 @@ mod tests {
             .validated()
             .is_err()
         );
-        assert!(valid_pattern("//..."));
-        assert!(valid_pattern("//:all"));
-        assert!(valid_pattern("//pkg:target+variant"));
     }
 
     #[test]
-    fn rejects_query_injection_relative_and_malformed_patterns() {
+    fn boundary_rejects_unsafe_tokens_and_nonabsolute_patterns() {
         for pattern in [
-            "//a) union //...",
             "//a\"",
+            "//a\\b",
+            "//a\nb",
+            "//a\tb",
+            "//a\0b",
             "@repo//a/...",
             "a/...",
-            "//a/../b:all",
-            "//a//b:all",
-            "//a:",
-            "//a:b:c",
-            "//a/*",
         ] {
-            assert!(!valid_pattern(pattern), "{pattern}");
+            assert!(
+                Scope {
+                    include: vec![pattern.into()],
+                    exclude: vec![]
+                }
+                .validated()
+                .is_err(),
+                "{pattern:?}"
+            );
+            assert!(
+                Scope {
+                    include: vec!["//...".into()],
+                    exclude: vec![pattern.into()]
+                }
+                .validated()
+                .is_err(),
+                "{pattern:?}"
+            );
         }
+    }
+
+    #[test]
+    fn leaves_pattern_grammar_to_bazel_and_keeps_each_input_in_one_token() {
+        let scope = Scope {
+            include: vec![
+                "//pkg:thing!%".into(),
+                "//a:b:c".into(),
+                "//a) union //...".into(),
+                "//pkg:it's".into(),
+            ],
+            exclude: vec![],
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(
+            scope.query().unwrap(),
+            "let selected = kind(\"rule\", (\"//a) union //...\" union \"//a:b:c\" union \"//pkg:it's\" union \"//pkg:thing!%\")) in $selected union kind(\"source file\", deps($selected, 1))"
+        );
     }
 }

@@ -21,7 +21,7 @@
   let busy = $state(false);
 
   function patterns(value: string): string[] {
-    return [...new Set(value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+    return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   }
 
   const scope = $derived({ include: patterns(include), exclude: patterns(exclude) });
