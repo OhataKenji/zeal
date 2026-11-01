@@ -33,6 +33,21 @@ export function sectionData<T>(section: Section<T> | undefined): T | null {
   return section && "data" in section ? section.data : null;
 }
 
+/** Chooses a notice tone without treating unavailable records as failures. */
+export function sectionNoticeTone(section: Section<unknown>): "error" | "warning" | "neutral" {
+  switch (section.status) {
+    case "parse_error":
+    case "read_error":
+      return "error";
+    case "incomplete":
+      return "warning";
+    case "ok":
+    case "missing":
+    case "not_available":
+      return "neutral";
+  }
+}
+
 /** Summarizes the status of a run detail section. */
 export function sectionMessage(section: Section<unknown>): string {
   switch (section.status) {

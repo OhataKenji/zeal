@@ -15,6 +15,7 @@
   --success: #28734d;
   --success-muted: #e8f4e9;
   --destructive: #b83737;
+  --destructive-muted: #fff2f2;
   --warning: #856522;
   --warning-muted: #fff8e9;
   --radius-md: 6px;
@@ -137,16 +138,59 @@ button:disabled {
   color: var(--muted-foreground);
 }
 
-.error {
-  color: var(--destructive);
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--background);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
 }
 
-.warn {
+.notice-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-body p {
+  margin: 0;
+}
+
+.notice-body pre {
+  margin: 6px 0 0;
+  font: 11.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notice-body pre:first-child {
+  margin-top: 0;
+}
+
+.notice > .button {
+  flex-shrink: 0;
+}
+
+.notice--error {
+  color: var(--destructive);
+  background: var(--destructive-muted);
+  border-color: var(--destructive);
+}
+
+.notice--warning {
   color: var(--warning);
   background: var(--warning-muted);
-  padding: 10px 14px;
-  margin: 0 0 10px;
-  border-radius: var(--radius-md);
+  border-color: var(--warning);
+}
+
+.field-error {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--destructive);
 }
 
 .link {

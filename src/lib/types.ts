@@ -55,6 +55,8 @@ export interface TargetScope {
 /** Current core state. A workspace switch clears workspace-scoped data. */
 export interface AppState {
   besError?: string | null;
+  /** A receiver is available for new Bazel runs, even if its preferred port is occupied. */
+  besReady: boolean;
   workspace: string | null;
   scope: TargetScope;
   bazel: string | null;

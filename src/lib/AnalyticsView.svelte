@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import {
     analyticsDateError,
@@ -117,9 +118,9 @@
     >
   </div>
   {#if view.loading}<p role="status">Loading…</p>{/if}
-  {#if view.error}<p class="error" role="alert">
+  {#if view.error}<Notice tone="error">
       Unable to load analytics: {view.error}
-    </p>{/if}
+    </Notice>{/if}
   {#if data}
     <section class="analytics-card">
       <h2>Runs</h2>

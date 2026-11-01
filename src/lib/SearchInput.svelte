@@ -17,7 +17,6 @@
     oninput,
     onpick,
     hints,
-    invalid = false,
     ...rest
   }: {
     index: SnapshotKey<Target> | null;
@@ -25,7 +24,6 @@
     oninput?: (value: string) => void;
     onpick?: (value: string) => void;
     hints?: readonly string[];
-    invalid?: boolean;
   } & Record<string, unknown> = $props();
 
   // Per-instance listbox id — several comboboxes can be open at once.
@@ -86,7 +84,6 @@
     aria-controls={open && index ? listId : undefined}
     aria-autocomplete="list"
     aria-activedescendant={activeOpt}
-    class:query-invalid={invalid}
     {value}
     oninput={type}
     onkeydown={keydown}

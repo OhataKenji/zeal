@@ -8,7 +8,7 @@ import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
 
-const WORKSPACE = "/demo/acme-mono";
+const WORKSPACE = "/demo/cool-mono";
 const NOW = Date.now();
 function target(label: string, ruleClass = "java_library"): Target {
   const [pkg, name] = label.slice(2).split(":");
@@ -145,6 +145,7 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
   });
 }).flat();
 const state: AppState = {
+  besReady: true,
   scope: { include: ["//app/..."] },
   workspace: WORKSPACE,
   bazel: "8.7.0",

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runStatus, sectionData, sectionMessage } from "../src/lib/run.ts";
+import { runStatus, sectionData, sectionMessage, sectionNoticeTone } from "../src/lib/run.ts";
 import type { RunRecord } from "../src/lib/types.ts";
 
 const RECORD: RunRecord = {
@@ -56,6 +56,18 @@ test("missing and unreadable observations remain distinct without changing a kno
     "not available — still running",
   );
   assert.equal(runStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, null).label, "✓ succeeded");
+});
+
+test("section notices distinguish broken reads, partial data, and absent records", () => {
+  assert.equal(sectionNoticeTone({ status: "read_error", note: "permission denied" }), "error");
+  assert.equal(sectionNoticeTone({ status: "parse_error", note: "invalid JSON" }), "error");
+  assert.equal(
+    sectionNoticeTone({ status: "incomplete", data: "partial", note: "truncated" }),
+    "warning",
+  );
+  assert.equal(sectionNoticeTone({ status: "missing" }), "neutral");
+  assert.equal(sectionNoticeTone({ status: "not_available", note: "still running" }), "neutral");
+  assert.equal(sectionNoticeTone({ status: "ok", data: "complete" }), "neutral");
 });
 
 test("build exit determines outcome even when its finish time was not recorded", () => {
