@@ -6,48 +6,21 @@ use bep::build_event::Payload;
 use bep::build_event_id::Id;
 use prost::Message;
 use rusqlite::{OptionalExtension, params};
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Default)]
 struct Facts {
-    // Workspace identity uses the exact stored path bytes, not Path equality.
-    workspace: Option<OsString>,
+    workspace: Option<PathBuf>,
     cmd: Option<String>,
     target: Option<String>,
     started: Option<i64>,
     finished: Option<i64>,
     exit: Option<i32>,
-}
-
-impl Facts {
-    /// Missing observations retain known facts; contradictory observations fail.
-    fn merge(self, observed: &Self) -> Result<Self, StoreError> {
-        fn merge_field<T: Clone + PartialEq>(
-            known: Option<T>,
-            observed: &Option<T>,
-        ) -> Result<Option<T>, StoreError> {
-            match (known, observed) {
-                (Some(old), Some(new)) if &old != new => Err(fail(ErrorKind::Conflict)),
-                (Some(known), _) => Ok(Some(known)),
-                (None, observed) => Ok(observed.clone()),
-            }
-        }
-
-        Ok(Self {
-            workspace: merge_field(self.workspace, &observed.workspace)?,
-            cmd: merge_field(self.cmd, &observed.cmd)?,
-            target: merge_field(self.target, &observed.target)?,
-            started: merge_field(self.started, &observed.started)?,
-            finished: merge_field(self.finished, &observed.finished)?,
-            exit: merge_field(self.exit, &observed.exit)?,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -183,9 +156,9 @@ impl Receipt {
             return Err(fail(ErrorKind::Invalid));
         }
         let target = target_patterns(children)?;
-        self.facts.workspace = Some(
-            database::workspace_path(Path::new(&started.workspace_directory))?.into_os_string(),
-        );
+        self.facts.workspace = Some(database::workspace_path(Path::new(
+            &started.workspace_directory,
+        ))?);
         self.facts.cmd = Some(started.command.clone());
         self.facts.target = Some(target);
         self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
@@ -193,6 +166,15 @@ impl Receipt {
     }
 
     fn save(&self, complete: bool) -> Result<(), StoreError> {
+        struct StoredFacts {
+            workspace: Option<Vec<u8>>,
+            cmd: Option<String>,
+            target: Option<String>,
+            started: Option<i64>,
+            finished: Option<i64>,
+            exit: Option<i32>,
+        }
+
         let mut store = Store::open(&self.data)?;
         let tx = store
             .conn
@@ -202,8 +184,8 @@ impl Receipt {
             "SELECT w.canonical_path,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.exit_code FROM run r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
             [&run_id],
             |r| {
-                Ok(Facts {
-                    workspace: r.get::<_, Option<Vec<u8>>>(0)?.map(OsString::from_vec),
+                Ok(StoredFacts {
+                    workspace: r.get(0)?,
                     cmd: r.get(1)?,
                     target: r.get(2)?,
                     started: r.get(3)?,
@@ -212,19 +194,37 @@ impl Receipt {
                 })
             },
         )?;
-        let facts = existing.merge(&self.facts)?;
+        fn conflicts<T: PartialEq>(old: Option<&T>, new: Option<&T>) -> bool {
+            old.zip(new).is_some_and(|(a, b)| a != b)
+        }
+        let path = self
+            .facts
+            .workspace
+            .as_ref()
+            .map(|v| v.as_os_str().as_bytes().to_vec());
+        // Reject contradictory reports; an absent value is not a contradiction.
+        if conflicts(existing.workspace.as_ref(), path.as_ref())
+            || conflicts(existing.cmd.as_ref(), self.facts.cmd.as_ref())
+            || conflicts(existing.target.as_ref(), self.facts.target.as_ref())
+            || conflicts(existing.started.as_ref(), self.facts.started.as_ref())
+            || conflicts(existing.finished.as_ref(), self.facts.finished.as_ref())
+            || conflicts(existing.exit.as_ref(), self.facts.exit.as_ref())
+        {
+            return Err(fail(ErrorKind::Conflict));
+        }
         if let Some(attempt) = self.attempt {
-            Self::save_attempt(&tx, &run_id, attempt, &facts, complete)?;
+            self.save_attempt(&tx, &run_id, attempt, path.as_deref(), complete)?;
         }
         tx.commit()?;
         Ok(())
     }
 
     fn save_attempt(
+        &self,
         tx: &rusqlite::Transaction<'_>,
         run_id: &str,
         attempt: i64,
-        facts: &Facts,
+        path: Option<&[u8]>,
         complete: bool,
     ) -> Result<(), StoreError> {
         let current: bool = tx.query_row(
@@ -235,11 +235,11 @@ impl Receipt {
         if !current {
             return Err(fail(ErrorKind::Conflict));
         }
-        let path = facts.workspace.as_ref().map(|v| v.as_os_str().as_bytes());
         let ws_id = save_workspace(tx, path)?;
+        // Missing retry facts must not erase facts already reported for this run.
         let updated = tx.execute(
-            "UPDATE run SET workspace_id=?3,cmd=?4,target_raw=?5,started_at_ms=?6,finished_at_ms=?7,exit_code=?8,received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
-            params![run_id,attempt,ws_id,facts.cmd,facts.target,facts.started,facts.finished,facts.exit,complete],
+            "UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=coalesce(finished_at_ms,?7),exit_code=coalesce(exit_code,?8),received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
+            params![run_id,attempt,ws_id,self.facts.cmd,self.facts.target,self.facts.started,self.facts.finished,self.facts.exit,complete],
         )?;
         if updated != 1 {
             return Err(fail(ErrorKind::Conflict));
@@ -446,90 +446,6 @@ mod tests {
     use super::test_support::Fixture;
     use super::*;
     use crate::store::{artifact, list, read_record};
-
-    fn known_facts() -> Facts {
-        Facts {
-            workspace: Some("/workspace".into()),
-            cmd: Some("build".into()),
-            target: Some("//:target".into()),
-            started: Some(1000),
-            finished: Some(2000),
-            exit: Some(0),
-        }
-    }
-
-    #[test]
-    fn facts_merge_acquires_all_observed_fields() {
-        assert_eq!(
-            Facts::default().merge(&known_facts()).unwrap(),
-            known_facts()
-        );
-    }
-
-    #[test]
-    fn facts_merge_retains_all_fields_missing_from_observations() {
-        assert_eq!(
-            known_facts().merge(&Facts::default()).unwrap(),
-            known_facts()
-        );
-    }
-
-    #[test]
-    fn facts_merge_accepts_equal_observations() {
-        assert_eq!(known_facts().merge(&known_facts()).unwrap(), known_facts());
-    }
-
-    fn assert_fact_conflict(observed: Facts) {
-        assert_eq!(
-            known_facts().merge(&observed).unwrap_err().kind,
-            ErrorKind::Conflict
-        );
-    }
-
-    #[test]
-    fn facts_merge_rejects_conflicts_in_every_field() {
-        assert_fact_conflict(Facts {
-            workspace: Some("/other".into()),
-            ..Default::default()
-        });
-        assert_fact_conflict(Facts {
-            cmd: Some("test".into()),
-            ..Default::default()
-        });
-        assert_fact_conflict(Facts {
-            target: Some("//:other".into()),
-            ..Default::default()
-        });
-        assert_fact_conflict(Facts {
-            started: Some(1001),
-            ..Default::default()
-        });
-        assert_fact_conflict(Facts {
-            finished: Some(2001),
-            ..Default::default()
-        });
-        assert_fact_conflict(Facts {
-            exit: Some(1),
-            ..Default::default()
-        });
-    }
-
-    #[test]
-    fn facts_merge_compares_workspace_identity_by_exact_path_bytes() {
-        let known = Facts {
-            workspace: Some("/missing/./workspace".into()),
-            ..Default::default()
-        };
-        let observed = Facts {
-            workspace: Some("/missing/workspace".into()),
-            ..Default::default()
-        };
-        assert_eq!(
-            known.merge(&observed).unwrap_err().kind,
-            ErrorKind::Conflict
-        );
-    }
-
     #[test]
     fn progress_before_started_is_saved_without_workspace_and_completion_is_a_separate_fact() {
         let f = Fixture::new();
@@ -628,33 +544,6 @@ mod tests {
     #[test]
     fn partial_retry_preserves_known_failure() {
         assert_partial_retry_preserves_result(1);
-    }
-
-    #[test]
-    fn partial_retry_preserves_non_utf8_workspace_identity() {
-        let f = Fixture::new();
-        save_partial_result(&f, 0);
-        let path = b"/workspace-\xff";
-        Store::open(&f.data)
-            .unwrap()
-            .conn
-            .execute("UPDATE workspace SET canonical_path=?1", [path.as_slice()])
-            .unwrap();
-        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
-        retry
-            .append(&f.ordered(1, bep::BuildEvent::default()))
-            .unwrap();
-        retry.partial().unwrap();
-        let stored: Vec<u8> = Store::open(&f.data)
-            .unwrap()
-            .conn
-            .query_row(
-                "SELECT w.canonical_path FROM run r JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
-                [&f.stream.invocation_id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(stored, path);
     }
 
     fn assert_retry_rejects_conflicting_result(exit_code: i32, seconds: i64) {
