@@ -37,16 +37,14 @@ export function getSession() {
   return session;
 }
 
-/** Replaces the session and starts event listening plus run-list refreshes. */
+/** Replaces the session and starts event listening. */
 export function connect() {
   session.dispose();
   view = emptyView();
   session = newSession();
   void session.init();
   const current = session;
-  const timer = setInterval(() => void current.loadRuns(), 1000);
   return () => {
-    clearInterval(timer);
     current.dispose();
   };
 }

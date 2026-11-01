@@ -17,18 +17,21 @@ use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServe
 pub const ADDRESS: &str = "127.0.0.1:4718";
 const MAX_SESSIONS: usize = 4;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+type HistoryChanged = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Receiver {
     data: PathBuf,
     sessions: Arc<tokio::sync::Semaphore>,
+    history_changed: HistoryChanged,
 }
 
 impl Receiver {
-    pub fn new(data: PathBuf) -> Self {
+    fn new(data: PathBuf, history_changed: HistoryChanged) -> Self {
         Self {
             data,
             sessions: Arc::new(tokio::sync::Semaphore::new(MAX_SESSIONS)),
+            history_changed,
         }
     }
 
@@ -45,6 +48,7 @@ impl Receiver {
 struct Session {
     receipt: Option<Receipt>,
     _permit: tokio::sync::OwnedSemaphorePermit,
+    history_changed: HistoryChanged,
 }
 
 #[allow(clippy::result_large_err)] // The RPC task reports tonic Status by value.
@@ -68,9 +72,15 @@ impl Session {
             self.receipt = Some(Receipt::begin(data, stream).map_err(store_status)?);
         }
         let receipt = self.receipt.as_mut().expect("receipt was initialized");
-        if let Err(error) = receipt.append(event) {
-            self.save_partial();
-            return Err(store_status(error));
+        let changed = match receipt.append(event) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.save_partial();
+                return Err(store_status(error));
+            }
+        };
+        if changed {
+            (self.history_changed)();
         }
         Ok(self)
     }
@@ -79,6 +89,7 @@ impl Session {
         tokio::task::spawn_blocking(move || {
             let receipt = self.receipt.take().expect("nonempty stream has a receipt");
             let range = receipt.finish().map_err(store_status)?;
+            (self.history_changed)();
             Ok((self, range))
         })
         .await
@@ -91,8 +102,10 @@ impl Session {
 
     fn save_partial(self) {
         let _permit = self._permit;
-        if let Some(receipt) = self.receipt {
-            let _ = receipt.partial();
+        if let Some(receipt) = self.receipt
+            && receipt.partial().is_ok()
+        {
+            (self.history_changed)();
         }
     }
 }
@@ -133,6 +146,7 @@ impl PublishBuildEvent for Receiver {
         let mut session = Session {
             receipt: None,
             _permit: self.admit()?,
+            history_changed: self.history_changed.clone(),
         };
         let mut incoming = request.into_inner();
         let data = self.data.clone();
@@ -212,17 +226,24 @@ fn unavailable(core: &Core, error: String) {
 }
 
 /// Publish only the listener we own. Any server termination revokes readiness.
-pub async fn start(data: Result<PathBuf, String>, core: Arc<Core>, changed: impl Fn()) {
-    if let Err(error) = serve_ready(data, &core, &changed).await {
+pub async fn start(
+    data: Result<PathBuf, String>,
+    core: Arc<Core>,
+    state_changed: impl Fn(),
+    history_changed: impl Fn() + Send + Sync + 'static,
+) {
+    let history_changed: HistoryChanged = Arc::new(history_changed);
+    if let Err(error) = serve_ready(data, &core, &state_changed, history_changed).await {
         unavailable(&core, error);
-        changed();
+        state_changed();
     }
 }
 
 async fn serve_ready(
     data: Result<PathBuf, String>,
     core: &Core,
-    changed: &impl Fn(),
+    state_changed: &impl Fn(),
+    history_changed: HistoryChanged,
 ) -> Result<(), String> {
     let data = data?;
     let listener = bind(ADDRESS).await.map_err(|error| error.to_string())?;
@@ -235,8 +256,8 @@ async fn serve_ready(
         });
         state.bes_endpoint = Some(endpoint);
     }
-    changed();
-    serve(listener, data)
+    state_changed();
+    serve_with_history_changed(listener, data, history_changed)
         .await
         .map_err(|error| error.to_string())?;
     Err("BES receiver stopped".to_string())
@@ -246,11 +267,19 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     data: PathBuf,
 ) -> Result<(), tonic::transport::Error> {
+    serve_with_history_changed(listener, data, Arc::new(|| {})).await
+}
+
+async fn serve_with_history_changed(
+    listener: tokio::net::TcpListener,
+    data: PathBuf,
+    history_changed: HistoryChanged,
+) -> Result<(), tonic::transport::Error> {
     tonic::transport::Server::builder()
         .concurrency_limit_per_connection(MAX_SESSIONS)
         .max_concurrent_streams(MAX_SESSIONS as u32)
         .add_service(
-            PublishBuildEventServer::new(Receiver::new(data))
+            PublishBuildEventServer::new(Receiver::new(data, history_changed))
                 .max_decoding_message_size(16 * 1024 * 1024),
         )
         .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
@@ -261,8 +290,10 @@ pub async fn serve(
 mod tests {
     use super::*;
     use crate::protocol::bep;
+    use crate::store::events::test_support::Fixture;
     use prost::Message;
     use std::fs;
+    use std::sync::Mutex;
 
     struct Temp(PathBuf);
     impl Temp {
@@ -308,11 +339,81 @@ mod tests {
         }
     }
 
+    fn observed_receiver(fixture: &Fixture, seen: Arc<Mutex<Vec<Option<i32>>>>) -> Receiver {
+        let data = fixture.data.clone();
+        let workspace = fixture.ws.clone();
+        let notify = Arc::new(move || {
+            let runs = store::list(&data, &workspace).unwrap();
+            seen.lock().unwrap().push(runs[0].exit_code);
+        });
+        Receiver::new(fixture.data.clone(), notify)
+    }
+
+    fn silent_receiver(data: PathBuf) -> Receiver {
+        Receiver::new(data, Arc::new(|| {}))
+    }
+
+    #[tokio::test]
+    async fn history_notifies_after_started_and_finished_are_committed() {
+        let fixture = Fixture::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let receiver = observed_receiver(&fixture, seen.clone());
+        let session = Session {
+            receipt: None,
+            _permit: receiver.admit().unwrap(),
+            history_changed: receiver.history_changed.clone(),
+        };
+        let session = session
+            .append(fixture.data.clone(), fixture.ordered(1, fixture.started()))
+            .await
+            .unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![None]);
+        let session = session
+            .append(fixture.data.clone(), fixture.ordered(2, fixture.finished()))
+            .await
+            .unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![None]);
+        session.finish().await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![None, Some(0)]);
+    }
+
+    #[tokio::test]
+    async fn history_notifies_after_partial_save_but_not_invalid_input() {
+        let fixture = Fixture::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let receiver = observed_receiver(&fixture, seen.clone());
+        let invalid = Session {
+            receipt: None,
+            _permit: receiver.admit().unwrap(),
+            history_changed: receiver.history_changed.clone(),
+        };
+        let mut bad = fixture.ordered(1, fixture.started());
+        bad.stream_id = None;
+        assert!(invalid.append(fixture.data.clone(), bad).await.is_err());
+        assert!(seen.lock().unwrap().is_empty());
+
+        let session = Session {
+            receipt: None,
+            _permit: receiver.admit().unwrap(),
+            history_changed: receiver.history_changed.clone(),
+        };
+        let session = session
+            .append(fixture.data.clone(), fixture.ordered(1, fixture.started()))
+            .await
+            .unwrap();
+        let session = session
+            .append(fixture.data.clone(), fixture.ordered(2, fixture.finished()))
+            .await
+            .unwrap();
+        session.partial().await;
+        assert_eq!(*seen.lock().unwrap(), vec![None, Some(0)]);
+    }
+
     #[tokio::test]
     async fn lifecycle_is_a_noop_even_when_stream_admission_is_full() {
         let temp = Temp::new();
         let data = temp.0.join("data");
-        let receiver = Receiver::new(data.clone());
+        let receiver = silent_receiver(data.clone());
         let _permits: Vec<_> = (0..MAX_SESSIONS)
             .map(|_| receiver.admit().unwrap())
             .collect();
@@ -336,12 +437,13 @@ mod tests {
             .unwrap();
         runtime.block_on(async {
             let temp = Temp::new();
-            let receiver = Receiver::new(temp.0.join("data"));
+            let receiver = silent_receiver(temp.0.join("data"));
             let (release, wait) = std::sync::mpsc::channel();
             let blocker = tokio::task::spawn_blocking(move || wait.recv().unwrap());
             let session = Session {
                 receipt: None,
                 _permit: receiver.admit().unwrap(),
+                history_changed: receiver.history_changed.clone(),
             };
             let id = uuid::Uuid::new_v4().to_string();
             let event = ordered(&id, 1, started(&id, &temp.0));
@@ -370,12 +472,13 @@ mod tests {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let receiver = Receiver::new(PathBuf::new());
+            let receiver = silent_receiver(PathBuf::new());
             let (release, wait) = std::sync::mpsc::channel();
             let blocker = tokio::task::spawn_blocking(move || wait.recv().unwrap());
             let session = Session {
                 receipt: None,
                 _permit: receiver.admit().unwrap(),
+                history_changed: receiver.history_changed.clone(),
             };
             let rpc = tokio::spawn(session.partial());
             tokio::task::yield_now().await;
@@ -411,7 +514,13 @@ mod tests {
     async fn binding_errors_do_not_publish_an_endpoint() {
         assert!(bind("invalid address").await.is_err());
         let core = Arc::new(Core::new());
-        start(Err("app data unavailable".into()), core.clone(), || ()).await;
+        start(
+            Err("app data unavailable".into()),
+            core.clone(),
+            || (),
+            || (),
+        )
+        .await;
         let state = core.state.lock().unwrap();
         assert!(state.bes_endpoint.is_none());
         assert_eq!(state.bes_error.as_deref(), Some("app data unavailable"));

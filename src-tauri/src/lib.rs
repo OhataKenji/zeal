@@ -33,7 +33,7 @@ use state::{AppStateDto, Core};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Manager, RunEvent, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 #[tauri::command]
 fn get_state(core: State<Arc<Core>>) -> AppStateDto {
@@ -198,7 +198,7 @@ async fn read_console(
 /// Runs of the open workspace, newest first, at most [`store::LIST_LIMIT`].
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "runs.list", skip_all)]
-fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, String> {
+async fn list_runs(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<Vec<RunRecord>, String> {
     let Some(ws) = core
         .state
         .lock()
@@ -209,7 +209,11 @@ fn list_runs(app: AppHandle, core: State<Arc<Core>>) -> Result<Vec<RunRecord>, S
         return Ok(Vec::new());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    store::list(&data, &ws).map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        store::list(&data, &ws).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "history list worker failed".to_string())?
 }
 
 /// Aggregate only the core-owned workspace; caller cannot name a DB or root.
@@ -357,6 +361,12 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
     }
 }
 
+fn emit_history_changed(app: &AppHandle) {
+    if let Err(error) = app.emit("history-changed", ()) {
+        log::warn!("emit history-changed failed: {error}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -375,7 +385,14 @@ pub fn run() {
             let receiver_core = core.clone();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                bes::start(data, receiver_core.clone(), || receiver_core.emit(&handle)).await;
+                let history_handle = handle.clone();
+                bes::start(
+                    data,
+                    receiver_core.clone(),
+                    || receiver_core.emit(&handle),
+                    move || emit_history_changed(&history_handle),
+                )
+                .await;
             });
             restore_workspace(app, core);
             Ok(())

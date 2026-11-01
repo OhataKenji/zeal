@@ -78,7 +78,8 @@ impl Receipt {
         })
     }
 
-    pub fn append(&mut self, ordered: &bes::OrderedBuildEvent) -> Result<(), StoreError> {
+    /// Reports whether Started was committed to the history database.
+    pub fn append(&mut self, ordered: &bes::OrderedBuildEvent) -> Result<bool, StoreError> {
         if ordered.stream_id.as_ref() != Some(&self.stream)
             || ordered.sequence_number < 1
             || ordered.encoded_len() > FRAME_LIMIT
@@ -91,15 +92,17 @@ impl Receipt {
             .event
             .as_ref()
             .ok_or_else(|| fail(ErrorKind::Invalid))?;
-        if let Some(any) = &wrapper.bazel_event {
-            self.append_bazel_event(any)?;
-        }
+        let changed = if let Some(any) = &wrapper.bazel_event {
+            self.append_bazel_event(any)?
+        } else {
+            false
+        };
         self.first.get_or_insert(ordered.sequence_number);
         self.last = ordered.sequence_number;
-        Ok(())
+        Ok(changed)
     }
 
-    fn append_bazel_event(&mut self, any: &prost_types::Any) -> Result<(), StoreError> {
+    fn append_bazel_event(&mut self, any: &prost_types::Any) -> Result<bool, StoreError> {
         if self.last_message {
             return Err(fail(ErrorKind::Conflict));
         }
@@ -119,11 +122,12 @@ impl Receipt {
             writer.write_all(&bytes)?;
             writer.write_all(&any.value)?;
         }
-        if matches!(event.payload, Some(Payload::Started(_))) {
+        let changed = matches!(event.payload, Some(Payload::Started(_)));
+        if changed {
             self.save(false)?;
         }
         self.last_message = event.last_message;
-        Ok(())
+        Ok(changed)
     }
 
     #[allow(deprecated)]

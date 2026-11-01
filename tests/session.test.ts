@@ -155,7 +155,7 @@ test("logs and results arrive while profile parsing is still pending", async () 
   assert.equal(h.view.profileLoading, false);
 });
 
-test("run-list polling refreshes a selected terminal run after completion", async () => {
+test("history notification refreshes a selected terminal run after completion", async () => {
   const h = harness();
   await h.session.init();
   pendingRequest(h, "list_runs").reply.resolve([RECORD]);
@@ -166,9 +166,9 @@ test("run-list polling refreshes a selected terminal run after completion", asyn
   pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
 
-  const poll = h.session.loadRuns();
+  h.emit("history-changed", undefined);
   lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
-  await poll;
+  await settle();
   assert.equal(requestCount(h, "get_run"), 2);
   assert.equal(h.view.detail, earlier);
   assert.equal(h.view.detailLoading, true);
@@ -180,7 +180,35 @@ test("run-list polling refreshes a selected terminal run after completion", asyn
   assert.equal(h.view.detail, COMPLETED);
 });
 
-test("the next unchanged list poll recovers completion during a detail read", async () => {
+test("history notifications during a list read trigger one follow-up read", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("history-changed", undefined);
+  h.emit("history-changed", undefined);
+  assert.equal(requestCount(h, "list_runs"), 1);
+  pendingRequest(h, "list_runs").reply.resolve([]);
+  await settle();
+  assert.equal(requestCount(h, "list_runs"), 2);
+  lastPendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  assert.deepEqual(h.view.runs, [RECORD]);
+  assert.equal(requestCount(h, "list_runs"), 2);
+});
+
+test("a history notification still refreshes after an in-flight read fails", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("history-changed", undefined);
+  pendingRequest(h, "list_runs").reply.reject(new Error("read failed"));
+  await settle();
+  assert.equal(requestCount(h, "list_runs"), 2);
+  lastPendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  assert.deepEqual(h.view.runs, [RECORD]);
+  assert.equal(h.view.runsError, null);
+});
+
+test("the next unchanged list refresh recovers completion during a detail read", async () => {
   const h = harness();
   await h.session.init();
   pendingRequest(h, "list_runs").reply.resolve([RECORD]);
@@ -338,7 +366,7 @@ test("Send waits for listeners, then rejects busy ingestion, a live run, a stopp
   const h = harness();
   assert.equal(canSend(h.view, "//:app"), false);
   await h.session.init();
-  assert.deepEqual([...h.listeners.keys()], ["app-state"]);
+  assert.deepEqual([...h.listeners.keys()], ["history-changed", "app-state"]);
   assert.equal(canSend(h.view, "//:app"), true);
   h.emit("app-state", { ...IDLE, ingest: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
@@ -788,11 +816,16 @@ test("workspace switch rejects both stale run list and stale detail", async () =
   pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
+  assert.equal(requestCount(h, "list_runs"), 2);
   assert.deepEqual(h.view.runs, []);
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
   assert.equal(h.view.profileLoading, false);
   assert.equal(h.view.selectedRun, null);
+  const otherRecord = { ...RECORD, workspace: "/other" };
+  lastPendingRequest(h, "list_runs").reply.resolve([otherRecord]);
+  await settle();
+  assert.deepEqual(h.view.runs, [otherRecord]);
 });
 
 test("target selection cancels an in-flight detail without changing core running state", async () => {
@@ -863,7 +896,7 @@ test("dispose removes listeners and ignores late reads", async () => {
   pendingRequest(h, "get_run").reply.resolve(COMPLETED);
   pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await settle();
-  assert.deepEqual(h.removed, ["app-state"]);
+  assert.deepEqual(h.removed, ["app-state", "history-changed"]);
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
 });
@@ -881,7 +914,7 @@ test("dispose during start reconciliation ignores completion without reading art
   reconciled.resolve({ ...IDLE, consoleRun: RECORD.id });
   await started;
   assert.equal(h.view, before);
-  assert.deepEqual(h.removed, ["app-state"]);
+  assert.deepEqual(h.removed, ["app-state", "history-changed"]);
   assert.equal(
     h.pending.some((call) => call.command === "get_run" || call.command === "get_run_profile"),
     false,
@@ -930,6 +963,27 @@ test("subscription failure leaves Send disabled", async () => {
   assert.match(view.error ?? "", /listener unavailable/);
 });
 
+test("failed state subscription removes the history subscription", async () => {
+  let view = emptyView();
+  const removed: string[] = [];
+  const session = createSession(
+    {
+      listen: async (name) => {
+        if (name === "app-state") throw new Error("state listener unavailable");
+        return () => removed.push(name);
+      },
+      invoke: async <T>() => IDLE as T,
+    },
+    (next) => {
+      view = next;
+    },
+  );
+  await session.init();
+  assert.deepEqual(removed, ["history-changed"]);
+  assert.match(view.error ?? "", /state listener unavailable/);
+  session.dispose();
+});
+
 test("a state event recovers a failed initial state read", async () => {
   const initial = deferred<AppState>();
   const h = harness(initial.promise);
@@ -944,7 +998,7 @@ test("a state event recovers a failed initial state read", async () => {
   assert.equal(canSend(h.view, "//:app"), true);
   assert.equal(h.view.error, null);
   h.session.dispose();
-  assert.deepEqual(h.removed, ["app-state"]);
+  assert.deepEqual(h.removed, ["app-state", "history-changed"]);
 });
 
 test("a stale initial read failure cannot disconnect a session established by events", async () => {
