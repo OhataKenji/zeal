@@ -2,15 +2,7 @@
   import type { SnapshotKey } from "fuzzysort";
   import { tick } from "svelte";
   import QueryExpr from "./QueryExpr.svelte";
-  import SearchDropdown from "./SearchDropdown.svelte";
-  import {
-    keyAction,
-    LIST_ID,
-    moveIndex,
-    optionId,
-    search,
-    type Match,
-  } from "./search";
+  import SearchInput from "./SearchInput.svelte";
   import type { Target } from "./types";
   import {
     defaultNodeFor,
@@ -30,7 +22,7 @@
     literalEditors,
     searchIndex,
     kindIndex,
-    attrsId,
+    attrIndex,
     context = "Root",
   }: {
     node: Expr;
@@ -38,7 +30,7 @@
     literalEditors: Set<number>;
     searchIndex: SnapshotKey<Target> | null;
     kindIndex: SnapshotKey<Target> | null;
-    attrsId: string;
+    attrIndex: SnapshotKey<Target> | null;
     context?: string;
   } = $props();
 
@@ -49,82 +41,6 @@
   const hole = $derived(isExprHole(node, literalEditors));
   const kind = $derived(kindOf(node));
   const textError = $derived(errors.get(`${node.id}:text`));
-
-  // The target field reuses the run composer's fuzzy find, including its
-  // keyboard contract; the dropdown opens on typing or arrow keys.
-  let targetOpen = $state(false);
-  let targetIndex = $state(0);
-  const targetText = $derived(node.kind === "target" ? node.text : "");
-  const targetMatches = $derived(
-    searchIndex ? search(searchIndex, targetText) : [],
-  );
-  const activeIdx = $derived(moveIndex(targetIndex, 0, targetMatches.length));
-  const activeOpt = $derived(
-    targetOpen && targetMatches.length > 0 ? optionId(activeIdx) : undefined,
-  );
-
-  // One key contract for every fuzzy combobox: arrows open/move, Enter picks,
-  // Escape closes — keyAction decides the intent, this applies it.
-  function comboKey(
-    e: KeyboardEvent,
-    ui: { open: boolean; index: number },
-    matches: Match[],
-    pick: (value: string) => void,
-  ): { open: boolean; index: number } {
-    if (e.isComposing) return ui;
-    const action = keyAction(ui, e.key, matches);
-    switch (action.kind) {
-      case "move":
-        e.preventDefault();
-        return { open: true, index: action.index };
-      case "pick":
-        e.preventDefault();
-        pick(action.value);
-        return { open: false, index: 0 };
-      case "close":
-        return { open: false, index: ui.index };
-      default:
-        return ui;
-    }
-  }
-
-  function pickTarget(value: string) {
-    if (node.kind === "target") node.text = value;
-    targetOpen = false;
-    targetIndex = 0;
-  }
-
-  function targetKey(e: KeyboardEvent) {
-    const ui = comboKey(
-      e,
-      { open: targetOpen, index: activeIdx },
-      targetMatches,
-      pickTarget,
-    );
-    targetOpen = ui.open;
-    targetIndex = ui.index;
-  }
-
-  // kind()'s pattern arg gets the same combobox over rule-class candidates.
-  let kindOpen = $state(false);
-  let kindSel = $state(0);
-  const kindArgI = $derived(
-    node.kind === "call" && node.fn === "kind"
-      ? FUNCTIONS.kind.args.findIndex((a) => a.name === "pattern")
-      : -1,
-  );
-  const kindPattern = $derived(
-    node.kind === "call" && kindArgI >= 0
-      ? scalarValue(node.args[kindArgI])
-      : "",
-  );
-  const kindMatches = $derived(
-    kindIndex ? search(kindIndex, kindPattern) : [],
-  );
-  const kindActiveIdx = $derived(moveIndex(kindSel, 0, kindMatches.length));
-  const kindActiveOpt = $derived(
-    kindOpen && kindMatches.length > 0 ? optionId(kindActiveIdx) : undefined,
-  );
 
   function fieldError(i: number): string | undefined {
     return errors.get(`${node.id}:${i}`);
@@ -144,9 +60,11 @@
     return call.args[i] as Expr;
   }
 
-  function datalist(arg: ArgSpec): string | undefined {
-    if (arg.name === "name" || arg.name === "attr_name") return attrsId;
-    return undefined;
+  // Scalar args with a candidate population get the shared fuzzy combobox.
+  function argIndex(fn: string, arg: ArgSpec): SnapshotKey<Target> | null {
+    if (fn === "kind" && arg.name === "pattern") return kindIndex;
+    if (arg.name === "name" || arg.name === "attr_name") return attrIndex;
+    return null;
   }
 
   function placeholder(arg: ArgSpec): string {
@@ -262,40 +180,20 @@
     {@render kindSelect()}
     <div class="query-arg">
       <label for={fieldId("text")}>Target pattern</label>
-      <div class="query-target-search">
-        <input
-          id={fieldId("text")}
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          role="combobox"
-          aria-expanded={targetOpen && !!searchIndex}
-          aria-controls={targetOpen && searchIndex ? LIST_ID : undefined}
-          aria-autocomplete="list"
-          aria-activedescendant={activeOpt}
-          placeholder="Fuzzy :all / //pkg:target"
-          aria-label="{context} target pattern"
-          class:query-invalid={!!textError}
-          value={target.text}
-          oninput={(e) => {
-            target.text = e.currentTarget.value;
-            // Editing to empty (Ctrl-k, select-all+Delete) must not collapse
-            // the node into a hole and unmount this very input.
-            if (target.text === "") literalEditors.add(node.id);
-            targetIndex = 0;
-            targetOpen = target.text !== "";
-          }}
-          onkeydown={targetKey}
-          onblur={() => (targetOpen = false)}
-        />
-        {#if targetOpen && searchIndex}
-          <SearchDropdown
-            matches={targetMatches}
-            index={activeIdx}
-            onpick={pickTarget}
-          />
-        {/if}
-      </div>
+      <SearchInput
+        id={fieldId("text")}
+        aria-label="{context} target pattern"
+        placeholder="Fuzzy :all / //pkg:target"
+        invalid={!!textError}
+        index={searchIndex}
+        value={target.text}
+        oninput={(v) => {
+          target.text = v;
+          // Editing to empty (Ctrl-k, select-all+Delete) must not collapse
+          // the node into a hole and unmount this very input.
+          if (v === "") literalEditors.add(node.id);
+        }}
+      />
       {#if textError}<p class="query-field-err">{textError}</p>{/if}
     </div>
   </div>
@@ -338,68 +236,35 @@
               {errors}
               {literalEditors}
               {searchIndex}
-              {attrsId}
+              {attrIndex}
               {kindIndex}
               context="{node.fn} {arg.name}"
             />
           {:else}
             {@const argError = fieldError(i)}
+            {@const idx = argIndex(node.fn, arg)}
             <div class="query-arg">
               <label for={fieldId(i)}
                 >{arg.name}{arg.optional ? " (optional)" : ""}</label
               >
-              {#if node.fn === "kind" && arg.name === "pattern"}
-                <div class="query-target-search">
-                  <input
-                    id={fieldId(i)}
-                    type="text"
-                    autocomplete="off"
-                    spellcheck="false"
-                    role="combobox"
-                    aria-expanded={kindOpen && !!kindIndex}
-                    aria-controls={kindOpen && kindIndex ? LIST_ID : undefined}
-                    aria-autocomplete="list"
-                    aria-activedescendant={kindActiveOpt}
-                    placeholder={placeholder(arg)}
-                    aria-label="{node.fn} {arg.name}"
-                    class:query-invalid={!!argError}
-                    value={scalarValue(call.args[i])}
-                    oninput={(e) => {
-                      call.args[i] = e.currentTarget.value;
-                      kindSel = 0;
-                      kindOpen = e.currentTarget.value !== "";
-                    }}
-                    onkeydown={(e) => {
-                      const ui = comboKey(
-                        e,
-                        { open: kindOpen, index: kindActiveIdx },
-                        kindMatches,
-                        (v) => (call.args[i] = v),
-                      );
-                      kindOpen = ui.open;
-                      kindSel = ui.index;
-                    }}
-                    onblur={() => (kindOpen = false)}
-                  />
-                  {#if kindOpen && kindIndex}
-                    <SearchDropdown
-                      matches={kindMatches}
-                      index={kindActiveIdx}
-                      onpick={(v) => {
-                        call.args[i] = v;
-                        kindOpen = false;
-                        kindSel = 0;
-                      }}
-                    />
-                  {/if}
-                </div>
+              {#if idx}
+                <SearchInput
+                  id={fieldId(i)}
+                  aria-label="{node.fn} {arg.name}"
+                  placeholder={placeholder(arg)}
+                  invalid={!!argError}
+                  index={idx}
+                  hints={[]}
+                  value={scalarValue(call.args[i])}
+                  oninput={(v) =>
+                    (call.args[i] = arg.optional && v === "" ? null : v)}
+                />
               {:else}
                 <input
                   id={fieldId(i)}
                   type="text"
                   autocomplete="off"
                   spellcheck="false"
-                  list={datalist(arg)}
                   placeholder={placeholder(arg)}
                   inputmode={arg.type === "int" ? "numeric" : undefined}
                   aria-label="{node.fn} {arg.name}"
@@ -437,7 +302,7 @@
             {errors}
             {literalEditors}
             {searchIndex}
-            {attrsId}
+            {attrIndex}
             {kindIndex}
             context="left"
           />
@@ -449,7 +314,7 @@
             {errors}
             {literalEditors}
             {searchIndex}
-            {attrsId}
+            {attrIndex}
             {kindIndex}
             context="right"
           />

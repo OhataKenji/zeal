@@ -135,11 +135,9 @@ export function keyAction(
 export const PATTERN_HINTS: readonly string[] = ["//...", ":all", ":*"];
 
 // The input's ARIA attributes and the dropdown markup are one contract split
-// across two components, so both ids are built here.
-/** Stable target listbox ID used by the search input's ARIA relationship. */
-export const LIST_ID = "qo-list";
-
+// across two components, so option ids are built in one place. The listbox id
+// is per combobox instance ($props.id()), so several inputs can coexist.
 /** Returns a DOM ID for the search option at the given result index. */
-export function optionId(index: number): string {
-  return `qo-opt-${index}`;
+export function optionId(listId: string, index: number): string {
+  return `${listId}-opt-${index}`;
 }

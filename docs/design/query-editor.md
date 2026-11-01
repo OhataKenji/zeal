@@ -193,11 +193,11 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 例は `@@platforms` の constraint graph だけを対象にする。canonical 名は `use_repo` 宣言なしで常に解決されるためどのリポジトリでもそのまま実行でき、60件程度の小さい universe で巨大リポジトリでも軽い。
 `tests()` の例は無い。どのリポジトリにも存在が保証される test_suite は存在しないためである。
 Code に未適用の編集があっても確認せず捨てる。再入力コストが低く、確認 UI の実装が重いため(worse is better)。
-target pattern の入力は実行時の target 選択と同じ fuzzy find(`search.ts` + `SearchDropdown`)で補完する。
+target pattern の入力は実行時の target 選択と同じ fuzzy find(`SearchInput` + `search.ts`)で補完する。
 候補は snapshot の `targets` に加え、dep edge の `to` に現れる `@`/`@@` 始まりの外部 repo label(`@maven//`、`@pip//` 等)を含める。workspace が宣言した外部依存は `targets` に載らないためである。
 手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
 `kind` の pattern も同じ fuzzy find で、候補は `.*_test rule` に snapshot の rule class を加えたものを使う。
-attribute 名だけは引き続き datalist で補完する。
+attribute 名も同じ fuzzy find で、候補は snapshot の edge が持つ属性名の集合を使う。
 
 ## Alternatives Considered
 

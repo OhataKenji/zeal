@@ -84,25 +84,32 @@
 
   let { snap }: { snap: Snapshot | null } = $props();
 
-  const attrsId = "query-attrs";
-
   const searchIndex = $derived(
     snap ? createIndex(querySearchTargets(snap)) : null,
   );
-  const attrOptions = $derived(
-    [...new Set((snap?.edges ?? []).map((e) => e.attr))].sort(),
+  // attr-name args search the attribute names the snapshot's edges carry.
+  const attrIndex = $derived(
+    snap
+      ? createIndex(
+          [...new Set(snap.edges.map((e) => e.attr))]
+            .sort()
+            .map((attr) => labelTarget(attr, "attr")),
+        )
+      : null,
   );
-  // kind()'s pattern arg searches the same candidates the old datalist held:
-  // a wildcard-test hint plus every rule class in the snapshot.
+  // kind()'s pattern arg searches a wildcard-test hint plus every rule class
+  // in the snapshot.
   const kindIndex = $derived(
-    createIndex(
-      [
-        ".*_test rule",
-        ...[...new Set((snap?.targets ?? []).map((t) => t.ruleClass))]
-          .sort()
-          .map((rc) => (rc.endsWith("file") ? rc : `${rc} rule`)),
-      ].map((label) => labelTarget(label, "kind")),
-    ),
+    snap
+      ? createIndex(
+          [
+            ".*_test rule",
+            ...[...new Set(snap.targets.map((t) => t.ruleClass))]
+              .sort()
+              .map((rc) => (rc.endsWith("file") ? rc : `${rc} rule`)),
+          ].map((label) => labelTarget(label, "kind")),
+        )
+      : null,
   );
   // Nodes that are empty targets render as holes unless their id was marked a
   // literal input when the kind selector picked "Target pattern".
@@ -435,15 +442,10 @@
                 {literalEditors}
                 {searchIndex}
                 {kindIndex}
-                {attrsId}
+                {attrIndex}
                 context="Root"
               />
             </div>
-            <datalist id={attrsId}>
-              {#each attrOptions as attr (attr)}
-                <option value={attr}></option>
-              {/each}
-            </datalist>
           </div>
         {:else}
           <div class="query-code-body">

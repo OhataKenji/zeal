@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  LIST_ID,
   PATTERN_HINTS,
   createIndex,
   keyAction,
@@ -292,10 +291,9 @@ test("Escape closes only an open dropdown and other keys do nothing", () => {
   });
 });
 
-test("the dropdown list and option ids come from one place", () => {
-  assert.equal(LIST_ID, "qo-list");
-  assert.equal(optionId(0), "qo-opt-0");
-  assert.equal(optionId(12), "qo-opt-12");
+test("option ids are scoped to their listbox id", () => {
+  assert.equal(optionId("qo-list", 0), "qo-list-opt-0");
+  assert.equal(optionId("qo-list", 12), "qo-list-opt-12");
 });
 
 test("segments merge ranges and cover the whole string", () => {

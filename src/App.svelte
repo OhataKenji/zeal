@@ -13,14 +13,7 @@
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
   import { runStatus } from "./lib/run";
-  import {
-    createIndex,
-    keyAction,
-    LIST_ID,
-    moveIndex,
-    optionId,
-    search,
-  } from "./lib/search";
+  import { createIndex } from "./lib/search";
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
@@ -30,7 +23,7 @@
   import RunView from "./lib/RunView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
-  import SearchDropdown from "./lib/SearchDropdown.svelte";
+  import SearchInput from "./lib/SearchInput.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
@@ -79,52 +72,15 @@
     targetField === "" ? null : targetError(targetField),
   );
 
-  // The composer is the only search entry point. `dropdownOpen` is set by
-  // typing only: programmatic insertion (tree, relations, run rows) replaces
-  // the field without dropping the list over it. The matches are computed even
-  // while closed, because ↑/↓ reopen the list from the current text.
-  let dropdownOpen = $state(false);
-  let matchIndex = $state(0);
+  // The composer is the only search entry point. Typing opens the dropdown;
+  // programmatic insertion (tree, relations, run rows) only replaces the
+  // field. Picking a candidate reveals it in the target tree.
   const index = $derived(snap ? createIndex(snap.targets) : null);
-  const matches = $derived(index ? search(index, targetField) : []);
-  // A snapshot swap can shorten the list under the selection, so clamp here:
-  // the highlight, `aria-activedescendant` and Enter all name the same row.
-  const activeIndex = $derived(moveIndex(matchIndex, 0, matches.length));
-  const activeOption = $derived(
-    dropdownOpen && matches.length > 0 ? optionId(activeIndex) : undefined,
-  );
 
   function pickTarget(value: string) {
     select(value);
     collapsed.targets = false;
     revealRequest += 1;
-    dropdownOpen = false;
-    matchIndex = 0;
-  }
-
-  function composerKey(event: KeyboardEvent) {
-    if (event.isComposing) return;
-    const action = keyAction(
-      { open: dropdownOpen, index: activeIndex },
-      event.key,
-      matches,
-    );
-    switch (action.kind) {
-      case "move":
-        event.preventDefault();
-        dropdownOpen = true;
-        matchIndex = action.index;
-        break;
-      case "pick":
-        event.preventDefault();
-        pickTarget(action.value);
-        break;
-      case "close":
-        dropdownOpen = false;
-        break;
-      case "none":
-        break;
-    }
   }
 
   function submit() {
@@ -459,28 +415,15 @@
         <option>run</option>
       </select>
       <div class="composer-search">
-        <input
+        <SearchInput
           class="input composer-target"
           aria-label="Target label or pattern"
-          role="combobox"
-          aria-expanded={dropdownOpen && !!snap}
-          aria-controls={dropdownOpen && snap ? LIST_ID : undefined}
-          aria-autocomplete="list"
-          aria-activedescendant={activeOption}
           placeholder="Fuzzy :all / //pkg:target"
-          autocomplete="off"
+          {index}
           value={targetField}
-          oninput={(event) => {
-            targetField = event.currentTarget.value;
-            matchIndex = 0;
-            dropdownOpen = targetField !== "";
-          }}
-          onkeydown={composerKey}
-          onblur={() => (dropdownOpen = false)}
+          oninput={(v) => (targetField = v)}
+          onpick={pickTarget}
         />
-        {#if dropdownOpen && snap}
-          <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
-        {/if}
       </div>
       <button
         bind:this={argumentsToggle}
