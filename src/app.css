@@ -257,7 +257,8 @@ button:disabled {
   display: flex;
 }
 
-.composer-search .search-dropdown {
+.composer-search .search-dropdown,
+.query-target-search .search-dropdown {
   position: absolute;
   top: calc(100% + 10px);
   left: 0;
@@ -1462,6 +1463,10 @@ button.chip:hover {
   flex: 1 1 200px;
   min-width: min(200px, 100%);
   max-width: 360px;
+}
+
+.query-target-search {
+  position: relative;
 }
 
 /* The target row's label is screen-reader only, like the mock's clipped one. */

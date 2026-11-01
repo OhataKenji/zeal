@@ -1,6 +1,16 @@
 <script lang="ts">
+  import type { SnapshotKey } from "fuzzysort";
   import { tick } from "svelte";
   import QueryExpr from "./QueryExpr.svelte";
+  import SearchDropdown from "./SearchDropdown.svelte";
+  import {
+    keyAction,
+    LIST_ID,
+    moveIndex,
+    optionId,
+    search,
+  } from "./search";
+  import type { Target } from "./types";
   import {
     defaultNodeFor,
     FUNCTIONS,
@@ -17,7 +27,7 @@
     node = $bindable(),
     errors,
     literalEditors,
-    labelsId,
+    searchIndex,
     attrsId,
     kindsId,
     context = "Root",
@@ -25,7 +35,7 @@
     node: Expr;
     errors: Map<string, string>;
     literalEditors: Set<number>;
-    labelsId: string;
+    searchIndex: SnapshotKey<Target> | null;
     attrsId: string;
     kindsId: string;
     context?: string;
@@ -38,6 +48,50 @@
   const hole = $derived(isExprHole(node, literalEditors));
   const kind = $derived(kindOf(node));
   const textError = $derived(errors.get(`${node.id}:text`));
+
+  // The target field reuses the run composer's fuzzy find, including its
+  // keyboard contract; the dropdown opens on typing or arrow keys.
+  let targetOpen = $state(false);
+  let targetIndex = $state(0);
+  const targetText = $derived(node.kind === "target" ? node.text : "");
+  const targetMatches = $derived(
+    searchIndex ? search(searchIndex, targetText) : [],
+  );
+  const activeIdx = $derived(moveIndex(targetIndex, 0, targetMatches.length));
+  const activeOpt = $derived(
+    targetOpen && targetMatches.length > 0 ? optionId(activeIdx) : undefined,
+  );
+
+  function pickTarget(value: string) {
+    if (node.kind === "target") node.text = value;
+    targetOpen = false;
+    targetIndex = 0;
+  }
+
+  function targetKey(e: KeyboardEvent) {
+    if (e.isComposing) return;
+    const action = keyAction(
+      { open: targetOpen, index: activeIdx },
+      e.key,
+      targetMatches,
+    );
+    switch (action.kind) {
+      case "move":
+        e.preventDefault();
+        targetOpen = true;
+        targetIndex = action.index;
+        break;
+      case "pick":
+        e.preventDefault();
+        pickTarget(action.value);
+        break;
+      case "close":
+        targetOpen = false;
+        break;
+      case "none":
+        break;
+    }
+  }
 
   function fieldError(i: number): string | undefined {
     return errors.get(`${node.id}:${i}`);
@@ -166,6 +220,7 @@
     {#if textError}<p class="query-field-err">Choose an expression</p>{/if}
   </div>
 {:else if node.kind === "target"}
+  {@const target = node as Extract<Expr, { kind: "target" }>}
   <div
     class="query-atom-row"
     data-node-id={node.id}
@@ -175,17 +230,37 @@
     {@render kindSelect()}
     <div class="query-arg">
       <label for={fieldId("text")}>Target pattern</label>
-      <input
-        id={fieldId("text")}
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        list={labelsId}
-        placeholder="//pkg:target or //..."
-        aria-label="{context} target pattern"
-        class:query-invalid={!!textError}
-        bind:value={node.text}
-      />
+      <div class="query-target-search">
+        <input
+          id={fieldId("text")}
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          role="combobox"
+          aria-expanded={targetOpen && !!searchIndex}
+          aria-controls={targetOpen && searchIndex ? LIST_ID : undefined}
+          aria-autocomplete="list"
+          aria-activedescendant={activeOpt}
+          placeholder="Fuzzy :all / //pkg:target"
+          aria-label="{context} target pattern"
+          class:query-invalid={!!textError}
+          value={target.text}
+          oninput={(e) => {
+            target.text = e.currentTarget.value;
+            targetIndex = 0;
+            targetOpen = e.currentTarget.value !== "";
+          }}
+          onkeydown={targetKey}
+          onblur={() => (targetOpen = false)}
+        />
+        {#if targetOpen && searchIndex}
+          <SearchDropdown
+            matches={targetMatches}
+            index={activeIdx}
+            onpick={pickTarget}
+          />
+        {/if}
+      </div>
       {#if textError}<p class="query-field-err">{textError}</p>{/if}
     </div>
   </div>
@@ -227,7 +302,7 @@
               }
               {errors}
               {literalEditors}
-              {labelsId}
+              {searchIndex}
               {attrsId}
               {kindsId}
               context="{node.fn} {arg.name}"
@@ -279,7 +354,7 @@
             bind:node={node.left}
             {errors}
             {literalEditors}
-            {labelsId}
+            {searchIndex}
             {attrsId}
             {kindsId}
             context="left"
@@ -291,7 +366,7 @@
             bind:node={node.right}
             {errors}
             {literalEditors}
-            {labelsId}
+            {searchIndex}
             {attrsId}
             {kindsId}
             context="right"

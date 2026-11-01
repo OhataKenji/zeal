@@ -191,7 +191,10 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 初期の利用はここから編集に入ることを想定する。
 プリセット選択は flag を既定に戻すが、実行はしない。例の fixture target は利用者の workspace に無いことが多く、即実行はほぼ失敗するためである。
 Code に未適用の編集があっても確認せず捨てる。再入力コストが低く、確認 UI の実装が重いため(worse is better)。
-label・attribute 名・`kind` の pattern の入力には、snapshot の target・属性名・rule class を datalist で補完する。
+target pattern の入力は実行時の target 選択と同じ fuzzy find(`search.ts` + `SearchDropdown`)で補完する。
+候補は snapshot の `targets` に加え、dep edge の `to` に現れる `@`/`@@` 始まりの外部 repo label(`@maven//`、`@pip//` 等)を含める。workspace が宣言した外部依存は `targets` に載らないためである。
+手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
+attribute 名と `kind` の pattern は引き続き datalist で補完する。
 
 ## Alternatives Considered
 

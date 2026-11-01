@@ -1,0 +1,2145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zeal | Query editor mock</title>
+    <style>
+      :root {
+        --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+        --background: #fff;
+        --foreground: #222;
+        --border: #dedede;
+        --muted: #f4f4f4;
+        --muted-foreground: #666;
+        --accent: #ededed;
+        --primary: #222;
+        --input: #d5d5d5;
+        --ring: #737373;
+        --sidebar: #fafafa;
+        --success: #28734d;
+        --success-muted: #e8f4e9;
+        --destructive: #b83737;
+        --warning: #856522;
+        --warning-muted: #fff8e9;
+        --radius-md: 6px;
+        --radius-lg: 10px;
+        --bg: var(--background);
+        --surface: var(--background);
+        --surface-2: #fbfbfb;
+        --line: var(--border);
+        --ink: var(--foreground);
+        --accent-soft: var(--muted);
+        --accent-line: var(--border);
+        --accent-ink: var(--foreground);
+        --code-bg: var(--muted);
+        --code-ink: var(--foreground);
+        --sans: var(--font-sans);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        display: flex;
+        min-height: 100vh;
+        font-family: var(--font-sans);
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--foreground);
+        background: var(--background);
+      }
+
+      code,
+      pre,
+      input,
+      textarea,
+      select {
+        font-family: var(--mono);
+      }
+
+      h1 {
+        font-size: 20px;
+        font-weight: 600;
+        margin: 0;
+      }
+
+      h2 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0;
+      }
+
+      button {
+        font: 500 13px var(--font-sans);
+        color: var(--foreground);
+        min-height: 32px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--background);
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        background: var(--muted);
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      :where(button, input, select, textarea, summary, a):focus-visible {
+        outline: 2px solid var(--ring);
+        outline-offset: -2px;
+      }
+
+      .primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: var(--background);
+      }
+
+      .primary:hover:not(:disabled) {
+        background: #444;
+      }
+
+      .sidebar {
+        flex: 0 0 272px;
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        padding: 20px 12px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+
+      .mark {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        background: var(--primary);
+        color: var(--background);
+        font-weight: 700;
+        font-size: 13px;
+      }
+
+      .brand-name {
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .workspace {
+        font-size: 11px;
+        color: var(--muted-foreground);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin: 0 0 6px 2px;
+      }
+
+      .nav {
+        margin-bottom: 22px;
+      }
+
+      .nav-item {
+        display: block;
+        padding: 6px 8px;
+        border-radius: var(--radius-md);
+        font-size: 13px;
+      }
+
+      .nav-item.is-current {
+        background: var(--accent);
+        color: var(--foreground);
+        font-weight: 600;
+        box-shadow: inset 2px 0 var(--primary);
+      }
+
+      .rail-heading {
+        font-size: 11px;
+        color: var(--muted-foreground);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+        margin: 0 0 6px 2px;
+        font-family: var(--font-sans);
+      }
+
+      .examples {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .example {
+        border: 0;
+        border-radius: var(--radius-md);
+        background: transparent;
+        padding: 6px 8px;
+        min-height: 32px;
+        text-align: left;
+      }
+
+      .example:hover:not(:disabled) {
+        background: var(--accent);
+      }
+
+      .example[aria-current] {
+        background: var(--accent);
+        color: var(--foreground);
+        font-weight: 600;
+        box-shadow: inset 2px 0 var(--primary);
+      }
+
+      .example code {
+        font-size: 12px;
+      }
+
+      .example .ex-desc {
+        display: none;
+        font-size: 11px;
+        color: var(--muted-foreground);
+        margin-top: 1px;
+      }
+
+      .example[aria-current] .ex-desc {
+        display: block;
+      }
+
+      main {
+        flex: 1;
+        min-width: 0;
+        padding: 24px 32px 40px;
+      }
+
+      .content {
+        max-width: 1160px;
+        min-width: 0;
+      }
+
+      .page-header {
+        margin-bottom: 16px;
+      }
+
+      .crumbs {
+        font-size: 12px;
+        color: var(--muted-foreground);
+        margin-bottom: 4px;
+      }
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .badge {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        color: var(--muted-foreground);
+        background: var(--muted);
+        border-radius: 4px;
+        padding: 1px 8px;
+      }
+
+      .conn-note {
+        font-size: 12px;
+        color: var(--muted-foreground);
+        margin: 4px 0 0;
+      }
+
+      .panel {
+        background: var(--background);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        margin-bottom: 14px;
+      }
+
+      .qp-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .head-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-left: auto;
+      }
+
+      .tabs {
+        display: inline-flex;
+        background: var(--muted);
+        border-radius: var(--radius-md);
+        padding: 2px;
+      }
+
+      .tabs [role="tab"] {
+        border: none;
+        border-radius: 4px;
+        padding: 0 12px;
+        min-height: 28px;
+        color: var(--muted-foreground);
+        background: transparent;
+      }
+
+      .tabs [role="tab"][aria-selected="true"] {
+        background: var(--background);
+        color: var(--foreground);
+        font-weight: 600;
+        box-shadow: 0 1px 3px #00000014;
+      }
+
+      .check {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-family: var(--font-sans);
+        font-size: 12.5px;
+        white-space: nowrap;
+      }
+
+      .builder-body {
+        padding: 12px 14px;
+      }
+
+      .hint {
+        font-size: 11.5px;
+        color: var(--muted-foreground);
+        margin: 4px 0 0;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      textarea,
+      select {
+        font-size: 12.5px;
+        color: var(--foreground);
+        background: var(--background);
+        border: 1px solid var(--input);
+        border-radius: var(--radius-md);
+        padding: 5px 8px;
+      }
+
+      input[type="text"],
+      select {
+        min-height: 32px;
+      }
+
+      input[type="checkbox"] {
+        accent-color: var(--primary);
+      }
+
+      input[type="text"] {
+        width: 240px;
+        max-width: 100%;
+      }
+
+      input.invalid {
+        border-color: var(--destructive);
+      }
+
+      .field-err {
+        font-size: 11.5px;
+        color: var(--destructive);
+        margin: 2px 0 0;
+      }
+
+      .expr-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--background);
+        min-width: 0;
+      }
+
+      .mini {
+        padding: 1px 8px;
+        font-size: 11px;
+        white-space: nowrap;
+        min-height: 24px;
+      }
+
+      .atom-row[data-kind="target"] .arg > label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+        padding: 0;
+      }
+
+      .expr-field {
+        border-left: 1px solid var(--border);
+        padding-left: 12px;
+        margin: 12px 0 0;
+        min-width: 0;
+      }
+
+      .field-label {
+        display: block;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted-foreground);
+        margin-bottom: 4px;
+        font-family: var(--font-sans);
+      }
+
+      .binary-fields {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+      }
+
+      .arg {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      .arg-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .arg label {
+        font-size: 11.5px;
+        color: var(--muted-foreground);
+        font-weight: 500;
+      }
+
+      .hint-details {
+        display: inline;
+      }
+
+      .hint-details summary {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 1px solid var(--border);
+        color: var(--muted-foreground);
+        font-size: 10px;
+        cursor: pointer;
+        list-style: none;
+        vertical-align: middle;
+      }
+
+      .hint-details summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .hint-details p {
+        margin: 4px 0 0;
+        font-size: 11.5px;
+        color: var(--muted-foreground);
+        max-width: 460px;
+      }
+
+      .gen {
+        margin-top: 10px;
+      }
+
+      .gen-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted-foreground);
+        margin: 0 0 4px;
+        font-family: var(--font-sans);
+      }
+
+      .gen pre {
+        margin: 0;
+        background: var(--muted);
+        color: var(--foreground);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 12px 16px;
+        font: 12px/1.6 var(--mono);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        overflow-x: auto;
+      }
+
+      .command-details > summary {
+        display: inline-flex;
+        align-items: center;
+        font: 400 12px var(--font-sans);
+        color: var(--muted-foreground);
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .command-details > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .command-details > summary::before {
+        content: "▸";
+        margin-right: 4px;
+        font-size: 10px;
+      }
+
+      .command-details[open] > summary::before {
+        content: "▾";
+      }
+
+      .command-line {
+        margin: 6px 0 0;
+      }
+
+      .command-line code {
+        font-size: 11.5px;
+        color: var(--muted-foreground);
+        word-break: break-all;
+      }
+
+      .flags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 20px;
+        align-items: center;
+        margin-top: 10px;
+      }
+
+      .flags code {
+        font-size: 12px;
+      }
+
+      .query-shared {
+        border-top: 1px solid var(--border);
+        padding: 12px 14px 14px;
+      }
+
+      .code-body {
+        padding: 12px 14px;
+      }
+
+      .code-body label {
+        display: block;
+        font-size: 12.5px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 84px;
+        resize: vertical;
+        font-size: 12.5px;
+      }
+
+      .code-warning {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--foreground);
+        background: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 8px 10px;
+      }
+
+      .code-warning.is-error {
+        color: var(--destructive);
+        border-left: 3px solid var(--destructive);
+      }
+
+      .rp-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .rp-head .count {
+        font-size: 12px;
+        color: var(--muted-foreground);
+        margin-left: auto;
+      }
+
+      .stale {
+        display: inline-block;
+        font-size: 11.5px;
+        color: var(--warning);
+        background: var(--warning-muted);
+        border: 1px solid var(--warning-muted);
+        border-radius: 4px;
+        padding: 1px 8px;
+        margin: 8px 14px 0;
+      }
+
+      .results-body {
+        padding: 10px 14px 14px;
+        overflow-x: auto;
+      }
+
+      .raw-output {
+        margin: 0;
+        font: 12.5px/1.6 var(--mono);
+        white-space: pre;
+      }
+
+      .empty {
+        color: var(--muted-foreground);
+        font-size: 12.5px;
+        margin: 4px 0;
+      }
+
+      .feedback {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        background: var(--primary);
+        color: var(--background);
+        border: 1px solid var(--primary);
+        font-size: 12px;
+        border-radius: var(--radius-md);
+        padding: 8px 12px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s;
+        box-shadow: 0 4px 12px #0000001f;
+      }
+
+      .feedback.visible {
+        opacity: 1;
+      }
+
+      .comp-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 6px 8px;
+        background: var(--muted);
+        border-bottom: 1px solid var(--border);
+        border-radius: var(--radius-md) var(--radius-md) 0 0;
+        position: relative;
+        min-width: 0;
+      }
+
+      .comp-head > select {
+        border-color: transparent;
+        background: transparent;
+        font: 500 12px var(--mono);
+        min-height: 28px;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .comp-head > select:hover,
+      .comp-head > select:focus-visible {
+        background: var(--background);
+        border-color: var(--input);
+      }
+
+      .comp-body {
+        padding: 10px 12px;
+        min-width: 0;
+      }
+
+      .fn-open {
+        font: 12px var(--mono);
+        color: var(--muted-foreground);
+      }
+
+      .call-args {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        min-width: 0;
+        padding: 10px 12px;
+      }
+
+      .call-arg {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 4px;
+        align-items: end;
+      }
+
+      .call-arg > .arg-head {
+        grid-column: 1 / -1;
+      }
+
+      .call-arg > .arg-comma {
+        grid-column: 2;
+      }
+
+      .call-arg.is-expr-simple {
+        flex: 0 1 420px;
+      }
+
+      .call-arg.is-word {
+        flex: 0 1 320px;
+      }
+
+      .call-arg.is-int {
+        flex: 0 1 140px;
+      }
+
+      .call-arg.is-wide {
+        flex-basis: 100%;
+        width: 100%;
+      }
+
+      .call-arg .arg input[type="text"] {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      .call-arg.is-int .arg input[type="text"] {
+        max-width: 120px;
+      }
+
+      .arg-comma {
+        font: 12px var(--mono);
+        color: var(--muted-foreground);
+      }
+
+      .atom-row {
+        display: flex;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+        position: relative;
+      }
+
+      .atom-row > .arg {
+        flex: 1 1 200px;
+        min-width: min(200px, 100%);
+        max-width: 360px;
+      }
+
+      .hole-row {
+        display: block;
+      }
+
+      .hole-row .hole-select {
+        width: min(240px, 100%);
+        min-width: 0;
+      }
+
+      .kind-select {
+        width: calc(21ch + 44px);
+        min-width: 0;
+        max-width: 100%;
+        flex: 0 1 auto;
+      }
+
+      select.invalid {
+        border-color: var(--destructive);
+      }
+
+      @media (max-width: 600px) {
+        .comp-body {
+          padding: 8px 6px;
+        }
+
+        .call-args {
+          padding: 8px 6px;
+        }
+
+        .call-arg {
+          flex-basis: 100%;
+          width: 100%;
+        }
+
+        .atom-row > .arg {
+          flex-basis: 100%;
+          max-width: 100%;
+        }
+      }
+
+      @media (max-width: 820px) {
+        body {
+          flex-direction: column;
+        }
+
+        .sidebar {
+          flex: none;
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+          padding: 12px 16px;
+        }
+
+        .brand {
+          margin-bottom: 8px;
+        }
+
+        .workspace {
+          display: none;
+        }
+
+        .nav {
+          display: inline-flex;
+          margin: 0 0 8px;
+        }
+
+        .examples {
+          flex-direction: row;
+          flex-wrap: wrap;
+        }
+
+        main {
+          padding: 14px 14px 48px;
+        }
+
+        input[type="text"] {
+          width: 100%;
+        }
+
+        .arg {
+          flex: 1 1 100%;
+        }
+
+        .expr-field {
+          padding-left: 6px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">Z</span>
+        <span class="brand-name">Zeal</span>
+      </div>
+      <p class="workspace">demo-workspace</p>
+      <nav class="nav" aria-label="Workspace">
+        <span class="nav-item is-current" aria-current="page">Query editor</span>
+      </nav>
+      <h2 class="rail-heading">Examples</h2>
+      <div class="examples">
+        <button type="button" class="example" data-preset="commonDeps">
+          <code>deps ∩ deps</code><span class="ex-desc">Shared dependencies</span>
+        </button>
+        <button type="button" class="example" data-preset="rdepsKind">
+          <code>rdeps + kind</code>
+        </button>
+        <button type="button" class="example" data-preset="deps">
+          <code>deps</code>
+        </button>
+        <button type="button" class="example" data-preset="somepath">
+          <code>somepath</code>
+        </button>
+        <button type="button" class="example" data-preset="onlyServer">
+          <code>deps − deps</code><span class="ex-desc">Dependencies unique to one target</span>
+        </button>
+        <button type="button" class="example" data-preset="smallTestSources">
+          <code>attr → labels</code><span class="ex-desc">Filter by attribute, then get srcs</span>
+        </button>
+        <button type="button" class="example" data-preset="suiteTests">
+          <code>tests</code><span class="ex-desc">Expand test suites</span>
+        </button>
+        <button type="button" class="example" data-preset="rdepsTests">
+          <code>rdeps → tests</code>
+        </button>
+        <button type="button" class="example" data-preset="allpaths">
+          <code>allpaths</code>
+        </button>
+        <button type="button" class="example" data-preset="buildfiles">
+          <code>buildfiles</code>
+        </button>
+      </div>
+    </aside>
+    <main>
+      <div class="content">
+        <header class="page-header">
+          <div class="crumbs">demo-workspace</div>
+          <div class="title-row">
+            <h1>Query editor</h1>
+            <span class="badge">Mock</span>
+          </div>
+          <p class="conn-note">Sample data · Not connected to Bazel</p>
+        </header>
+        <section class="panel query-panel" aria-labelledby="query-heading">
+          <div class="qp-head">
+            <h2 id="query-heading">Bazel query</h2>
+            <div class="tabs" role="tablist" aria-label="Query mode">
+              <button type="button" role="tab" id="tab-builder" aria-selected="true">
+                Builder
+              </button>
+              <button type="button" role="tab" id="tab-code" aria-selected="false">Code</button>
+            </div>
+            <div class="head-actions">
+              <button type="button" id="copy-command">Copy command</button>
+              <button type="button" id="run-sample" class="primary">Run sample</button>
+            </div>
+          </div>
+          <div class="builder-body" id="builder-view">
+            <div id="expr-root"></div>
+            <datalist id="label-options">
+              <option value="//..."></option>
+              <option value="//app/..."></option>
+              <option value="//app/lib/..."></option>
+              <option value="//app:all_tests"></option>
+              <option value="//app:server"></option>
+              <option value="//app:server_test"></option>
+              <option value="//app/lib:parser"></option>
+              <option value="//app/lib:parser_test"></option>
+              <option value="//app/lib:http"></option>
+              <option value="//app/lib:Parser.java"></option>
+              <option value="//integration:api_test"></option>
+              <option value="//tools:cli"></option>
+              <option value="//tools:parser_smoke_test"></option>
+            </datalist>
+            <datalist id="attr-names">
+              <option value="srcs"></option>
+              <option value="deps"></option>
+              <option value="data"></option>
+              <option value="tags"></option>
+              <option value="size"></option>
+              <option value="testonly"></option>
+            </datalist>
+            <div class="gen">
+              <p class="gen-label">Generated query</p>
+              <pre><code id="generated-query"></code></pre>
+            </div>
+          </div>
+          <div class="code-body" id="code-view" hidden>
+            <label for="code-input">Bazel query expression</label>
+            <textarea id="code-input" spellcheck="false" autocomplete="off"></textarea>
+            <p class="hint">
+              Switching to Builder parses supported syntax and normalizes parentheses and operators.
+            </p>
+            <div class="code-warning" id="code-warning" hidden>
+              <span id="code-warning-text"></span>
+              <button type="button" id="restore-builder">Revert to last Builder</button>
+            </div>
+          </div>
+          <div class="query-shared">
+            <details class="command-details">
+              <summary>Command</summary>
+              <p class="command-line"><code id="command-line"></code></p>
+            </details>
+            <div class="flags">
+              <label class="check">
+                <input type="checkbox" id="flag-noimplicit" checked />
+                <code>--noimplicit_deps</code>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="flag-notool" />
+                <code>--notool_deps</code>
+              </label>
+            </div>
+          </div>
+        </section>
+        <section class="panel results-panel" aria-labelledby="results-heading">
+          <div class="rp-head">
+            <h2 id="results-heading">Sample results</h2>
+            <div class="tabs" role="tablist" aria-label="Result view">
+              <button type="button" role="tab" id="tab-result-raw" aria-selected="true">Raw</button>
+              <button type="button" role="tab" id="tab-result-graph" aria-selected="false">
+                Graph
+              </button>
+            </div>
+            <span class="count" id="result-count"></span>
+            <button type="button" id="copy-output">Copy output</button>
+          </div>
+          <p id="stale-note" class="stale" hidden>Query changed · previous sample</p>
+          <div class="results-body" id="results-body"></div>
+        </section>
+      </div>
+    </main>
+    <div role="status" aria-live="polite" id="feedback" class="feedback"></div>
+    <script>
+      const universeHelp =
+        "The search scope includes the targets in universe and their transitive dependencies. It does not restrict results to a package.";
+      const FUNCTIONS = {
+        deps: {
+          signature: "deps(expr[, depth])",
+          args: [
+            { name: "expr", type: "expr" },
+            { name: "depth", type: "int", optional: true, min: 0 },
+          ],
+          wrapArg: 0,
+          help: "Returns the transitive dependencies of expr, including expr itself.",
+        },
+        rdeps: {
+          signature: "rdeps(universe, expr[, depth])",
+          args: [
+            { name: "universe", type: "expr", default: "//..." },
+            { name: "expr", type: "expr" },
+            { name: "depth", type: "int", optional: true, min: 0 },
+          ],
+          wrapArg: 1,
+          help: "Finds reverse dependencies of expr within universe and its transitive dependencies.",
+        },
+        somepath: {
+          signature: "somepath(from, to)",
+          args: [
+            { name: "from", type: "expr" },
+            { name: "to", type: "expr" },
+          ],
+          wrapArg: 0,
+          help: "Finds one dependency path between from and to.",
+        },
+        allpaths: {
+          signature: "allpaths(from, to)",
+          args: [
+            { name: "from", type: "expr" },
+            { name: "to", type: "expr" },
+          ],
+          wrapArg: 0,
+          help: "Returns all targets on dependency paths between from and to.",
+        },
+        kind: {
+          signature: "kind(pattern, expr)",
+          args: [
+            { name: "pattern", type: "word", default: ".*_test rule" },
+            { name: "expr", type: "expr" },
+          ],
+          wrapArg: 1,
+          help: "Filters targets by a regular expression on target kind.",
+        },
+        filter: {
+          signature: "filter(pattern, expr)",
+          args: [
+            { name: "pattern", type: "word", default: "//app/" },
+            { name: "expr", type: "expr" },
+          ],
+          wrapArg: 1,
+          help: "Filters targets by a regular expression on their labels.",
+        },
+        attr: {
+          signature: "attr(name, pattern, expr)",
+          args: [
+            { name: "name", type: "word", default: "size" },
+            { name: "pattern", type: "word", default: "^small$" },
+            { name: "expr", type: "expr" },
+          ],
+          wrapArg: 2,
+          help: "Filters attribute values by a regular expression. List attributes such as tags are matched as strings in [value, ...] form.",
+        },
+        labels: {
+          signature: "labels(attr_name, expr)",
+          args: [
+            { name: "attr_name", type: "word", default: "srcs" },
+            { name: "expr", type: "expr" },
+          ],
+          wrapArg: 1,
+          help: "Returns targets referenced by a label-valued attribute such as srcs, deps, or data.",
+        },
+        tests: {
+          signature: "tests(expr)",
+          args: [{ name: "expr", type: "expr" }],
+          wrapArg: 0,
+          help: "Selects test rules and expands test_suite targets into individual tests, applying the suite's tags and size filters.",
+        },
+        buildfiles: {
+          signature: "buildfiles(expr)",
+          args: [{ name: "expr", type: "expr" }],
+          wrapArg: 0,
+          help: "Returns BUILD files defining the targets' packages and their loaded .bzl files.",
+        },
+        loadfiles: {
+          signature: "loadfiles(expr)",
+          args: [{ name: "expr", type: "expr" }],
+          wrapArg: 0,
+          help: "Returns .bzl files loaded by the packages of expr.",
+        },
+        executables: {
+          signature: "executables(expr)",
+          args: [{ name: "expr", type: "expr" }],
+          wrapArg: 0,
+          help: "Returns executable, non-test rule targets in expr.",
+        },
+        siblings: {
+          signature: "siblings(expr)",
+          args: [{ name: "expr", type: "expr" }],
+          wrapArg: 0,
+          help: "Returns targets in the same packages as expr.",
+        },
+        same_pkg_direct_rdeps: {
+          signature: "same_pkg_direct_rdeps(expr)",
+          args: [{ name: "expr", type: "expr" }],
+          wrapArg: 0,
+          help: "Returns targets in the same packages that directly depend on expr.",
+        },
+        some: {
+          signature: "some(expr[, count])",
+          args: [
+            { name: "expr", type: "expr" },
+            { name: "count", type: "int", optional: true, min: 1 },
+          ],
+          wrapArg: 0,
+          help: "Returns up to count arbitrarily chosen targets from expr.",
+        },
+        visible: {
+          signature: "visible(predicate, input)",
+          args: [
+            { name: "predicate", type: "expr" },
+            { name: "input", type: "expr" },
+          ],
+          wrapArg: 1,
+          help: "Returns targets in input that are visible to every target in predicate.",
+        },
+      };
+      let nextNodeId = 1;
+      const node = (kind, props = {}) => ({ id: nextNodeId++, kind, ...props });
+      const target = (text = "") => node("target", { text });
+      function makeCall(fn, keep) {
+        const schema = FUNCTIONS[fn];
+        const args = schema.args.map((arg) => {
+          if (arg.type === "expr") return target(arg.default ?? "");
+          if (arg.type === "int") return null;
+          return arg.default ?? "";
+        });
+        const n = node("call", { fn, args });
+        if (keep !== undefined) n.args[schema.wrapArg] = keep;
+        return n;
+      }
+      function defaultNodeFor(kind) {
+        if (kind === "target") return target("");
+        if (Object.hasOwn(FUNCTIONS, kind)) return makeCall(kind);
+        return node("binary", {
+          op: kind,
+          left: target(""),
+          right: target(""),
+        });
+      }
+      const kindGroups = [
+        ["Expressions", [["target", "Target pattern"]]],
+        ["Functions", Object.keys(FUNCTIONS).map((f) => [f, f])],
+        [
+          "Set operations",
+          [
+            ["intersect", "intersect"],
+            ["union", "union"],
+            ["except", "except"],
+          ],
+        ],
+      ];
+      const literalEditors = new Set();
+      let codeError = "";
+      const state = {
+        root: null,
+        mode: "builder",
+        rawDraft: "",
+        noImplicit: true,
+        noToolDeps: false,
+        explain: false,
+        resultView: "raw",
+        lastRun: null,
+      };
+      const KEYWORDS = new Set(["except", "in", "intersect", "let", "set", "union"]);
+      function quoteWord(value, force = false) {
+        const safe =
+          /^[A-Za-z0-9_./:@$~*\[\]-]+$/.test(value) && !/^[-*]/.test(value) && !KEYWORDS.has(value);
+        if (!force && safe) return value;
+        if (!value.includes('"')) return '"' + value + '"';
+        if (!value.includes("'")) return "'" + value + "'";
+        throw new Error(
+          "The word contains both quote types. Bazel query strings do not support escaping.",
+        );
+      }
+      function serialize(n) {
+        switch (n.kind) {
+          case "target":
+            return quoteWord(n.text);
+          case "binary":
+            return "(" + serialize(n.left) + " " + n.op + " " + serialize(n.right) + ")";
+          case "call": {
+            const schema = FUNCTIONS[n.fn];
+            const args = schema.args.flatMap((arg, i) => {
+              const value = n.args[i];
+              if (arg.optional && (value === null || value === "")) return [];
+              if (arg.type === "expr") return [serialize(value)];
+              if (arg.type === "int") return [String(value).trim()];
+              return [quoteWord(value, arg.name === "pattern")];
+            });
+            return n.fn + "(" + args.join(", ") + ")";
+          }
+        }
+      }
+      function activeQuery() {
+        return state.mode === "code" ? state.rawDraft : serialize(state.root);
+      }
+      function shellQuote(value) {
+        return "'" + value.replaceAll("'", "'\\''") + "'";
+      }
+      function command() {
+        return `bazel query ${shellQuote(activeQuery())}${
+          state.noImplicit ? " --noimplicit_deps" : ""
+        }${state.noToolDeps ? " --notool_deps" : ""}`;
+      }
+      function syntaxError(t, msg) {
+        const e = new Error(`At position ${t.pos}: ${msg}`);
+        e.pos = t.pos;
+        return e;
+      }
+      const WORD_CHARS = /[A-Za-z0-9*/@.\-_:$~\[\]]/;
+      function tokenize(text) {
+        const tokens = [];
+        let i = 0;
+        while (i < text.length) {
+          const c = text[i];
+          if (/\s/.test(c)) {
+            i++;
+            continue;
+          }
+          if ("(),^+-".includes(c)) {
+            tokens.push({ type: c, value: c, pos: i });
+            i++;
+            continue;
+          }
+          if (c === '"' || c === "'") {
+            const start = i;
+            i++;
+            let v = "";
+            while (i < text.length && text[i] !== c) {
+              v += text[i];
+              i++;
+            }
+            if (i >= text.length)
+              throw syntaxError({ type: "eof", pos: text.length }, "Unterminated quoted word");
+            i++;
+            tokens.push({ type: "word", value: v, pos: start });
+            continue;
+          }
+          const start = i;
+          let v = "";
+          while (i < text.length) {
+            const ch = text[i];
+            if (ch === "+" && v.startsWith("@@")) {
+              v += ch;
+              i++;
+              continue;
+            }
+            if (WORD_CHARS.test(ch) || ch.charCodeAt(0) > 127) {
+              v += ch;
+              i++;
+              continue;
+            }
+            break;
+          }
+          if (v === "")
+            throw syntaxError(
+              { type: c, pos: i },
+              `'${c}' must be quoted when used in a target name`,
+            );
+          tokens.push({
+            type: KEYWORDS.has(v) ? v : "word",
+            value: v,
+            pos: start,
+          });
+        }
+        tokens.push({ type: "eof", value: "", pos: text.length });
+        return tokens;
+      }
+      function parseQuery(text) {
+        const tokens = tokenize(text);
+        let index = 0;
+        const peek = () => tokens[index];
+        const take = (type) => {
+          const t = peek();
+          if (t.type !== type) throw syntaxError(t, "expected " + type);
+          index++;
+          return t;
+        };
+        const OPS = {
+          intersect: "intersect",
+          "^": "intersect",
+          union: "union",
+          "+": "union",
+          except: "except",
+          "-": "except",
+        };
+        function expression() {
+          let left = primary();
+          while (Object.hasOwn(OPS, peek().type)) {
+            const op = OPS[tokens[index++].type];
+            left = node("binary", { op, left, right: primary() });
+          }
+          return left;
+        }
+        function primary() {
+          const t = peek();
+          if (t.type === "(") {
+            take("(");
+            const value = expression();
+            take(")");
+            return value;
+          }
+          const word = take("word").value;
+          if (peek().type === "(") {
+            if (!Object.hasOwn(FUNCTIONS, word))
+              throw syntaxError(t, word + " is not supported by this Builder");
+            take("(");
+            const schema = FUNCTIONS[word];
+            const args = [];
+            for (let i = 0; i < schema.args.length; i++) {
+              const arg = schema.args[i];
+              if (peek().type === ")" && arg.optional) {
+                args.push(null);
+                continue;
+              }
+              if (i > 0) take(",");
+              args.push(arg.type === "expr" ? expression() : take("word").value);
+            }
+            take(")");
+            return node("call", { fn: word, args });
+          }
+          return target(word);
+        }
+        const root = expression();
+        take("eof");
+        return root;
+      }
+      function wordQuotable(s) {
+        return !(s.includes('"') && s.includes("'"));
+      }
+      function validate(root) {
+        const errors = [];
+        function walk(n) {
+          switch (n.kind) {
+            case "target": {
+              const t = n.text;
+              if (t.trim() === "") {
+                errors.push({ id: n.id, arg: "text", msg: "Required" });
+              } else if (/^[-*]/.test(t)) {
+                errors.push({
+                  id: n.id,
+                  arg: "text",
+                  msg: "Targets cannot start with - or *. Use //pkg:target syntax.",
+                });
+              } else if (/[\x00-\x1f]/.test(t)) {
+                errors.push({
+                  id: n.id,
+                  arg: "text",
+                  msg: "Control characters are not allowed",
+                });
+              } else if (!wordQuotable(t)) {
+                errors.push({
+                  id: n.id,
+                  arg: "text",
+                  msg: "The word contains both quote types",
+                });
+              }
+              break;
+            }
+            case "binary":
+              walk(n.left);
+              walk(n.right);
+              break;
+            case "call": {
+              const schema = FUNCTIONS[n.fn];
+              schema.args.forEach((arg, i) => {
+                const v = n.args[i];
+                if (arg.type === "expr") {
+                  walk(v);
+                  return;
+                }
+                if (arg.type === "int") {
+                  if (v === null || v === "") {
+                    if (!arg.optional) errors.push({ id: n.id, arg: i, msg: "Required" });
+                  } else {
+                    const s = String(v).trim();
+                    if (!/^(0|[0-9]+)$/.test(s))
+                      errors.push({
+                        id: n.id,
+                        arg: i,
+                        msg: "Enter a non-negative integer",
+                      });
+                    else if (!Number.isSafeInteger(+s) || +s > 2147483647)
+                      errors.push({
+                        id: n.id,
+                        arg: i,
+                        msg: "Must be at most 2147483647",
+                      });
+                    else if (arg.min != null && +s < arg.min)
+                      errors.push({
+                        id: n.id,
+                        arg: i,
+                        msg: `Must be at least ${arg.min}`,
+                      });
+                  }
+                  return;
+                }
+                const s = String(v);
+                if (/[\x00-\x1f]/.test(s))
+                  errors.push({
+                    id: n.id,
+                    arg: i,
+                    msg: "Control characters are not allowed",
+                  });
+                else if (!wordQuotable(s))
+                  errors.push({
+                    id: n.id,
+                    arg: i,
+                    msg: "The word contains both quote types",
+                  });
+              });
+              break;
+            }
+          }
+        }
+        walk(root);
+        return errors;
+      }
+      function findNode(id) {
+        let found = null;
+        (function walk(n) {
+          if (!n || found) return;
+          if (n.id === id) {
+            found = n;
+            return;
+          }
+          if (n.kind === "binary") {
+            walk(n.left);
+            walk(n.right);
+          } else if (n.kind === "call") {
+            n.args.forEach((a) => {
+              if (a && typeof a === "object") walk(a);
+            });
+          }
+        })(state.root);
+        return found;
+      }
+      const FIXTURES = {
+        'kind(".*_test rule", rdeps(//..., //app/lib:parser))': [
+          ["//app/lib:parser_test", "java_test"],
+          ["//app:server_test", "java_test"],
+          ["//integration:api_test", "java_test"],
+          ["//tools:parser_smoke_test", "sh_test"],
+        ],
+        "deps(//app:server)": [
+          ["//app:server", "java_binary"],
+          ["//app/lib:http", "java_library"],
+          ["//app/lib:parser", "java_library"],
+          ["//app/lib:Parser.java", "source file"],
+        ],
+        "somepath(//app:server, //app/lib:parser)": [
+          ["//app:server", "java_binary"],
+          ["//app/lib:http", "java_library"],
+          ["//app/lib:parser", "java_library"],
+        ],
+        "(deps(//app:server) intersect deps(//tools:cli))": [
+          ["//app/lib:parser", "java_library"],
+          ["//app/lib:Parser.java", "source file"],
+        ],
+        "(deps(//app:server) except deps(//tools:cli))": [
+          ["//app:server", "java_binary"],
+          ["//app/lib:http", "java_library"],
+        ],
+        'labels(srcs, attr(size, "^small$", //app/...))': [
+          ["//app/lib:ParserTest.java", "source file"],
+        ],
+        "tests(//app:all_tests)": [
+          ["//app/lib:parser_test", "java_test"],
+          ["//app:server_test", "java_test"],
+        ],
+        "tests(rdeps(//..., //app/lib:parser))": [
+          ["//app/lib:parser_test", "java_test"],
+          ["//app:server_test", "java_test"],
+          ["//integration:api_test", "java_test"],
+          ["//tools:parser_smoke_test", "sh_test"],
+        ],
+        "allpaths(//app:server, //app/lib:parser)": [
+          ["//app:server", "java_binary"],
+          ["//app/lib:http", "java_library"],
+          ["//app/lib:parser", "java_library"],
+        ],
+        "buildfiles(deps(//app:server))": [
+          ["//app:BUILD", "source file"],
+          ["//app/lib:BUILD", "source file"],
+          ["//build_defs:java.bzl", "source file"],
+          ["//build_defs:BUILD", "source file"],
+        ],
+      };
+      const SAMPLE_EDGES = [
+        ["//app:server", "//app/lib:http"],
+        ["//app:server", "//app/lib:parser"],
+        ["//app/lib:http", "//app/lib:parser"],
+        ["//app/lib:parser", "//app/lib:Parser.java"],
+        ["//tools:cli", "//app/lib:parser"],
+        ["//app/lib:parser_test", "//app/lib:parser"],
+        ["//app/lib:parser_test", "//app/lib:ParserTest.java"],
+        ["//app:server_test", "//app:server"],
+        ["//integration:api_test", "//app/lib:http"],
+        ["//tools:parser_smoke_test", "//app/lib:parser"],
+        ["//app:all_tests", "//app/lib:parser_test"],
+        ["//app:all_tests", "//app:server_test"],
+        ["//app:BUILD", "//build_defs:java.bzl"],
+        ["//app/lib:BUILD", "//build_defs:java.bzl"],
+      ];
+      const PRESETS = {
+        commonDeps: "(deps(//app:server) intersect deps(//tools:cli))",
+        rdepsKind: 'kind(".*_test rule", rdeps(//..., //app/lib:parser))',
+        deps: "deps(//app:server)",
+        somepath: "somepath(//app:server, //app/lib:parser)",
+        onlyServer: "(deps(//app:server) except deps(//tools:cli))",
+        smallTestSources: 'labels(srcs, attr(size, "^small$", //app/...))',
+        suiteTests: "tests(//app:all_tests)",
+        rdepsTests: "tests(rdeps(//..., //app/lib:parser))",
+        allpaths: "allpaths(//app:server, //app/lib:parser)",
+        buildfiles: "buildfiles(deps(//app:server))",
+      };
+      const $ = (sel) => document.querySelector(sel);
+      function el(tag, attrs, ...children) {
+        const node = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs || {})) {
+          if (k === "text") node.textContent = v;
+          else if (k === "class") node.className = v;
+          else if (k in node && k !== "list" && k !== "type") node[k] = v;
+          else node.setAttribute(k, v);
+        }
+        for (const c of children) if (c) node.append(c);
+        return node;
+      }
+      function currentKey() {
+        try {
+          return `${state.noImplicit ? "1" : "0"}${state.noToolDeps ? "1" : "0"}|${activeQuery()}`;
+        } catch {
+          return null;
+        }
+      }
+      let fbTimer = null;
+      function setFeedback(msg) {
+        const fb = $("#feedback");
+        clearTimeout(fbTimer);
+        fb.textContent = msg;
+        fb.classList.add("visible");
+        fbTimer = setTimeout(() => {
+          fb.textContent = "";
+          fb.classList.remove("visible");
+        }, 3000);
+      }
+      async function copyText(text, okMsg, fallbackNode) {
+        try {
+          await navigator.clipboard.writeText(text);
+          setFeedback(okMsg);
+        } catch {
+          setFeedback("Clipboard access is unavailable. Copy the displayed text manually.");
+          if (fallbackNode) {
+            const details = fallbackNode.closest("details");
+            if (details) details.open = true;
+            const range = document.createRange();
+            range.selectNodeContents(fallbackNode);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        }
+      }
+      function commit(apply) {
+        apply();
+        renderRoot();
+        renderPreview();
+      }
+      function scalarEdit(apply) {
+        apply();
+        renderPreview();
+      }
+      function hintDetails() {
+        const details = el("details", { class: "hint-details" });
+        details.append(el("summary", { "aria-label": "About universe", text: "?" }));
+        details.append(el("p", { text: universeHelp }));
+        return details;
+      }
+      function scalarField(host, opts) {
+        const arg = el("div", { class: "arg" });
+        let inputId = "";
+        if (opts.labelText) {
+          const label = el("label", { text: opts.labelText });
+          inputId = `f-${String(opts.errKey).replace(/[^A-Za-z0-9_-]/g, "_")}`;
+          label.setAttribute("for", inputId);
+          arg.append(label);
+        }
+        const input = el("input", {
+          type: "text",
+          autocomplete: "off",
+          spellcheck: "false",
+        });
+        if (inputId) input.id = inputId;
+        if (opts.aria) input.setAttribute("aria-label", opts.aria);
+        if (opts.list) input.setAttribute("list", opts.list);
+        if (opts.placeholder) input.placeholder = opts.placeholder;
+        if (opts.inputmode) input.setAttribute("inputmode", opts.inputmode);
+        input.value = opts.value ?? "";
+        input.dataset.input = opts.errKey;
+        input.addEventListener("input", () => {
+          scalarEdit(() => opts.set(input.value));
+        });
+        const errEl = el("p", { class: "field-err" });
+        errEl.dataset.err = opts.errKey;
+        arg.append(input, errEl);
+        host.append(arg);
+        return arg;
+      }
+      function sigOf(n) {
+        if (n.kind === "call") return FUNCTIONS[n.fn].signature;
+        if (n.kind === "binary") return `expr ${n.op} expr2`;
+        return "target pattern";
+      }
+      function replaceExpression(id, replacement) {
+        function visit(n) {
+          if (n.id === id) return replacement;
+          if (n.kind === "binary") {
+            n.left = visit(n.left);
+            n.right = visit(n.right);
+          } else if (n.kind === "call") {
+            FUNCTIONS[n.fn].args.forEach((a, i) => {
+              if (a.type === "expr") n.args[i] = visit(n.args[i]);
+            });
+          }
+          return n;
+        }
+        state.root = visit(state.root);
+      }
+      function switchedFunction(current, fn) {
+        const old = FUNCTIONS[current.fn];
+        const nextSchema = FUNCTIONS[fn];
+        const next = makeCall(fn, current.args[old.wrapArg]);
+        next.id = current.id;
+        nextSchema.args.forEach((arg, i) => {
+          if (i === nextSchema.wrapArg) return;
+          const j = old.args.findIndex(
+            (a, j) => j !== old.wrapArg && a.name === arg.name && a.type === arg.type,
+          );
+          if (j >= 0) next.args[i] = current.args[j];
+        });
+        return next;
+      }
+      function isExprHole(n) {
+        return n.kind === "target" && n.text === "" && !literalEditors.has(n.id);
+      }
+      function currentKind(n) {
+        if (n.kind === "call") return n.fn;
+        if (n.kind === "binary") return n.op;
+        return n.kind;
+      }
+      function buildKindSelect(n, slotLabel) {
+        const sel = el("select", {
+          class: "kind-select",
+          "aria-label": `Expression kind for ${slotLabel}`,
+          title: "Change expression type",
+        });
+        sel.dataset.kindFor = n.id;
+        for (const [g, items] of kindGroups) {
+          const og = el("optgroup", { label: g });
+          for (const [v, label] of items) og.append(el("option", { value: v, text: label }));
+          sel.append(og);
+        }
+        sel.value = currentKind(n);
+        sel.addEventListener("change", () => {
+          const v = sel.value;
+          if (v === currentKind(n)) return;
+          const refocus = () => {
+            const ns = document.querySelector(`[data-kind-for="${n.id}"]`);
+            if (ns) ns.focus();
+          };
+          if (n.kind === "call" && Object.hasOwn(FUNCTIONS, v)) {
+            commit(() => replaceExpression(n.id, switchedFunction(n, v)));
+            refocus();
+            return;
+          }
+          if (n.kind === "binary" && (v === "intersect" || v === "union" || v === "except")) {
+            commit(() => {
+              n.op = v;
+            });
+            refocus();
+            return;
+          }
+          const next = defaultNodeFor(v);
+          if (next.kind === "target") literalEditors.add(next.id);
+          commit(() => replaceExpression(n.id, next));
+          focusNewExpr(next.id);
+        });
+        return sel;
+      }
+      function renderRoot() {
+        const host = $("#expr-root");
+        host.textContent = "";
+        renderExpression(state.root, host, "Root");
+      }
+      function isComposite(n) {
+        return n.kind !== "target" && !isExprHole(n);
+      }
+      function renderExpression(n, host, slotLabel) {
+        if (isExprHole(n)) {
+          renderExprHole(n, host, slotLabel);
+          return;
+        }
+        if (n.kind === "target") {
+          renderAtom(n, host, slotLabel);
+          return;
+        }
+        const card = el("div", { class: "expr-card" });
+        card.dataset.nodeId = n.id;
+        card.dataset.kind = n.kind;
+        if (n.kind === "call") renderCall(n, card, slotLabel);
+        else if (n.kind === "binary") renderBinary(n, card, slotLabel);
+        host.append(card);
+      }
+      function renderExprHole(n, host, slotLabel) {
+        const wrap = el("div", { class: "atom-row hole-row" });
+        wrap.dataset.nodeId = n.id;
+        wrap.dataset.kind = n.kind;
+        const sel = el("select", {
+          class: "hole-select",
+          "aria-label": `Choose an expression for ${slotLabel}`,
+        });
+        sel.dataset.input = `${n.id}:text`;
+        const ph = el("option", {
+          value: "",
+          text: "Choose expression…",
+          disabled: true,
+          selected: true,
+        });
+        sel.append(ph);
+        for (const [g, items] of kindGroups) {
+          const og = el("optgroup", { label: g });
+          for (const [v, label] of items) og.append(el("option", { value: v, text: label }));
+          sel.append(og);
+        }
+        sel.addEventListener("change", () => {
+          const v = sel.value;
+          const next = defaultNodeFor(v);
+          if (v === "target") literalEditors.add(next.id);
+          commit(() => replaceExpression(n.id, next));
+          focusNewExpr(next.id);
+        });
+        wrap.append(sel);
+        const errEl = el("p", { class: "field-err" });
+        errEl.dataset.err = `${n.id}:text`;
+        errEl.dataset.holeError = "1";
+        wrap.append(errEl);
+        host.append(wrap);
+      }
+      function focusNewExpr(id) {
+        const c = document.querySelector(`[data-node-id="${id}"]`);
+        if (!c) return;
+        const kind = c.dataset.kind;
+        let region = c;
+        if (kind === "call") region = c.querySelector(":scope > .call-args") || c;
+        else if (kind === "binary") region = c.querySelector(":scope > .comp-body") || c;
+        else if (kind === "target") {
+          const inp = c.querySelector("input");
+          if (inp) {
+            inp.focus();
+            return;
+          }
+        }
+        const t = region.querySelector("input, select") || region.querySelector("button");
+        if (t) t.focus();
+      }
+      function renderAtom(n, host, slotLabel) {
+        const row = el("div", { class: "atom-row" });
+        row.dataset.nodeId = n.id;
+        row.dataset.kind = n.kind;
+        const arg = el("div", { class: "arg" });
+        if (n.text !== "") literalEditors.add(n.id);
+        scalarField(arg, {
+          labelText: "Target pattern",
+          errKey: `${n.id}:text`,
+          value: n.text,
+          list: "label-options",
+          placeholder: "//app:server",
+          aria: `${slotLabel} target pattern`,
+          set: (v) => {
+            n.text = v;
+          },
+        });
+        row.append(buildKindSelect(n, slotLabel), arg);
+        host.append(row);
+      }
+      function renderCall(n, card, slotLabel) {
+        const schema = FUNCTIONS[n.fn];
+        const head = el("div", { class: "comp-head" });
+        head.append(buildKindSelect(n, slotLabel));
+        card.append(head);
+        const body = el("div", { class: "call-args" });
+        schema.args.forEach((arg, i) => {
+          const row = el("div", { class: "call-arg" });
+          row.dataset.callFor = n.id;
+          row.dataset.argIndex = i;
+          if (arg.type === "expr") {
+            row.classList.add(isComposite(n.args[i]) ? "is-wide" : "is-expr-simple");
+            const h2 = el("div", { class: "arg-head" });
+            h2.append(el("span", { class: "field-label", text: arg.name }));
+            if (arg.name === "universe" && n.fn === "rdeps") h2.append(hintDetails());
+            row.append(h2);
+            renderExpression(n.args[i], row, `${n.fn} ${arg.name}`);
+          } else {
+            row.classList.add(arg.type === "int" ? "is-int" : "is-word");
+            scalarField(row, {
+              labelText: arg.name + (arg.optional ? " (optional)" : ""),
+              errKey: `${n.id}:${i}`,
+              value: n.args[i] ?? "",
+              placeholder: arg.optional
+                ? "optional"
+                : arg.type === "int"
+                  ? "0"
+                  : arg.name === "pattern"
+                    ? "regex"
+                    : "word",
+              aria: `${n.fn} ${arg.name}`,
+              inputmode: arg.type === "int" ? "numeric" : "",
+              list:
+                arg.name === "name" || arg.name === "attr_name"
+                  ? "attr-names"
+                  : arg.name === "pattern" && n.fn === "kind"
+                    ? "kind-patterns"
+                    : "",
+              set: (v) => {
+                n.args[i] = arg.optional && v === "" ? null : v;
+              },
+            });
+          }
+          row.append(el("span", { class: "arg-comma", text: "," }));
+          body.append(row);
+        });
+        card.append(body);
+      }
+      function renderBinary(n, card, slotLabel) {
+        const head = el("div", { class: "comp-head" });
+        const sel = buildKindSelect(n, slotLabel);
+        sel.title = `Change expression type: ${sigOf(n)}`;
+        head.append(sel);
+        card.append(head);
+        const body = el("div", { class: "comp-body" });
+        const grid = el("div", { class: "binary-fields" });
+        const lf = el("div", { class: "expr-field" });
+        lf.append(el("span", { class: "field-label", text: "left" }));
+        renderExpression(n.left, lf, "left");
+        const rf = el("div", { class: "expr-field" });
+        rf.append(el("span", { class: "field-label", text: "right" }));
+        renderExpression(n.right, rf, "right");
+        grid.append(lf, rf);
+        body.append(grid);
+        card.append(body);
+      }
+      function updateArgumentSeparators() {
+        document.querySelectorAll(".call-arg[data-call-for]").forEach((row) => {
+          const n = findNode(+row.dataset.callFor);
+          const c = row.querySelector(":scope > .arg-comma");
+          if (!c || !n || n.kind !== "call") return;
+          const schema = FUNCTIONS[n.fn];
+          const i = +row.dataset.argIndex;
+          const inc = (j) => !schema.args[j].optional || (n.args[j] != null && n.args[j] !== "");
+          c.hidden = !inc(i) || !schema.args.some((_, j) => j > i && inc(j));
+        });
+      }
+      function renderMode() {
+        const isBuilder = state.mode === "builder";
+        $("#builder-view").hidden = !isBuilder;
+        $("#code-view").hidden = isBuilder;
+        $("#tab-builder").setAttribute("aria-selected", String(isBuilder));
+        $("#tab-code").setAttribute("aria-selected", String(!isBuilder));
+      }
+      function applyErrors(errors) {
+        const map = new Map(errors.map((e) => [`${e.id}:${e.arg}`, e.msg]));
+        document.querySelectorAll("#builder-view [data-err]").forEach((elm) => {
+          const m = map.get(elm.dataset.err);
+          elm.hidden = !m;
+          elm.textContent = elm.dataset.holeError && m ? "Choose an expression" : m || "";
+        });
+        document.querySelectorAll("#builder-view [data-input]").forEach((inp) => {
+          inp.classList.toggle("invalid", map.has(inp.dataset.input));
+        });
+      }
+      function renderPreview() {
+        let q = "";
+        let serErr = "";
+        try {
+          q = serialize(state.root);
+        } catch (e) {
+          serErr = e.message;
+        }
+        $("#generated-query").textContent = serErr ? `(serialize error) ${serErr}` : q;
+        let cmd = "";
+        try {
+          cmd = command();
+        } catch (e) {
+          cmd = `(serialize error) ${e.message}`;
+        }
+        $("#command-line").textContent = cmd;
+        const errors = validate(state.root);
+        const valid =
+          state.mode === "builder" ? !serErr && errors.length === 0 : state.rawDraft.trim() !== "";
+        $("#run-sample").disabled = !valid;
+        $("#copy-command").disabled = !valid;
+        $("#tab-code").disabled = state.mode === "builder" && Boolean(serErr);
+        applyErrors(errors);
+        updateArgumentSeparators();
+        updateExampleMarks(serErr ? "" : q);
+        renderResults();
+      }
+      function updateExampleMarks(builderExpr) {
+        document.querySelectorAll(".example").forEach((btn) => {
+          const match =
+            state.mode === "builder" &&
+            state.noImplicit &&
+            !state.noToolDeps &&
+            builderExpr === PRESETS[btn.dataset.preset];
+          if (match) btn.setAttribute("aria-current", "true");
+          else btn.removeAttribute("aria-current");
+        });
+      }
+      function renderResults() {
+        const body = $("#results-body");
+        body.textContent = "";
+        const stale = $("#stale-note");
+        const count = $("#result-count");
+        const copyLabels = $("#copy-output");
+        if (!state.lastRun) {
+          stale.hidden = true;
+          count.textContent = "";
+          copyLabels.disabled = true;
+          body.append(
+            el("p", {
+              class: "empty",
+              text: "Select Run sample to show sample results.",
+            }),
+          );
+          return;
+        }
+        stale.hidden = currentKey() === state.lastRun.key;
+        if (!state.lastRun.rows) {
+          count.textContent = "";
+          copyLabels.disabled = true;
+          body.append(
+            el("p", {
+              class: "empty",
+              text: "No sample results are available for this query. Bazel is not connected.",
+            }),
+          );
+          return;
+        }
+        count.textContent = `${state.lastRun.rows.length} targets`;
+        copyLabels.disabled = false;
+        if (state.resultView === "graph") renderGraph(body, state.lastRun.rows);
+        else {
+          body.append(
+            el("pre", {
+              class: "raw-output",
+              text: state.lastRun.rows.map((r) => r[0]).join("\n"),
+            }),
+          );
+        }
+      }
+      function renderGraph(body, rows) {
+        const rules = new Map(rows.map(([l, r]) => [l, r]));
+        const lines = ["digraph mygraph {", "  node [shape=box];"];
+        for (const [l, r] of rules) lines.push(`  "${l}" [label="${l}\\n(${r})"];`);
+        for (const [a, b] of SAMPLE_EDGES)
+          if (rules.has(a) && rules.has(b)) lines.push(`  "${a}" -> "${b}"`);
+        lines.push("}");
+        const dot = lines.join("\n");
+        state.lastRun.dot = dot;
+        body.append(el("pre", { class: "raw-output", text: dot }));
+      }
+      function runSample() {
+        const q = activeQuery();
+        state.lastRun = {
+          key: currentKey(),
+          query: q,
+          rows:
+            state.noImplicit && !state.noToolDeps && Object.hasOwn(FIXTURES, q)
+              ? FIXTURES[q]
+              : null,
+        };
+        renderResults();
+      }
+      function updateCodeStatus() {
+        let canonical = "";
+        try {
+          canonical = serialize(state.root).trim();
+        } catch (e) {
+          canonical = "";
+        }
+        const diverged = state.rawDraft.trim() !== canonical;
+        const warn = $("#code-warning");
+        warn.hidden = !(diverged || codeError);
+        warn.classList.toggle("is-error", Boolean(codeError));
+        $("#code-warning-text").textContent =
+          codeError || "The edited query differs from the Builder expression.";
+      }
+      function setMode(mode) {
+        if (mode === state.mode) return;
+        if (mode === "code") {
+          try {
+            state.rawDraft = serialize(state.root);
+          } catch (e) {
+            setFeedback(`Cannot serialize the Builder expression: ${e.message}`);
+            return;
+          }
+          state.mode = "code";
+          $("#code-input").value = state.rawDraft;
+          codeError = "";
+          updateCodeStatus();
+        } else {
+          let canonical = "";
+          try {
+            canonical = serialize(state.root).trim();
+          } catch (e) {
+            canonical = "";
+          }
+          if (state.rawDraft.trim() === canonical) {
+            state.mode = "builder";
+            codeError = "";
+          } else {
+            try {
+              const parsed = parseQuery(state.rawDraft);
+              const errs = validate(parsed);
+              if (errs.length) {
+                codeError = errs[0].msg;
+                updateCodeStatus();
+                return;
+              }
+              state.root = parsed;
+              state.mode = "builder";
+              codeError = "";
+            } catch (e) {
+              codeError = e.message;
+              updateCodeStatus();
+              return;
+            }
+          }
+        }
+        renderMode();
+        renderRoot();
+        renderPreview();
+      }
+      function loadPreset(name) {
+        if (state.mode === "code") {
+          let canonical = "";
+          try {
+            canonical = serialize(state.root).trim();
+          } catch (e) {
+            canonical = "";
+          }
+          if (state.rawDraft.trim() !== canonical) {
+            const ok = window.confirm("Loading this example replaces your Code edits. Continue?");
+            if (!ok) return;
+          }
+        }
+        state.root = parseQuery(PRESETS[name]);
+        state.noImplicit = true;
+        state.noToolDeps = false;
+        state.mode = "builder";
+        state.rawDraft = "";
+        codeError = "";
+        $("#flag-noimplicit").checked = true;
+        $("#flag-notool").checked = false;
+        renderRoot();
+        renderMode();
+        renderPreview();
+        runSample();
+      }
+      $("#flag-noimplicit").addEventListener("change", (e) => {
+        state.noImplicit = e.target.checked;
+        renderPreview();
+      });
+      $("#flag-notool").addEventListener("change", (e) => {
+        state.noToolDeps = e.target.checked;
+        renderPreview();
+      });
+      $("#tab-builder").addEventListener("click", () => setMode("builder"));
+      $("#tab-code").addEventListener("click", () => setMode("code"));
+      $("#tab-result-raw").addEventListener("click", () => {
+        state.resultView = "raw";
+        $("#tab-result-raw").setAttribute("aria-selected", "true");
+        $("#tab-result-graph").setAttribute("aria-selected", "false");
+        renderResults();
+      });
+      $("#tab-result-graph").addEventListener("click", () => {
+        state.resultView = "graph";
+        $("#tab-result-graph").setAttribute("aria-selected", "true");
+        $("#tab-result-raw").setAttribute("aria-selected", "false");
+        renderResults();
+      });
+      $("#code-input").addEventListener("input", (e) => {
+        state.rawDraft = e.target.value;
+        codeError = "";
+        updateCodeStatus();
+        renderPreview();
+      });
+      $("#restore-builder").addEventListener("click", () => {
+        const ok = window.confirm("Discard Code edits and restore the Builder expression?");
+        if (!ok) return;
+        state.rawDraft = serialize(state.root);
+        state.mode = "builder";
+        renderMode();
+        renderPreview();
+      });
+      $("#copy-command").addEventListener("click", () =>
+        copyText(command(), "Command copied", $("#command-line")),
+      );
+      $("#copy-output").addEventListener("click", () => {
+        if (!state.lastRun || !state.lastRun.rows) return;
+        copyText(
+          state.resultView === "graph" && state.lastRun.dot
+            ? state.lastRun.dot
+            : state.lastRun.rows.map((r) => r[0]).join("\n"),
+          "Output copied",
+          null,
+        );
+      });
+      $("#run-sample").addEventListener("click", runSample);
+      document.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          if (!$("#run-sample").disabled) runSample();
+        }
+      });
+      document.querySelectorAll(".example").forEach((btn) => {
+        btn.addEventListener("click", () => loadPreset(btn.dataset.preset));
+      });
+      const kindDatalist = el("datalist", { id: "kind-patterns" });
+      for (const p of [".*_test rule", "java_library rule", "java_binary rule", "source file"]) {
+        kindDatalist.append(el("option", { value: p }));
+      }
+      document.body.append(kindDatalist);
+      state.root = parseQuery(PRESETS.commonDeps);
+      renderRoot();
+      renderMode();
+      renderPreview();
+      runSample();
+    </script>
+  </body>
+</html>

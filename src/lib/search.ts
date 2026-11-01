@@ -1,5 +1,5 @@
 import fuzzysort, { type SnapshotKey } from "fuzzysort";
-import type { Target } from "./types.ts";
+import type { Snapshot, Target } from "./types.ts";
 
 /** Candidate and fuzzy-match ranges for one target label. */
 export interface Match {
@@ -16,6 +16,31 @@ export interface Match {
  */
 export function createIndex(targets: Target[]): SnapshotKey<Target> {
   return fuzzysort.snapshot(targets, { key: "label" });
+}
+
+/**
+ * Candidates for query target-pattern inputs. The snapshot's `targets` only
+ * hold in-workspace rules (`kind("rule", //...)`), but queries also name
+ * external repos — `@maven//`, `@pip//`, toolchains. Those arrive as `to` of
+ * the workspace's own dependency edges (implicit deps are filtered at
+ * ingest), so they join the index as label-only targets; internal edge
+ * destinations would just duplicate `targets` and are skipped.
+ */
+export function querySearchTargets(snap: Snapshot): Target[] {
+  const external = new Set<string>();
+  for (const e of snap.edges) {
+    if (e.to.startsWith("@")) external.add(e.to);
+  }
+  return [
+    ...snap.targets,
+    ...[...external].map((label): Target => ({
+      label,
+      pkg: "",
+      name: "",
+      ruleClass: "external",
+      location: null,
+    })),
+  ];
 }
 
 /**

@@ -61,6 +61,7 @@
   import { Check, Copy } from "phosphor-svelte";
   import { onDestroy } from "svelte";
   import { app } from "./state.svelte";
+  import { createIndex, querySearchTargets } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
@@ -83,11 +84,11 @@
 
   let { snap }: { snap: Snapshot | null } = $props();
 
-  const labelsId = "query-labels";
   const attrsId = "query-attrs";
   const kindsId = "query-kinds";
-  const labelOptions = $derived(
-    (snap?.targets ?? []).slice(0, 300).map((t) => t.label),
+
+  const searchIndex = $derived(
+    snap ? createIndex(querySearchTargets(snap)) : null,
   );
   const attrOptions = $derived(
     [...new Set((snap?.edges ?? []).map((e) => e.attr))].sort(),
@@ -446,17 +447,12 @@
                 bind:node={root}
                 {errors}
                 {literalEditors}
-                {labelsId}
+                {searchIndex}
                 {attrsId}
                 {kindsId}
                 context="Root"
               />
             </div>
-            <datalist id={labelsId}>
-              {#each labelOptions as label (label)}
-                <option value={label}></option>
-              {/each}
-            </datalist>
             <datalist id={attrsId}>
               {#each attrOptions as attr (attr)}
                 <option value={attr}></option>
