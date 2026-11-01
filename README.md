@@ -23,10 +23,10 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 ## Target discovery scope
 
 Set the discovery scope when opening a repository. Enter one absolute Bazel
-pattern per line in **include target patterns**, for example `//services/payments/...`,
-`//libs/money/...`, or `//tools:generator`. Optional exclude patterns take precedence
-across all includes. The default include is `//...` (the whole repository); narrow
-it to limit discovery.
+pattern per line in **target patterns**, for example `//services/payments/...`,
+`//libs/money/...`, or `//tools:generator`. Targets matching any listed pattern
+are discovered. The default is `//...` (the whole repository); narrow it to limit
+discovery. Saved exclusion fields from earlier versions are ignored.
 
 Zeal saves the last repository and its scope for refreshes and restarts. Existing
 settings without a scope use the default `//...`; invalid saved settings are not

@@ -47,10 +47,9 @@ export interface IngestError {
   summary: string;
 }
 
-/** Target patterns included in discovery, with exclusions taking precedence. */
+/** Target patterns included in discovery. */
 export interface TargetScope {
   include: string[];
-  exclude: string[];
 }
 
 /** Current core state. A workspace switch clears workspace-scoped data. */

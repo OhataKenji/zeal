@@ -16,7 +16,6 @@
   // Props seed this form once.
   let path = $state(untrack(() => initial));
   let include = $state(untrack(() => initialScope.include.join("\n")));
-  let exclude = $state(untrack(() => initialScope.exclude.join("\n")));
   let error = $state<string | null>(null);
   let busy = $state(false);
 
@@ -28,7 +27,6 @@
     try {
       await openWorkspace(path.trim(), {
         include: include.split("\n"),
-        exclude: exclude.split("\n"),
       });
       close?.();
     } catch (e) {
@@ -56,7 +54,7 @@
     />
   </label>
   <label>
-    include target patterns
+    target patterns
     <textarea
       class="input scope-patterns"
       bind:value={include}
@@ -67,19 +65,8 @@
       required
     ></textarea>
   </label>
-  <label>
-    exclude target patterns (optional)
-    <textarea
-      class="input scope-patterns"
-      bind:value={exclude}
-      placeholder="//services/payments/legacy/..."
-      rows="3"
-      aria-describedby="scope-help"
-      disabled={busy}
-    ></textarea>
-  </label>
   <p class="scope-help" id="scope-help">
-    One Bazel target pattern per line. Exclusions take precedence. This scope controls target
+    One Bazel target pattern per line. This scope controls target
     discovery; dependencies may point outside it. Default: //... (whole repository). Narrow it to limit discovery.
   </p>
   <div class="ws-actions">

@@ -5,14 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Scope {
     pub include: Vec<String>,
-    pub exclude: Vec<String>,
 }
 
 impl Default for Scope {
     fn default() -> Self {
         Self {
             include: vec!["//...".to_string()],
-            exclude: Vec::new(),
         }
     }
 }
@@ -21,21 +19,15 @@ impl Scope {
     /// Validate and normalize the patterns at the IPC and persistence boundaries.
     pub fn validated(self) -> Result<Self, String> {
         let include = normalize(self.include)?;
-        let exclude = normalize(self.exclude)?;
         if include.is_empty() {
             return Err("include at least one target pattern".to_string());
         }
-        Ok(Self { include, exclude })
+        Ok(Self { include })
     }
 
     /// Quote the scope accepted at the IPC or persistence boundary.
     pub fn query(&self) -> String {
-        let includes = union(&self.include);
-        let selected = if self.exclude.is_empty() {
-            includes
-        } else {
-            format!("({includes}) except ({})", union(&self.exclude))
-        };
+        let selected = union(&self.include);
         format!(
             "let selected = kind(\"rule\", ({selected})) in $selected union kind(\"source file\", deps($selected, 1))"
         )
@@ -74,7 +66,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_both_lists_at_the_boundary() {
+    fn trims_and_drops_blank_patterns_preserving_order_and_duplicates() {
         let scope = Scope {
             include: vec![
                 " //b/... ".into(),
@@ -82,30 +74,22 @@ mod tests {
                 "//a:all".into(),
                 "//b/...".into(),
             ],
-            exclude: vec![
-                " //b/old/... ".into(),
-                " ".into(),
-                "//a:skip".into(),
-                "//b/old/...".into(),
-            ],
         }
         .validated()
         .unwrap();
         assert_eq!(scope.include, ["//b/...", "//a:all", "//b/..."]);
-        assert_eq!(scope.exclude, ["//b/old/...", "//a:skip", "//b/old/..."]);
     }
 
     #[test]
-    fn multiple_patterns_are_combined_before_exclusions() {
+    fn multiple_patterns_are_combined_as_a_union() {
         let scope = Scope {
             include: vec!["//a:all".into(), "//b/...".into()],
-            exclude: vec!["//b/old/...".into()],
         }
         .validated()
         .unwrap();
         assert_eq!(
             scope.query(),
-            "let selected = kind(\"rule\", ((\"//a:all\" union \"//b/...\") except (\"//b/old/...\"))) in $selected union kind(\"source file\", deps($selected, 1))"
+            "let selected = kind(\"rule\", (\"//a:all\" union \"//b/...\")) in $selected union kind(\"source file\", deps($selected, 1))"
         );
     }
 
@@ -114,8 +98,7 @@ mod tests {
         assert_eq!(Scope::default().validated().unwrap().include, ["//..."]);
         assert!(
             Scope {
-                include: vec![" ".into()],
-                exclude: vec![]
+                include: vec![" ".into()]
             }
             .validated()
             .is_err()
@@ -135,17 +118,7 @@ mod tests {
         ] {
             assert!(
                 Scope {
-                    include: vec![pattern.into()],
-                    exclude: vec![]
-                }
-                .validated()
-                .is_err(),
-                "{pattern:?}"
-            );
-            assert!(
-                Scope {
-                    include: vec!["//...".into()],
-                    exclude: vec![pattern.into()]
+                    include: vec![pattern.into()]
                 }
                 .validated()
                 .is_err(),
@@ -163,7 +136,6 @@ mod tests {
                 "//a) union //...".into(),
                 "//pkg:it's".into(),
             ],
-            exclude: vec![],
         }
         .validated()
         .unwrap();

@@ -96,7 +96,6 @@ mod tests {
         let dir = TempDir::new();
         let scope = Scope {
             include: vec!["//app/...".into()],
-            exclude: vec!["//app/old/...".into()],
         };
         save(dir.path(), Path::new("/workspace"), &scope);
         let saved = load_saved(dir.path()).unwrap();
@@ -119,12 +118,24 @@ mod tests {
         for scope in [
             serde_json::Value::Null,
             serde_json::json!("//..."),
-            serde_json::json!({"include": [], "exclude": []}),
-            serde_json::json!({"include": ["//app\\unsafe"], "exclude": []}),
+            serde_json::json!({"include": []}),
+            serde_json::json!({"include": ["//app\\unsafe"]}),
         ] {
             let settings = serde_json::json!({"path": "/workspace", "scope": scope});
             std::fs::write(dir.path().join(SAVED_FILE), settings.to_string()).unwrap();
             assert!(load_saved(dir.path()).is_none(), "{settings}");
         }
+    }
+
+    #[test]
+    fn old_exclude_settings_are_ignored() {
+        let dir = TempDir::new();
+        std::fs::write(dir.path().join(SAVED_FILE), r#"{"path":"/workspace","scope":{"include":["//app/..."],"exclude":["//app/old/..."]}}"#).unwrap();
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.scope.include, ["//app/..."]);
+        assert_eq!(
+            saved.scope.query(),
+            "let selected = kind(\"rule\", (\"//app/...\")) in $selected union kind(\"source file\", deps($selected, 1))"
+        );
     }
 }

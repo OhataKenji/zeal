@@ -4,7 +4,7 @@ import { canSend, canStop, createSession, emptyView, type Transport } from "../s
 import type { AppState, Profile, RunDetail, RunRecord, Section } from "../src/lib/types.ts";
 
 const IDLE: AppState = {
-  scope: { include: ["//app/..."], exclude: [] },
+  scope: { include: ["//app/..."] },
   workspace: "/workspace",
   bazel: "/bin/bazel",
   ingest: "idle",
@@ -1097,12 +1097,11 @@ test("workspace changes revoke a completed Console and discard its pending detai
   assert.equal(h.view.selectedRun, null);
 });
 
-test("workspace opening sends all include and exclude patterns to the core", async () => {
+test("workspace opening sends all target patterns to the core", async () => {
   const h = harness();
   await h.session.init();
   const scope = {
     include: ["//services/payments/...", "//libs/money/...", "//tools:generator"],
-    exclude: ["//services/payments/legacy/..."],
   };
   const opened = h.session.openWorkspace("/other", scope);
   const request = pendingRequest(h, "open_workspace");
