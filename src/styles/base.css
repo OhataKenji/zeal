@@ -1,6 +1,6 @@
 :root {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-sans: -apple-system, "BlinkMacSystemFont", "Segoe UI", sans-serif;
+  --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
   --background: #fff;
   --foreground: #222;
   --border: #dedede;
