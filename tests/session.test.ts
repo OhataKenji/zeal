@@ -124,6 +124,10 @@ function lastPendingRequest(h: ReturnType<typeof harness>, command: string) {
   return request;
 }
 
+function requestCount(h: ReturnType<typeof harness>, command: string) {
+  return h.pending.filter((call) => call.command === command).length;
+}
+
 // Drain promise reactions only; no timers or arbitrary sleeps in race tests.
 async function settle() {
   await Promise.resolve();
@@ -176,7 +180,7 @@ test("a profile failure leaves logs visible and retries only timing", async () =
   const retry = h.session.loadProfile();
   lastPendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
   await retry;
-  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 1);
+  assert.equal(requestCount(h, "get_run"), 1);
   assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
 });
@@ -195,7 +199,7 @@ test("a log request failure leaves timing visible and retries only the summary",
   await retry;
   assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detailError, null);
-  assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 1);
+  assert.equal(requestCount(h, "get_run_profile"), 1);
 });
 
 test("a late profile response or error cannot replace a newer selection", async () => {
@@ -251,7 +255,6 @@ test("Send does not depend on a snapshot and stays usable after a failed ingesti
     snapshotFetchedAt: null,
     lastError: { exitCode: 1, summary: "query failed" },
   });
-  assert.equal(h.view.state?.snapshotFetchedAt, null);
   const lastError = h.view.state?.lastError;
   assert.ok(lastError);
   assert.match(lastError.summary, /query failed/);
@@ -282,7 +285,7 @@ test("snapshot data is fetched once per snapshotFetchedAt change, not per state 
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt, running: "run-a" });
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
   await settle();
-  assert.equal(h.pending.filter((call) => call.command === "get_snapshot").length, 1);
+  assert.equal(requestCount(h, "get_snapshot"), 1);
 });
 
 test("events during a snapshot fetch do not duplicate the request", async () => {
@@ -292,7 +295,7 @@ test("events during a snapshot fetch do not duplicate the request", async () => 
   assert.equal(h.view.snapshotLoading, true);
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt, running: "run-a" });
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
-  assert.equal(h.pending.filter((call) => call.command === "get_snapshot").length, 1);
+  assert.equal(requestCount(h, "get_snapshot"), 1);
   pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
   await settle();
   assert.deepEqual(h.view.snapshot, SNAPSHOT);
@@ -330,6 +333,19 @@ test("workspace switch drops the snapshot and its in-flight fetch", async () => 
   assert.equal(h.view.snapshot, null);
 });
 
+test("an event without snapshotFetchedAt clears a stale snapshot", async () => {
+  const h = harness();
+  await h.session.init();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
+  pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
+  await settle();
+  assert.deepEqual(h.view.snapshot, SNAPSHOT);
+  // Re-opening the same workspace clears the core snapshot without a
+  // workspace change, so only this field dropping to null can clear the view.
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: null });
+  assert.equal(h.view.snapshot, null);
+});
+
 test("loadSnapshot retries a failed fetch directly and deduplicates calls", async () => {
   const h = harness();
   await h.session.init();
@@ -341,7 +357,7 @@ test("loadSnapshot retries a failed fetch directly and deduplicates calls", asyn
   void h.session.loadSnapshot();
   assert.equal(h.view.snapshotError, null);
   assert.equal(h.view.snapshotLoading, true);
-  assert.equal(h.pending.filter((call) => call.command === "get_snapshot").length, 2);
+  assert.equal(requestCount(h, "get_snapshot"), 2);
   lastPendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
   await settle();
   assert.deepEqual(h.view.snapshot, SNAPSHOT);
@@ -914,8 +930,8 @@ test("process completion opens detail once and allows Console to stay reopened",
   await settle();
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.selectedRun, null);
-  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 1);
-  assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 1);
+  assert.equal(requestCount(h, "get_run"), 1);
+  assert.equal(requestCount(h, "get_run_profile"), 1);
 });
 
 test("successive executions each open detail once after their own completion", async () => {
@@ -944,8 +960,8 @@ test("successive executions each open detail once after their own completion", a
   h.emit("app-state", { ...IDLE, consoleRun: secondRecord.id });
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.selectedRun, null);
-  assert.equal(h.pending.filter((call) => call.command === "get_run").length, 2);
-  assert.equal(h.pending.filter((call) => call.command === "get_run_profile").length, 2);
+  assert.equal(requestCount(h, "get_run"), 2);
+  assert.equal(requestCount(h, "get_run_profile"), 2);
 });
 
 test("process completion preserves another selected run", async () => {
