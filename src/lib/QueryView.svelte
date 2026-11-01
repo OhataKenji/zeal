@@ -336,8 +336,7 @@
     );
   }
 
-  // Loading an example only fills the editor: the fixture targets usually do
-  // not exist in the user's workspace, so an immediate run would just error.
+  // Loading an example only fills the editor; the user decides when to run.
   function loadExample(id: string) {
     const built = applyExample(id);
     if (!built) return;

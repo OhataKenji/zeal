@@ -693,44 +693,52 @@ export function codeDiverged(root: Expr, draft: string): boolean {
 // Ordered like the bazel query guide: single-function queries first (what X
 // needs, how it connects, who needs X), then existence enumeration, then the
 // composite idioms (diffs) and plumbing.
+//
+// Every example only names @@platforms constraint-graph targets: canonical
+// `@@` names resolve without a use_repo declaration, so each runs verbatim in
+// any repository (even an empty MODULE.bazel), and a ~60-target universe
+// keeps them cheap in huge monorepos. tests() has no universal example —
+// no test_suite is guaranteed to exist.
 const PRESETS: Record<string, { expr: string; desc: string }> = {
-  deps: { expr: "deps(//app:server)", desc: "Transitive dependencies" },
+  deps: {
+    expr: "deps(@@platforms//os:all)",
+    desc: "Transitive dependencies",
+  },
   somepath: {
-    expr: "somepath(//app:server, //app/lib:parser)",
+    expr: "somepath(@@platforms//os:all, @@platforms//os:os)",
     desc: "One path between two targets",
   },
   allpaths: {
-    expr: "allpaths(//app:server, //app/lib:parser)",
+    expr: "allpaths(@@platforms//os:all, @@platforms//os:os)",
     desc: "Every path between two targets",
   },
   rdeps: {
-    expr: "rdeps(//..., //app/lib:parser)",
+    expr: "rdeps(@@platforms//..., @@platforms//os:os)",
     desc: "Reverse dependencies",
   },
-  kindTests: {
-    expr: 'kind(".*_test rule", //app/...)',
+  kindConstraint: {
+    expr: 'kind("constraint_value rule", @@platforms//...)',
     desc: "Find targets by rule kind",
   },
-  suiteTests: { expr: "tests(//app:all_tests)", desc: "Expand test suites" },
-  rdepsTests: {
-    expr: "tests(rdeps(//..., //app/lib:parser))",
-    desc: "Tests that depend on a target",
+  siblings: {
+    expr: "siblings(@@platforms//os:linux)",
+    desc: "Targets in the same package",
   },
-  smallTestSources: {
-    expr: 'labels(srcs, attr(size, "^small$", //app/...))',
-    desc: "Filter by attribute, then get srcs",
+  attrLabels: {
+    expr: 'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
+    desc: "Filter by attribute, then get labels",
   },
-  onlyServer: {
-    expr: "(deps(//app:server) except deps(//tools:cli))",
-    desc: "Dependencies unique to one target",
+  osExceptKind: {
+    expr: '(@@platforms//os:all) except kind("constraint_value rule", @@platforms//os:all)',
+    desc: "Package targets minus a rule kind",
   },
-  commonDeps: {
-    expr: "(deps(//app:server) intersect deps(//tools:cli))",
-    desc: "Shared dependencies",
+  depsIntersectKind: {
+    expr: '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
+    desc: "Constraint values inside the deps",
   },
   buildfiles: {
-    expr: "buildfiles(deps(//app:server))",
-    desc: "BUILD and .bzl files in the deps",
+    expr: "buildfiles(deps(@@platforms//os:all))",
+    desc: "BUILD files in the deps",
   },
 };
 
@@ -739,12 +747,11 @@ const EXAMPLE_LABELS: Record<string, string> = {
   somepath: "somepath",
   allpaths: "allpaths",
   rdeps: "rdeps",
-  kindTests: "kind *_test",
-  suiteTests: "tests",
-  rdepsTests: "rdeps → tests",
-  smallTestSources: "attr → labels",
-  onlyServer: "deps − deps",
-  commonDeps: "deps ∩ deps",
+  kindConstraint: "kind constraint_value",
+  siblings: "siblings",
+  attrLabels: "attr → labels",
+  osExceptKind: "all − kind",
+  depsIntersectKind: "deps ∩ kind",
   buildfiles: "buildfiles",
 };
 
@@ -768,8 +775,8 @@ export const EXAMPLES: ReadonlyArray<{
  * Builds the named example expression, or null for an unknown name. Loading
  * an example replaces the current expression, resets the flags to
  * `DEFAULT_FLAGS`, and returns to Builder mode — the view performs those
- * resets itself; loading never runs the query (the fixture targets usually
- * do not exist in the user's workspace, so a run would just fail).
+ * resets itself; loading never runs the query (a click fills the editor,
+ * and the user decides when to run).
  */
 export function applyExample(id: string): Expr | null {
   return EXAMPLES.find((e) => e.id === id)?.build() ?? null;

@@ -243,17 +243,17 @@ test("constructors fill schema defaults and defaultNodeFor covers every kind", (
 });
 
 const EXPECTED: Record<string, string> = {
-  deps: "deps(//app:server)",
-  somepath: "somepath(//app:server, //app/lib:parser)",
-  allpaths: "allpaths(//app:server, //app/lib:parser)",
-  rdeps: "rdeps(//..., //app/lib:parser)",
-  kindTests: 'kind(".*_test rule", //app/...)',
-  suiteTests: "tests(//app:all_tests)",
-  rdepsTests: "tests(rdeps(//..., //app/lib:parser))",
-  smallTestSources: 'labels(srcs, attr(size, "^small$", //app/...))',
-  onlyServer: "(deps(//app:server) except deps(//tools:cli))",
-  commonDeps: "(deps(//app:server) intersect deps(//tools:cli))",
-  buildfiles: "buildfiles(deps(//app:server))",
+  deps: "deps(@@platforms//os:all)",
+  somepath: "somepath(@@platforms//os:all, @@platforms//os:os)",
+  allpaths: "allpaths(@@platforms//os:all, @@platforms//os:os)",
+  rdeps: "rdeps(@@platforms//..., @@platforms//os:os)",
+  kindConstraint: 'kind("constraint_value rule", @@platforms//...)',
+  siblings: "siblings(@@platforms//os:linux)",
+  attrLabels: 'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
+  osExceptKind: '(@@platforms//os:all except kind("constraint_value rule", @@platforms//os:all))',
+  depsIntersectKind:
+    '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
+  buildfiles: "buildfiles(deps(@@platforms//os:all))",
 };
 
 test("every example serializes to its golden text and parses back", () => {
@@ -277,7 +277,7 @@ test("every example serializes to its golden text and parses back", () => {
 test("applyExample builds a fresh tree for a known name only", () => {
   const built = applyExample("deps");
   assert.ok(built);
-  assert.equal(text(built), "deps(//app:server)");
+  assert.equal(text(built), "deps(@@platforms//os:all)");
   assert.equal(applyExample("no-such-example"), null);
   assert.deepEqual(DEFAULT_FLAGS, { noImplicit: true, noTool: false });
 });
