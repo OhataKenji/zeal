@@ -37,6 +37,21 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
+/// The current workspace snapshot. Events carry only `snapshot_fetched_at`,
+/// so the UI requests this once per change instead of on every state push.
+#[tracing::instrument(target = "zeal::operations", name = "snapshot.get", skip_all)]
+#[tauri::command]
+async fn get_snapshot(
+    core: State<'_, Arc<Core>>,
+) -> Result<Option<Arc<snapshot::Snapshot>>, String> {
+    Ok(core
+        .state
+        .lock()
+        .expect("application state lock poisoned")
+        .snapshot
+        .clone())
+}
+
 /// Open a directory as the Bazel workspace: validate it, resolve bazel, and
 /// start a background snapshot ingestion. Refused while a run is in flight: its
 /// process group belongs to the workspace it was started in.
@@ -328,6 +343,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            get_snapshot,
             read_console,
             write_console,
             resize_console,

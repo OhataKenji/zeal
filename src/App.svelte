@@ -39,9 +39,14 @@
   onMount(connect);
 
   const st = $derived(app.state);
-  const snap = $derived(st?.snapshot ?? null);
+  const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const known = $derived(new Set(snap?.targets.map((t) => t.label) ?? []));
+
+  function retryTargets() {
+    if (app.view.snapshotError) void getSession().loadSnapshot();
+    else refresh();
+  }
 
   let analyticsOpen = $state(false);
   let selected = $state<string | null>(null);
@@ -221,11 +226,16 @@
       <div class="pane-body">
         {#if snap && tree}
           <Tree root={tree} {selected} {revealRequest} onselect={select} />
-        {:else if state.ingest === "running"}
+        {:else if state.ingest === "running" || app.view.snapshotLoading}
           <p class="dim">Loading targets…</p>
-        {:else if state.lastError}
-          <p class="error">{state.lastError.summary}</p>
-          <button type="button" class="button" onclick={refresh}>retry</button>
+        {:else if app.view.snapshotError || state.lastError}
+          <p class="error">{app.view.snapshotError ?? state.lastError?.summary}</p>
+          <button
+            type="button"
+            class="button"
+            onclick={retryTargets}
+            >retry</button
+          >
         {:else}
           <p class="dim">—</p>
         {/if}
@@ -339,14 +349,17 @@
         partial results from
         {new Date(snap.meta.fetchedAt).toLocaleTimeString()}
       </p>
-    {:else if snap && state.lastError}
+    {:else if snap && (state.lastError || app.view.snapshotError)}
       <p class="warn">
         Refresh failed — showing the snapshot from {new Date(
           snap.meta.fetchedAt,
-        ).toLocaleTimeString()} ({state.lastError.summary})
+        ).toLocaleTimeString()} ({state.lastError?.summary ?? app.view.snapshotError})
       </p>
+      {#if app.view.snapshotError}
+        <button type="button" class="button" onclick={getSession().loadSnapshot}>retry</button>
+      {/if}
     {/if}
-    {#if state.ingest === "running"}
+    {#if state.ingest === "running" || app.view.snapshotLoading}
       <p class="dim">Loading targets…</p>
     {/if}
     {#if app.view.selectedRun}
@@ -364,9 +377,20 @@
       />
     {:else if snap}
       <p class="dim">Select a target in the tree</p>
-    {:else if state.ingest !== "running" && state.lastError}
-      <p class="error">Failed to load targets: {state.lastError.summary}</p>
-      <button type="button" class="button" onclick={refresh}>retry</button>
+    {:else if state.ingest !== "running" && !app.view.snapshotLoading && (app.view.snapshotError || state.lastError)}
+      <p class="error">
+        {#if app.view.snapshotError}
+          {app.view.snapshotError}
+        {:else}
+          Failed to load targets: {state.lastError?.summary}
+        {/if}
+      </p>
+      <button
+        type="button"
+        class="button"
+        onclick={retryTargets}
+        >retry</button
+      >
     {/if}
     {/if}
   </main>

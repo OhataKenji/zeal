@@ -3,6 +3,7 @@
  * preview implements it too — the mock cannot silently fall behind. */
 export const COMMANDS = {
   getState: "get_state",
+  getSnapshot: "get_snapshot",
   openWorkspace: "open_workspace",
   refresh: "refresh",
   openLocation: "open_location",
