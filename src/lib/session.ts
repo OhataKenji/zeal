@@ -21,7 +21,7 @@ export interface SessionView {
   console: RunRecord | null;
   consoleOpen: boolean;
   state: AppState | null;
-  /** Full snapshot for `state.snapshotId`; loaded separately from events. */
+  /** Full snapshot for `state.fetchedAt`; loaded separately from events. */
   snapshot: Snapshot | null;
   snapshotLoading: boolean;
   snapshotError: string | null;
@@ -90,11 +90,6 @@ export function canStop(view: SessionView): boolean {
   return !!(view.ready && view.state?.running && !view.state.stopping);
 }
 
-/** Compares snapshot identity carried by state events and by loaded data. */
-function sameSnapshot(a: number | null | undefined, b: number | null | undefined) {
-  return (a ?? null) === (b ?? null);
-}
-
 /**
  * Creates a workspace session that rejects stale requests. Call `dispose()`
  * to invalidate pending responses and remove its event subscription.
@@ -136,12 +131,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  // The DTO carries only the snapshot's identity; its data is fetched when
-  // that identity changes, not on every state event.
+  // The DTO carries only the snapshot's fetchedAt; its data is fetched when
+  // that timestamp changes, not on every state event.
   async function loadSnapshot() {
     // Manual calls re-check in-flight state that acceptState already guards.
-    if (snapshotRequested && sameSnapshot(view.state?.snapshotId, snapshotRequested)) return;
-    snapshotRequested = view.state?.snapshotId ?? null;
+    if (snapshotRequested !== null && view.state?.fetchedAt === snapshotRequested) return;
+    snapshotRequested = view.state?.fetchedAt ?? null;
     const generation = ++snapshotGeneration;
     update({ snapshotLoading: true, snapshotError: null });
     try {
@@ -291,8 +286,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
-    const wantId = state.snapshotId;
-    if (wantId === null) {
+    const wantFetchedAt = state.fetchedAt;
+    if (wantFetchedAt === null) {
       // Defensive: the core drops its snapshot only on a workspace switch,
       // which the reset above already clears.
       if (view.snapshot || view.snapshotError || snapshotRequested) {
@@ -301,10 +296,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         update({ snapshot: null, snapshotLoading: false, snapshotError: null });
       }
     } else if (
-      // A fetch for this id may already be in flight; re-issuing would
+      // A fetch for this snapshot may already be in flight; re-issuing would
       // duplicate the transfer this split exists to avoid.
-      !sameSnapshot(wantId, view.snapshot?.meta.fetchedAt) &&
-      !sameSnapshot(wantId, snapshotRequested)
+      wantFetchedAt !== view.snapshot?.meta.fetchedAt &&
+      wantFetchedAt !== snapshotRequested
     ) {
       void loadSnapshot();
     }

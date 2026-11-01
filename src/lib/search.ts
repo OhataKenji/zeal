@@ -10,7 +10,7 @@ export interface Match {
 
 /**
  * Builds the index over `targets`. The session swaps the snapshot in only when
- * its id changes, so the component derives a fresh index once per fetch;
+ * its fetchedAt changes, so the component derives a fresh index once per fetch;
  * typing then only searches the index it holds.
  */
 export function createIndex(targets: Target[]): SnapshotKey<Target> {
