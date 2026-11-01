@@ -1383,8 +1383,10 @@ button.chip:hover {
 }
 
 .query-expr-card {
-  border-left: 1px solid var(--border);
-  padding-left: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  padding: 4px 8px 6px;
   min-width: 0;
 }
 
@@ -1413,7 +1415,7 @@ button.chip:hover {
 }
 
 .query-comp-body {
-  padding: 6px 8px 8px;
+  padding: 6px 0 2px;
   min-width: 0;
 }
 
@@ -1422,7 +1424,7 @@ button.chip:hover {
   flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
-  padding: 6px 8px 8px;
+  padding: 6px 0 2px;
 }
 
 .query-call-arg {
@@ -1465,6 +1467,10 @@ button.chip:hover {
   gap: 6px;
   min-width: 0;
   position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  padding: 8px 10px;
 }
 
 .query-atom-row > .query-arg {
@@ -1527,9 +1533,7 @@ button.chip:hover {
 }
 
 .query-expr-field {
-  border-left: 1px solid var(--border);
-  padding-left: 12px;
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   min-width: 0;
 }
 
