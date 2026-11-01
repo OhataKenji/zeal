@@ -1695,12 +1695,6 @@ button.chip:hover {
   margin-left: auto;
 }
 
-.query-stale {
-  font-size: 11.5px;
-  color: var(--warning);
-  margin: 8px 0 0;
-}
-
 .query-strip {
   font-size: 12px;
   padding: 8px 12px;

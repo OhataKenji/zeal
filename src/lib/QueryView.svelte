@@ -193,11 +193,16 @@
           : null)),
   );
 
-  const stored = $derived(qstate.results[resultView]);
   const currentKey = $derived(
     exprText.trim() === "" ? null : keyFor(exprText, resultView, flags),
   );
-  const stale = $derived(stored !== undefined && stored.key !== currentKey);
+  // Editing the query clears the result rather than marking it stale: only a
+  // result fetched under the current inputs is shown.
+  const stored = $derived(
+    currentKey !== null && qstate.results[resultView]?.key === currentKey
+      ? qstate.results[resultView]
+      : undefined,
+  );
   const runningThisView = $derived(qstate.running && runningView === resultView);
   const failedOutput = $derived.by(() => {
     if (!stored) return null;
@@ -549,9 +554,6 @@
           </div>
           <span class="query-results-count">{resultCount}</span>
         </div>
-        {#if stale}
-          <p class="query-stale">Stale results</p>
-        {/if}
         {#if qstate.error}
           <p class="query-strip is-error" role="alert">{qstate.error}</p>
         {/if}

@@ -358,8 +358,8 @@ export function queryArgv(
 /**
  * Identity of one stored result: the flag bits, the result view, and the
  * expression text — the mock's `currentKey` with the view folded in, since
- * each view keeps its own result. Comparing `keyFor` of the current inputs
- * against a stored key decides whether that result is stale.
+ * each view keeps its own result. The view shows a stored result only while
+ * its key matches `keyFor` of the current inputs.
  */
 export function keyFor(expr: string, view: "raw" | "graph", flags: CommandFlags): string {
   return `${flags.noImplicit ? "1" : "0"}${flags.noTool ? "1" : "0"}|${view}|${expr}`;
@@ -806,8 +806,9 @@ export interface Stored extends QueryOutput {
 }
 
 /**
- * Execution state pushed to the view on every change. The view compares each
- * stored result's `key` against `keyFor` of the current inputs for staleness.
+ * Execution state pushed to the view on every change. The view shows a stored
+ * result only while its `key` matches `keyFor` of the current inputs — editing
+ * the query clears the display rather than marking it stale.
  * The controller only tracks its own in-flight run — the view owns the global
  * busy picture and combines both.
  */

@@ -164,7 +164,7 @@ busy 中の呼び出しはアプリ側で拒否し、外部の bazel が lock �
 
 query が非0終了した場合は、結果欄に exit code と stderr の末尾を表示する。
 同じ見方の前回結果は新しい結果で置き換わる。失敗も結果として保持する。
-query や flag が前回の実行時から変わっていれば、stale 表示を出す。
+query や flag が実行時の値から変わると結果はクリアされる(stale 表示は持たない)。
 
 ### 結果の見方
 
@@ -248,7 +248,7 @@ mock の fixture は実在しない label のみを使う。
 - kind selector の切替：`deps`→`rdeps` で `expr` が保たれ `universe` に既定値が入ること、`deps`→`somepath` で `expr` が `from` に移ること、`intersect`→`union` で左右が保たれること
 - Code の parse：括弧、左結合、`^`/`+`/`-` が AST に戻ること。`set`・`let`・`$name` を含む式が Builder に戻らないこと
 - flag の組み合わせで生成 command が変わること
-- 実行経路：検証エラー中の Run 無効、非0終了で exit code と stderr が出ること、実行中の拒否、stale 表示
+- 実行経路：検証エラー中の Run 無効、非0終了で exit code と stderr が出ること、実行中の拒否、入力変更で結果がクリアされること
 - **smoke**：Bazel 8.7以上の小さな repo で catalog 全16関数を実行し、signature・既定値・受理可否を確かめる
 - **smoke**：`--nograph:factored`・`--graph:node_limit` の flag 組と、SVG の `<img>` 表示を実機で確かめる
 - **spike**：`aquery` の出力形式から action/artifact の表が作れるかを調べる
