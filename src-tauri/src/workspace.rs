@@ -2,7 +2,7 @@
 //! last opened workspace.
 
 use crate::scope::Scope;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// A directory is a Bazel workspace root if it has MODULE.bazel or
@@ -43,18 +43,18 @@ fn is_executable(p: &Path) -> bool {
 const SAVED_FILE: &str = "workspace.json";
 
 /// The last workspace and its explicitly selected discovery scope.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub struct SavedWorkspace {
     pub path: PathBuf,
     #[serde(default)]
     pub scope: Scope,
 }
 
-/// Legacy path-only settings restore without discovery until a scope is chosen.
+/// Legacy path-only settings use the default scope; invalid settings are not restored.
 pub fn load_saved(data_dir: &Path) -> Option<SavedWorkspace> {
     let s = std::fs::read_to_string(data_dir.join(SAVED_FILE)).ok()?;
     let mut saved: SavedWorkspace = serde_json::from_str(&s).ok()?;
-    saved.scope = saved.scope.validated().unwrap_or_default();
+    saved.scope = saved.scope.validated().ok()?;
     Some(saved)
 }
 
@@ -105,11 +105,26 @@ mod tests {
     }
 
     #[test]
-    fn legacy_settings_do_not_enable_unbounded_discovery() {
+    fn legacy_settings_restore_with_the_default_scope() {
         let dir = TempDir::new();
         std::fs::write(dir.path().join(SAVED_FILE), r#"{"path":"/workspace"}"#).unwrap();
         let saved = load_saved(dir.path()).unwrap();
         assert_eq!(saved.path, Path::new("/workspace"));
-        assert!(saved.scope.query().is_err());
+        assert_eq!(saved.scope, Scope::default());
+    }
+
+    #[test]
+    fn invalid_explicit_scope_is_not_replaced_with_the_default() {
+        let dir = TempDir::new();
+        for scope in [
+            serde_json::Value::Null,
+            serde_json::json!("//..."),
+            serde_json::json!({"include": [], "exclude": []}),
+            serde_json::json!({"include": ["//app\\unsafe"], "exclude": []}),
+        ] {
+            let settings = serde_json::json!({"path": "/workspace", "scope": scope});
+            std::fs::write(dir.path().join(SAVED_FILE), settings.to_string()).unwrap();
+            assert!(load_saved(dir.path()).is_none(), "{settings}");
+        }
     }
 }

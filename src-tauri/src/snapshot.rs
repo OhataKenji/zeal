@@ -86,13 +86,9 @@ pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
         .iter()
         .map(|s| label::canonical(s))
         .collect();
-    let mut known = HashSet::new();
     let mut targets = Vec::new();
     for r in rules {
         let lbl = label::canonical(&r.label);
-        if !known.insert(lbl.clone()) {
-            continue;
-        }
         let LabelParts { package, name } = label::split(&lbl);
         targets.push(Target {
             label: lbl,
@@ -119,7 +115,7 @@ pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
             if label::is_select_key(&to) {
                 continue;
             }
-            if known.contains(&to) || label::is_external(&to) || !sources.contains(&to) {
+            if label::is_external(&to) || !sources.contains(&to) {
                 edges.insert(Edge {
                     from: owner.clone(),
                     to,

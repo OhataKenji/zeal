@@ -5,41 +5,31 @@
 
   let {
     initial = "",
-    initialScope = { include: ["//..."], exclude: [] },
+    initialScope,
     onclose,
   }: {
     initial?: string;
-    initialScope?: TargetScope;
+    initialScope: TargetScope;
     onclose?: () => void;
   } = $props();
 
-  // Props seed this form once. A different repository starts with the default scope.
+  // Props seed this form once.
   let path = $state(untrack(() => initial));
-  let include = $state(untrack(() => (initialScope.include.length ? initialScope.include : ["//..."]).join("\n")));
+  let include = $state(untrack(() => initialScope.include.join("\n")));
   let exclude = $state(untrack(() => initialScope.exclude.join("\n")));
   let error = $state<string | null>(null);
   let busy = $state(false);
 
-  function patterns(value: string): string[] {
-    return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  }
-
-  const scope = $derived({ include: patterns(include), exclude: patterns(exclude) });
-
-  function changePath(event: Event & { currentTarget: HTMLInputElement }) {
-    if (event.currentTarget.value.trim() !== initial.trim()) {
-      include = "//...";
-      exclude = "";
-    }
-  }
-
   async function submit() {
-    if (busy || !path.trim() || scope.include.length === 0) return;
+    if (busy || !path.trim() || include.trim() === "") return;
     const close = onclose;
     busy = true;
     error = null;
     try {
-      await openWorkspace(path.trim(), scope);
+      await openWorkspace(path.trim(), {
+        include: include.split("\n"),
+        exclude: exclude.split("\n"),
+      });
       close?.();
     } catch (e) {
       error = String(e);
@@ -61,7 +51,6 @@
     <input
       class="input workspace-path"
       bind:value={path}
-      oninput={changePath}
       placeholder="/path/to/bazel/workspace"
       disabled={busy}
     />
@@ -97,7 +86,7 @@
     <button
       class="button button-primary"
       type="submit"
-      disabled={busy || path.trim() === "" || scope.include.length === 0}>open</button
+      disabled={busy || path.trim() === "" || include.trim() === ""}>open</button
     >
     {#if onclose}
       <button class="button" type="button" onclick={onclose} disabled={busy}>cancel</button>

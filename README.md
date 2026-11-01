@@ -29,7 +29,8 @@ across all includes. The default include is `//...` (the whole repository); narr
 it to limit discovery.
 
 Zeal saves the last repository and its scope for refreshes and restarts. Existing
-settings without a scope prompt for one before discovery starts. Scope controls
+settings without a scope use the default `//...`; invalid saved settings are not
+restored. Scope controls
 which targets are listed; their references can point outside it, and reverse
 relationships only cover discovered targets. Resolving direct source files can
 load dependency packages outside the scope.

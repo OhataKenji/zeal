@@ -2,10 +2,19 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Scope {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+}
+
+impl Default for Scope {
+    fn default() -> Self {
+        Self {
+            include: vec!["//...".to_string()],
+            exclude: Vec::new(),
+        }
+    }
 }
 
 impl Scope {
@@ -20,19 +29,16 @@ impl Scope {
     }
 
     /// Quote the scope accepted at the IPC or persistence boundary.
-    pub fn query(&self) -> Result<String, String> {
-        if self.include.is_empty() {
-            return Err("include at least one target pattern".to_string());
-        }
+    pub fn query(&self) -> String {
         let includes = union(&self.include);
         let selected = if self.exclude.is_empty() {
             includes
         } else {
             format!("({includes}) except ({})", union(&self.exclude))
         };
-        Ok(format!(
+        format!(
             "let selected = kind(\"rule\", ({selected})) in $selected union kind(\"source file\", deps($selected, 1))"
-        ))
+        )
     }
 }
 
@@ -60,8 +66,6 @@ fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
         }
         normalized.push(pattern.to_string());
     }
-    normalized.sort();
-    normalized.dedup();
     Ok(normalized)
 }
 
@@ -87,8 +91,8 @@ mod tests {
         }
         .validated()
         .unwrap();
-        assert_eq!(scope.include, ["//a:all", "//b/..."]);
-        assert_eq!(scope.exclude, ["//a:skip", "//b/old/..."]);
+        assert_eq!(scope.include, ["//b/...", "//a:all", "//b/..."]);
+        assert_eq!(scope.exclude, ["//b/old/...", "//a:skip", "//b/old/..."]);
     }
 
     #[test]
@@ -100,14 +104,14 @@ mod tests {
         .validated()
         .unwrap();
         assert_eq!(
-            scope.query().unwrap(),
+            scope.query(),
             "let selected = kind(\"rule\", ((\"//a:all\" union \"//b/...\") except (\"//b/old/...\"))) in $selected union kind(\"source file\", deps($selected, 1))"
         );
     }
 
     #[test]
-    fn empty_scope_never_means_the_whole_workspace() {
-        assert!(Scope::default().query().is_err());
+    fn default_is_whole_workspace_but_explicit_empty_scope_is_rejected() {
+        assert_eq!(Scope::default().validated().unwrap().include, ["//..."]);
         assert!(
             Scope {
                 include: vec![" ".into()],
@@ -164,8 +168,8 @@ mod tests {
         .validated()
         .unwrap();
         assert_eq!(
-            scope.query().unwrap(),
-            "let selected = kind(\"rule\", (\"//a) union //...\" union \"//a:b:c\" union \"//pkg:it's\" union \"//pkg:thing!%\")) in $selected union kind(\"source file\", deps($selected, 1))"
+            scope.query(),
+            "let selected = kind(\"rule\", (\"//pkg:thing!%\" union \"//a:b:c\" union \"//a) union //...\" union \"//pkg:it's\")) in $selected union kind(\"source file\", deps($selected, 1))"
         );
     }
 }

@@ -36,7 +36,7 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
         let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
             return Ok(());
         };
-        let query = st.scope.query()?;
+        let query = st.scope.query();
         st.ingest_running = true;
         (ws, bazel, query)
     };
