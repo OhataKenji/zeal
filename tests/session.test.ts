@@ -7,7 +7,7 @@ const IDLE: AppState = {
   workspace: "/workspace",
   bazel: "/bin/bazel",
   ingest: "idle",
-  snapshotMeta: null,
+  snapshotId: null,
   lastError: null,
   running: null,
   stopping: false,
@@ -248,10 +248,10 @@ test("Send does not depend on a snapshot and stays usable after a failed ingesti
   await h.session.init();
   h.emit("app-state", {
     ...IDLE,
-    snapshotMeta: null,
+    snapshotId: null,
     lastError: { exitCode: 1, summary: "query failed" },
   });
-  assert.equal(h.view.state?.snapshotMeta, null);
+  assert.equal(h.view.state?.snapshotId, null);
   const lastError = h.view.state?.lastError;
   assert.ok(lastError);
   assert.match(lastError.summary, /query failed/);
@@ -262,7 +262,7 @@ test("ingestion completing never starts a run", async () => {
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, ingest: "running" });
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
   await settle();
   assert.deepEqual(h.view.snapshot, SNAPSHOT);
@@ -276,11 +276,11 @@ test("ingestion completing never starts a run", async () => {
 test("snapshot data is fetched once per meta change, not per state event", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
   await settle();
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta, running: "run-a" });
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta, running: "run-a" });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   await settle();
   assert.equal(h.pending.filter((call) => call.command === "get_snapshot").length, 1);
 });
@@ -288,10 +288,10 @@ test("snapshot data is fetched once per meta change, not per state event", async
 test("events during a snapshot fetch do not duplicate the request", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   assert.equal(h.view.snapshotLoading, true);
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta, running: "run-a" });
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta, running: "run-a" });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   assert.equal(h.pending.filter((call) => call.command === "get_snapshot").length, 1);
   pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
   await settle();
@@ -306,8 +306,8 @@ test("a stale snapshot fetch cannot replace the current snapshot", async () => {
     ...SNAPSHOT,
     meta: { fetchedAt: 2, status: "partial" as const },
   };
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
-  h.emit("app-state", { ...IDLE, snapshotMeta: newer.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: newer.meta });
   const requests = h.pending.filter((call) => call.command === "get_snapshot");
   assert.equal(requests.length, 2);
   requests[1].reply.resolve(newer);
@@ -321,8 +321,8 @@ test("a stale snapshot fetch cannot replace the current snapshot", async () => {
 test("workspace switch drops the snapshot and its in-flight fetch", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
-  h.emit("app-state", { ...IDLE, workspace: "/other", snapshotMeta: null });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, workspace: "/other", snapshotId: null });
   assert.equal(h.view.snapshot, null);
   const request = pendingRequest(h, "get_snapshot");
   request.reply.resolve(SNAPSHOT);
@@ -333,7 +333,7 @@ test("workspace switch drops the snapshot and its in-flight fetch", async () => 
 test("loadSnapshot retries a failed fetch directly and deduplicates calls", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   pendingRequest(h, "get_snapshot").reply.reject(new Error("snapshot worker failed"));
   await settle();
   assert.match(h.view.snapshotError ?? "", /snapshot worker failed/);
@@ -351,12 +351,12 @@ test("loadSnapshot retries a failed fetch directly and deduplicates calls", asyn
 test("a failed snapshot fetch is surfaced and retried by the next event", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta });
   pendingRequest(h, "get_snapshot").reply.reject(new Error("snapshot worker failed"));
   await settle();
   assert.match(h.view.snapshotError ?? "", /snapshot worker failed/);
   assert.equal(h.view.snapshotLoading, false);
-  h.emit("app-state", { ...IDLE, snapshotMeta: SNAPSHOT.meta, running: "run-a" });
+  h.emit("app-state", { ...IDLE, snapshotId: SNAPSHOT.meta, running: "run-a" });
   assert.equal(h.view.snapshotError, null);
   lastPendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
   await settle();

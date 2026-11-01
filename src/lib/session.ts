@@ -22,7 +22,7 @@ export interface SessionView {
   console: RunRecord | null;
   consoleOpen: boolean;
   state: AppState | null;
-  /** Full snapshot for `state.snapshotMeta`; loaded separately from events. */
+  /** Full snapshot for `state.snapshotId`; loaded separately from events. */
   snapshot: Snapshot | null;
   snapshotLoading: boolean;
   snapshotError: string | null;
@@ -143,8 +143,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   // that identity changes, not on every state event.
   async function loadSnapshot() {
     // Manual calls re-check in-flight state that acceptState already guards.
-    if (snapshotRequested && sameMeta(view.state?.snapshotMeta, snapshotRequested)) return;
-    snapshotRequested = view.state?.snapshotMeta ?? null;
+    if (snapshotRequested && sameMeta(view.state?.snapshotId, snapshotRequested)) return;
+    snapshotRequested = view.state?.snapshotId ?? null;
     const generation = ++snapshotGeneration;
     update({ snapshotLoading: true, snapshotError: null });
     try {
@@ -294,7 +294,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
-    const wantMeta = state.snapshotMeta;
+    const wantMeta = state.snapshotId;
     if (!wantMeta) {
       // Defensive: the core drops its snapshot only on a workspace switch,
       // which the reset above already clears.

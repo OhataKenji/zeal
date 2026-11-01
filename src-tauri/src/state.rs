@@ -22,7 +22,7 @@ pub struct AppStateDto {
     /// Identity of the current snapshot, kept across failed refreshes. The UI
     /// fetches the full snapshot through `get_snapshot` only when this changes,
     /// so events never carry target data.
-    pub snapshot_meta: Option<Meta>,
+    pub snapshot_id: Option<Meta>,
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
@@ -191,7 +191,7 @@ impl Core {
                 .map(|p| p.to_string_lossy().into_owned()),
             bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
             ingest: if st.ingest_running { "running" } else { "idle" },
-            snapshot_meta: st.snapshot.as_ref().map(|snapshot| snapshot.meta.clone()),
+            snapshot_id: st.snapshot.as_ref().map(|snapshot| snapshot.meta.clone()),
             last_error: st.last_error.clone(),
             running: st.run.as_ref().map(|run| run.id.clone()),
             console_run: st.console_run().cloned(),
@@ -264,7 +264,7 @@ mod tests {
 
         let json = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(
-            json["snapshotMeta"],
+            json["snapshotId"],
             serde_json::json!({ "fetchedAt": 1, "status": "partial" }),
             "the event names the snapshot; its data goes through get_snapshot"
         );

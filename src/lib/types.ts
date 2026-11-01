@@ -54,7 +54,7 @@ export interface AppState {
   bazel: string | null;
   ingest: "idle" | "running";
   /** Identity of the core's snapshot; its data loads through `get_snapshot`. */
-  snapshotMeta: SnapshotMeta | null;
+  snapshotId: SnapshotMeta | null;
   lastError: IngestError | null;
   running: string | null;
   // The current workspace's last Console remains readable after process exit.

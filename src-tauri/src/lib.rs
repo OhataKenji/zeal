@@ -37,7 +37,7 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
-/// The current workspace snapshot. Events carry only its meta, so the UI
+/// The current workspace snapshot. Events carry only its id, so the UI
 /// requests this once per change instead of on every state push.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.get", skip_all)]
 #[tauri::command]
