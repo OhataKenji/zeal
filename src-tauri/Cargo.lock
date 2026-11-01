@@ -5613,6 +5613,7 @@ dependencies = [
  "rustix-openpty",
  "serde",
  "serde_json",
+ "shlex",
  "tauri",
  "tauri-build",
  "tauri-plugin-log",

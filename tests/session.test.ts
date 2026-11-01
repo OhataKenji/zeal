@@ -280,7 +280,7 @@ test("Send passes the target through unchanged and ignores whitespace and duplic
   void h.session.start("build", "//:app");
   const starts = h.pending.filter((call) => call.command === "start_run");
   assert.equal(starts.length, 1);
-  assert.deepEqual(starts[0].args, { cmd: "build", target: "//:app" });
+  assert.deepEqual(starts[0].args, { cmd: "build", target: "//:app", arguments: "" });
 });
 
 test("start records the selected cmd and the target string unchanged", async () => {
@@ -288,9 +288,44 @@ test("start records the selected cmd and the target string unchanged", async () 
   await h.session.init();
   const started = h.session.start("test", "//app:tar;get");
   const call = pendingRequest(h, "start_run");
-  assert.deepEqual(call.args, { cmd: "test", target: "//app:tar;get" });
+  assert.deepEqual(call.args, { cmd: "test", target: "//app:tar;get", arguments: "" });
   call.reply.resolve({ ...RECORD, cmd: "test", target: "//app:tar;get" });
   await started;
+});
+
+test("start forwards quoted arguments and the program separator unchanged", async () => {
+  const h = harness();
+  await h.session.init();
+  const argumentsText = `--config=dev --define='message=hello world' -- "two words" '$HOME; echo'`;
+  const started = h.session.start("run", "//:app", argumentsText);
+  const call = pendingRequest(h, "start_run");
+  assert.deepEqual(call.args, {
+    cmd: "run",
+    target: "//:app",
+    arguments: argumentsText,
+  });
+  call.reply.resolve(RECORD);
+  await started;
+});
+
+test("an argument parse failure is visible and allows a corrected start", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("run", "//:app", '"unfinished');
+  pendingRequest(h, "start_run").reply.reject(new Error("Unclosed quote in arguments"));
+  await started;
+  assert.match(h.view.error ?? "", /Unclosed quote/);
+  assert.equal(canSend(h.view, "//:app"), true);
+  const retried = h.session.start("run", "//:app", '"complete"');
+  assert.equal(h.pending.filter((call) => call.command === "start_run").length, 2);
+  assert.deepEqual(lastPendingRequest(h, "start_run").args, {
+    cmd: "run",
+    target: "//:app",
+    arguments: '"complete"',
+  });
+  lastPendingRequest(h, "start_run").reply.resolve(RECORD);
+  await retried;
+  assert.equal(h.view.error, null);
 });
 
 test("stop is offered only while a run is live and not already stopping", async () => {

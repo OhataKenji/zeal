@@ -8,7 +8,7 @@
     Play,
     Stop,
   } from "phosphor-svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
   import { runStatus } from "./lib/run";
@@ -48,6 +48,12 @@
   let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<RunCmd>("build");
+  let argumentsText = $state("");
+  let argumentsOpen = $state(false);
+  let argumentsToggle: HTMLButtonElement | undefined;
+  let argumentsPanel = $state<HTMLDivElement>();
+  let argumentsInput = $state<HTMLInputElement>();
+  const argumentsConfigured = $derived(argumentsText.trim() !== "");
   let switchingWs = $state(false);
   const busy = $derived(
     !app.view.ready ||
@@ -116,7 +122,33 @@
     if (running) {
       void getSession().stop();
     } else {
-      void getSession().start(cmd, targetField);
+      void getSession().start(cmd, targetField, argumentsText);
+    }
+  }
+
+  async function setArgumentsOpen(open: boolean) {
+    argumentsOpen = open;
+    dropdownOpen = false;
+    await tick();
+    if (argumentsOpen === open) {
+      (open ? argumentsInput : argumentsToggle)?.focus();
+    }
+  }
+
+  function argumentsKey(event: KeyboardEvent) {
+    if (!argumentsOpen || event.isComposing || event.key !== "Escape") return;
+    event.preventDefault();
+    void setArgumentsOpen(false);
+  }
+
+  function dismissArguments(event: Event) {
+    if (
+      argumentsOpen &&
+      event.target instanceof Node &&
+      !argumentsPanel?.contains(event.target) &&
+      !argumentsToggle?.contains(event.target)
+    ) {
+      argumentsOpen = false;
     }
   }
 
@@ -340,6 +372,12 @@
   </main>
 {/snippet}
 
+<svelte:window
+  onpointerdown={dismissArguments}
+  onfocusin={dismissArguments}
+  onkeydown={argumentsKey}
+/>
+
 <div class="win">
   <div class="toolbar">
     <div class="workspace-picker">
@@ -399,6 +437,38 @@
           <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
         {/if}
       </div>
+      <button
+        bind:this={argumentsToggle}
+        type="button"
+        class="button button-ghost arguments-toggle"
+        aria-label={argumentsConfigured ? "Arguments (configured)" : "Arguments"}
+        aria-expanded={argumentsOpen}
+        aria-controls="run-arguments-popover"
+        title={argumentsConfigured ? argumentsText : "Specify arguments"}
+        onclick={() => setArgumentsOpen(!argumentsOpen)}
+      >
+        Arguments
+        {#if argumentsConfigured}<span class="arguments-indicator" aria-hidden="true"></span>{/if}
+      </button>
+      {#if argumentsOpen}
+        <div
+          bind:this={argumentsPanel}
+          class="arguments-popover"
+          id="run-arguments-popover"
+        >
+          <input
+            bind:this={argumentsInput}
+            bind:value={argumentsText}
+            id="run-arguments"
+            class="input arguments-input"
+            aria-label="Arguments"
+            placeholder="--config=dev; run program arguments after --"
+            title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </div>
+      {/if}
       <button
         type="button"
         class="button button-primary icon-button"

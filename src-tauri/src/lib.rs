@@ -95,9 +95,17 @@ fn start_run(
     core: State<Arc<Core>>,
     cmd: String,
     target: String,
+    arguments: Option<String>,
 ) -> Result<RunRecord, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    runner::start(app, core.inner().clone(), &data, &cmd, &target)
+    runner::start(
+        app,
+        core.inner().clone(),
+        &data,
+        &cmd,
+        &target,
+        arguments.as_deref().unwrap_or_default(),
+    )
 }
 
 /// Stop the run in flight: SIGINT to its process group, then SIGKILL if it does
