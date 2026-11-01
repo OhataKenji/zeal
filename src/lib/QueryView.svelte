@@ -455,10 +455,6 @@
               bind:value={draft}
               oninput={() => (codeError = null)}
             ></textarea>
-            <p class="query-hint">
-              Switching to Builder parses supported syntax and normalizes
-              parentheses and operators.
-            </p>
             {#if codeWarning}
               <div class="query-code-warning" class:is-error={!!codeError}>
                 <span
