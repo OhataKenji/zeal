@@ -11,6 +11,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.12.3
         version: 2.12.3
+      '@viz-js/viz':
+        specifier: 3.31.0
+        version: 3.31.0
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -605,6 +608,9 @@ packages:
 
   '@types/node@26.6.5':
     resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
+
+  '@viz-js/viz@3.31.0':
+    resolution: {integrity: sha512-r7zlQdRvcwvIpjHGgs+KNWHeE/P5/Dq7k8ZAKaMCbZqomxCBJV78gVuQYaHzFVca+kB0mX0fMW9UFevCOBG50A==}
 
   '@xterm/addon-fit@0.11.0':
     resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
@@ -1589,6 +1595,8 @@ snapshots:
   '@types/node@26.6.5':
     dependencies:
       undici-types: 8.9.0
+
+  '@viz-js/viz@3.31.0': {}
 
   '@xterm/addon-fit@0.11.0': {}
 

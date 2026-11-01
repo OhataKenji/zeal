@@ -13,6 +13,7 @@ export const COMMANDS = {
   getAnalytics: "get_analytics",
   startRun: "start_run",
   stopRun: "stop_run",
+  runQuery: "run_query",
   readConsole: "read_console",
   writeConsole: "write_console",
   resizeConsole: "resize_console",

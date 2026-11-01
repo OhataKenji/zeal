@@ -1,5 +1,5 @@
 import fuzzysort, { type SnapshotKey } from "fuzzysort";
-import type { Target } from "./types.ts";
+import type { Snapshot, Target } from "./types.ts";
 
 /** Candidate and fuzzy-match ranges for one target label. */
 export interface Match {
@@ -16,6 +16,27 @@ export interface Match {
  */
 export function createIndex(targets: Target[]): SnapshotKey<Target> {
   return fuzzysort.snapshot(targets, { key: "label" });
+}
+
+/**
+ * Candidates for query target-pattern inputs. The snapshot's `targets` only
+ * hold in-workspace rules (`kind("rule", //...)`), but queries also name
+ * external repos — `@maven//`, `@pip//`, toolchains. Those arrive as `to` of
+ * the workspace's own dependency edges (implicit deps are filtered at
+ * ingest), so they join the index as label-only targets; internal edge
+ * destinations would just duplicate `targets` and are skipped.
+ */
+export function querySearchTargets(snap: Snapshot): Target[] {
+  const external = new Set<string>();
+  for (const e of snap.edges) {
+    if (e.to.startsWith("@")) external.add(e.to);
+  }
+  return [...snap.targets, ...[...external].map((label) => labelTarget(label, "external"))];
+}
+
+/** A label-only candidate, for indexes over strings that are not targets. */
+export function labelTarget(label: string, ruleClass: string): Target {
+  return { label, pkg: "", name: "", ruleClass, location: null };
 }
 
 /**
@@ -114,11 +135,9 @@ export function keyAction(
 export const PATTERN_HINTS: readonly string[] = ["//...", ":all", ":*"];
 
 // The input's ARIA attributes and the dropdown markup are one contract split
-// across two components, so both ids are built here.
-/** Stable target listbox ID used by the search input's ARIA relationship. */
-export const LIST_ID = "qo-list";
-
+// across two components, so option ids are built in one place. The listbox id
+// is per combobox instance ($props.id()), so several inputs can coexist.
 /** Returns a DOM ID for the search option at the given result index. */
-export function optionId(index: number): string {
-  return `qo-opt-${index}`;
+export function optionId(listId: string, index: number): string {
+  return `${listId}-opt-${index}`;
 }

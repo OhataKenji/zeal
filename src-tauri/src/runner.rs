@@ -54,7 +54,7 @@ pub fn start(
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
-    if st.ingest_running || st.run.is_some() {
+    if st.bazel_busy() {
         return Err("bazel is busy".to_string());
     }
     let endpoint = receiver_endpoint(&st)?;
@@ -270,10 +270,17 @@ impl<F: Fn()> Drop for RunSlot<'_, F> {
 
 /// Bound process stopping to the short exit grace. A child already reaped has
 /// nothing left to signal; wait for its in-progress save to release the slot.
+/// A live editor query is simply killed: it has no stop path and the process
+/// is going away either way.
 pub fn exit_stop(core: &Core) {
     let id = {
         let mut st = core.state.lock().expect("application state lock poisoned");
         begin_stop(&mut st);
+        // A query in flight has no stop path of its own; the process is going
+        // away either way, so the group is killed outright.
+        if let Some(pgid) = st.query_pgid {
+            let _ = signal_group(pgid, Signal::KILL);
+        }
         st.run.as_ref().map(|run| run.id.clone())
     };
     let Some(id) = id else {
@@ -362,7 +369,7 @@ fn clear_run(st: &mut CoreState) {
 
 /// A run's process group must not address the caller's group (0) or all
 /// signalable processes (1 when negated by kill_process_group).
-fn process_group(pgid: i32) -> io::Result<Pid> {
+pub(crate) fn process_group(pgid: i32) -> io::Result<Pid> {
     if pgid <= 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -373,7 +380,7 @@ fn process_group(pgid: i32) -> io::Result<Pid> {
 }
 
 /// Signal the run's session group, or its terminal's foreground job group.
-fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
+pub(crate) fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
     Ok(process::kill_process_group(process_group(pgid)?, signal)?)
 }
 

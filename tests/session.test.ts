@@ -13,6 +13,7 @@ const IDLE: AppState = {
   running: null,
   stopping: false,
   runNote: null,
+  query: "idle",
 };
 const SNAPSHOT = {
   meta: { fetchedAt: 1, status: "ok" as const },
@@ -221,7 +222,7 @@ test("a late profile response or error cannot replace a newer selection", async 
   assert.equal(h.view.profileLoading, false);
 });
 
-test("Send waits for listeners, then rejects busy ingestion, a live run and a stopping run", async () => {
+test("Send waits for listeners, then rejects busy ingestion, a live run, a stopping run and a running query", async () => {
   const h = harness();
   assert.equal(canSend(h.view, "//:app"), false);
   await h.session.init();
@@ -232,6 +233,8 @@ test("Send waits for listeners, then rejects busy ingestion, a live run and a st
   h.emit("app-state", { ...IDLE, running: RECORD.id });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", { ...IDLE, running: RECORD.id, stopping: true });
+  assert.equal(canSend(h.view, "//:app"), false);
+  h.emit("app-state", { ...IDLE, query: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", IDLE);
   assert.equal(canSend(h.view, "//:app"), true);
@@ -852,6 +855,8 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
   await h.session.init();
   h.emit("app-state", { ...IDLE, running: RECORD.id });
   await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
+  h.emit("app-state", { ...IDLE, query: "running" });
+  await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
   assert.equal(
     h.pending.some((call) => call.command === "open_workspace"),
     false,
@@ -864,6 +869,8 @@ test("refresh is rejected while busy and is never queued", async () => {
   h.emit("app-state", { ...IDLE, running: RECORD.id });
   await h.session.refresh();
   h.emit("app-state", { ...IDLE, ingest: "running" });
+  await h.session.refresh();
+  h.emit("app-state", { ...IDLE, query: "running" });
   await h.session.refresh();
   h.emit("app-state", IDLE);
   assert.equal(

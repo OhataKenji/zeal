@@ -154,6 +154,7 @@ const state: AppState = {
   running: null,
   stopping: false,
   runNote: null,
+  query: "idle",
 };
 let currentSnapshot: Snapshot | null = SNAPSHOT;
 const consoleOutput = new Map<string, string>();
@@ -379,6 +380,43 @@ export function installPreview() {
     open_location: () => {},
     start_run: (payload) => startRun(String(payload?.cmd), String(payload?.target)),
     stop_run: () => stopRun(),
+    run_query: (payload) => {
+      if (state.ingest === "running" || state.running !== null || state.query === "running") {
+        throw new Error("bazel is busy");
+      }
+      const output = String(payload?.output ?? "label");
+      const expr = String(payload?.expr ?? "");
+      const labels = expr.includes("//")
+        ? SNAPSHOT.targets.map((t) => t.label)
+        : ["//app:server", "//app/lib:parser", "//tools:cli"];
+      const finished = {
+        exitCode: 0,
+        stdout:
+          output === "graph"
+            ? `digraph mygraph {\n${labels
+                .slice(0, 6)
+                .map((l, i) => `  node${i} [label="${l}"];`)
+                .join("\n")}\n${labels
+                .slice(1, 6)
+                .map((_, i) => `  node${i} -> node${i + 1};`)
+                .join("\n")}\n}\n`
+            : labels.join("\n") + "\n",
+        truncated: false,
+        stderrTail: "",
+        timedOut: false,
+      };
+      // The reply lands only when the (mock) query finishes, so the
+      // preview's busy state behaves like the real slot.
+      state.query = "running";
+      void emit("app-state", structuredClone(state));
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          state.query = "idle";
+          void emit("app-state", structuredClone(state));
+          resolve(finished);
+        }, 800);
+      });
+    },
   };
   mockIPC(
     (command, args) => {

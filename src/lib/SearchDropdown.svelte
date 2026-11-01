@@ -1,14 +1,18 @@
 <script lang="ts">
-  import { LIST_ID, PATTERN_HINTS, optionId, segments, type Match } from "./search";
+  import { optionId, PATTERN_HINTS, segments, type Match } from "./search";
 
   let {
     matches,
     index,
     onpick,
+    listId,
+    hints = PATTERN_HINTS,
   }: {
     matches: Match[];
     index: number;
     onpick: (value: string) => void;
+    listId: string;
+    hints?: readonly string[];
   } = $props();
 
   // The list is taller than the window shows, so the row Enter would pick has
@@ -20,9 +24,9 @@
   });
 </script>
 
-<div class="search-dropdown" id={LIST_ID} role="listbox">
+<div class="search-dropdown" id={listId} role="listbox">
   {#if matches.length === 0}
-    <div class="match dim">No matching targets</div>
+    <div class="match dim">No matches</div>
   {:else}
     {#each matches as match, i (match.target.label)}
       <button
@@ -30,7 +34,7 @@
         type="button"
         class="match"
         class:selected={i === index}
-        id={optionId(i)}
+        id={optionId(listId, i)}
         role="option"
         aria-selected={i === index}
         tabindex={-1}
@@ -48,7 +52,9 @@
       </button>
     {/each}
   {/if}
-  <div class="foot">
-    {#each PATTERN_HINTS as hint (hint)}<code>{hint}</code>{/each}
-  </div>
+  {#if hints.length > 0}
+    <div class="foot">
+      {#each hints as hint (hint)}<code>{hint}</code>{/each}
+    </div>
+  {/if}
 </div>

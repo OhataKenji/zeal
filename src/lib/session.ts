@@ -79,6 +79,7 @@ export function canSend(view: SessionView, target: string): boolean {
     view.state.bazel &&
     view.state.ingest === "idle" &&
     !view.state.running &&
+    view.state.query !== "running" &&
     targetError(target) === null
   );
 }
@@ -398,7 +399,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.opening ||
       view.starting ||
       view.state?.running ||
-      view.state?.ingest === "running"
+      view.state?.ingest === "running" ||
+      view.state?.query === "running"
     ) {
       throw new Error(
         "Wait for the current Bazel operation to finish before changing the workspace",
@@ -420,7 +422,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.starting ||
       view.opening ||
       view.state?.running ||
-      view.state?.ingest === "running"
+      view.state?.ingest === "running" ||
+      view.state?.query === "running"
     ) {
       return;
     }

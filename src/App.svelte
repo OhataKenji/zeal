@@ -7,19 +7,13 @@
     ArrowClockwise,
     Play,
     Stop,
+    TreeStructure,
   } from "phosphor-svelte";
   import { onMount, tick } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
   import { runStatus } from "./lib/run";
-  import {
-    createIndex,
-    keyAction,
-    LIST_ID,
-    moveIndex,
-    optionId,
-    search,
-  } from "./lib/search";
+  import { createIndex } from "./lib/search";
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
@@ -28,7 +22,8 @@
   import RunStatus from "./lib/RunStatus.svelte";
   import RunView from "./lib/RunView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
-  import SearchDropdown from "./lib/SearchDropdown.svelte";
+  import QueryView from "./lib/QueryView.svelte";
+  import SearchInput from "./lib/SearchInput.svelte";
   import type { AppState, RunCmd } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
@@ -49,6 +44,7 @@
   }
 
   let analyticsOpen = $state(false);
+  let queryOpen = $state(false);
   let selected = $state<string | null>(null);
   let revealRequest = $state(0);
   let targetField = $state("");
@@ -65,7 +61,8 @@
       app.view.starting ||
       app.view.opening ||
       !!st?.running ||
-      st?.ingest === "running",
+      st?.ingest === "running" ||
+      st?.query === "running",
   );
   const running = $derived(!!st?.running);
   const actionLabel = $derived(
@@ -75,52 +72,15 @@
     targetField === "" ? null : targetError(targetField),
   );
 
-  // The composer is the only search entry point. `dropdownOpen` is set by
-  // typing only: programmatic insertion (tree, relations, run rows) replaces
-  // the field without dropping the list over it. The matches are computed even
-  // while closed, because ↑/↓ reopen the list from the current text.
-  let dropdownOpen = $state(false);
-  let matchIndex = $state(0);
+  // The composer is the only search entry point. Typing opens the dropdown;
+  // programmatic insertion (tree, relations, run rows) only replaces the
+  // field. Picking a candidate reveals it in the target tree.
   const index = $derived(snap ? createIndex(snap.targets) : null);
-  const matches = $derived(index ? search(index, targetField) : []);
-  // A snapshot swap can shorten the list under the selection, so clamp here:
-  // the highlight, `aria-activedescendant` and Enter all name the same row.
-  const activeIndex = $derived(moveIndex(matchIndex, 0, matches.length));
-  const activeOption = $derived(
-    dropdownOpen && matches.length > 0 ? optionId(activeIndex) : undefined,
-  );
 
   function pickTarget(value: string) {
     select(value);
     collapsed.targets = false;
     revealRequest += 1;
-    dropdownOpen = false;
-    matchIndex = 0;
-  }
-
-  function composerKey(event: KeyboardEvent) {
-    if (event.isComposing) return;
-    const action = keyAction(
-      { open: dropdownOpen, index: activeIndex },
-      event.key,
-      matches,
-    );
-    switch (action.kind) {
-      case "move":
-        event.preventDefault();
-        dropdownOpen = true;
-        matchIndex = action.index;
-        break;
-      case "pick":
-        event.preventDefault();
-        pickTarget(action.value);
-        break;
-      case "close":
-        dropdownOpen = false;
-        break;
-      case "none":
-        break;
-    }
   }
 
   function submit() {
@@ -133,7 +93,6 @@
 
   async function setArgumentsOpen(open: boolean) {
     argumentsOpen = open;
-    dropdownOpen = false;
     await tick();
     if (argumentsOpen === open) {
       (open ? argumentsInput : argumentsToggle)?.focus();
@@ -186,6 +145,7 @@
   // field, which is the single source of truth for "the current target".
   function select(label: string | null) {
     analyticsOpen = false;
+    queryOpen = false;
     getSession().selectRun(null);
     selected = label;
     if (label) targetField = label;
@@ -210,18 +170,29 @@
     class:collapsed={collapsed.targets}
     style:flex-grow={collapsed.targets ? 0 : targetsShare}
   >
-    <button
-      class="pane-head"
-      aria-expanded={!collapsed.targets}
-      onclick={() => (collapsed.targets = !collapsed.targets)}
-    >
-      {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
-          size={10}
-        />{/if} Targets
-      <span class="pane-count"
-        >{snap?.targets.length.toLocaleString() ?? "—"}</span
+    <div class="pane-heading">
+      <button
+        class="pane-head"
+        aria-expanded={!collapsed.targets}
+        onclick={() => (collapsed.targets = !collapsed.targets)}
       >
-    </button>
+        {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
+            size={10}
+          />{/if} Targets
+        <span class="pane-count"
+          >{snap?.targets.length.toLocaleString() ?? "—"}</span
+        >
+      </button>
+      <button
+        class="analytics-link"
+        class:active={queryOpen && !app.view.selectedRun}
+        onclick={() => {
+          queryOpen = true;
+          analyticsOpen = false;
+          getSession().selectRun(null);
+        }}><TreeStructure size={12} /> Query</button
+      >
+    </div>
     {#if !collapsed.targets}
       <div class="pane-body">
         {#if snap && tree}
@@ -276,6 +247,7 @@
         class:active={analyticsOpen && !app.view.selectedRun}
         onclick={() => {
           analyticsOpen = true;
+          queryOpen = false;
           getSession().selectRun(null);
         }}><ChartBar size={12} /> Analytics</button
       >
@@ -330,7 +302,7 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen}
+    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen || queryOpen}
   >
     {#if app.view.console}
       {#key app.view.console.id}
@@ -368,6 +340,10 @@
       {/key}
     {:else if analyticsOpen}
       {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
+    {:else if queryOpen}
+      {#key workspace}
+        <QueryView {snap} />
+      {/key}
     {:else if snap && selected}
       <TargetView
         {snap}
@@ -438,28 +414,15 @@
         <option>run</option>
       </select>
       <div class="composer-search">
-        <input
+        <SearchInput
           class="input composer-target"
           aria-label="Target label or pattern"
-          role="combobox"
-          aria-expanded={dropdownOpen && !!snap}
-          aria-controls={dropdownOpen && snap ? LIST_ID : undefined}
-          aria-autocomplete="list"
-          aria-activedescendant={activeOption}
           placeholder="Fuzzy :all / //pkg:target"
-          autocomplete="off"
+          {index}
           value={targetField}
-          oninput={(event) => {
-            targetField = event.currentTarget.value;
-            matchIndex = 0;
-            dropdownOpen = targetField !== "";
-          }}
-          onkeydown={composerKey}
-          onblur={() => (dropdownOpen = false)}
+          oninput={(v) => (targetField = v)}
+          onpick={pickTarget}
         />
-        {#if dropdownOpen && snap}
-          <SearchDropdown {matches} index={activeIndex} onpick={pickTarget} />
-        {/if}
       </div>
       <button
         bind:this={argumentsToggle}
