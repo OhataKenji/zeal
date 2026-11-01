@@ -6,7 +6,7 @@
 
 use crate::snapshot::{self, Status};
 use crate::state::{Core, IngestError};
-use crate::xml::{self, RawRule};
+use crate::xml::{self, ParsedQuery};
 use std::io::{BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -20,15 +20,15 @@ use tauri::AppHandle;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 
 enum Outcome {
-    Ok(Vec<RawRule>),
+    Ok(ParsedQuery),
     /// exit != 0 but at least one rule was parsed.
-    Partial(Vec<RawRule>, IngestError),
+    Partial(ParsedQuery, IngestError),
     Failed(IngestError),
 }
 
 /// Start one ingestion. Busy requests are rejected rather than queued.
 pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
-    let (ws, bazel) = {
+    let (ws, bazel, query) = {
         let mut st = core.state.lock().expect("application state lock poisoned");
         if st.ingest_running || st.run.is_some() {
             return Err("bazel is busy; refresh after it finishes".to_string());
@@ -36,12 +36,13 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
         let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
             return Ok(());
         };
+        let query = st.scope.query();
         st.ingest_running = true;
-        (ws, bazel)
+        (ws, bazel, query)
     };
     core.emit(&app);
     thread::spawn(move || {
-        let outcome = fetch(&ws, &bazel);
+        let outcome = fetch(&ws, &bazel, &query);
         let snapshot = match &outcome {
             Outcome::Ok(rules) => Some(Arc::new(snapshot::build(rules, Status::Ok))),
             Outcome::Partial(rules, _) => Some(Arc::new(snapshot::build(rules, Status::Partial))),
@@ -62,13 +63,12 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     Ok(())
 }
 
-/// Run `bazel query 'kind("rule", //...)' --output=xml --noimplicit_deps
-/// --keep_going` in `ws`, streaming stdout through the XML parser.
+/// Run the scoped query in `ws`, streaming XML stdout through the parser.
 #[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
-fn fetch(ws: &Path, bazel: &Path) -> Outcome {
+fn fetch(ws: &Path, bazel: &Path, query: &str) -> Outcome {
     let mut child = match Command::new(bazel)
         .arg("query")
-        .arg("kind(\"rule\", //...)")
+        .arg(query)
         .args(["--output=xml", "--noimplicit_deps", "--keep_going"])
         .current_dir(ws)
         .stdin(Stdio::null())
@@ -87,7 +87,7 @@ fn fetch(ws: &Path, bazel: &Path) -> Outcome {
     // stdout is parsed as it arrives; stderr is drained concurrently so the
     // child never blocks on a full pipe.
     let stdout = child.stdout.take().expect("stdout piped");
-    let parse_handle = thread::spawn(move || xml::parse_rules(BufReader::new(stdout)));
+    let parse_handle = thread::spawn(move || xml::parse_query(BufReader::new(stdout)));
     let mut stderr = child.stderr.take().expect("stderr piped");
     let stderr_handle = thread::spawn(move || {
         let mut buf = Vec::new();
@@ -130,7 +130,7 @@ fn fetch(ws: &Path, bazel: &Path) -> Outcome {
     let code = status.code();
     match code {
         Some(0) => Outcome::Ok(rules),
-        _ if !rules.is_empty() => Outcome::Partial(
+        _ if !rules.rules.is_empty() => Outcome::Partial(
             rules,
             IngestError {
                 exit_code: code,

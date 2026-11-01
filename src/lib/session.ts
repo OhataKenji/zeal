@@ -8,6 +8,7 @@ import type {
   RunRecord,
   Section,
   Snapshot,
+  TargetScope,
 } from "./types.ts";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
@@ -391,7 +392,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
-  async function openWorkspace(path: string) {
+  async function openWorkspace(path: string, scope: TargetScope) {
     if (
       !view.ready ||
       view.opening ||
@@ -406,7 +407,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({ opening: true });
     const revision = stateRevision;
     try {
-      const state = await transport.invoke<AppState>(COMMANDS.openWorkspace, { path });
+      const state = await transport.invoke<AppState>(COMMANDS.openWorkspace, { path, scope });
       if (revision === stateRevision) acceptState(state);
     } finally {
       update({ opening: false });

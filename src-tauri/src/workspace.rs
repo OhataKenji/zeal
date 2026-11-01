@@ -1,6 +1,8 @@
 //! Workspace detection, bazel executable resolution, and persistence of the
 //! last opened workspace.
 
+use crate::scope::Scope;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// A directory is a Bazel workspace root if it has MODULE.bazel or
@@ -40,21 +42,100 @@ fn is_executable(p: &Path) -> bool {
 
 const SAVED_FILE: &str = "workspace.json";
 
-/// Read the persisted workspace path from `data_dir`, if any.
-pub fn load_saved(data_dir: &Path) -> Option<PathBuf> {
-    let s = std::fs::read_to_string(data_dir.join(SAVED_FILE)).ok()?;
-    serde_json::from_str::<serde_json::Value>(&s)
-        .ok()?
-        .get("path")?
-        .as_str()
-        .map(PathBuf::from)
+/// The last workspace and its explicitly selected discovery scope.
+#[derive(Deserialize)]
+pub struct SavedWorkspace {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub scope: Scope,
 }
 
-/// Persist the workspace path under `data_dir`. Best-effort.
-pub fn save(data_dir: &Path, ws: &Path) {
+/// Legacy path-only settings use the default scope; invalid settings are not restored.
+pub fn load_saved(data_dir: &Path) -> Option<SavedWorkspace> {
+    let s = std::fs::read_to_string(data_dir.join(SAVED_FILE)).ok()?;
+    let mut saved: SavedWorkspace = serde_json::from_str(&s).ok()?;
+    saved.scope = saved.scope.validated().ok()?;
+    Some(saved)
+}
+
+/// Persist the workspace and scope under `data_dir`. Best-effort.
+pub fn save(data_dir: &Path, ws: &Path, scope: &Scope) {
     if std::fs::create_dir_all(data_dir).is_err() {
         return;
     }
-    let body = serde_json::json!({ "path": ws.to_string_lossy() });
+    let body = serde_json::json!({ "path": ws.to_string_lossy(), "scope": scope });
     let _ = std::fs::write(data_dir.join(SAVED_FILE), body.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("zeal-workspace-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn persisted_scope_survives_reopening() {
+        let dir = TempDir::new();
+        let scope = Scope {
+            include: vec!["//app/...".into()],
+        };
+        save(dir.path(), Path::new("/workspace"), &scope);
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.path, Path::new("/workspace"));
+        assert_eq!(saved.scope, scope);
+    }
+
+    #[test]
+    fn legacy_settings_restore_with_the_default_scope() {
+        let dir = TempDir::new();
+        std::fs::write(dir.path().join(SAVED_FILE), r#"{"path":"/workspace"}"#).unwrap();
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.path, Path::new("/workspace"));
+        assert_eq!(saved.scope, Scope::default());
+    }
+
+    #[test]
+    fn invalid_explicit_scope_is_not_replaced_with_the_default() {
+        let dir = TempDir::new();
+        for scope in [
+            serde_json::Value::Null,
+            serde_json::json!("//..."),
+            serde_json::json!({"include": []}),
+            serde_json::json!({"include": ["//app\\unsafe"]}),
+        ] {
+            let settings = serde_json::json!({"path": "/workspace", "scope": scope});
+            std::fs::write(dir.path().join(SAVED_FILE), settings.to_string()).unwrap();
+            assert!(load_saved(dir.path()).is_none(), "{settings}");
+        }
+    }
+
+    #[test]
+    fn old_exclude_settings_are_ignored() {
+        let dir = TempDir::new();
+        std::fs::write(dir.path().join(SAVED_FILE), r#"{"path":"/workspace","scope":{"include":["//app/..."],"exclude":["//app/old/..."]}}"#).unwrap();
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.scope.include, ["//app/..."]);
+        assert_eq!(
+            saved.scope.query(),
+            "let selected = kind(\"rule\", (\"//app/...\")) in $selected union kind(\"source file\", deps($selected, 1))"
+        );
+    }
 }

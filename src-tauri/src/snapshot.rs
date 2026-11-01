@@ -8,7 +8,7 @@
 
 use crate::label;
 use crate::label::LabelParts;
-use crate::xml::RawRule;
+use crate::xml::ParsedQuery;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -75,18 +75,20 @@ pub struct Snapshot {
 }
 
 /// Build a snapshot from parsed rules. Labels are canonicalized before being
-/// classified: a label that names a known target or starts with `@`/`@@`
-/// becomes an edge; anything else is a file reference.
+/// classified: only explicit source-file metadata identifies input files.
+/// Other references remain edges, including targets outside the selected scope.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.build", skip_all)]
 #[must_use]
-pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
-    let mut known = HashSet::new();
+pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
+    let rules = &query.rules;
+    let sources: HashSet<String> = query
+        .source_files
+        .iter()
+        .map(|s| label::canonical(s))
+        .collect();
     let mut targets = Vec::new();
     for r in rules {
         let lbl = label::canonical(&r.label);
-        if !known.insert(lbl.clone()) {
-            continue;
-        }
         let LabelParts { package, name } = label::split(&lbl);
         targets.push(Target {
             label: lbl,
@@ -113,7 +115,7 @@ pub fn build(rules: &[RawRule], status: Status) -> Snapshot {
             if label::is_select_key(&to) {
                 continue;
             }
-            if known.contains(&to) || label::is_external(&to) {
+            if label::is_external(&to) || !sources.contains(&to) {
                 edges.insert(Edge {
                     from: owner.clone(),
                     to,
@@ -164,18 +166,18 @@ mod tests {
     use std::collections::HashMap;
     use std::io::Cursor;
 
-    fn fixture_rules() -> Vec<xml::RawRule> {
+    fn fixture_rules() -> xml::ParsedQuery {
         let xml = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/query.xml"
         ))
         .unwrap();
-        xml::parse_rules(Cursor::new(xml))
+        xml::parse_query(Cursor::new(xml))
     }
 
     #[test]
     fn conditions_packages_keep_rule_and_file_inputs() {
-        let rules = xml::parse_rules(Cursor::new(
+        let rules = xml::parse_query(Cursor::new(
             r#"<query>
               <rule class="filegroup" name="//app:direct">
                 <list name="srcs">
@@ -185,6 +187,8 @@ mod tests {
                 </list>
               </rule>
               <rule class="filegroup" name="//conditions:inputs"/>
+              <source-file name="//conditions:input.txt"/>
+              <source-file name="//tools/conditions:input.txt"/>
             </query>"#,
         ));
         let snapshot = build(&rules, Status::Ok);
@@ -292,7 +296,7 @@ mod tests {
 
     #[test]
     fn edges_dedup() {
-        let rules = xml::parse_rules(Cursor::new(
+        let rules = xml::parse_query(Cursor::new(
             r#"<query><rule name="//a:x" class="r"><list name="deps">
             <label value="//a:y"/><label value="//a:y"/></list></rule>
             <rule name="//a:y" class="r"/></query>"#,
@@ -306,5 +310,21 @@ mod tests {
                 attr: "deps".into()
             }]
         );
+    }
+    #[test]
+    fn references_outside_scope_are_not_assumed_to_be_files() {
+        let query = xml::parse_query(Cursor::new(
+            r#"<query>
+          <rule name="//app:main" class="r"><list name="srcs">
+            <label value="//other:generated"/><label value="//app:main.rs"/>
+          </list></rule>
+          <source-file name="//app:main.rs"/>
+        </query>"#,
+        ));
+        let snap = build(&query, Status::Ok);
+        assert_eq!(snap.targets.len(), 1);
+        assert_eq!(snap.edges[0].to, "//other:generated");
+        assert_eq!(snap.files.len(), 1);
+        assert_eq!(snap.files[0].path, "app/main.rs");
     }
 }

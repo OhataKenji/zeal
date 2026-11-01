@@ -522,6 +522,7 @@
     <div class="content">
       <WorkspacePrompt
         initial={st.workspace ?? ""}
+        initialScope={st.scope}
         onclose={st.workspace ? () => (switchingWs = false) : undefined}
       />
       {#if st.workspace && st.bazel === null}

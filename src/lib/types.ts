@@ -47,10 +47,16 @@ export interface IngestError {
   summary: string;
 }
 
+/** Target patterns included in discovery. */
+export interface TargetScope {
+  include: string[];
+}
+
 /** Current core state. A workspace switch clears workspace-scoped data. */
 export interface AppState {
   besError?: string | null;
   workspace: string | null;
+  scope: TargetScope;
   bazel: string | null;
   ingest: "idle" | "running";
   /** `Snapshot.meta.fetchedAt` of the core's snapshot; its data loads through `get_snapshot`. */

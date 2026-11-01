@@ -468,7 +468,9 @@ button:disabled {
   padding: 40px 12px;
   display: flex;
   gap: 10px;
-  align-items: end;
+  flex-direction: column;
+  max-width: 640px;
+  margin: 0 auto;
 }
 
 .ws-prompt label {
@@ -478,6 +480,24 @@ button:disabled {
   flex: 1;
   font-size: 11px;
   color: var(--muted-foreground);
+}
+
+.ws-prompt .scope-patterns {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  font-family: var(--mono);
+}
+
+.scope-help {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.ws-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .app-error {

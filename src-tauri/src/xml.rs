@@ -45,27 +45,38 @@ pub struct RawRule {
     pub outputs: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct ParsedQuery {
+    pub rules: Vec<RawRule>,
+    pub source_files: Vec<String>,
+}
+
 #[tracing::instrument(target = "zeal::operations", name = "query.xml_parse", skip_all)]
-pub fn parse_rules<R: BufRead>(input: R) -> Vec<RawRule> {
+pub fn parse_query<R: BufRead>(input: R) -> ParsedQuery {
     let mut reader = Reader::from_reader(input);
-    let mut rules = Vec::new();
+    let mut parsed = ParsedQuery::default();
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) if e.name().as_ref() == b"rule" => {
                 let mut rule = raw_rule(&reader, &e);
                 read_body(&mut reader, &mut rule);
-                rules.push(rule);
+                parsed.rules.push(rule);
             }
             Ok(Event::Empty(e)) if e.name().as_ref() == b"rule" => {
-                rules.push(raw_rule(&reader, &e));
+                parsed.rules.push(raw_rule(&reader, &e));
+            }
+            Ok(Event::Start(e) | Event::Empty(e)) if e.name().as_ref() == b"source-file" => {
+                if let Some(label) = attr_value(&reader, &e, "name") {
+                    parsed.source_files.push(label);
+                }
             }
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
     }
-    rules
+    parsed
 }
 
 /// `<rule ...>` was opened: read its attributes into a fresh RawRule.
@@ -174,7 +185,7 @@ mod tests {
             "/tests/fixtures/query.xml"
         ))
         .unwrap();
-        parse_rules(Cursor::new(xml))
+        parse_query(Cursor::new(xml)).rules
     }
 
     #[test]
@@ -231,13 +242,13 @@ mod tests {
         .unwrap();
         // Cut mid-rule: everything after the first </rule> is lost.
         let cut = xml.find("</rule>").unwrap() + "</rule>".len();
-        let rules = parse_rules(Cursor::new(&xml[..cut]));
+        let rules = parse_query(Cursor::new(&xml[..cut])).rules;
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].label, "//app/lib:parser");
 
         // Cut mid-body: the rule survives with the attributes that arrived.
         let mid = xml.find("<list name=\"deps\">").unwrap();
-        let rules = parse_rules(Cursor::new(&xml[..mid]));
+        let rules = parse_query(Cursor::new(&xml[..mid])).rules;
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].label, "//app/lib:parser");
         assert!(!rules[0].label_attrs.iter().any(|(a, _)| a == "deps"));

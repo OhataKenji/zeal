@@ -66,4 +66,9 @@
     <rule-output name="//tools:launcher.sh"/>
   </rule>
   <rule class="cc_library" location="/repo/tools/BUILD:4:1" name="//tools:cc"/>
+  <source-file name="//app/lib:Parser.java"/>
+  <source-file name="//app/lib:Token.java"/>
+  <source-file name="//app/lib:grammars.txt"/>
+  <source-file name="//app/lib:parser.proto"/>
+  <source-file name="//app:server.cfg"/>
 </query>

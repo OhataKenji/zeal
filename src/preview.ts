@@ -145,6 +145,7 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
   });
 }).flat();
 const state: AppState = {
+  scope: { include: ["//app/..."] },
   workspace: WORKSPACE,
   bazel: "8.7.0",
   ingest: "idle",
@@ -367,8 +368,9 @@ export function installPreview() {
     // The app sends this command with the AnalyticsFilter shape.
     get_analytics: (payload) =>
       previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
-    open_workspace: () => {
-      state.workspace = WORKSPACE;
+    open_workspace: (payload) => {
+      state.workspace = String(payload?.path ?? WORKSPACE);
+      state.scope = structuredClone(payload?.scope as AppState["scope"]);
       state.snapshotFetchedAt = SNAPSHOT.meta.fetchedAt;
       currentSnapshot = SNAPSHOT;
       return structuredClone(state);
