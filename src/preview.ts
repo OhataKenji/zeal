@@ -148,7 +148,7 @@ const state: AppState = {
   workspace: WORKSPACE,
   bazel: "8.7.0",
   ingest: "idle",
-  fetchedAt: SNAPSHOT.meta.fetchedAt,
+  snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
   lastError: null,
   running: null,
   stopping: false,
@@ -345,7 +345,7 @@ export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
   if (new URLSearchParams(location.search).get("preview") === "empty") {
     state.workspace = null;
-    state.fetchedAt = null;
+    state.snapshotFetchedAt = null;
     currentSnapshot = null;
   }
   // Every command the app invokes needs a handler; the Record type makes a
@@ -369,7 +369,7 @@ export function installPreview() {
       previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
     open_workspace: () => {
       state.workspace = WORKSPACE;
-      state.fetchedAt = SNAPSHOT.meta.fetchedAt;
+      state.snapshotFetchedAt = SNAPSHOT.meta.fetchedAt;
       currentSnapshot = SNAPSHOT;
       return structuredClone(state);
     },

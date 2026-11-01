@@ -37,8 +37,8 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
-/// The current workspace snapshot. Events carry only its `fetched_at`, so the
-/// UI requests this once per change instead of on every state push.
+/// The current workspace snapshot. Events carry only `snapshot_fetched_at`,
+/// so the UI requests this once per change instead of on every state push.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.get", skip_all)]
 #[tauri::command]
 async fn get_snapshot(
