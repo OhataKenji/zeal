@@ -110,6 +110,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let stateRevision = 0;
   let listGeneration = 0;
   let listing = false;
+  let listPending = false;
   let detailGeneration = 0;
   let profileGeneration = 0;
   let snapshotGeneration = 0;
@@ -117,6 +118,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let targetGeneration = 0;
   let targetRequestInFlight = false;
   let unlisten: (() => void) | undefined;
+  let unlistenHistory: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
     if (disposed) return;
     view = { ...view, ...patch };
@@ -124,7 +126,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function loadRuns() {
-    if (listing || !view.state?.workspace || disposed) return;
+    if (!view.state?.workspace || disposed) return;
+    if (listing) {
+      listPending = true;
+      return;
+    }
     listing = true;
     const generation = ++listGeneration;
     try {
@@ -150,6 +156,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       }
     } finally {
       listing = false;
+      if (listPending && !disposed) {
+        listPending = false;
+        void loadRuns();
+      }
     }
   }
 
@@ -451,16 +461,33 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     disposed = true;
     unlisten?.();
     unlisten = undefined;
+    unlistenHistory?.();
+    unlistenHistory = undefined;
   }
 
   async function init() {
     try {
+      const removeHistory = await transport.listen<void>("history-changed", () => {
+        void loadRuns();
+      });
+      if (disposed) {
+        removeHistory();
+        return;
+      }
+      unlistenHistory = removeHistory;
       const remove = await transport.listen<AppState>("app-state", acceptState);
       if (disposed) {
         remove();
         return;
       }
       unlisten = remove;
+    } catch (error) {
+      unlistenHistory?.();
+      unlistenHistory = undefined;
+      if (!disposed) update({ error: `Could not connect: ${String(error)}` });
+      return;
+    }
+    try {
       const revision = stateRevision;
       const state = await transport.invoke<AppState>(COMMANDS.getState);
       if (revision === stateRevision) acceptState(state);
