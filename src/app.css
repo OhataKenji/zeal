@@ -1729,8 +1729,18 @@ button.chip:hover {
   overflow-x: auto;
 }
 
+.query-graph-viewport {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.query-graph-viewport:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
 .query-graph {
-  max-width: 100%;
+  display: block;
 }
 
 .query-empty {
