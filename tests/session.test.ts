@@ -155,6 +155,118 @@ test("logs and results arrive while profile parsing is still pending", async () 
   assert.equal(h.view.profileLoading, false);
 });
 
+test("run-list polling refreshes a selected terminal run after completion", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  h.session.selectRun(RECORD.id);
+  const earlier = { ...COMPLETED, record: RECORD };
+  pendingRequest(h, "get_run").reply.resolve(earlier);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
+  await settle();
+
+  const poll = h.session.loadRuns();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await poll;
+  assert.equal(requestCount(h, "get_run"), 2);
+  assert.equal(h.view.detail, earlier);
+  assert.equal(h.view.detailLoading, true);
+  assert.equal(h.view.selectedRun, RECORD.id);
+  assert.equal(h.view.profile, PROFILE);
+  assert.equal(requestCount(h, "get_run_profile"), 1);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  await settle();
+  assert.equal(h.view.detail, COMPLETED);
+});
+
+test("the next unchanged list poll recovers completion during a detail read", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  h.session.selectRun(RECORD.id);
+  const first = h.session.loadRuns();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await first;
+  assert.equal(requestCount(h, "get_run"), 1);
+  pendingRequest(h, "get_run").reply.resolve({ ...COMPLETED, record: RECORD });
+  await settle();
+
+  const next = h.session.loadRuns();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await next;
+  assert.equal(requestCount(h, "get_run"), 2);
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  await settle();
+  const stable = h.session.loadRuns();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await stable;
+  assert.equal(requestCount(h, "get_run"), 2);
+});
+
+test("a failed automatic detail refresh waits for explicit Retry", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  h.session.selectRun(RECORD.id);
+  const earlier = { ...COMPLETED, record: RECORD };
+  pendingRequest(h, "get_run").reply.resolve(earlier);
+  await settle();
+  const first = h.session.loadRuns();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await first;
+  lastPendingRequest(h, "get_run").reply.reject(new Error("record unavailable"));
+  await settle();
+  const next = h.session.loadRuns();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await next;
+  assert.equal(requestCount(h, "get_run"), 2);
+  assert.equal(h.view.detail, earlier);
+  assert.match(h.view.detailError ?? "", /record unavailable/);
+  const retry = h.session.loadDetail();
+  lastPendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  await retry;
+  assert.equal(h.view.detailError, null);
+});
+
+test("another run changing or completing does not reload the viewed run or profile", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await settle();
+  h.session.selectRun(RECORD.id);
+  pendingRequest(h, "get_run").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_run_profile").reply.resolve(PROFILE);
+  await settle();
+  h.emit("app-state", { ...IDLE, running: "another-run" });
+  lastPendingRequest(h, "list_runs").reply.resolve([
+    { ...COMPLETED.record, id: "another-run" },
+    COMPLETED.record,
+  ]);
+  await settle();
+  h.emit("app-state", IDLE);
+  assert.equal(requestCount(h, "get_run"), 1);
+  assert.equal(requestCount(h, "get_run_profile"), 1);
+  assert.equal(h.view.profile, PROFILE);
+});
+
+test("a list response after disposal cannot start a detail refresh", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_runs").reply.resolve([RECORD]);
+  await settle();
+  h.session.selectRun(RECORD.id);
+  pendingRequest(h, "get_run").reply.resolve({ ...COMPLETED, record: RECORD });
+  await settle();
+  const poll = h.session.loadRuns();
+  h.session.dispose();
+  lastPendingRequest(h, "list_runs").reply.resolve([COMPLETED.record]);
+  await poll;
+  assert.equal(requestCount(h, "get_run"), 1);
+});
+
 test("timing can arrive before logs without clearing either response", async () => {
   const h = harness();
   await h.session.init();
