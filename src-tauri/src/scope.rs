@@ -35,14 +35,20 @@ impl Scope {
             .join(" union ");
         format!("kind(\"rule\", ({selected}))")
     }
+}
 
-    /// Rules and source files needed to classify target relationships.
-    pub fn query(&self) -> String {
-        format!(
-            "let selected = {} in $selected union kind(\"source file\", deps($selected, 1))",
-            self.rules_query()
-        )
+/// The selected rule and its direct source files, needed to classify its attributes.
+pub fn target_query(label: &str) -> Result<String, String> {
+    if !label.starts_with("//")
+        || label
+            .chars()
+            .any(|c| c == '"' || c == '\\' || c.is_control())
+    {
+        return Err("invalid target label".to_string());
     }
+    Ok(format!(
+        "let selected = \"{label}\" in $selected union kind(\"source file\", deps($selected, 1))"
+    ))
 }
 
 fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
@@ -90,10 +96,6 @@ mod tests {
         }
         .validated()
         .unwrap();
-        assert_eq!(
-            scope.query(),
-            "let selected = kind(\"rule\", (\"//a:all\" union \"//b/...\")) in $selected union kind(\"source file\", deps($selected, 1))"
-        );
         assert_eq!(
             scope.rules_query(),
             "kind(\"rule\", (\"//a:all\" union \"//b/...\"))"
@@ -147,8 +149,23 @@ mod tests {
         .validated()
         .unwrap();
         assert_eq!(
-            scope.query(),
-            "let selected = kind(\"rule\", (\"//pkg:thing!%\" union \"//a:b:c\" union \"//a) union //...\" union \"//pkg:it's\")) in $selected union kind(\"source file\", deps($selected, 1))"
+            scope.rules_query(),
+            "kind(\"rule\", (\"//pkg:thing!%\" union \"//a:b:c\" union \"//a) union //...\" union \"//pkg:it's\"))"
         );
+    }
+
+    #[test]
+    fn target_query_selects_one_rule_and_its_direct_source_files() {
+        assert_eq!(
+            target_query("//app:chosen").unwrap(),
+            "let selected = \"//app:chosen\" in $selected union kind(\"source file\", deps($selected, 1))"
+        );
+    }
+
+    #[test]
+    fn target_query_rejects_unsafe_labels() {
+        for label in ["//app:\"x", "//app:\\x", "//app:\nx", "@repo//app:x"] {
+            assert!(target_query(label).is_err(), "{label:?}");
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 _OhataKenji_
 _Last update: 2026/10/17_
-_Status: Original M1 design. Current loading flow: [Target の段階的な取得](./target-loading.md)._
+_Status: 以下は 2026/10/17 時点の仕様であり、現行仕様ではない。used by 要件は廃止済み。現行の取得と表示は [Target の段階的な取得](./target-loading.md) を参照。_
 
 ## Goal
 

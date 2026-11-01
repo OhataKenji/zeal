@@ -133,9 +133,6 @@ mod tests {
         std::fs::write(dir.path().join(SAVED_FILE), r#"{"path":"/workspace","scope":{"include":["//app/..."],"exclude":["//app/old/..."]}}"#).unwrap();
         let saved = load_saved(dir.path()).unwrap();
         assert_eq!(saved.scope.include, ["//app/..."]);
-        assert_eq!(
-            saved.scope.query(),
-            "let selected = kind(\"rule\", (\"//app/...\")) in $selected union kind(\"source file\", deps($selected, 1))"
-        );
+        assert_eq!(saved.scope.rules_query(), "kind(\"rule\", (\"//app/...\"))");
     }
 }

@@ -130,19 +130,12 @@ export function ancestorsOf(pkg: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// The four relationship lines
+// Selected target attributes and outputs
 
-/** Targets and files that depend on the selected target. */
-export interface UsedBy {
-  label: string;
-  attrs: string[];
-}
-
-/** Direct dependency, data, and reverse-usage relationships for a target. */
+/** Direct attributes and outputs for a target. */
 export interface Relations {
   target: Target;
   attributes: Array<{ name: string; labels: string[]; files: string[] }>;
-  usedBy: UsedBy[];
   outputs: FileEntry[];
 }
 
@@ -160,15 +153,9 @@ export function relations(detail: TargetDetail): Relations {
     return value;
   }
   for (const name of ["srcs", "data", "deps"]) attribute(name);
-  const usedBy = new Map<string, Set<string>>();
   for (const e of detail.edges) {
     if (e.from === label) {
       attribute(e.attr).labels.add(e.to);
-    }
-    if (e.to === label) {
-      let attrs = usedBy.get(e.from);
-      if (!attrs) usedBy.set(e.from, (attrs = new Set()));
-      attrs.add(e.attr);
     }
   }
   for (const file of detail.files) {
@@ -184,9 +171,6 @@ export function relations(detail: TargetDetail): Relations {
       labels: [...value.labels].sort(),
       files: [...value.files].sort(),
     })),
-    usedBy: [...usedBy]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([label, attrs]) => ({ label, attrs: [...attrs].sort() })),
     outputs: detail.files.filter((f) => f.owner === label && f.role === "out"),
   };
 }

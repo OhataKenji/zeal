@@ -414,8 +414,8 @@
             <td>対象を見つける。label → package → file の一致</td>
           </tr>
           <tr>
-            <td>関係4行</td>
-            <td>deps / data / used by / files</td>
+            <td>target 詳細</td>
+            <td>属性 / 入出力ファイル</td>
           </tr>
           <tr>
             <td>composer</td>
@@ -450,11 +450,6 @@
           <dd>:parser_proto · @maven//:guava</dd>
           <dt>data →</dt>
           <dd>//app:grammars</dd>
-          <dt>used by ←</dt>
-          <dd>
-            //app:server <span class="dim">java_binary</span> · :parser_test
-            <span class="dim">java_test</span>
-          </dd>
           <dt>files</dt>
           <dd>Parser.java, Token.java … → libparser.jar</dd>
         </dl>
