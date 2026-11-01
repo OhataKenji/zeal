@@ -1678,13 +1678,6 @@ button.chip:hover {
   margin-top: 4px;
 }
 
-.query-code-body label {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
 .query-code-body textarea {
   width: 100%;
   min-height: 84px;

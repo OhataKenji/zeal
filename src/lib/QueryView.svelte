@@ -473,9 +473,9 @@
           </div>
         {:else}
           <div class="query-code-body">
-            <label for="query-code-input">Bazel query expression</label>
             <textarea
               id="query-code-input"
+              aria-label="Bazel query expression"
               spellcheck="false"
               autocomplete="off"
               bind:value={draft}
