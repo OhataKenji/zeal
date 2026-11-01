@@ -118,9 +118,19 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++listGeneration;
     try {
       const runs = await transport.invoke<RunRecord[]>(COMMANDS.listRuns);
-      if (generation === listGeneration) {
+      if (generation === listGeneration && !disposed) {
         if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
           update({ runs, runsError: null });
+        }
+        const selected = runs.find((run) => run.id === view.selectedRun);
+        if (
+          selected &&
+          view.detail &&
+          !view.detailLoading &&
+          !view.detailError &&
+          JSON.stringify(selected) !== JSON.stringify(view.detail.record)
+        ) {
+          void loadDetail();
         }
       }
     } catch (error) {
@@ -307,9 +317,10 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (resumed || state.workspace !== before?.workspace || state.running !== before?.running) {
       void loadRuns();
     }
-    if (resumed || (before?.running && before.running !== state.running)) {
-      const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
-      if (!selectCompletedConsole(completed)) loadSelected();
+    if (!resumed && (!before?.running || before.running === state.running)) return;
+    const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
+    if (!selectCompletedConsole(completed) && (resumed || view.selectedRun === completed)) {
+      loadSelected();
     }
   }
 
