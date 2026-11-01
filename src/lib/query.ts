@@ -745,8 +745,8 @@ export const EXAMPLES: ReadonlyArray<{
  * Builds the named example expression, or null for an unknown name. Loading
  * an example replaces the current expression, resets the flags to
  * `DEFAULT_FLAGS`, and returns to Builder mode — the view performs those
- * resets itself and confirms first when `codeDiverged` says a Code draft
- * would be lost; this layer never confirms.
+ * resets itself; loading never runs the query (the fixture targets usually
+ * do not exist in the user's workspace, so a run would just fail).
  */
 export function applyExample(id: string): Expr | null {
   return EXAMPLES.find((e) => e.id === id)?.build() ?? null;

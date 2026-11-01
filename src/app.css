@@ -1285,12 +1285,6 @@ button.chip:hover {
   margin-bottom: 16px;
 }
 
-.query-crumbs {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  margin-bottom: 4px;
-}
-
 .query-title-row {
   display: flex;
   align-items: center;
@@ -1304,9 +1298,6 @@ button.chip:hover {
 }
 
 .query-panel {
-  background: var(--background);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
   margin-bottom: 14px;
 }
 
@@ -1394,9 +1385,8 @@ button.chip:hover {
 }
 
 .query-expr-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--background);
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
   min-width: 0;
 }
 
@@ -1405,10 +1395,6 @@ button.chip:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 6px 8px;
-  background: var(--muted);
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
   position: relative;
   min-width: 0;
 }
@@ -1424,12 +1410,12 @@ button.chip:hover {
 
 .query-comp-head > select:hover,
 .query-comp-head > select:focus-visible {
-  background: var(--background);
+  background: var(--muted);
   border-color: var(--input);
 }
 
 .query-comp-body {
-  padding: 10px 12px;
+  padding: 6px 8px 8px;
   min-width: 0;
 }
 
@@ -1438,7 +1424,7 @@ button.chip:hover {
   flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 6px 8px 8px;
 }
 
 .query-call-arg {
@@ -1631,7 +1617,6 @@ button.chip:hover {
   margin: 0;
   background: var(--muted);
   color: var(--foreground);
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 16px;
   font: 12px/1.6 var(--mono);
@@ -1641,7 +1626,6 @@ button.chip:hover {
 }
 
 .query-shared {
-  border-top: 1px solid var(--border);
   padding: 12px 14px 14px;
 }
 
@@ -1738,7 +1722,6 @@ button.chip:hover {
   font-size: 12px;
   color: var(--foreground);
   background: var(--muted);
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 8px 10px;
 }
@@ -1759,7 +1742,6 @@ button.chip:hover {
   font-size: 11.5px;
   color: var(--warning);
   background: var(--warning-muted);
-  border: 1px solid var(--warning-muted);
   border-radius: 4px;
   padding: 1px 8px;
   margin: 8px 14px 0;
@@ -1770,7 +1752,6 @@ button.chip:hover {
   border-radius: var(--radius-md);
   padding: 8px 10px;
   margin: 8px 14px 0;
-  border: 1px solid var(--border);
   background: var(--muted);
 }
 
@@ -1783,7 +1764,7 @@ button.chip:hover {
 .query-strip.is-warn {
   color: var(--warning);
   background: var(--warning-muted);
-  border-color: var(--warning-muted);
+  border-left: 3px solid var(--warning);
 }
 
 .query-strip p {

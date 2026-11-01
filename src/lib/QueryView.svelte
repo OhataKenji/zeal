@@ -33,15 +33,11 @@
   } from "./query";
   import type { Snapshot } from "./types";
 
-  let { snap, workspace }: { snap: Snapshot | null; workspace: string } = $props();
+  let { snap }: { snap: Snapshot | null } = $props();
 
   const labelsId = "query-labels";
   const attrsId = "query-attrs";
   const kindsId = "query-kinds";
-
-  const wsName = $derived(
-    workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace,
-  );
   const labelOptions = $derived(
     (snap?.targets ?? []).slice(0, 300).map((t) => t.label),
   );
@@ -303,6 +299,8 @@
     );
   }
 
+  // Loading an example only fills the editor: the fixture targets usually do
+  // not exist in the user's workspace, so an immediate run would just error.
   function loadExample(id: string) {
     const built = applyExample(id);
     if (!built) return;
@@ -312,7 +310,6 @@
     codeError = null;
     noImplicit = DEFAULT_FLAGS.noImplicit;
     noTool = DEFAULT_FLAGS.noTool;
-    run();
   }
 
   function revertToBuilder() {
@@ -376,12 +373,13 @@
         </button>
       {/each}
     </div>
-    <p class="query-conn-note">Runs a <code>bazel query</code> in {wsName}</p>
+    <p class="query-conn-note">
+      Runs a <code>bazel query</code> against the open workspace
+    </p>
   </aside>
   <div class="query-main">
     <div class="query-content">
       <header class="query-page-header">
-        <div class="query-crumbs">{wsName}</div>
         <div class="query-title-row"><h1>Query editor</h1></div>
       </header>
       <section class="query-panel" aria-labelledby="query-heading">

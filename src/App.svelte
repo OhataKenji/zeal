@@ -387,7 +387,7 @@
       {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
     {:else if queryOpen}
       {#key workspace}
-        <QueryView {snap} {workspace} />
+        <QueryView {snap} />
       {/key}
     {:else if snap && selected}
       <TargetView
