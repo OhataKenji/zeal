@@ -6,13 +6,12 @@ import {
   keyAction,
   moveIndex,
   optionId,
-  querySearchTargets,
   search,
   segments,
 } from "../src/lib/search.ts";
-import type { Snapshot } from "../src/lib/types.ts";
+import type { TargetIndex } from "../src/lib/types.ts";
 
-const SNAPSHOT: Snapshot = {
+const SNAPSHOT: TargetIndex = {
   meta: { fetchedAt: 1, status: "ok" },
   targets: [
     {
@@ -37,8 +36,6 @@ const SNAPSHOT: Snapshot = {
       location: null,
     },
   ],
-  edges: [],
-  files: [],
 };
 
 // The index belongs to whoever holds the candidates: built once here, searched
@@ -96,33 +93,6 @@ test("file paths are not search candidates", () => {
   assert.deepEqual(search(SEARCH_INDEX, "Lexer.java"), []);
   assert.deepEqual(search(SEARCH_INDEX, "Parser.java"), []);
   assert.deepEqual(search(SEARCH_INDEX, "parser.jar"), []);
-});
-
-test("query search targets add external repos from dep edges", () => {
-  const snap: Snapshot = {
-    ...SNAPSHOT,
-    edges: [
-      { from: "//app/lib:parser", to: "@maven//:com_guava", attr: "deps" },
-      { from: "//app/lib:parser", to: "@maven//:com_guava", attr: "runtime_deps" },
-      { from: "//app/lib:parser", to: "@pip//:requests", attr: "deps" },
-      // Internal edge destinations are known targets by ingest's invariant —
-      // they are covered already and skipped.
-      { from: "//app/lib:parser", to: "//app/lib:parser_test", attr: "deps" },
-      { from: "//app/lib:parser", to: "//other:missing", attr: "deps" },
-    ],
-  };
-  const targets = querySearchTargets(snap);
-  assert.equal(targets.length, SNAPSHOT.targets.length + 2);
-  assert.deepEqual(
-    targets.slice(SNAPSHOT.targets.length).map((t) => t.label),
-    ["@maven//:com_guava", "@pip//:requests"],
-  );
-  assert.equal(targets[3].ruleClass, "external");
-  const index = createIndex(targets);
-  assert.deepEqual(
-    search(index, "maven guava").map((match) => match.target.label),
-    ["@maven//:com_guava"],
-  );
 });
 
 test("later searches do not change earlier results", () => {

@@ -27,18 +27,24 @@ export interface FileEntry {
   role: string;
 }
 
-/** Fetch status and timestamp for one workspace snapshot. */
-export interface SnapshotMeta {
+/** Fetch status and timestamp for one workspace target index. */
+export interface TargetIndexMeta {
   fetchedAt: number;
   status: "ok" | "partial";
 }
 
-/** The core's current index of workspace targets, edges, and files. */
-export interface Snapshot {
-  meta: SnapshotMeta;
+/** The labels and rule classes needed by the target tree and search. */
+export interface TargetIndex {
+  meta: TargetIndexMeta;
   targets: Target[];
+}
+
+/** Relationships loaded only after a target is selected. */
+export interface TargetDetail {
+  target: Target;
   edges: Edge[];
   files: FileEntry[];
+  status: "ok" | "partial";
 }
 
 /** A user-facing summary for a failed core operation. */
@@ -61,7 +67,7 @@ export interface AppState {
   scope: TargetScope;
   bazel: string | null;
   ingest: "idle" | "running";
-  /** `Snapshot.meta.fetchedAt` of the core's snapshot; its data loads through `get_snapshot`. */
+  /** `TargetIndex.meta.fetchedAt`; its data loads through `get_snapshot`. */
   snapshotFetchedAt: number | null;
   lastError: IngestError | null;
   running: string | null;
@@ -72,6 +78,8 @@ export interface AppState {
   runNote: string | null;
   // An ad-hoc query-editor `bazel query`, distinct from a run or snapshot ingest.
   query: "idle" | "running";
+  // A selected target's detail query, serialized with the other Bazel operations.
+  detailQuery: "idle" | "running";
 }
 
 /** Commands accepted by the run composer. */

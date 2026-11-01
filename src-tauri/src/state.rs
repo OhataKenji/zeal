@@ -1,6 +1,6 @@
 //! Shared application state held by the Rust core.
 
-use crate::snapshot::Snapshot;
+use crate::snapshot::TargetIndex;
 use serde::Serialize;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ pub struct AppStateDto {
     /// "idle" | "running": whether a query ingestion is in flight.
     pub ingest: &'static str,
     /// `fetched_at` of the current snapshot, kept across failed refreshes. The
-    /// UI fetches the full snapshot through `get_snapshot` only when this
+    /// UI fetches the target index through `get_snapshot` only when this
     /// changes, so events never carry target data.
     pub snapshot_fetched_at: Option<u64>,
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
@@ -41,6 +41,8 @@ pub struct AppStateDto {
     pub run_note: Option<String>,
     /// "idle" | "running": whether an ad-hoc editor query is in flight.
     pub query: &'static str,
+    /// "idle" | "running": whether a selected target's detail is loading.
+    pub detail_query: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -140,10 +142,10 @@ pub struct CoreState {
     pub workspace: Option<PathBuf>,
     pub scope: crate::scope::Scope,
     pub bazel: Option<PathBuf>,
-    /// The latest fully built snapshot; swapped atomically per fetch.
-    pub snapshot: Option<Arc<Snapshot>>,
+    /// The latest target index; swapped atomically per fetch.
+    pub snapshot: Option<Arc<TargetIndex>>,
     pub last_error: Option<IngestError>,
-    /// At most one bazel invocation is active: ingest, run, or editor query.
+    /// At most one bazel invocation is active: ingest, detail, run, or editor query.
     /// Busy requests are rejected.
     pub ingest_running: bool,
     /// The run holding the slot; `None` when no run is in flight.
@@ -154,6 +156,8 @@ pub struct CoreState {
     /// Ad-hoc editor query in flight (the "query" DTO field; distinct from
     /// ingest's `bazel query //...` snapshot fetch).
     pub query_running: bool,
+    /// Scoped XML query for a selected target.
+    pub detail_query_running: bool,
     /// Process group of the query child (its pid), so app exit can kill it.
     pub query_pgid: Option<i32>,
 }
@@ -161,7 +165,7 @@ pub struct CoreState {
 impl CoreState {
     /// Whether any bazel invocation holds the serialized slot.
     pub fn bazel_busy(&self) -> bool {
-        self.ingest_running || self.run.is_some() || self.query_running
+        self.ingest_running || self.run.is_some() || self.query_running || self.detail_query_running
     }
 }
 
@@ -196,6 +200,7 @@ impl Core {
                 console: None,
                 run_note: None,
                 query_running: false,
+                detail_query_running: false,
                 query_pgid: None,
             }),
             run_finished: Condvar::new(),
@@ -225,6 +230,11 @@ impl Core {
             stopping: st.run.as_ref().is_some_and(|run| run.stopping),
             run_note: st.run_note.clone(),
             query: if st.query_running { "running" } else { "idle" },
+            detail_query: if st.detail_query_running {
+                "running"
+            } else {
+                "idle"
+            },
         }
     }
 
@@ -307,6 +317,9 @@ mod tests {
             st.run = None;
             st.query_running = true;
             assert!(st.bazel_busy());
+            st.query_running = false;
+            st.detail_query_running = true;
+            assert!(st.bazel_busy());
         }
     }
 
@@ -322,20 +335,28 @@ mod tests {
         }
         let json = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(json["query"], "running");
+        assert_eq!(json["detailQuery"], "idle");
+
+        {
+            let mut st = core.state.lock().unwrap();
+            st.query_running = false;
+            st.detail_query_running = true;
+        }
+        let json = serde_json::to_value(core.dto()).unwrap();
+        assert_eq!(json["query"], "idle");
+        assert_eq!(json["detailQuery"], "running");
     }
 
     #[test]
     fn the_dto_names_the_snapshot_without_carrying_its_data() {
         use crate::snapshot::{Meta, Status};
 
-        let snapshot = Snapshot {
+        let snapshot = TargetIndex {
             meta: Meta {
                 fetched_at: 1,
                 status: Status::Partial,
             },
             targets: Vec::new(),
-            edges: Vec::new(),
-            files: Vec::new(),
         };
         let core = Core::new();
         core.state.lock().unwrap().snapshot = Some(Arc::new(snapshot));
