@@ -352,6 +352,28 @@ function syntaxError(t: { pos: number }, msg: string): Error & { pos: number } {
 
 const WORD_CHARS = /[A-Za-z0-9*/@.\-_:$~[\]]/;
 
+function readWord(text: string, start: number): [token: Token, end: number] {
+  const quote = text[start];
+  if (quote === '"' || quote === "'") {
+    const end = text.indexOf(quote, start + 1);
+    if (end < 0) throw syntaxError({ pos: text.length }, "Unterminated quoted word");
+    return [{ type: "word", value: text.slice(start + 1, end), pos: start, quoted: true }, end + 1];
+  }
+  let end = start;
+  while (
+    end < text.length &&
+    (WORD_CHARS.test(text[end]) ||
+      text.charCodeAt(end) > 127 ||
+      (text[end] === "+" && text.startsWith("@@", start)))
+  ) {
+    end++;
+  }
+  if (end === start)
+    throw syntaxError({ pos: start }, `'${text[start]}' must be quoted when used in a target name`);
+  const value = text.slice(start, end);
+  return [{ type: KEYWORDS.has(value) ? value : "word", value, pos: start }, end];
+}
+
 function tokenize(text: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
@@ -366,41 +388,9 @@ function tokenize(text: string): Token[] {
       i++;
       continue;
     }
-    if (c === '"' || c === "'") {
-      const start = i;
-      i++;
-      let v = "";
-      while (i < text.length && text[i] !== c) {
-        v += text[i];
-        i++;
-      }
-      if (i >= text.length) throw syntaxError({ pos: text.length }, "Unterminated quoted word");
-      i++;
-      tokens.push({ type: "word", value: v, pos: start, quoted: true });
-      continue;
-    }
-    const start = i;
-    let v = "";
-    while (i < text.length) {
-      const ch = text[i];
-      if (ch === "+" && v.startsWith("@@")) {
-        v += ch;
-        i++;
-        continue;
-      }
-      if (WORD_CHARS.test(ch) || ch.charCodeAt(0) > 127) {
-        v += ch;
-        i++;
-        continue;
-      }
-      break;
-    }
-    if (v === "") throw syntaxError({ pos: i }, `'${c}' must be quoted when used in a target name`);
-    tokens.push({
-      type: KEYWORDS.has(v) ? v : "word",
-      value: v,
-      pos: start,
-    });
+    const [token, end] = readWord(text, i);
+    tokens.push(token);
+    i = end;
   }
   tokens.push({ type: "eof", value: "", pos: text.length });
   return tokens;
@@ -447,25 +437,23 @@ function parseQuery(text: string): Expr {
       return value;
     }
     const word = takeWord();
-    if (peek().type === "(") {
-      if (!Object.hasOwn(FUNCTIONS, word))
-        throw syntaxError(t, `${word} is not supported by this Builder`);
-      take("(");
-      const schema = FUNCTIONS[word];
-      const args: (Expr | string | null)[] = [];
-      for (let i = 0; i < schema.args.length; i++) {
-        const arg = schema.args[i];
-        if (peek().type === ")" && arg.optional) {
-          args.push(null);
-          continue;
-        }
-        if (i > 0) take(",");
-        args.push(arg.type === "expr" ? expression() : takeWord());
+    if (peek().type !== "(") return target(word);
+    if (!Object.hasOwn(FUNCTIONS, word))
+      throw syntaxError(t, `${word} is not supported by this Builder`);
+    take("(");
+    const schema = FUNCTIONS[word];
+    const args: (Expr | string | null)[] = [];
+    for (let i = 0; i < schema.args.length; i++) {
+      const arg = schema.args[i];
+      if (peek().type === ")" && arg.optional) {
+        args.push(null);
+        continue;
       }
-      take(")");
-      return { id: nextNodeId++, kind: "call", fn: word, args };
+      if (i > 0) take(",");
+      args.push(arg.type === "expr" ? expression() : takeWord());
     }
-    return target(word);
+    take(")");
+    return { id: nextNodeId++, kind: "call", fn: word, args };
   }
   const root = expression();
   take("eof");
@@ -496,6 +484,15 @@ export function parse(
 
 function wordQuotable(s: string): boolean {
   return !(s.includes('"') && s.includes("'"));
+}
+
+function integerError(value: unknown, arg: ArgSpec): string | null {
+  if (value === null || value === "") return arg.optional ? null : "Required";
+  const s = String(value).trim();
+  if (!/^(0|[0-9]+)$/.test(s)) return "Enter a non-negative integer";
+  if (!Number.isSafeInteger(+s) || +s > 2147483647) return "Must be at most 2147483647";
+  if (arg.min != null && +s < arg.min) return `Must be at least ${arg.min}`;
+  return null;
 }
 
 /**
@@ -546,29 +543,8 @@ export function validate(root: Expr): Map<string, string> {
             return;
           }
           if (arg.type === "int") {
-            if (v === null || v === "") {
-              if (!arg.optional) errors.push({ id: n.id, arg: i, msg: "Required" });
-            } else {
-              const s = String(v).trim();
-              if (!/^(0|[0-9]+)$/.test(s))
-                errors.push({
-                  id: n.id,
-                  arg: i,
-                  msg: "Enter a non-negative integer",
-                });
-              else if (!Number.isSafeInteger(+s) || +s > 2147483647)
-                errors.push({
-                  id: n.id,
-                  arg: i,
-                  msg: "Must be at most 2147483647",
-                });
-              else if (arg.min != null && +s < arg.min)
-                errors.push({
-                  id: n.id,
-                  arg: i,
-                  msg: `Must be at least ${arg.min}`,
-                });
-            }
+            const msg = integerError(v, arg);
+            if (msg) errors.push({ id: n.id, arg: i, msg });
             return;
           }
           const s = String(v);

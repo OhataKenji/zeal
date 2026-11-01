@@ -254,6 +254,37 @@ test("parser rejects set, let and $name variables", () => {
   assert.equal(letArg.pos, 5);
 });
 
+test("parser preserves empty words, mixed quotes and literal backslashes", () => {
+  assert.equal(targetNode(parseOk('""')).text, "");
+  assert.equal(targetNode(parseOk('"a\\b"')).text, "a\\b");
+  assert.equal(targetNode(parseOk(`'a"b'`)).text, 'a"b');
+  assert.equal(targetNode(parseOk(`"a'b"`)).text, "a'b");
+});
+
+test("parser accepts Unicode target names", () => {
+  assert.equal(targetNode(parseOk("//包:😀")).text, "//包:😀");
+});
+
+for (const [source, pos, message] of [
+  ["  'a b' !", 8, /'!' must be quoted/],
+  ["//包:😀 !", 7, /'!' must be quoted/],
+  ["  'a b", 6, /Unterminated quoted word/],
+  ['"done"//next', 6, /expected eof/],
+] as const) {
+  test(`parser preserves source offsets for ${JSON.stringify(source)}`, () => {
+    const error = parseErr(source);
+    assert.equal(error.pos, pos);
+    assert.match(error.error, message);
+  });
+}
+
+test("parser separates nested call arguments from optional trailing depth", () => {
+  assert.equal(text(parseOk("rdeps(//u, deps(//e, 2), 3)")), "rdeps(//u, deps(//e, 2), 3)");
+  const trailing = parseErr("deps(//a,)");
+  assert.equal(trailing.pos, 9);
+  assert.match(trailing.error, /expected word/);
+});
+
 test("parser reports positions for other malformed input", () => {
   const unknown = parseErr("fizzle(//a)");
   assert.equal(unknown.pos, 0);
@@ -331,6 +362,21 @@ test("validate enforces int syntax, range and minimum", () => {
   deps.args[1] = "0";
   assert.equal(validate(deps).size, 0, "depth minimum is 0");
 });
+
+for (const value of [null, "", "0", " 0002 "]) {
+  test(`validate accepts optional depth ${JSON.stringify(value)}`, () => {
+    const deps = callNode(makeCall("deps", target("//a")));
+    deps.args[1] = value;
+    assert.deepEqual(validate(deps), new Map());
+  });
+}
+for (const value of ["   ", "+2", "1.0", "1e2"]) {
+  test(`validate rejects non-integer depth ${JSON.stringify(value)}`, () => {
+    const deps = callNode(makeCall("deps", target("//a")));
+    deps.args[1] = value;
+    assert.deepEqual(validate(deps), new Map([[`${deps.id}:1`, "Enter a non-negative integer"]]));
+  });
+}
 
 test("switchKind carries the wrapArg expression between functions", () => {
   const deps = parseOk("deps(//a:b)");
