@@ -1600,43 +1600,51 @@ button.chip:hover {
   margin: 4px 0 0;
 }
 
+.query-command {
+  position: relative;
+  margin-top: 6px;
+}
+
 .query-command-pre {
-  margin: 6px 0 0;
+  margin: 0;
   background: var(--muted);
   color: var(--foreground);
   border-radius: var(--radius-md);
-  padding: 12px 16px;
+  padding: 12px 44px 12px 16px;
   font: 12px/1.6 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   overflow-x: auto;
 }
 
-.query-shared {
-  margin-top: 12px;
-}
-
-.query-command-details > summary {
+.query-copy {
+  position: absolute;
+  top: 7px;
+  right: 7px;
   display: inline-flex;
   align-items: center;
-  font: 400 12px var(--font-sans);
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
-  list-style: none;
 }
 
-.query-command-details > summary::-webkit-details-marker {
-  display: none;
+.query-copy:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--foreground);
 }
 
-.query-command-details > summary::before {
-  content: "▸";
-  margin-right: 4px;
-  font-size: 10px;
+.query-copy:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-.query-command-details[open] > summary::before {
-  content: "▾";
+.query-shared {
+  margin-top: 12px;
 }
 
 .query-flags {

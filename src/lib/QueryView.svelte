@@ -11,6 +11,7 @@
 
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { Check, Copy } from "phosphor-svelte";
   import { onDestroy } from "svelte";
   import { app } from "./state.svelte";
   import QueryExpr from "./QueryExpr.svelte";
@@ -91,6 +92,7 @@
   });
   onDestroy(() => {
     clearTimeout(fbTimer);
+    clearTimeout(copyTimer);
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
 
@@ -321,6 +323,22 @@
     fbTimer = setTimeout(() => (feedback = ""), 3000);
   }
 
+  // The icon flips to a check for a moment, like GitHub code blocks.
+  let copiedCmd = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  async function copyCommand() {
+    try {
+      await navigator.clipboard.writeText(command);
+      copiedCmd = true;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copiedCmd = false), 1500);
+    } catch {
+      setFeedback(
+        "Clipboard access is unavailable — copy the displayed text manually.",
+      );
+    }
+  }
+
   async function copyText(text: string, okMsg: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -458,10 +476,19 @@
           </div>
         {/if}
         <div class="query-shared">
-          <details class="query-command-details" open>
-            <summary>Command</summary>
+          <div class="query-command">
             <pre class="query-command-pre"><code>{command}</code></pre>
-          </details>
+            <button
+              type="button"
+              class="query-copy"
+              aria-label="Copy command"
+              title="Copy command"
+              disabled={!valid}
+              onclick={() => void copyCommand()}
+            >
+              {#if copiedCmd}<Check size={14} />{:else}<Copy size={14} />{/if}
+            </button>
+          </div>
           <div class="query-flags">
             <label class="query-check">
               <input type="checkbox" bind:checked={noImplicit} />
@@ -475,13 +502,6 @@
               {#if runBlockReason}
                 <span class="query-busy dim">{runBlockReason}</span>
               {/if}
-              <button
-                type="button"
-                class="button"
-                disabled={!valid}
-                onclick={() => void copyText(command, "Command copied")}
-                >Copy command</button
-              >
               <button
                 type="button"
                 class="button"
