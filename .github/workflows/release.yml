@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # tauri-action can replace assets even on a published release.
+      # Start each version with a new tag and release, including drafts.
       - name: Check release version
         shell: bash
         env:
@@ -47,7 +47,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build DMG and create draft release
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
@@ -58,7 +58,7 @@ jobs:
           releaseCommitish: ${{ github.sha }}
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: false
+          uploadUpdaterJson: false
           releaseBody: |
             Download the DMG for macOS on Apple Silicon.
             This app is ad-hoc signed and is not notarized by Apple.
