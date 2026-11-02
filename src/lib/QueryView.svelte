@@ -166,13 +166,13 @@
     untrack(() => controller?.clear());
   });
 
-  // Invocations serialize with build/test and ingest in the core; the reason
+  // Queries serialize with other Bazel commands and ingest in the core; the reason
   // text doubles as the disabled-Execute explanation.
   const busyReason = $derived.by((): string | null => {
     if (!app.view.ready) return "not connected to Bazel";
     if (app.view.opening) return "the workspace is changing";
     if (app.view.starting) return "an invocation is starting";
-    if (st?.activeInvocation) return "a build/test invocation is in progress";
+    if (st?.activeInvocation) return "a Bazel invocation is in progress";
     if (st?.ingest === "running") return "targets are loading";
     if (st?.query === "running" && !qstate.running)
       return "a query is already running";

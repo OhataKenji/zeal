@@ -289,7 +289,9 @@ function getInvocation(id: unknown) {
     bep: {
       status: "ok",
       data: {
-        targets: [{ label: record.pattern, ok: record.exitCode === 0 }],
+        targets: FULL_DATA.targets
+          .filter((target) => target.label === record.pattern)
+          .map((target) => ({ label: target.label, ok: record.exitCode === 0 })),
         tests: [],
         ...(record.id === records[0]?.id
           ? {
