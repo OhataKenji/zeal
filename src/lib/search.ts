@@ -130,9 +130,6 @@ export function keyAction(
   }
 }
 
-/** Bazel target patterns shown as examples below the search results. */
-export const PATTERN_HINTS: readonly string[] = ["//...", ":all", ":*"];
-
 // The input's ARIA attributes and the dropdown markup are one contract split
 // across two components, so option ids are built in one place. The listbox id
 // is per combobox instance ($props.id()), so several inputs can coexist.

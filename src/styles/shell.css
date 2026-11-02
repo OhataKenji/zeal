@@ -115,6 +115,12 @@
   font-family: var(--mono);
 }
 
+/* The composer's focus ring is the field's indicator; a second outline on
+   the bare input inside it reads as a double box. */
+.composer-target:focus-visible {
+  outline: none;
+}
+
 .composer-search {
   position: relative;
   min-width: 0;
@@ -161,7 +167,6 @@
 
 .composer:focus-within {
   border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 25%, transparent);
 }
 
 .composer.composer-invalid {
