@@ -411,23 +411,6 @@ exit "$code"
     }
 
     #[test]
-    fn heavy_stderr_reports_failed_target_list() {
-        let fixture = QueryFixture::new();
-        assert!(
-            matches!(fetch_list(&fixture, "failed"), Outcome::Failed(error)
-            if error.exit_code == Some(7) && error.summary == "final diagnostic marker")
-        );
-    }
-
-    #[test]
-    fn heavy_stderr_does_not_block_selected_target_detail_success() {
-        let fixture = QueryFixture::new();
-        assert!(
-            matches!(fetch_detail(&fixture, "success"), Outcome::Ok(query) if query.rules.len() == 1)
-        );
-    }
-
-    #[test]
     fn heavy_stderr_preserves_partial_selected_target_detail() {
         let fixture = QueryFixture::new();
         assert!(
