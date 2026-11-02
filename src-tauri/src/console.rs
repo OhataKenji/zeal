@@ -93,6 +93,26 @@ mod tests {
                 core,
             }
         }
+
+        fn read(&self, offset: u64) -> Output {
+            read(&self.data, &self.core, &self.id, offset).unwrap()
+        }
+
+        /// The process is gone; the console capture may still be draining.
+        fn end_run(&self) {
+            self.core.state.lock().unwrap().run = None;
+        }
+
+        fn finish(&self) {
+            self.core
+                .state
+                .lock()
+                .unwrap()
+                .console
+                .as_mut()
+                .unwrap()
+                .finished = true;
+        }
     }
 
     impl Drop for Fixture {
@@ -102,35 +122,34 @@ mod tests {
     }
 
     #[test]
-    fn process_exit_does_not_end_drain_before_the_capture_writes_its_final_bytes() {
+    fn process_exit_does_not_end_drain() {
         let fixture = Fixture::new();
         std::fs::write(fixture.dir.join("terminal.log"), vec![0xff; 70 * 1024]).unwrap();
-        let first = read(&fixture.data, &fixture.core, &fixture.id, 0).unwrap();
+        let first = fixture.read(0);
         assert_eq!(first.data.len(), 64 * 1024);
         assert!(!first.done);
-        fixture.core.state.lock().unwrap().run = None;
-        let middle = read(&fixture.data, &fixture.core, &fixture.id, first.offset).unwrap();
+        fixture.end_run();
+        let middle = fixture.read(first.offset);
         assert_eq!(middle.data, vec![0xff; 6 * 1024]);
         assert!(!middle.done);
+    }
+
+    #[test]
+    fn a_finished_capture_serves_its_final_bytes_and_replays_the_log() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.dir.join("terminal.log"), vec![0xff; 70 * 1024]).unwrap();
+        fixture.end_run();
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(fixture.dir.join("terminal.log"))
             .unwrap();
         file.write_all(b"program tail\n").unwrap();
-        fixture
-            .core
-            .state
-            .lock()
-            .unwrap()
-            .console
-            .as_mut()
-            .unwrap()
-            .finished = true;
-        let last = read(&fixture.data, &fixture.core, &fixture.id, middle.offset).unwrap();
+        fixture.finish();
+        let last = fixture.read(70 * 1024);
         assert_eq!(last.data, b"program tail\n");
         assert!(last.done);
-        let reopened = read(&fixture.data, &fixture.core, &fixture.id, 0).unwrap();
-        assert_eq!(reopened.data, first.data);
+        let reopened = fixture.read(0);
+        assert_eq!(reopened.data, vec![0xff; 64 * 1024]);
         assert!(!reopened.done);
         assert!(read(&fixture.data, &fixture.core, &fixture.id, last.offset + 1).is_err());
     }
@@ -139,21 +158,13 @@ mod tests {
     fn unobserved_invocation_keeps_its_failure_output_after_capture_finishes() {
         let fixture = Fixture::new();
         std::fs::write(fixture.dir.join("terminal.log"), b"startup failed\n").unwrap();
-        {
-            let mut state = fixture.core.state.lock().unwrap();
-            state.run = None;
-            state.console.as_mut().unwrap().finished = true;
-        }
+        fixture.end_run();
+        fixture.finish();
         assert!(store::read_record(&fixture.data, &fixture.workspace, &fixture.id).is_err());
-        let output = read(&fixture.data, &fixture.core, &fixture.id, 0).unwrap();
+        let output = fixture.read(0);
         assert_eq!(output.data, b"startup failed\n");
         assert!(output.done);
-        assert_eq!(
-            read(&fixture.data, &fixture.core, &fixture.id, 0)
-                .unwrap()
-                .data,
-            output.data
-        );
+        assert_eq!(fixture.read(0).data, output.data);
         assert!(crate::terminal::write(&fixture.core, &fixture.id, b"input").is_err());
     }
 

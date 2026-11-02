@@ -9,6 +9,7 @@ use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
 use crate::store::{self, RunRecord};
 use serde::Serialize;
+use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::Path;
 
@@ -38,55 +39,70 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
     let record = store::read_record(data, workspace, id)?;
     let (log, bep) = match store::event_artifact(data, workspace, id).map_err(io::Error::from) {
         Err(error) => {
-            let kind = error.kind();
-            let note = error.to_string();
-            if kind == io::ErrorKind::NotFound {
+            if error.kind() == io::ErrorKind::NotFound {
                 (Section::Missing, Section::Missing)
             } else {
-                (
-                    Section::ReadError { note: note.clone() },
-                    Section::ReadError { note },
-                )
+                event_failure(true, error.to_string())
             }
         }
-        Ok((file, complete)) => {
-            let length = file.metadata()?.len();
-            let parsed = bep::parse_detail(BufReader::new(file), length);
-            if parsed.invalid && parsed.events == 0 {
-                let note = "BEP contains an invalid or incomplete event".to_string();
-                if parsed.read_error {
-                    (
-                        Section::ReadError { note: note.clone() },
-                        Section::ReadError { note },
-                    )
-                } else {
-                    (
-                        Section::ParseError { note: note.clone() },
-                        Section::ParseError { note },
-                    )
-                }
-            } else {
-                let log = if parsed.invalid || !complete {
-                    Section::Incomplete {
-                        data: parsed.log,
-                        note: "BEP ended with an invalid or incomplete event".into(),
-                    }
-                } else {
-                    Section::Ok { data: parsed.log }
-                };
-                let bep = if parsed.bep.truncated || !complete {
-                    Section::Incomplete {
-                        data: parsed.bep,
-                        note: "BEP is incomplete or reached its display limit".into(),
-                    }
-                } else {
-                    Section::Ok { data: parsed.bep }
-                };
-                (log, bep)
-            }
-        }
+        Ok((file, complete)) => event_sections(file, complete)?,
     };
     Ok(RunDetail { record, log, bep })
+}
+
+/// Log and build-result views of the open event artifact. A stream that fails
+/// before its first usable event fails both sections alike; afterwards each
+/// reports its own completeness.
+fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Section<Bep>)> {
+    let length = file.metadata()?.len();
+    let parsed = bep::parse_detail(BufReader::new(file), length);
+    if parsed.invalid && parsed.events == 0 {
+        let note = "BEP contains an invalid or incomplete event".to_string();
+        return Ok(event_failure(parsed.read_error, note));
+    }
+    let log_incomplete = parsed.invalid || !complete;
+    let bep_incomplete = parsed.bep.truncated || !complete;
+    Ok((
+        observation(
+            parsed.log,
+            log_incomplete,
+            "BEP ended with an invalid or incomplete event",
+        ),
+        observation(
+            parsed.bep,
+            bep_incomplete,
+            "BEP is incomplete or reached its display limit",
+        ),
+    ))
+}
+
+/// Both sections report the same failure when the event stream is unusable as
+/// a whole.
+fn event_failure(read_error: bool, note: String) -> (Section<String>, Section<Bep>) {
+    if read_error {
+        (
+            Section::ReadError { note: note.clone() },
+            Section::ReadError { note },
+        )
+    } else {
+        (
+            Section::ParseError { note: note.clone() },
+            Section::ParseError { note },
+        )
+    }
+}
+
+/// A parsed observation keeps its data either way; the status only records
+/// whether the stream and the display limit let it finish.
+fn observation<T>(data: T, incomplete: bool, note: &str) -> Section<T> {
+    if incomplete {
+        Section::Incomplete {
+            data,
+            note: note.into(),
+        }
+    } else {
+        Section::Ok { data }
+    }
 }
 
 /// Read a saved profile, reporting artifact failures as section statuses.
@@ -127,7 +143,7 @@ mod tests {
     use crate::store::events::test_support::Fixture;
     use std::fs;
     #[test]
-    fn event_details_are_shared_and_missing_files_do_not_hide_build_result() {
+    fn complete_event_shares_log_and_build_result_sections() {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
@@ -139,27 +155,46 @@ mod tests {
             run_profile(&f.data, &f.ws, id).unwrap(),
             Section::Missing
         ));
+    }
+    #[test]
+    fn missing_event_artifact_still_yields_the_record() {
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
+        let record = run_detail(&f.data, &f.ws, id).unwrap().record;
         fs::remove_file(f.dir().join("attempt/1/bep.binpb")).unwrap();
         let missing = run_detail(&f.data, &f.ws, id).unwrap();
-        assert_eq!(missing.record, detail.record);
+        assert_eq!(missing.record, record);
         assert!(matches!(missing.log, Section::Missing));
         assert!(matches!(missing.bep, Section::Missing));
     }
     #[test]
-    fn malformed_detail_and_optional_profile_are_independent_sections() {
+    fn malformed_event_artifact_marks_both_sections_parse_error() {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
         fs::write(f.dir().join("attempt/1/bep.binpb"), b"\xff").unwrap();
-        fs::write(f.dir().join("profile.gz"), b"invalid gzip").unwrap();
         let detail = run_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(detail.record.exit_code, Some(0));
         assert!(matches!(detail.log, Section::ParseError { .. }));
         assert!(matches!(detail.bep, Section::ParseError { .. }));
+    }
+    #[test]
+    fn malformed_profile_reports_its_own_parse_error() {
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
+        fs::write(f.dir().join("profile.gz"), b"invalid gzip").unwrap();
         assert!(matches!(
             run_profile(&f.data, &f.ws, id).unwrap(),
             Section::ParseError { .. }
         ));
+    }
+    #[test]
+    fn unknown_workspace_fails_detail_and_profile() {
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
         assert!(run_detail(&f.data, &other, id).is_err());

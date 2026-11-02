@@ -381,7 +381,7 @@ mod tests {
         );
     }
     #[test]
-    fn workspace_and_safe_file_boundaries_preserve_record_when_details_disappear() {
+    fn runs_are_invisible_to_unobserved_workspaces() {
         let f = Fixture::new();
         f.complete();
         let run = &f.stream.invocation_id;
@@ -393,14 +393,25 @@ mod tests {
             ErrorKind::Missing
         );
         assert!(artifact(&f.data, &other, run, "bep.binpb").is_err());
-        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb").is_err());
-        assert!(artifact(&f.data, &f.ws, run, "../zeal.db").is_err());
+    }
+    #[test]
+    fn workspace_aliases_list_the_same_runs() {
+        let f = Fixture::new();
+        f.complete();
         let alias = f.root.join("alias");
         symlink(&f.ws, &alias).unwrap();
         assert_eq!(
             list(&f.data, &alias).unwrap(),
             list(&f.data, &f.ws).unwrap()
         );
+    }
+    #[test]
+    fn artifact_paths_and_symlinks_cannot_escape_the_run_directory() {
+        let f = Fixture::new();
+        f.complete();
+        let run = &f.stream.invocation_id;
+        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb").is_err());
+        assert!(artifact(&f.data, &f.ws, run, "../zeal.db").is_err());
         let path = f.dir().join("attempt/1/bep.binpb");
         fs::remove_file(&path).unwrap();
         symlink(f.data.join("zeal.db"), &path).unwrap();
@@ -410,6 +421,11 @@ mod tests {
                 .kind(),
             io::ErrorKind::PermissionDenied
         );
+    }
+    #[test]
+    fn run_records_survive_when_run_details_disappear() {
+        let f = Fixture::new();
+        f.complete();
         fs::remove_dir_all(f.dir()).unwrap();
         assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
     }
@@ -438,7 +454,7 @@ mod tests {
         assert!(runs.iter().all(|run| run.id != f.stream.invocation_id));
     }
     #[test]
-    fn reservation_collision_abort_and_live_output_do_not_require_observed_workspace() {
+    fn a_reservation_is_usable_before_any_workspace_observes_it() {
         let f = Fixture::new();
         let run = &f.stream.invocation_id;
         let dir = reserve_invocation(&f.data, run).unwrap();
@@ -456,16 +472,28 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+    #[test]
+    fn aborting_a_reservation_preserves_foreign_files_and_frees_the_invocation() {
+        let f = Fixture::new();
+        let run = &f.stream.invocation_id;
+        let dir = reserve_invocation(&f.data, run).unwrap();
         fs::write(dir.join("unexpected"), b"keep").unwrap();
         assert!(abort_reservation(&f.data, run).is_err());
         assert!(dir.join("unexpected").exists());
         fs::remove_file(dir.join("unexpected")).unwrap();
         abort_reservation(&f.data, run).unwrap();
         assert!(!dir.exists());
-        let _ = reserve_invocation(&f.data, run).unwrap();
+        reserve_invocation(&f.data, run).unwrap();
+    }
+    #[test]
+    fn a_completed_run_cannot_be_aborted() {
+        let f = Fixture::new();
         f.complete();
         assert_eq!(
-            abort_reservation(&f.data, run).unwrap_err().kind,
+            abort_reservation(&f.data, &f.stream.invocation_id)
+                .unwrap_err()
+                .kind,
             ErrorKind::Conflict
         );
     }

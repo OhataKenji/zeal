@@ -412,6 +412,25 @@ mod tests {
         st.run.as_ref().is_some_and(|run| run.stopping)
     }
 
+    /// The state `start` leaves around a spawned child: its run holds the
+    /// slot and a console session exists under the same id.
+    fn hold_run(core: &Core, ws: &Path, id: &str, terminal: crate::terminal::Control, pgid: i32) {
+        let mut state = core.state.lock().unwrap();
+        state.workspace = Some(ws.to_path_buf());
+        state.run = Some(ActiveRun {
+            id: id.into(),
+            terminal,
+            pgid: Some(pgid),
+            stopping: false,
+            stop_started: None,
+        });
+        state.console = Some(ConsoleSession {
+            id: id.into(),
+            workspace: ws.to_path_buf(),
+            finished: false,
+        });
+    }
+
     use std::io::{BufRead, BufReader};
     use std::sync::mpsc;
 
@@ -555,22 +574,7 @@ mod tests {
         )
         .unwrap();
         let core = Core::new();
-        {
-            let mut state = core.state.lock().unwrap();
-            state.workspace = Some(ws.clone());
-            state.run = Some(ActiveRun {
-                id: id.clone().into(),
-                terminal,
-                pgid: Some(child.id() as i32),
-                stopping: false,
-                stop_started: None,
-            });
-            state.console = Some(ConsoleSession {
-                id: id.clone().into(),
-                workspace: ws.clone(),
-                finished: false,
-            });
-        }
+        hold_run(&core, &ws, &id, terminal, child.id() as i32);
         let exit = Ok(child.wait().unwrap().code().unwrap());
         capture.finish().unwrap();
         {
@@ -581,17 +585,9 @@ mod tests {
             assert!(!is_stopping(&state));
         }
         assert!(store::read_record(&data, &ws, &id).is_err());
-        assert!(crate::terminal::write(&core, &id, b"late input").is_err());
         assert!(crate::terminal::resize(&core, &id, 80, 24).is_ok());
-        let output =
-            serde_json::to_value(crate::console::read(&data, &core, &id, 0).unwrap()).unwrap();
-        let bytes: Vec<u8> = serde_json::from_value(output["data"].clone()).unwrap();
-        assert_eq!(bytes, b"startup failed\r\n");
-        assert_eq!(output["done"], true);
         assert_eq!(core.dto().console_run.as_deref(), Some(id.as_str()));
-        let reopened =
-            serde_json::to_value(crate::console::read(&data, &core, &id, 0).unwrap()).unwrap();
-        assert_eq!(reopened, output);
+        assert_saved_console(&data, &core, &id, "startup failed\r\n");
     }
 
     #[test]
@@ -690,22 +686,7 @@ mod tests {
         let mut command = fixture.command(cmd, target, &dir, &id);
         let (child, terminal, capture) = crate::terminal::spawn(&mut command, &dir).unwrap();
         let core = Arc::new(Core::new());
-        {
-            let mut state = core.state.lock().unwrap();
-            state.workspace = Some(fixture.ws.clone());
-            state.console = Some(ConsoleSession {
-                id: id.clone().into(),
-                workspace: fixture.ws.clone(),
-                finished: false,
-            });
-            state.run = Some(ActiveRun {
-                id: id.clone().into(),
-                terminal,
-                pgid: Some(child.id() as i32),
-                stopping: false,
-                stop_started: None,
-            });
-        }
+        hold_run(&core, &fixture.ws, &id, terminal, child.id() as i32);
         let (release, input) = mpsc::sync_channel(1);
         let owner_core = core.clone();
         let owner_id = id.clone();
@@ -718,6 +699,8 @@ mod tests {
                 (cmd == "run").then_some(input),
             )
         });
+        // A `run` child blocks on stdin: feed it only once the build's BEP
+        // record exists, the order the GUI observes.
         if cmd == "run" {
             wait_for_gui_build(fixture, &id, &dir, &process).await;
             crate::terminal::resize(&core, &id, 100, 30).unwrap();
@@ -729,7 +712,15 @@ mod tests {
             .unwrap();
         let output = fs::read_to_string(dir.join("terminal.log")).unwrap();
         assert_eq!(code, if cmd == "run" { 23 } else { 0 }, "{cmd}: {output}");
-        let record = store::read_record(&fixture.data, &fixture.ws, &id).unwrap();
+        assert_gui_record(fixture, cmd, target, &id);
+        assert!(core.state.lock().unwrap().run.is_none());
+        assert_saved_console(&fixture.data, &core, &id, &output);
+    }
+
+    /// The BES-recorded invocation: the build's own command, target and exit,
+    /// plus the artifacts the GUI needs to reopen the run.
+    fn assert_gui_record(fixture: &GuiBazelFixture, cmd: &str, target: &str, id: &str) {
+        let record = store::read_record(&fixture.data, &fixture.ws, id).unwrap();
         assert_eq!(record.cmd.as_deref(), Some(cmd));
         assert_eq!(record.target.as_deref(), Some(target));
         assert_eq!(
@@ -738,10 +729,8 @@ mod tests {
             "program exit must not replace build exit"
         );
         assert!(record.finished_at.is_some());
-        assert!(store::artifact(&fixture.data, &fixture.ws, &id, "bep.binpb").is_ok());
-        assert!(store::artifact(&fixture.data, &fixture.ws, &id, "profile.gz").is_ok());
-        assert!(core.state.lock().unwrap().run.is_none());
-        assert_saved_console(&fixture.data, &core, &id, &output);
+        assert!(store::artifact(&fixture.data, &fixture.ws, id, "bep.binpb").is_ok());
+        assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.gz").is_ok());
     }
 
     /// Completed consoles expose durable bytes even when reopened, but reject new input.
@@ -944,10 +933,10 @@ mod tests {
         assert_eq!(st.run_note.as_deref(), Some("old"));
     }
 
-    /// A reap of the run the slot still holds: the
-    /// slot is cleared and the note follows the outcome.
+    /// A reap of the run the slot still holds: a recorded exit clears the
+    /// slot and the note.
     #[test]
-    fn apply_reap_clears_the_run_it_still_holds() {
+    fn apply_reap_clears_the_held_run_and_its_note() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
         st.run = Some(ActiveRun {
@@ -961,8 +950,16 @@ mod tests {
         assert!(st.run.is_none());
         assert!(!is_stopping(&st));
         assert_eq!(st.run_note, None, "a recorded exit clears the note");
+    }
 
+    /// A wait error still releases the held run's slot and leaves its reason
+    /// in the note.
+    #[test]
+    fn apply_reap_notes_the_reason_for_an_unknown_exit() {
+        let core = Core::new();
+        let mut st = core.state.lock().unwrap();
         st.run = Some(ActiveRun::stub("abc", Some(42)));
+
         let why = std::io::Error::from_raw_os_error(libc::EINTR);
         assert!(apply_reap(&mut st, "abc", &Err(why)));
         assert!(st.run.is_none(), "an unknown exit still releases the slot");
@@ -1334,21 +1331,35 @@ mod tests {
         assert!(!is_stopping(&st));
         assert!(held_pgid(&st).is_none());
     }
-    #[test]
-    fn unconfirmed_kill_expires_without_releasing_a_successors_slot() {
-        let core = Core::new();
+    /// Stop a stubbed run and observe it with the deadlines already lapsed:
+    /// the owner reports the kill unconfirmed on its first poll.
+    fn unconfirmed_exit(core: &Core, id: &str) -> io::Result<i32> {
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
+            st.run = Some(ActiveRun::stub(id, Some(i32::MAX)));
             begin_stop(&mut st);
         }
-        let exit = observe_process(&core, "run", || Ok(None), Duration::ZERO, Duration::ZERO);
+        observe_process(core, id, || Ok(None), Duration::ZERO, Duration::ZERO)
+    }
+
+    #[test]
+    fn unconfirmed_kill_releases_the_slot_with_the_unknown_exit_note() {
+        let core = Core::new();
+        let exit = unconfirmed_exit(&core, "run");
         assert_eq!(exit.as_ref().unwrap_err().kind(), io::ErrorKind::TimedOut);
         let mut st = core.state.lock().unwrap();
         assert!(held_pgid(&st).is_none());
         assert!(apply_reap(&mut st, "run", &exit));
         assert!(st.run.is_none());
         assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
+    }
+
+    #[test]
+    fn an_expired_reap_never_releases_a_successors_slot() {
+        let core = Core::new();
+        let exit = unconfirmed_exit(&core, "run");
+        let mut st = core.state.lock().unwrap();
+        assert!(apply_reap(&mut st, "run", &exit));
         st.run = Some(ActiveRun::stub("next", Some(i32::MAX)));
         assert!(!apply_reap(&mut st, "run", &exit));
         assert_eq!(held_id(&st), Some("next"));

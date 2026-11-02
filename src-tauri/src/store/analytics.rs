@@ -639,19 +639,32 @@ mod tests {
         assert_eq!(total(&f.query(f.filter())), 2);
     }
     #[test]
-    fn defaults_empty_workspace_alias_and_invalid_bound_values() {
+    fn default_filter_spans_thirty_days_ending_today() {
         let f = Fixture::new();
         let result = f.query(Filter::default());
         assert_eq!(result.days.len(), 30);
         assert_eq!(total(&result), 0);
         assert_eq!(result.filter.end, Some(result.today));
+    }
+    #[test]
+    fn unregistered_workspaces_have_empty_analytics() {
+        let f = Fixture::new();
         let other = f.root.join("unregistered");
         fs::create_dir(&other).unwrap();
         assert_eq!(total(&query(&f.data, &other, f.filter()).unwrap()), 0);
+    }
+    #[test]
+    fn workspace_aliases_resolve_to_the_same_history() {
+        let f = Fixture::new();
         let alias = f.root.join("alias");
         std::os::unix::fs::symlink(&f.ws, &alias).unwrap();
         f.insert("2026-03-07", "build", Some(0));
         assert_eq!(total(&query(&f.data, &alias, f.filter()).unwrap()), 1);
+    }
+    #[test]
+    fn invalid_bound_values_are_rejected() {
+        let f = Fixture::new();
+        f.insert("2026-03-07", "build", Some(0));
         for filter in [
             Filter {
                 start: Some("2026-02-30".into()),

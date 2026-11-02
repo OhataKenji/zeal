@@ -68,9 +68,7 @@ pub fn parse_query<R: BufRead>(input: R) -> ParsedQuery {
                 parsed.rules.push(raw_rule(&e));
             }
             Ok(Event::Start(e) | Event::Empty(e)) if e.name().as_ref() == "source-file" => {
-                if let Some(label) = attr_value(&e, "name") {
-                    parsed.source_files.push(label);
-                }
+                parsed.source_files.extend(attr_value(&e, "name"));
             }
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
