@@ -51,7 +51,7 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
-For signed macOS releases, see [the release guide](docs/release-guide.md).
+For macOS releases, see [the release guide](docs/release-guide.md).
 
 See [docs/prd.md](docs/prd.md) and [docs/design/](docs/design/) for more details.
 
