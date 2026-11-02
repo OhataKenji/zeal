@@ -5,9 +5,14 @@ Apple Developer Programへの加入やSecretsの登録は不要です。
 
 ## Create a release
 
-1. `src-tauri/tauri.conf.json`の`version`、`src-tauri/Cargo.toml`のpackage version、`src-tauri/Cargo.lock`の`zeal`のversionを同じ新しい版に更新し、mainへマージします。
-2. 対象コミットの`CI`と`Build`が成功したら、GitHubの`Actions → Release → Run workflow`で`main`を選びます。
-   実行対象のコミットがCIに成功していることを確認してください。
+1. `src-tauri/tauri.conf.json`の`version`と`src-tauri/Cargo.toml`のpackage versionを同じ新しい版に更新します。
+   リポジトリのルートで次のコマンドを実行し、更新された`Cargo.lock`も含めてmainへマージします。
+
+   ```sh
+   cargo update --manifest-path src-tauri/Cargo.toml --workspace
+   ```
+
+2. GitHubの`Actions → Release → Run workflow`で`main`を選んで実行し、その実行対象コミットの`CI`と`Build`が成功していることを確認します。
 3. 作成されたDraft ReleaseからDMGをダウンロードし、下の確認を行います。
 4. Releaseの説明に変更内容を追記し、`Publish release`を押します。
    タグは自動で作成されるため、先に作る必要はありません。
