@@ -5,6 +5,7 @@
     CaretRight,
     ChartBar,
     ArrowClockwise,
+    Gear,
     Play,
     Stop,
     TreeStructure,
@@ -367,28 +368,35 @@
     <div class="workspace-picker">
       <Cube size={22} weight="fill" class="brand-icon" />
       {#if st?.workspace}
-        <button
-          class="link label"
-          title={st.workspace}
-          disabled={busy}
-          onclick={() => (switchingWs = !switchingWs)}
+        <span class="label" title={st.workspace}
           >{st.workspace.split(/[\\/]/).filter(Boolean).at(-1) ??
-            st.workspace}</button
+            st.workspace}</span
         >
+        <div class="workspace-actions">
+          <button
+            type="button"
+            class="button button-ghost icon-button"
+            aria-label="Switch workspace"
+            aria-expanded={switchingWs}
+            title="Switch workspace"
+            disabled={busy}
+            onclick={() => (switchingWs = !switchingWs)}
+          >
+            <Gear size={14} />
+          </button>
+          <button
+            type="button"
+            class="button button-ghost icon-button"
+            aria-label="Reload targets"
+            title="Reload targets"
+            onclick={refresh}
+            disabled={busy}
+          >
+            <ArrowClockwise size={14} />
+          </button>
+        </div>
       {:else}
         <strong>Zeal</strong>
-      {/if}
-      {#if st?.workspace}
-        <button
-          type="button"
-          class="button button-ghost icon-button"
-          aria-label="Reload targets"
-          title="Reload targets"
-          onclick={refresh}
-          disabled={busy}
-        >
-          <ArrowClockwise size={14} />
-        </button>
       {/if}
     </div>
     <div class="composer" class:composer-invalid={!!inputError}>

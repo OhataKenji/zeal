@@ -16,14 +16,12 @@
     value,
     oninput,
     onpick,
-    hints,
     ...rest
   }: {
     index: SnapshotKey<Target> | null;
     value: string;
     oninput?: (value: string) => void;
     onpick?: (value: string) => void;
-    hints?: readonly string[];
   } & Record<string, unknown> = $props();
 
   // Per-instance listbox id — several comboboxes can be open at once.
@@ -90,12 +88,6 @@
     onblur={() => (open = false)}
   />
   {#if open && index}
-    <SearchDropdown
-      {matches}
-      index={activeIdx}
-      onpick={pick}
-      {listId}
-      {hints}
-    />
+    <SearchDropdown {matches} index={activeIdx} onpick={pick} {listId} />
   {/if}
 </div>
