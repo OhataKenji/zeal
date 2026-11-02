@@ -20,11 +20,7 @@ pnpm tauri build -- --locked  # build a release bundle
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
-### Desktop launch (macOS / Linux)
-
-- For mise/asdf, add their shims to your shell `PATH`.
-- Zeal loads your interactive login shell's `PATH` at startup for Bazelisk and child tools. Slow shell startup delays Zeal.
-- Project environments such as `nix develop` are not activated automatically.
+On macOS and Linux, Zeal loads your login shell's `PATH` at startup.
 
 ## Features
 
