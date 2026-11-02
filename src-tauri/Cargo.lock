@@ -5608,6 +5608,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tonic",

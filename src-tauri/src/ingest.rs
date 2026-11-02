@@ -6,230 +6,77 @@
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
 use crate::xml::{self, ParsedQuery};
-use rustix::event::{self, PollFd, PollFlags, Timespec};
-use rustix::fs::{self, OFlags};
 use rustix::process::Signal;
-use std::io::{self, BufReader, Read};
-use std::os::fd::AsFd;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use tempfile::NamedTempFile;
 
 /// Upper bound for one `bazel query`. First runs may include a bazelisk
 /// download and a cold analysis cache.
 pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Allow a reaped child time to close both pipes before canceling readers.
-const DRAIN_GRACE: Duration = Duration::from_secs(2);
-
 /// Confirm a SIGKILL before giving the child to a detached reaper.
 const KILL_CONFIRM: Duration = Duration::from_secs(2);
 
-/// Bound the wait for a reader to acknowledge cancellation.
-const READER_CONFIRM: Duration = Duration::from_millis(500);
-
 const POLL: Duration = Duration::from_millis(50);
 const STDERR_TAIL: usize = 8192;
+/// Maximum captured bytes accepted for either stream after the direct child exits.
+const MAX_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
 
-/// A pipe reader owns its FD and can be stopped without waiting for EOF.
-struct CancelableRead<R> {
-    pipe: R,
-    cancel: Arc<AtomicBool>,
-    eof: bool,
+/// The returned reader has an independent file offset from the child's writer.
+fn capture_file() -> io::Result<(Stdio, File)> {
+    let named = NamedTempFile::new()?;
+    let reader = named.reopen()?;
+    Ok((Stdio::from(named.into_file()), reader))
 }
 
-impl<R: Read + AsFd> CancelableRead<R> {
-    fn new(pipe: R, cancel: Arc<AtomicBool>) -> io::Result<Self> {
-        let flags = fs::fcntl_getfl(&pipe)?;
-        fs::fcntl_setfl(&pipe, flags | OFlags::NONBLOCK)?;
-        Ok(Self {
-            pipe,
-            cancel,
-            eof: false,
-        })
+fn output_len(file: &File, stream: &str) -> Result<u64, String> {
+    let len = file
+        .metadata()
+        .map_err(|error| format!("could not stat query {stream}: {error}"))?
+        .len();
+    if len > MAX_OUTPUT_BYTES {
+        return Err(format!("query {stream} exceeds 512 MiB"));
     }
-
-    fn read_once(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
-        match self.pipe.read(buf) {
-            Ok(0) => {
-                self.eof = true;
-                Ok(Some(0))
-            }
-            Ok(count) => Ok(Some(count)),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok(None),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                self.wait_readable()?;
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    fn wait_readable(&self) -> io::Result<()> {
-        let mut fds = [PollFd::new(&self.pipe, PollFlags::IN)];
-        let timeout = Timespec {
-            tv_sec: 0,
-            tv_nsec: 50_000_000,
-        };
-        match event::poll(&mut fds, Some(&timeout)) {
-            Ok(_) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok(()),
-            Err(error) => Err(error.into()),
-        }
-    }
+    Ok(len)
 }
 
-impl<R: Read + AsFd> Read for CancelableRead<R> {
-    #[expect(
-        clippy::excessive_nesting,
-        reason = "the retry loop must check cancellation before each read"
-    )]
+fn read_stderr_tail(mut stderr: File, len: u64) -> io::Result<Vec<u8>> {
+    let tail_len = len.min(STDERR_TAIL as u64);
+    stderr.seek(SeekFrom::Start(len - tail_len))?;
+    let mut tail = vec![0; tail_len as usize];
+    stderr.read_exact(&mut tail)?;
+    Ok(tail)
+}
+
+/// Record read errors even when an XML parser treats them as end of input.
+struct CheckedRead {
+    inner: io::Take<File>,
+    error: Option<String>,
+}
+
+impl Read for CheckedRead {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        loop {
-            if self.cancel.load(Ordering::Acquire) {
-                return Ok(0);
+        match self.inner.read(buf) {
+            Ok(0) if !buf.is_empty() && self.inner.limit() > 0 => {
+                self.error = Some("query stdout shortened after child exit".into());
+                Ok(0)
             }
-            if let Some(count) = self.read_once(buf)? {
-                return Ok(count);
-            }
-        }
-    }
-}
-
-/// Keep only the last stderr bytes while draining the pipe to EOF or cancel.
-fn capture_stderr(reader: &mut CancelableRead<ChildStderr>) -> io::Result<Vec<u8>> {
-    let mut tail = Vec::new();
-    let mut buf = [0; 4096];
-    loop {
-        let count = reader.read(&mut buf)?;
-        if count == 0 {
-            return Ok(tail);
-        }
-        tail.extend_from_slice(&buf[..count]);
-        let excess = tail.len().saturating_sub(STDERR_TAIL);
-        tail.drain(..excess);
-    }
-}
-
-/// Parsing and error capture run concurrently while the child is supervised.
-struct QueryReaders<T> {
-    stdout: JoinHandle<(Result<T, String>, bool)>,
-    stderr: JoinHandle<(io::Result<Vec<u8>>, bool)>,
-    cancel: Arc<AtomicBool>,
-}
-
-/// A missing worker result means its FD could not be confirmed reclaimed.
-struct ReaderOutput<T> {
-    stdout: Option<(Result<T, String>, bool)>,
-    stderr: Option<(io::Result<Vec<u8>>, bool)>,
-}
-
-impl<T: Send + 'static> QueryReaders<T> {
-    fn start(
-        child: &mut Child,
-        parse: impl FnOnce(&mut BufReader<CancelableRead<ChildStdout>>) -> Result<T, String>
-        + Send
-        + 'static,
-    ) -> io::Result<Self> {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let stdout_pipe = child.stdout.take().expect("stdout piped");
-        let stderr_pipe = child.stderr.take().expect("stderr piped");
-        let stdout = CancelableRead::new(stdout_pipe, cancel.clone())?;
-        let stderr = CancelableRead::new(stderr_pipe, cancel.clone())?;
-        let stdout = thread::Builder::new()
-            .name("query-stdout".into())
-            .spawn(move || {
-                let mut reader = BufReader::new(stdout);
-                let parsed = parse(&mut reader);
-                (parsed, reader.get_ref().eof)
-            })?;
-        let stderr = match thread::Builder::new()
-            .name("query-stderr".into())
-            .spawn(move || {
-                let mut reader = stderr;
-                let captured = capture_stderr(&mut reader);
-                (captured, reader.eof)
-            }) {
-            Ok(stderr) => stderr,
             Err(error) => {
-                let reclaimed = stop_after_spawn_failure(&cancel, stdout);
-                return Err(spawn_failure_error(error, reclaimed));
+                self.error = Some(error.to_string());
+                Err(error)
             }
-        };
-        Ok(Self {
-            stdout,
-            stderr,
-            cancel,
-        })
-    }
-
-    fn finish(self, drain_deadline: Instant) -> ReaderOutput<T> {
-        self.wait_until(drain_deadline);
-        if !(self.stdout.is_finished() && self.stderr.is_finished()) {
-            self.cancel.store(true, Ordering::Release);
-            self.wait_until(Instant::now() + READER_CONFIRM);
-        }
-        let stdout = if self.stdout.is_finished() {
-            Some(
-                self.stdout
-                    .join()
-                    .unwrap_or_else(|_| (Err("query output parser failed".into()), false)),
-            )
-        } else {
-            None
-        };
-        let stderr = if self.stderr.is_finished() {
-            Some(
-                self.stderr
-                    .join()
-                    .unwrap_or((Err(io::Error::other("query stderr reader failed")), false)),
-            )
-        } else {
-            None
-        };
-        ReaderOutput { stdout, stderr }
-    }
-
-    fn wait_until(&self, deadline: Instant) {
-        while !(self.stdout.is_finished() && self.stderr.is_finished()) && Instant::now() < deadline
-        {
-            thread::sleep(POLL);
+            other => other,
         }
     }
-}
-
-fn stop_after_spawn_failure<T>(cancel: &AtomicBool, stdout: JoinHandle<T>) -> bool {
-    cancel.store(true, Ordering::Release);
-    let until = Instant::now() + READER_CONFIRM;
-    while !stdout.is_finished() && Instant::now() < until {
-        thread::sleep(POLL);
-    }
-    if stdout.is_finished() {
-        let _ = stdout.join();
-        true
-    } else {
-        log::error!("query stdout reader cleanup unconfirmed after spawn failure");
-        false
-    }
-}
-
-fn spawn_failure_error(error: io::Error, reclaimed: bool) -> io::Error {
-    let note = if reclaimed {
-        ""
-    } else {
-        "; stdout reader cleanup unconfirmed"
-    };
-    io::Error::other(format!("failed to start stderr reader: {error}{note}"))
 }
 
 /// `status` confirms direct-child reaping; otherwise a reaper owns the Child.
@@ -304,37 +151,17 @@ fn reap_later(mut child: Child) {
 }
 
 fn finish_query<T>(
-    exit: ChildExit,
-    readers: ReaderOutput<T>,
+    status: ExitStatus,
+    data: T,
+    stderr_tail: &[u8],
     has_data: impl Fn(&T) -> bool,
 ) -> Outcome<T> {
-    let code = exit.status.and_then(|status| status.code());
-    let mut errors = output_errors(&readers);
-    if let Some(error) = exit.error {
-        errors.insert(0, error);
-    }
-    if !errors.is_empty() {
-        return Outcome::Failed(IngestError {
-            exit_code: code,
-            summary: errors.join("; "),
-        });
-    }
-    let data = readers
-        .stdout
-        .expect("complete stdout reader returned a result")
-        .0
-        .expect("complete stdout reader parsed data");
-    if code == Some(0) {
+    if status.success() {
         Outcome::Ok(data)
     } else {
-        let stderr = readers
-            .stderr
-            .expect("complete stderr reader returned a result")
-            .0
-            .expect("complete stderr reader captured");
-        let stderr_tail = String::from_utf8_lossy(&stderr);
+        let stderr_tail = String::from_utf8_lossy(stderr_tail);
         let error = IngestError {
-            exit_code: code,
+            exit_code: status.code(),
             summary: summarize(&stderr_tail),
         };
         if has_data(&data) {
@@ -343,35 +170,6 @@ fn finish_query<T>(
             Outcome::Failed(error)
         }
     }
-}
-
-fn output_errors<T>(readers: &ReaderOutput<T>) -> Vec<String> {
-    let mut errors = Vec::new();
-    match &readers.stdout {
-        None => {
-            let error = "could not reclaim stdout reader";
-            log::error!("{error}");
-            errors.push(error.into());
-        }
-        Some((_, false)) => errors.push("query stdout incomplete".into()),
-        _ => (),
-    }
-    match &readers.stderr {
-        None => {
-            let error = "could not reclaim stderr reader";
-            log::error!("{error}");
-            errors.push(error.into());
-        }
-        Some((_, false)) => errors.push("query stderr incomplete".into()),
-        _ => (),
-    }
-    if let Some((Err(error), _)) = &readers.stdout {
-        errors.push(error.clone());
-    }
-    if let Some((Err(error), _)) = &readers.stderr {
-        errors.push(format!("could not read query stderr: {error}"));
-    }
-    errors
 }
 
 enum Outcome<T> {
@@ -502,72 +300,101 @@ impl Drop for DetailSlot {
     }
 }
 
-/// Run one scoped query and parse stdout as it arrives.
+/// Run one scoped query and parse only bytes present when its direct child exits.
 #[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
-fn fetch<T: Send + 'static>(
+fn fetch<T>(
     ws: &Path,
     bazel: &Path,
     query: &str,
     output: &str,
-    parse: impl FnOnce(&mut BufReader<CancelableRead<ChildStdout>>) -> Result<T, String>
-    + Send
-    + 'static,
+    parse: impl FnOnce(&mut dyn BufRead) -> Result<T, String>,
     has_data: impl Fn(&T) -> bool,
 ) -> Outcome<T> {
     fetch_with_timeout(ws, bazel, query, output, parse, has_data, QUERY_TIMEOUT)
 }
 
-fn fetch_with_timeout<T: Send + 'static>(
+fn fetch_with_timeout<T>(
     ws: &Path,
     bazel: &Path,
     query: &str,
     output: &str,
-    parse: impl FnOnce(&mut BufReader<CancelableRead<ChildStdout>>) -> Result<T, String>
-    + Send
-    + 'static,
+    parse: impl FnOnce(&mut dyn BufRead) -> Result<T, String>,
     has_data: impl Fn(&T) -> bool,
     timeout: Duration,
 ) -> Outcome<T> {
-    let mut child = match Command::new(bazel)
+    let (stdout_writer, stdout_reader) = match capture_file() {
+        Ok(files) => files,
+        Err(error) => return failed(None, format!("failed to create stdout capture: {error}")),
+    };
+    let (stderr_writer, stderr_reader) = match capture_file() {
+        Ok(files) => files,
+        Err(error) => return failed(None, format!("failed to create stderr capture: {error}")),
+    };
+    let child = match Command::new(bazel)
         .arg("query")
         .arg(query)
         .arg(format!("--output={output}"))
         .args(["--noimplicit_deps", "--keep_going"])
         .current_dir(ws)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(stdout_writer)
+        .stderr(stderr_writer)
         .process_group(0)
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => {
-            return Outcome::Failed(IngestError {
-                exit_code: None,
-                summary: format!("failed to spawn {}: {e}", bazel.display()),
-            });
-        }
-    };
-    let readers = match QueryReaders::start(&mut child, parse) {
-        Ok(readers) => readers,
         Err(error) => {
-            let exit = observe_child(child, Duration::ZERO);
-            return Outcome::Failed(IngestError {
-                exit_code: exit.status.and_then(|status| status.code()),
-                summary: format!(
-                    "failed to start query readers: {error}{}",
-                    if exit.status.is_none() {
-                        "; direct-child cleanup unconfirmed"
-                    } else {
-                        ""
-                    }
-                ),
-            });
+            return failed(
+                None,
+                format!("failed to spawn {}: {error}", bazel.display()),
+            );
         }
     };
     let exit = observe_child(child, timeout);
-    let output = readers.finish(Instant::now() + DRAIN_GRACE);
-    finish_query(exit, output, has_data)
+    if let Some(error) = exit.error {
+        return failed(exit.status.and_then(|status| status.code()), error);
+    }
+    let Some(status) = exit.status else {
+        return failed(None, "query exit unconfirmed".into());
+    };
+    // Freeze both lengths before reading either file. Descendant writes later
+    // are outside this query's result.
+    let stdout_len = match output_len(&stdout_reader, "stdout") {
+        Ok(len) => len,
+        Err(error) => return failed(status.code(), error),
+    };
+    let stderr_len = match output_len(&stderr_reader, "stderr") {
+        Ok(len) => len,
+        Err(error) => return failed(status.code(), error),
+    };
+    let stderr_tail = match read_stderr_tail(stderr_reader, stderr_len) {
+        Ok(tail) => tail,
+        Err(error) => {
+            return failed(
+                status.code(),
+                format!("could not read query stderr: {error}"),
+            );
+        }
+    };
+    let mut stdout = BufReader::new(CheckedRead {
+        inner: stdout_reader.take(stdout_len),
+        error: None,
+    });
+    let data = match parse(&mut stdout) {
+        Ok(data) => data,
+        Err(error) => return failed(status.code(), error),
+    };
+    if let Some(error) = &stdout.get_ref().error {
+        return failed(
+            status.code(),
+            format!("could not read query stdout: {error}"),
+        );
+    }
+    finish_query(status, data, &stderr_tail, has_data)
+}
+
+fn failed<T>(exit_code: Option<i32>, summary: String) -> Outcome<T> {
+    Outcome::Failed(IngestError { exit_code, summary })
 }
 
 /// Last non-empty stderr lines, truncated; bazel writes its errors there.
@@ -636,23 +463,17 @@ mod tests {
         }
     }
 
-    fn assert_incomplete_pipe(fixture: &QueryFixture, redirected: &str) {
-        // The direct shell exits. Its background child keeps one pipe
-        // open longer than DRAIN_GRACE, then exits on its own.
+    fn assert_descendant_held_file_does_not_delay_query(fixture: &QueryFixture, redirected: &str) {
+        // The direct shell exits while its background child retains one output FD.
         fixture.script(&format!(
             "sleep 4 {redirected} & printf 'cc_library rule //app:lib\\n'; exit 0\n"
         ));
         let start = Instant::now();
-        let Outcome::Failed(error) = fixture.label_kind(Duration::from_secs(2)) else {
-            panic!("incomplete pipe must be reported");
+        let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
+            panic!("the direct child's output should be accepted");
         };
         assert!(start.elapsed() < Duration::from_secs(3));
-        assert!(error.summary.contains("incomplete"), "{}", error.summary);
-        assert!(
-            !error.summary.contains("could not reclaim"),
-            "readers must join and close their FDs: {}",
-            error.summary
-        );
+        assert_eq!(targets[0].label, "//app:lib");
     }
 
     #[test]
@@ -685,32 +506,75 @@ mod tests {
     }
 
     #[test]
-    fn descendant_held_pipes_are_canceled_and_reclaimed_repeatedly() {
+    fn capture_rejects_output_larger_than_limit() {
+        let file = NamedTempFile::new().unwrap();
+        file.as_file().set_len(MAX_OUTPUT_BYTES).unwrap();
+        assert_eq!(
+            output_len(file.as_file(), "stdout").unwrap(),
+            MAX_OUTPUT_BYTES
+        );
+        file.as_file().set_len(MAX_OUTPUT_BYTES + 1).unwrap();
+        assert!(
+            output_len(file.as_file(), "stdout")
+                .unwrap_err()
+                .contains("exceeds 512 MiB")
+        );
+    }
+
+    #[test]
+    fn stderr_tail_reads_only_the_last_eight_kib() {
+        use std::io::Write;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"xx").unwrap();
+        file.write_all(&vec![b'a'; STDERR_TAIL]).unwrap();
+        let reader = file.reopen().unwrap();
+        let tail = read_stderr_tail(reader, (STDERR_TAIL + 2) as u64).unwrap();
+        assert_eq!(tail.len(), STDERR_TAIL);
+        assert!(tail.iter().all(|byte| *byte == b'a'));
+    }
+
+    #[test]
+    fn output_written_after_direct_child_exit_is_excluded() {
+        let fixture = QueryFixture::new();
+        fixture.script(
+            "(sleep 4; printf 'invalid later output\\n') & printf 'cc_library rule //app:lib\\n'; exit 0\n",
+        );
+        let start = Instant::now();
+        let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
+            panic!("query should use output present at direct-child exit");
+        };
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].label, "//app:lib");
+    }
+
+    #[test]
+    fn descendant_held_output_files_do_not_block_repeated_queries() {
         let fixture = QueryFixture::new();
         for redirected in ["2>/dev/null", "1>/dev/null", "2>/dev/null", "1>/dev/null"] {
-            assert_incomplete_pipe(&fixture, redirected);
+            assert_descendant_held_file_does_not_delay_query(&fixture, redirected);
         }
 
         fixture.script("printf 'cc_library rule //app:recovered\\n'\n");
         let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
-            panic!("subsequent query should work after incomplete output");
+            panic!("subsequent query should work after inherited output FDs");
         };
         assert_eq!(targets[0].label, "//app:recovered");
     }
 
     #[test]
-    fn incomplete_xml_detail_fails_and_next_detail_succeeds() {
+    fn descendant_held_stderr_does_not_block_detail_or_next_query() {
         let fixture = QueryFixture::new();
         fixture.script(
             "sleep 4 2>/dev/null & printf '<query><rule name=\"//app:lib\" class=\"cc_library\"/></query>'; exit 0\n",
         );
         let start = Instant::now();
-        let Outcome::Failed(error) = fixture.detail(Duration::from_secs(2)) else {
-            panic!("XML with a held stdout pipe must be incomplete");
+        let Outcome::Ok(query) = fixture.detail(Duration::from_secs(2)) else {
+            panic!("XML from the direct child should complete");
         };
         assert!(start.elapsed() < Duration::from_secs(3));
-        assert!(error.summary.contains("query stdout incomplete"));
-        assert!(!error.summary.contains("could not reclaim"));
+        assert_eq!(query.rules[0].label, "//app:lib");
 
         fixture.script("printf '<query><rule name=\"//app:lib\" class=\"cc_library\"/></query>'\n");
         let Outcome::Ok(query) = fixture.detail(Duration::from_secs(2)) else {
@@ -720,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn timed_out_child_is_reaped_and_readers_stop() {
+    fn timed_out_child_is_reaped_and_next_query_works() {
         let fixture = QueryFixture::new();
         fixture.script("exec sleep 30\n");
         let start = Instant::now();
@@ -730,7 +594,12 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(3));
         assert!(error.summary.contains("timed out"), "{}", error.summary);
         assert!(!error.summary.contains("exit unconfirmed"));
-        assert!(!error.summary.contains("could not reclaim"));
+
+        fixture.script("printf 'cc_library rule //app:recovered\\n'\n");
+        assert!(matches!(
+            fixture.label_kind(Duration::from_secs(2)),
+            Outcome::Ok(_)
+        ));
 
         let child = Command::new("/bin/sh")
             .args(["-c", "exec sleep 30"])
