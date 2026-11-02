@@ -16,6 +16,6 @@ fn main() {
     config.include_file("bazel_protos.rs");
     tonic_build::configure()
         .compile_protos_with_config(config, &["proto/bes.proto", &bazel_bep], &includes)
-        .expect("compile BES protocol");
+        .expect("compile BES/BEP protocol");
     tauri_build::build()
 }

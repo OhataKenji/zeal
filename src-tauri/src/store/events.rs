@@ -17,7 +17,7 @@ pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 struct Facts {
     workspace: Option<PathBuf>,
     cmd: Option<String>,
-    target: Option<String>,
+    pattern: Option<String>,
     started: Option<i64>,
     finished: Option<i64>,
     exit: Option<i32>,
@@ -49,14 +49,14 @@ impl Receipt {
         {
             return Err(fail(ErrorKind::Invalid));
         }
-        let run_id = id(&stream.invocation_id)?;
-        let attempt = reserve_attempt(data, &run_id)?;
+        let invocation_id = id(&stream.invocation_id)?;
+        let attempt = reserve_attempt(data, &invocation_id)?;
         // No Store or SQL transaction survives into file writes.
         let writer = if let Some(attempt) = attempt {
             let root = super::securefs::Dir::root(data)?;
             let dir = root
-                .child("runs", true)?
-                .child(&run_id, true)?
+                .child("invocations", true)?
+                .child(&invocation_id, true)?
                 .child("attempt", true)?
                 .create_child(&attempt.to_string())?;
             Some(BufWriter::with_capacity(
@@ -159,12 +159,12 @@ impl Receipt {
         {
             return Err(fail(ErrorKind::Invalid));
         }
-        let target = target_patterns(children)?;
+        let pattern = target_patterns(children)?;
         self.facts.workspace = Some(database::workspace_path(Path::new(
             &started.workspace_directory,
         ))?);
         self.facts.cmd = Some(started.command.clone());
-        self.facts.target = Some(target);
+        self.facts.pattern = Some(pattern);
         self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
         Ok(())
     }
@@ -173,7 +173,7 @@ impl Receipt {
         struct StoredFacts {
             workspace: Option<Vec<u8>>,
             cmd: Option<String>,
-            target: Option<String>,
+            pattern: Option<String>,
             started: Option<i64>,
             finished: Option<i64>,
             exit: Option<i32>,
@@ -183,15 +183,15 @@ impl Receipt {
         let tx = store
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let run_id = id(&self.stream.invocation_id)?;
+        let invocation_id = id(&self.stream.invocation_id)?;
         let existing = tx.query_row(
-            "SELECT w.canonical_path,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.exit_code FROM run r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
-            [&run_id],
+            "SELECT w.canonical_path,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code FROM invocation r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
+            [&invocation_id],
             |r| {
                 Ok(StoredFacts {
                     workspace: r.get(0)?,
                     cmd: r.get(1)?,
-                    target: r.get(2)?,
+                    pattern: r.get(2)?,
                     started: r.get(3)?,
                     finished: r.get(4)?,
                     exit: r.get(5)?,
@@ -209,7 +209,7 @@ impl Receipt {
         // Reject contradictory reports; an absent value is not a contradiction.
         if conflicts(existing.workspace.as_ref(), path.as_ref())
             || conflicts(existing.cmd.as_ref(), self.facts.cmd.as_ref())
-            || conflicts(existing.target.as_ref(), self.facts.target.as_ref())
+            || conflicts(existing.pattern.as_ref(), self.facts.pattern.as_ref())
             || conflicts(existing.started.as_ref(), self.facts.started.as_ref())
             || conflicts(existing.finished.as_ref(), self.facts.finished.as_ref())
             || conflicts(existing.exit.as_ref(), self.facts.exit.as_ref())
@@ -217,7 +217,7 @@ impl Receipt {
             return Err(fail(ErrorKind::Conflict));
         }
         if let Some(attempt) = self.attempt {
-            self.save_attempt(&tx, &run_id, attempt, path.as_deref(), complete)?;
+            self.save_attempt(&tx, &invocation_id, attempt, path.as_deref(), complete)?;
         }
         tx.commit()?;
         Ok(())
@@ -226,24 +226,25 @@ impl Receipt {
     fn save_attempt(
         &self,
         tx: &rusqlite::Transaction<'_>,
-        run_id: &str,
+        invocation_id: &str,
         attempt: i64,
         path: Option<&[u8]>,
         complete: bool,
     ) -> Result<(), StoreError> {
         let current: bool = tx.query_row(
-            "SELECT attempt=?2 AND received_complete=0 FROM run WHERE id=?1",
-            params![run_id, attempt],
+            "SELECT attempt=?2 AND received_complete=0 FROM invocation WHERE id=?1",
+            params![invocation_id, attempt],
             |r| r.get(0),
         )?;
         if !current {
             return Err(fail(ErrorKind::Conflict));
         }
         let ws_id = save_workspace(tx, path)?;
-        // Missing retry facts must not erase facts already reported for this run.
+        // Missing retry facts must not erase facts already reported for this
+        // invocation.
         let updated = tx.execute(
-            "UPDATE run SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_raw=coalesce(target_raw,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=coalesce(finished_at_ms,?7),exit_code=coalesce(exit_code,?8),received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
-            params![run_id,attempt,ws_id,self.facts.cmd,self.facts.target,self.facts.started,self.facts.finished,self.facts.exit,complete],
+            "UPDATE invocation SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_pattern=coalesce(target_pattern,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=coalesce(finished_at_ms,?7),exit_code=coalesce(exit_code,?8),received_complete=?9 WHERE id=?1 AND attempt=?2 AND received_complete=0",
+            params![invocation_id,attempt,ws_id,self.facts.cmd,self.facts.pattern,self.facts.started,self.facts.finished,self.facts.exit,complete],
         )?;
         if updated != 1 {
             return Err(fail(ErrorKind::Conflict));
@@ -270,18 +271,18 @@ impl Receipt {
 }
 
 /// Reserve a new attempt before opening its files. Completed receipts are replayed read-only.
-fn reserve_attempt(data: &Path, run_id: &str) -> Result<Option<i64>, StoreError> {
+fn reserve_attempt(data: &Path, invocation_id: &str) -> Result<Option<i64>, StoreError> {
     let mut store = Store::open(data)?;
     let tx = store
         .conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute(
-        "INSERT INTO run(id) VALUES(?1) ON CONFLICT(id) DO NOTHING",
-        [run_id],
+        "INSERT INTO invocation(id) VALUES(?1) ON CONFLICT(id) DO NOTHING",
+        [invocation_id],
     )?;
     let (previous, complete): (i64, bool) = tx.query_row(
-        "SELECT attempt,received_complete FROM run WHERE id=?1",
-        [run_id],
+        "SELECT attempt,received_complete FROM invocation WHERE id=?1",
+        [invocation_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     if complete {
@@ -292,8 +293,8 @@ fn reserve_attempt(data: &Path, run_id: &str) -> Result<Option<i64>, StoreError>
         .checked_add(1)
         .ok_or_else(|| fail(ErrorKind::Capacity))?;
     tx.execute(
-        "UPDATE run SET attempt=?2 WHERE id=?1 AND received_complete=0",
-        params![run_id, next],
+        "UPDATE invocation SET attempt=?2 WHERE id=?1 AND received_complete=0",
+        params![invocation_id, next],
     )?;
     tx.commit()?;
     Ok(Some(next))
@@ -307,10 +308,10 @@ fn target_patterns(children: &[bep::BuildEventId]) -> Result<String, StoreError>
             _ => None,
         })
         .flatten();
-    let mut target = String::new();
+    let mut joined = String::new();
     for pattern in patterns {
-        let separator = usize::from(!target.is_empty());
-        if target
+        let separator = usize::from(!joined.is_empty());
+        if joined
             .len()
             .saturating_add(separator)
             .saturating_add(pattern.len())
@@ -319,11 +320,11 @@ fn target_patterns(children: &[bep::BuildEventId]) -> Result<String, StoreError>
             return Err(fail(ErrorKind::Invalid));
         }
         if separator != 0 {
-            target.push(' ');
+            joined.push(' ');
         }
-        target.push_str(pattern);
+        joined.push_str(pattern);
     }
-    Ok(target)
+    Ok(joined)
 }
 
 fn save_workspace(
@@ -435,7 +436,9 @@ pub(crate) mod test_support {
             receipt.finish().unwrap();
         }
         pub fn dir(&self) -> PathBuf {
-            self.data.join("runs").join(&self.stream.invocation_id)
+            self.data
+                .join("invocations")
+                .join(&self.stream.invocation_id)
         }
     }
     impl Drop for Fixture {
@@ -567,9 +570,11 @@ mod tests {
         let state: (i64, bool) = Store::open(&f.data)
             .unwrap()
             .conn
-            .query_row("SELECT attempt,received_complete FROM run", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT attempt,received_complete FROM invocation",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(state, (2, false));
     }
@@ -650,9 +655,11 @@ mod tests {
         let store = Store::open(&f.data).unwrap();
         let state: (i64, bool) = store
             .conn
-            .query_row("SELECT attempt,received_complete FROM run", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT attempt,received_complete FROM invocation",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(state, (2, true));
     }
@@ -670,7 +677,7 @@ mod tests {
         let complete: bool = Store::open(&f.data)
             .unwrap()
             .conn
-            .query_row("SELECT received_complete FROM run", [], |r| r.get(0))
+            .query_row("SELECT received_complete FROM invocation", [], |r| r.get(0))
             .unwrap();
         assert!(!complete);
 

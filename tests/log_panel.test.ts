@@ -23,7 +23,7 @@ test("LogPanel displays the available log and its section status", async (t) => 
       optimizeDeps: { noDiscovery: true, include: [] },
       ssr: { optimizeDeps: { exclude: ["svelte"] } },
     });
-    const { default: LogPanel } = await server.ssrLoadModule("/src/lib/run/LogPanel.svelte");
+    const { default: LogPanel } = await server.ssrLoadModule("/src/lib/invocation/LogPanel.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
     function output(section: Section<string> | undefined, loading = false): string {
@@ -39,32 +39,32 @@ test("LogPanel displays the available log and its section status", async (t) => 
       assert.match(html, /incomplete — event tail is missing/);
       assert.match(html, /saved prefix/);
       assert.match(html, /class="notice notice--warning" role="status"/);
-      assert.match(html, /aria-label="Build stdout and stderr"/);
+      assert.match(html, /aria-label="Invocation output"/);
     });
 
     await t.test("an empty incomplete log still explains the missing data", () => {
       const html = output({ status: "incomplete", data: "", note: "invalid last event" });
       assert.match(html, /incomplete — invalid last event/);
-      assert.match(html, /aria-label="Build stdout and stderr"/);
+      assert.match(html, /aria-label="Invocation output"/);
     });
 
     await t.test("complete logs have no warning", () => {
       const html = output({ status: "ok", data: "complete output" });
       assert.match(html, /complete output/);
-      assert.doesNotMatch(html, /class="notice|Loading build log/);
+      assert.doesNotMatch(html, /class="notice|Loading invocation output/);
     });
 
     await t.test("an outstanding log request shows the existing loading message", () => {
       const html = output(undefined, true);
-      assert.match(html, /Loading build log…/);
-      assert.doesNotMatch(html, /class="notice|aria-label="Build stdout and stderr"/);
+      assert.match(html, /Loading invocation output…/);
+      assert.doesNotMatch(html, /class="notice|aria-label="Invocation output"/);
     });
 
     await t.test("an unreadable log shows its error without inventing log content", () => {
       const html = output({ status: "read_error", note: "permission denied" });
       assert.match(html, /read error — permission denied/);
       assert.match(html, /class="notice notice--error" role="alert"/);
-      assert.doesNotMatch(html, /aria-label="Build stdout and stderr"|Loading build log/);
+      assert.doesNotMatch(html, /aria-label="Invocation output"|Loading invocation output/);
     });
   } finally {
     await server?.close();

@@ -2,10 +2,10 @@ import { COMMANDS } from "./commands.ts";
 import { targetError } from "./target.ts";
 import type {
   AppState,
+  BazelCommand,
+  InvocationDetail,
+  InvocationRecord,
   Profile,
-  RunCmd,
-  RunDetail,
-  RunRecord,
   Section,
   TargetDetail,
   TargetIndex,
@@ -18,9 +18,9 @@ export interface Transport {
   listen<T>(event: string, callback: (payload: T) => void): Promise<() => void>;
 }
 
-/** UI state for one workspace and its selected run. */
+/** UI state for one workspace and its selected invocation. */
 export interface SessionView {
-  console: RunRecord | null;
+  console: InvocationRecord | null;
   consoleOpen: boolean;
   state: AppState | null;
   /** Tree and search data for `state.snapshotFetchedAt`. */
@@ -34,10 +34,10 @@ export interface SessionView {
   starting: boolean;
   opening: boolean;
   error: string | null;
-  runs: RunRecord[];
-  runsError: string | null;
-  selectedRun: string | null;
-  detail: RunDetail | null;
+  invocations: InvocationRecord[];
+  invocationsError: string | null;
+  selectedInvocation: string | null;
+  detail: InvocationDetail | null;
   detailLoading: boolean;
   detailError: string | null;
   profile: Section<Profile> | null;
@@ -61,9 +61,9 @@ export function emptyView(): SessionView {
     starting: false,
     opening: false,
     error: null,
-    runs: [],
-    runsError: null,
-    selectedRun: null,
+    invocations: [],
+    invocationsError: null,
+    selectedInvocation: null,
     detail: null,
     detailLoading: false,
     detailError: null,
@@ -85,7 +85,7 @@ export function canSend(view: SessionView, target: string): boolean {
     view.state?.workspace &&
     view.state.bazel &&
     view.state.ingest === "idle" &&
-    !view.state.running &&
+    !view.state.activeInvocation &&
     view.state.query !== "running" &&
     view.state.detailQuery !== "running" &&
     targetError(target) === null
@@ -93,11 +93,12 @@ export function canSend(view: SessionView, target: string): boolean {
 }
 
 /**
- * Returns whether the core can stop an active run that is not already stopping.
- * Core remains responsible for releasing an unconfirmed run with a note.
+ * Returns whether the core can stop an active invocation that is not already
+ * stopping. Core remains responsible for releasing an unconfirmed invocation
+ * with a note.
  */
 export function canStop(view: SessionView): boolean {
-  return !!(view.ready && view.state?.running && !view.state.stopping);
+  return !!(view.ready && view.state?.activeInvocation && !view.state.stopping);
 }
 
 /**
@@ -117,7 +118,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let snapshotRequested: number | null = null;
   let targetGeneration = 0;
   let targetRequestInFlight = false;
-  let pendingStart: { workspace: string; cmd: RunCmd; target: string } | null = null;
+  let pendingStart: { workspace: string; cmd: BazelCommand; pattern: string } | null = null;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
@@ -126,7 +127,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     changed(view);
   }
 
-  async function loadRuns() {
+  async function loadInvocations() {
     if (!view.state?.workspace || disposed) return;
     if (listing) {
       listPending = true;
@@ -135,28 +136,28 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     listing = true;
     const generation = ++listGeneration;
     try {
-      const runs = await transport.invoke<RunRecord[]>(COMMANDS.listRuns);
-      acceptLoadedRuns(generation, runs);
+      const invocations = await transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations);
+      acceptLoadedInvocations(generation, invocations);
     } catch (error) {
       if (generation === listGeneration) {
-        update({ runsError: String(error) });
+        update({ invocationsError: String(error) });
       }
     } finally {
       listing = false;
       if (listPending && !disposed) {
         listPending = false;
-        void loadRuns();
+        void loadInvocations();
       }
     }
   }
 
   // A changed selected record means its saved observation may have completed.
-  function acceptLoadedRuns(generation: number, runs: RunRecord[]) {
+  function acceptLoadedInvocations(generation: number, invocations: InvocationRecord[]) {
     if (generation !== listGeneration || disposed) return;
-    if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
-      update({ runs, runsError: null });
+    if (JSON.stringify(invocations) !== JSON.stringify(view.invocations) || view.invocationsError) {
+      update({ invocations, invocationsError: null });
     }
-    const selected = runs.find((run) => run.id === view.selectedRun);
+    const selected = invocations.find((inv) => inv.id === view.selectedInvocation);
     if (
       !selected ||
       !view.detail ||
@@ -216,7 +217,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       !state?.workspace ||
       !state.bazel ||
       state.ingest === "running" ||
-      state.running ||
+      state.activeInvocation ||
       state.query === "running" ||
       state.detailQuery === "running"
     );
@@ -276,15 +277,21 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function loadDetail() {
-    const id = view.selectedRun;
-    // Saved observations are read after the active run ends.
-    if (!id || !view.ready || view.starting || view.detailLoading || id === view.state?.running) {
+    const id = view.selectedInvocation;
+    // Saved observations are read after the active invocation ends.
+    if (
+      !id ||
+      !view.ready ||
+      view.starting ||
+      view.detailLoading ||
+      id === view.state?.activeInvocation
+    ) {
       return;
     }
     const generation = ++detailGeneration;
     update({ detailLoading: true, detailError: null });
     try {
-      const detail = await transport.invoke<RunDetail>(COMMANDS.getRun, { id });
+      const detail = await transport.invoke<InvocationDetail>(COMMANDS.getInvocation, { id });
       if (generation === detailGeneration) {
         update({ detail, detailLoading: false });
       }
@@ -296,14 +303,22 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function loadProfile() {
-    const id = view.selectedRun;
-    if (!id || !view.ready || view.starting || view.profileLoading || id === view.state?.running) {
+    const id = view.selectedInvocation;
+    if (
+      !id ||
+      !view.ready ||
+      view.starting ||
+      view.profileLoading ||
+      id === view.state?.activeInvocation
+    ) {
       return;
     }
     const generation = ++profileGeneration;
     update({ profileLoading: true, profileError: null });
     try {
-      const profile = await transport.invoke<Section<Profile>>(COMMANDS.getRunProfile, { id });
+      const profile = await transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
+        id,
+      });
       if (generation === profileGeneration) {
         update({ profile, profileLoading: false });
       }
@@ -319,12 +334,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     void loadProfile();
   }
 
-  function selectRun(id: string | null) {
+  function selectInvocation(id: string | null) {
     ++detailGeneration;
     ++profileGeneration;
     update({
       consoleOpen: false,
-      selectedRun: id,
+      selectedInvocation: id,
       detail: null,
       detailError: null,
       detailLoading: false,
@@ -342,18 +357,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       !view.consoleOpen ||
       view.console?.id !== id ||
       view.starting ||
-      view.state?.running
+      view.state?.activeInvocation
     ) {
       return false;
     }
-    selectRun(id);
+    selectInvocation(id);
     return true;
   }
 
   // Console read access outlives process controls for the last local process.
-  function openConsole(record: RunRecord) {
-    if (record.id !== (view.state?.consoleRun ?? view.state?.running)) {
-      selectRun(record.id);
+  function openConsole(record: InvocationRecord) {
+    if (record.id !== (view.state?.consoleInvocation ?? view.state?.activeInvocation)) {
+      selectInvocation(record.id);
       return;
     }
     if (view.consoleOpen && view.console?.id === record.id) return;
@@ -362,7 +377,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       console: record,
       consoleOpen: true,
-      selectedRun: null,
+      selectedInvocation: null,
       detail: null,
       detailError: null,
       detailLoading: false,
@@ -376,9 +391,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       console: null,
       consoleOpen: false,
-      runs: [],
-      runsError: null,
-      selectedRun: null,
+      invocations: [],
+      invocationsError: null,
+      selectedInvocation: null,
       detail: null,
       detailLoading: false,
       detailError: null,
@@ -436,30 +451,38 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     });
     openPendingConsole(state);
     syncTargetData(state, before, contextChanged);
-    if (resumed || workspaceChanged || state.running !== before?.running) {
-      void loadRuns();
+    if (resumed || workspaceChanged || state.activeInvocation !== before?.activeInvocation) {
+      void loadInvocations();
     }
-    syncCompletedRun(state, before, resumed);
+    syncCompletedInvocation(state, before, resumed);
   }
 
-  // A started run claims the Console only when its own workspace grants it.
+  // A started invocation claims the Console only when its own workspace grants it.
   function openPendingConsole(state: AppState) {
     if (
       !pendingStart ||
       pendingStart.workspace !== state.workspace ||
-      !state.running ||
-      state.consoleRun !== state.running
+      !state.activeInvocation ||
+      state.consoleInvocation !== state.activeInvocation
     ) {
       return;
     }
-    openConsole({ id: state.running, cmd: pendingStart.cmd, target: pendingStart.target });
+    openConsole({
+      id: state.activeInvocation,
+      cmd: pendingStart.cmd,
+      pattern: pendingStart.pattern,
+    });
   }
 
-  function syncCompletedRun(state: AppState, before: AppState | null, resumed: boolean) {
-    if (!resumed && (!before?.running || before.running === state.running)) return;
-    const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
+  function syncCompletedInvocation(state: AppState, before: AppState | null, resumed: boolean) {
+    if (
+      !resumed &&
+      (!before?.activeInvocation || before.activeInvocation === state.activeInvocation)
+    )
+      return;
+    const completed = before?.activeInvocation ?? (resumed ? state.consoleInvocation : undefined);
     if (selectCompletedConsole(completed)) return;
-    if (resumed || view.selectedRun === completed) loadSelected();
+    if (resumed || view.selectedInvocation === completed) loadSelected();
   }
 
   function syncTargetData(state: AppState, before: AppState | null, contextChanged: boolean) {
@@ -518,8 +541,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   // Returns false when disposed mid-registration or a subscription failed.
   async function subscribe() {
     try {
-      const removeHistory = await transport.listen<void>("history-changed", () => {
-        void loadRuns();
+      const removeHistory = await transport.listen<void>("invocations-changed", () => {
+        void loadInvocations();
       });
       if (disposed) {
         removeHistory();
@@ -554,62 +577,62 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (workspace === view.state?.workspace && revision === stateRevision) {
         update({
           ready: false,
-          error: `The run started, but getting its state failed; waiting for the next update: ${String(error)}`,
+          error: `The invocation started, but getting its state failed; waiting for the next update: ${String(error)}`,
         });
       }
     }
   }
 
-  async function start(cmd: RunCmd, target: string, argumentsText = "") {
-    if (!canSend(view, target)) return;
+  async function start(cmd: BazelCommand, pattern: string, argumentsText = "") {
+    if (!canSend(view, pattern)) return;
     const workspace = view.state?.workspace;
     if (!workspace) return;
-    let startedRun: string | undefined;
-    pendingStart = { workspace, cmd, target };
+    let startedInvocation: string | undefined;
+    pendingStart = { workspace, cmd, pattern };
     update({ starting: true, error: null });
     try {
-      // The core parses arguments once; the target stays a separate token.
-      const record = await transport.invoke<RunRecord>(COMMANDS.startRun, {
+      // The core parses arguments once; the pattern stays a separate token.
+      const record = await transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
         cmd,
-        target,
+        pattern,
         arguments: argumentsText,
       });
       pendingStart = null;
       if (disposed || workspace !== view.state?.workspace) return;
-      startedRun = record.id;
-      openStartedConsole(record, cmd, target);
+      startedInvocation = record.id;
+      openStartedConsole(record, cmd, pattern);
       await reconcileStartedState(workspace);
       if (disposed || workspace !== view.state?.workspace) return;
-      // The run may already have finished before start_run's reply. Never
-      // write that reply back into the authoritative running state.
-      void loadRuns();
+      // The invocation may already have finished before start_invocation's
+      // reply. Never write that reply back into the authoritative active state.
+      void loadInvocations();
     } catch (error) {
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
-      finishStart(workspace, startedRun);
+      finishStart(workspace, startedInvocation);
     }
   }
 
-  function openStartedConsole(record: RunRecord, cmd: RunCmd, target: string) {
+  function openStartedConsole(record: InvocationRecord, cmd: BazelCommand, pattern: string) {
     if (view.consoleOpen && view.console?.id === record.id) return;
-    selectRun(null);
+    selectInvocation(null);
     // Composer input labels the live Console until build events report it.
-    update({ console: { ...record, cmd, target }, consoleOpen: true });
+    update({ console: { ...record, cmd, pattern }, consoleOpen: true });
   }
 
-  function finishStart(workspace: string, startedRun: string | undefined) {
+  function finishStart(workspace: string, startedInvocation: string | undefined) {
     pendingStart = null;
     update({ starting: false });
     requestTargetDetail();
     if (disposed || workspace !== view.state?.workspace || !view.ready) return;
-    if (!selectCompletedConsole(startedRun)) loadSelected();
+    if (!selectCompletedConsole(startedInvocation)) loadSelected();
   }
 
   async function stop() {
     if (!canStop(view)) return;
     const workspace = view.state?.workspace;
     try {
-      await transport.invoke(COMMANDS.stopRun);
+      await transport.invoke(COMMANDS.stopInvocation);
     } catch (error) {
       if (workspace === view.state?.workspace) update({ error: String(error) });
     }
@@ -620,7 +643,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       !view.ready ||
       view.opening ||
       view.starting ||
-      view.state?.running ||
+      view.state?.activeInvocation ||
       view.state?.ingest === "running" ||
       view.state?.query === "running" ||
       view.state?.detailQuery === "running"
@@ -645,7 +668,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       !view.ready ||
       view.starting ||
       view.opening ||
-      view.state?.running ||
+      view.state?.activeInvocation ||
       view.state?.ingest === "running" ||
       view.state?.query === "running" ||
       view.state?.detailQuery === "running"
@@ -666,11 +689,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     stop,
     openWorkspace,
     refresh,
-    selectRun,
+    selectInvocation,
     openConsole,
     loadDetail,
     loadProfile,
-    loadRuns,
+    loadInvocations,
     loadSnapshot,
     selectTarget,
   };

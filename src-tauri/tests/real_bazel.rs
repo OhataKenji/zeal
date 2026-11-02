@@ -15,7 +15,7 @@ async fn real_bazel_records_invocation_and_accepts_standard_input() {
     fixture.records_invocation("test", "//:check").await;
     fixture.accepts_standard_input().await;
     assert_eq!(
-        zeal_lib::list_run_records(&fixture.data, &fixture.ws)
+        zeal_lib::list_invocation_records(&fixture.data, &fixture.ws)
             .unwrap()
             .len(),
         3
@@ -64,7 +64,7 @@ impl BazelFixture {
         }
     }
 
-    fn command(&self, cmd: &str, target: &str, id: &str) -> Command {
+    fn command(&self, cmd: &str, pattern: &str, id: &str) -> Command {
         let mut command = Command::new(&self.bazel);
         command
             .current_dir(&self.ws)
@@ -87,19 +87,19 @@ impl BazelFixture {
             .arg("--bes_upload_mode=wait_for_upload_complete")
             .arg("--bes_timeout=10s")
             .arg(format!("--invocation_id={id}"))
-            .arg(target);
+            .arg(pattern);
         command
     }
 
-    async fn records_invocation(&self, cmd: &str, target: &str) {
+    async fn records_invocation(&self, cmd: &str, pattern: &str) {
         let id = uuid::Uuid::new_v4().to_string();
-        let mut process = self.command(cmd, target, &id);
+        let mut process = self.command(cmd, pattern, &id);
         let output = tokio::task::spawn_blocking(move || process.output().unwrap())
             .await
             .unwrap();
         assert_success(&output, cmd);
-        let record = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
-        assert_invocation(&record, cmd, target);
+        let record = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
+        assert_invocation(&record, cmd, pattern);
     }
 
     async fn accepts_standard_input(&self) {
@@ -109,13 +109,13 @@ impl BazelFixture {
         let process =
             tokio::task::spawn_blocking(move || run_with_input_after_build(command, wait_input));
         self.wait_for_build(&id, &process).await;
-        let observed = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
+        let observed = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert!(observed.finished_at.is_some(), "BEP finishes before input");
         let _ = send_input.send(());
         let output = process.await.unwrap();
         assert_success(&output, "run");
         assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
-        let observed = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
+        let observed = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&observed, "run", "//:double");
         assert!(observed.finished_at.is_some());
     }
@@ -144,10 +144,10 @@ fn assert_success(output: &std::process::Output, cmd: &str) {
     );
 }
 
-/// The recorded invocation of `cmd target`, exited cleanly.
-fn assert_invocation(record: &zeal_lib::RunRecord, cmd: &str, target: &str) {
+/// The recorded invocation of `cmd pattern`, exited cleanly.
+fn assert_invocation(record: &zeal_lib::InvocationRecord, cmd: &str, pattern: &str) {
     assert_eq!(record.cmd.as_deref(), Some(cmd));
-    assert_eq!(record.target.as_deref(), Some(target));
+    assert_eq!(record.pattern.as_deref(), Some(pattern));
     assert_eq!(record.exit_code, Some(0));
 }
 
@@ -157,7 +157,7 @@ async fn wait_for_build_receipt(
     id: &str,
     process: &tokio::task::JoinHandle<std::process::Output>,
 ) {
-    while !zeal_lib::read_run_record(data, workspace, id)
+    while !zeal_lib::read_invocation_record(data, workspace, id)
         .is_ok_and(|build| build.finished_at.is_some())
         && !process.is_finished()
     {

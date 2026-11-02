@@ -1,18 +1,18 @@
-.run-command-block {
+.invocation-command-block {
   margin-top: 20px;
 }
 
-.run-arguments-heading,
-.run-command-block h4 {
+.command-arguments-heading,
+.invocation-command-block h4 {
   margin: 0 0 12px;
   font: 400 12px var(--font-sans);
 }
 
-.run-arguments-heading {
+.command-arguments-heading {
   margin: 20px 0 12px;
 }
 
-.run-command-code {
+.invocation-command-code {
   display: block;
   margin: 12px 0;
   padding: 12px 16px;
@@ -24,13 +24,13 @@
   white-space: pre-wrap;
 }
 
-.run-collapsible summary {
+.invocation-collapsible summary {
   cursor: pointer;
   font: 400 12px var(--font-sans);
   padding: 8px 0;
 }
 
-.run-row {
+.invocation-row {
   width: 100%;
   text-align: left;
   border: 0;
@@ -44,11 +44,11 @@
   overflow: hidden;
 }
 
-.run-command {
+.invocation-command {
   font: 600 12px var(--font-sans);
 }
 
-.run-target {
+.invocation-pattern {
   display: block;
   margin: 6px 0 0 20px;
   overflow: hidden;
@@ -57,14 +57,14 @@
   font: 11px var(--mono);
 }
 
-.run-row .run-label time {
+.invocation-row .invocation-label time {
   margin-left: auto;
   font: 11px var(--font-sans);
   color: var(--muted-foreground);
   white-space: nowrap;
 }
 
-.run-row .run-label {
+.invocation-row .invocation-label {
   display: flex;
   gap: 8px;
   align-items: baseline;
@@ -72,27 +72,27 @@
   color: var(--foreground);
 }
 
-.run-row.selected {
+.invocation-row.selected {
   background: var(--accent);
   box-shadow: inset 2px 0 var(--primary);
   font-weight: 650;
 }
 
-.content.run-content {
+.content.invocation-content {
   display: flex;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
 }
 
-.run-content > .notice,
-.run-content > .dim {
+.invocation-content > .notice,
+.invocation-content > .dim {
   margin: 0;
   padding: 5px 20px;
   font-size: 11px;
 }
 
-.run-page {
+.invocation-page {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -100,11 +100,11 @@
   color: var(--foreground);
 }
 
-.run-page code {
+.invocation-page code {
   font: 12px var(--mono);
 }
 
-.run-summary {
+.invocation-summary {
   flex: 1 1 280px;
   min-width: 0;
   display: flex;
@@ -112,7 +112,7 @@
   align-items: center;
 }
 
-.run-summary h1 {
+.invocation-summary h1 {
   font-size: 21px;
   font-weight: 700;
   letter-spacing: -0.7px;
@@ -129,7 +129,7 @@
   color: var(--destructive);
 }
 
-.run-tabs {
+.invocation-tabs {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -144,7 +144,7 @@
   font-size: 11px;
 }
 
-.run-panel {
+.invocation-panel {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -153,19 +153,19 @@
   padding: 0 24px 24px;
 }
 
-.run-section {
+.invocation-section {
   flex: 0 0 auto;
   min-width: 0;
 }
 
-.run-panel:not(.run-all) > .run-section {
+.invocation-panel:not(.invocation-all) > .invocation-section {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.run-all .log-panel {
+.invocation-all .log-panel {
   height: clamp(180px, 32vh, 320px);
 }
 
@@ -184,7 +184,7 @@
   overflow: hidden;
 }
 
-.run-log {
+.invocation-log {
   flex: 1;
   min-height: 100px;
   width: 100%;
@@ -194,8 +194,8 @@
   overflow: auto;
 }
 
-.run-log::selection,
-.run-log ::selection {
+.invocation-log::selection,
+.invocation-log ::selection {
   background: var(--terminal-selection);
 }
 
@@ -246,15 +246,15 @@
   font-size: 11px;
 }
 
-.run-details dd {
+.invocation-details dd {
   overflow-wrap: anywhere;
 }
 
-.run-row:hover {
+.invocation-row:hover {
   background: var(--accent);
 }
 
-.run-header {
+.invocation-header {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -263,17 +263,17 @@
 }
 
 @media (max-width: 1050px) {
-  .run-header {
+  .invocation-header {
     gap: 14px;
   }
 }
 
 @media (max-width: 800px) {
-  .run-header {
+  .invocation-header {
     padding: 18px;
   }
 
-  .run-panel {
+  .invocation-panel {
     padding: 0 16px 16px;
   }
 }

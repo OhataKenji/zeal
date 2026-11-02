@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Bep, Section } from "../types";
-  import { sectionData, sectionMessage, sectionNoticeTone } from "../run";
+  import { sectionData, sectionMessage, sectionNoticeTone } from "../invocation";
   import Notice from "../Notice.svelte";
 
   let { section }: { section: Section<Bep> | undefined } = $props();

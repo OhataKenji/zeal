@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "camelCase")]
 pub struct AppStateDto {
     pub bes_error: Option<String>,
-    /// Whether the receiver can accept a new Bazel run.
+    /// Whether the receiver can accept a new Bazel invocation.
     pub bes_ready: bool,
     /// Workspace root path, if one is open.
     pub workspace: Option<String>,
@@ -29,16 +29,16 @@ pub struct AppStateDto {
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
-    /// Id of the run in flight, if any.
-    pub running: Option<RunId>,
+    /// Id of the invocation in flight, if any.
+    pub active_invocation: Option<InvocationId>,
     /// The Console whose output can still be read in the open workspace.
-    pub console_run: Option<RunId>,
-    /// A stop was accepted for `running`; it stays until the run leaves the
-    /// slot, however it ends.
+    pub console_invocation: Option<InvocationId>,
+    /// A stop was accepted for `active_invocation`; it stays until the
+    /// invocation leaves the slot, however it ends.
     pub stopping: bool,
-    /// Why the last run's exit is unknown: its `wait` failed, or its group was
-    /// killed and no exit was confirmed.
-    pub run_note: Option<String>,
+    /// Why the last invocation's exit is unknown: its `wait` failed, or its
+    /// group was killed and no exit was confirmed.
+    pub invocation_note: Option<String>,
     /// "idle" | "running": whether an ad-hoc editor query is in flight.
     pub query: &'static str,
     /// "idle" | "running": whether a selected target's detail is loading.
@@ -54,13 +54,13 @@ pub struct IngestError {
     pub summary: String,
 }
 
-/// Identifier for one run owned by the application.
+/// Identifier for one invocation owned by the application.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-pub struct RunId(String);
+pub struct InvocationId(String);
 
-impl RunId {
-    /// Wraps a run identifier from a persisted run record.
+impl InvocationId {
+    /// Wraps an invocation identifier from a persisted invocation record.
     #[must_use]
     pub fn new(value: String) -> Self {
         Self(value)
@@ -72,19 +72,19 @@ impl RunId {
     }
 }
 
-impl From<String> for RunId {
+impl From<String> for InvocationId {
     fn from(value: String) -> Self {
         Self::new(value)
     }
 }
 
-impl From<&str> for RunId {
+impl From<&str> for InvocationId {
     fn from(value: &str) -> Self {
         Self::new(value.to_owned())
     }
 }
 
-impl Deref for RunId {
+impl Deref for InvocationId {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -92,27 +92,27 @@ impl Deref for RunId {
     }
 }
 
-/// The run holding the run slot. All of its fields exist exactly while a run
-/// owns the slot: releasing the slot drops them together, so a group id can
-/// never outlive the run it belongs to. `pgid` is revoked at reap so a racing
-/// stop can never signal a recycled process group.
-pub struct ActiveRun {
-    /// Persisted identifier of the run in flight.
-    pub id: RunId,
-    /// The PTY the run's process writes through.
+/// The invocation holding the bazel slot. All of its fields exist exactly
+/// while an invocation owns the slot: releasing the slot drops them together,
+/// so a group id can never outlive the invocation it belongs to. `pgid` is
+/// revoked at reap so a racing stop can never signal a recycled process group.
+pub struct ActiveInvocation {
+    /// Persisted identifier of the invocation in flight.
+    pub id: InvocationId,
+    /// The PTY the invocation's process writes through.
     pub terminal: crate::terminal::Control,
     /// The child's process group, for the one stop that signals it; `None`
     /// once the owner has reaped the child.
     pub pgid: Option<i32>,
     /// A stop was accepted for `id`: its group was signalled and a repeated
-    /// stop does nothing. It stays until the run leaves the slot, however it
-    /// ends.
+    /// stop does nothing. It stays until the invocation leaves the slot,
+    /// however it ends.
     pub stopping: bool,
     /// First stop request; the child owner applies its escalation deadlines.
     pub stop_started: Option<std::time::Instant>,
 }
 
-impl ActiveRun {
+impl ActiveInvocation {
     /// A held slot for state tests; its terminal is detached from any pty.
     #[cfg(test)]
     pub fn stub(id: &str, pgid: Option<i32>) -> Self {
@@ -129,7 +129,7 @@ impl ActiveRun {
 /// Read access to the last Console. This outlives process control and is never
 /// used to classify or persist invocation history.
 pub struct ConsoleSession {
-    pub id: RunId,
+    pub id: InvocationId,
     pub workspace: PathBuf,
     /// The capture worker has stopped writing, including its final drain.
     pub finished: bool,
@@ -145,14 +145,15 @@ pub struct CoreState {
     /// The latest target index; swapped atomically per fetch.
     pub snapshot: Option<Arc<TargetIndex>>,
     pub last_error: Option<IngestError>,
-    /// At most one bazel invocation is active: ingest, detail, run, or editor query.
-    /// Busy requests are rejected.
+    /// At most one bazel invocation is active: ingest, detail, invocation, or
+    /// editor query. Busy requests are rejected.
     pub ingest_running: bool,
-    /// The run holding the slot; `None` when no run is in flight.
-    pub run: Option<ActiveRun>,
+    /// The invocation holding the slot; `None` when no invocation is in
+    /// flight.
+    pub active_invocation: Option<ActiveInvocation>,
     pub console: Option<ConsoleSession>,
-    /// Message for the UI about why the last run's exit is unknown.
-    pub run_note: Option<String>,
+    /// Message for the UI about why the last invocation's exit is unknown.
+    pub invocation_note: Option<String>,
     /// Ad-hoc editor query in flight (the "query" DTO field; distinct from
     /// ingest's `bazel query //...` snapshot fetch).
     pub query_running: bool,
@@ -165,12 +166,15 @@ pub struct CoreState {
 impl CoreState {
     /// Whether any bazel invocation holds the serialized slot.
     pub fn bazel_busy(&self) -> bool {
-        self.ingest_running || self.run.is_some() || self.query_running || self.detail_query_running
+        self.ingest_running
+            || self.active_invocation.is_some()
+            || self.query_running
+            || self.detail_query_running
     }
 }
 
 impl CoreState {
-    pub fn console_run(&self) -> Option<&RunId> {
+    pub fn console_invocation(&self) -> Option<&InvocationId> {
         self.console
             .as_ref()
             .filter(|console| self.workspace.as_ref() == Some(&console.workspace))
@@ -180,7 +184,7 @@ impl CoreState {
 
 pub struct Core {
     pub state: Mutex<CoreState>,
-    pub run_finished: Condvar,
+    pub invocation_finished: Condvar,
 }
 
 impl Core {
@@ -196,14 +200,14 @@ impl Core {
                 snapshot: None,
                 last_error: None,
                 ingest_running: false,
-                run: None,
+                active_invocation: None,
                 console: None,
-                run_note: None,
+                invocation_note: None,
                 query_running: false,
                 detail_query_running: false,
                 query_pgid: None,
             }),
-            run_finished: Condvar::new(),
+            invocation_finished: Condvar::new(),
         }
     }
 
@@ -225,10 +229,16 @@ impl Core {
                 .as_ref()
                 .map(|snapshot| snapshot.meta.fetched_at),
             last_error: st.last_error.clone(),
-            running: st.run.as_ref().map(|run| run.id.clone()),
-            console_run: st.console_run().cloned(),
-            stopping: st.run.as_ref().is_some_and(|run| run.stopping),
-            run_note: st.run_note.clone(),
+            active_invocation: st
+                .active_invocation
+                .as_ref()
+                .map(|invocation| invocation.id.clone()),
+            console_invocation: st.console_invocation().cloned(),
+            stopping: st
+                .active_invocation
+                .as_ref()
+                .is_some_and(|invocation| invocation.stopping),
+            invocation_note: st.invocation_note.clone(),
             query: if st.query_running { "running" } else { "idle" },
             detail_query: if st.detail_query_running {
                 "running"
@@ -281,30 +291,30 @@ mod tests {
     }
 
     #[test]
-    fn dto_reports_the_stopping_run_and_its_note() {
+    fn dto_reports_the_stopping_invocation_and_its_note() {
         let core = Core::new();
         let idle = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(idle["running"], serde_json::Value::Null);
+        assert_eq!(idle["activeInvocation"], serde_json::Value::Null);
         assert_eq!(idle["stopping"], false);
-        assert_eq!(idle["runNote"], serde_json::Value::Null);
+        assert_eq!(idle["invocationNote"], serde_json::Value::Null);
 
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun {
+            st.active_invocation = Some(ActiveInvocation {
                 stopping: true,
-                ..ActiveRun::stub("abc", Some(1))
+                ..ActiveInvocation::stub("abc", Some(1))
             });
-            st.run_note = Some("note".to_string());
+            st.invocation_note = Some("note".to_string());
         }
         let json = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(json["running"], "abc");
+        assert_eq!(json["activeInvocation"], "abc");
         assert_eq!(json["stopping"], true);
-        assert_eq!(json["runNote"], "note");
+        assert_eq!(json["invocationNote"], "note");
     }
 
     /// Every way the serialized slot can be held makes `bazel_busy` true.
     #[test]
-    fn bazel_busy_covers_ingest_run_and_query() {
+    fn bazel_busy_covers_ingest_invocation_and_query() {
         let core = Core::new();
         assert!(!core.state.lock().unwrap().bazel_busy());
         {
@@ -312,9 +322,9 @@ mod tests {
             st.ingest_running = true;
             assert!(st.bazel_busy());
             st.ingest_running = false;
-            st.run = Some(ActiveRun::stub("r", None));
+            st.active_invocation = Some(ActiveInvocation::stub("r", None));
             assert!(st.bazel_busy());
-            st.run = None;
+            st.active_invocation = None;
             st.query_running = true;
             assert!(st.bazel_busy());
             st.query_running = false;

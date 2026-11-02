@@ -4,11 +4,11 @@
 //!
 //! Stop is best-effort: SIGINT, then SIGKILL after a grace period. An unknown
 //! exit releases the slot with a note. Only
-//! the currently held run may be signalled; descendants are not supervised.
+//! the currently held invocation may be signalled; descendants are not supervised.
 
-use crate::runargs::{argv, parse_arguments, validate_cmd, validate_target};
-use crate::state::{ActiveRun, ConsoleSession, Core, CoreState};
-use crate::store::{self, RunRecord};
+use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
+use crate::state::{ActiveInvocation, ConsoleSession, Core, CoreState};
+use crate::store::{self, InvocationRecord};
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
@@ -24,10 +24,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-/// Time SIGINT gets to end the run before its group is killed.
+/// Time SIGINT gets to end the invocation before its group is killed.
 const STOP_GRACE: Duration = Duration::from_secs(3);
-/// Time SIGKILL gets to end the run before its exit is called unknown and its
-/// slot is released.
+/// Time SIGKILL gets to end the invocation before its exit is called unknown
+/// and its slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
 /// App exit gives a live child at most `EXIT_GRACE` of polling before SIGKILL.
 /// A reaped child's in-progress save is joined separately.
@@ -37,18 +37,19 @@ const EXIT_POLL: Duration = Duration::from_millis(25);
 /// Shown when the group was killed but no exit was confirmed.
 const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
-/// Start a run in the open workspace and return its record. The run finishes
-/// in the background; target data is refreshed only on request.
+/// Start an invocation in the open workspace and return its record. The
+/// invocation finishes in the background; target data is refreshed only on
+/// request.
 pub fn start(
     app: AppHandle,
     core: Arc<Core>,
     data: &Path,
     cmd: &str,
-    target: &str,
+    pattern: &str,
     arguments: &str,
-) -> Result<RunRecord, String> {
+) -> Result<InvocationRecord, String> {
     validate_cmd(cmd)?;
-    validate_target(target)?;
+    validate_pattern(pattern)?;
     let arguments = parse_arguments(arguments)?;
     let mut st = core.state.lock().expect("application state lock poisoned");
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
@@ -63,11 +64,11 @@ pub fn start(
     // The record exists before bazel does; a failing store prevents the spawn.
     let id = uuid::Uuid::new_v4().to_string();
     let dir = store::reserve_invocation(data, &id).map_err(|e| e.to_string())?;
-    let rec = RunRecord {
+    let rec = InvocationRecord {
         id,
         workspace: None,
         cmd: None,
-        target: None,
+        pattern: None,
         started_at: None,
         finished_at: None,
         exit_code: None,
@@ -75,7 +76,7 @@ pub fn start(
     // Its own process group: a stop reaches bazel and whatever it started.
     let (mut child, terminal, capture) = match crate::terminal::spawn(
         Command::new(&bazel)
-            .args(argv(cmd, target, &arguments, &dir, endpoint, &rec.id))
+            .args(argv(cmd, pattern, &arguments, &dir, endpoint, &rec.id))
             .current_dir(&ws),
         &dir,
     ) {
@@ -85,7 +86,7 @@ pub fn start(
             return Err(format!("failed to spawn {}: {e}", bazel.display()));
         }
     };
-    st.run = Some(ActiveRun {
+    st.active_invocation = Some(ActiveInvocation {
         id: rec.id.clone().into(),
         terminal,
         pgid: Some(child.id() as i32),
@@ -97,13 +98,13 @@ pub fn start(
         workspace: ws,
         finished: false,
     });
-    st.run_note = None;
+    st.invocation_note = None;
     drop(st);
     core.emit(&app);
 
     let id = rec.id.clone();
     thread::spawn(move || {
-        let _slot = RunSlot {
+        let _slot = BazelSlot {
             core: &core,
             id: &id,
             emit: || core.emit(&app),
@@ -126,7 +127,7 @@ pub fn start(
         if apply_reap(&mut st, &id, &exit)
             && let Err(error) = captured
         {
-            st.run_note = Some(format!("Failed to save the terminal output: {error}"));
+            st.invocation_note = Some(format!("Failed to save the terminal output: {error}"));
         }
     });
     Ok(rec)
@@ -160,10 +161,11 @@ fn finish_console(st: &mut CoreState, id: &str) {
     }
 }
 
-/// Stop the run in flight: SIGINT to its process group, SIGKILL after
+/// Stop the invocation in flight: SIGINT to its process group, SIGKILL after
 /// `STOP_GRACE` (3 s) and, if the exit is still unconfirmed `STOP_CONFIRM`
-/// (2 s) later, the slot released with the note. Does nothing when no run is
-/// held or a stop is already in flight, so the slot is never held by a stop.
+/// (2 s) later, the slot released with the note. Does nothing when no
+/// invocation is held or a stop is already in flight, so the slot is never
+/// held by a stop.
 pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
     core.emit(&app);
@@ -173,17 +175,17 @@ pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
 /// The first request sends SIGINT and fixes the deadlines. Only the thread
 /// owning the child can reap or escalate, so a reap cannot race a later signal.
 fn begin_stop(st: &mut CoreState) {
-    let Some(run) = st.run.as_mut() else {
+    let Some(invocation) = st.active_invocation.as_mut() else {
         return;
     };
-    let Some(pgid) = run.pgid.filter(|_| !run.stopping) else {
+    let Some(pgid) = invocation.pgid.filter(|_| !invocation.stopping) else {
         return;
     };
-    run.stopping = true;
-    run.stop_started = Some(Instant::now());
-    st.run_note = None;
-    if let Err(e) = signal_run(st, pgid, Signal::INT) {
-        log::warn!("SIGINT to run group failed: {e}");
+    invocation.stopping = true;
+    invocation.stop_started = Some(Instant::now());
+    st.invocation_note = None;
+    if let Err(e) = signal_invocation(st, pgid, Signal::INT) {
+        log::warn!("SIGINT to invocation group failed: {e}");
     }
 }
 
@@ -201,12 +203,12 @@ fn observe_process(
     loop {
         let mut st = core.state.lock().expect("application state lock poisoned");
         if !still_held(&st, id) {
-            return Err(io::Error::other("run no longer owned"));
+            return Err(io::Error::other("invocation no longer owned"));
         }
         match poll() {
             Ok(Some(code)) => {
-                if let Some(run) = st.run.as_mut() {
-                    run.pgid = None;
+                if let Some(invocation) = st.active_invocation.as_mut() {
+                    invocation.pgid = None;
                 }
                 return Ok(code);
             }
@@ -214,20 +216,24 @@ fn observe_process(
             Err(error) => {
                 // A failed wait can mean another reaper already consumed the
                 // child. Its former PID is no longer safe to signal.
-                if let Some(run) = st.run.as_mut() {
-                    run.pgid = None;
+                if let Some(invocation) = st.active_invocation.as_mut() {
+                    invocation.pgid = None;
                 }
                 return Err(error);
             }
         }
-        if let Some(started) = st.run.as_ref().and_then(|run| run.stop_started) {
+        if let Some(started) = st
+            .active_invocation
+            .as_ref()
+            .and_then(|invocation| invocation.stop_started)
+        {
             if started.elapsed() >= grace && !killed {
-                kill_run(&st);
+                kill_invocation(&st);
                 killed = true;
             }
             if started.elapsed() >= grace + confirm {
-                if let Some(run) = st.run.as_mut() {
-                    run.pgid = None;
+                if let Some(invocation) = st.active_invocation.as_mut() {
+                    invocation.pgid = None;
                 }
                 return Err(io::Error::new(io::ErrorKind::TimedOut, STOP_UNCONFIRMED));
             }
@@ -239,12 +245,12 @@ fn observe_process(
 
 /// A panic in observation or saving must release the slot and wake app exit.
 /// Normal completion publishes after the slot is released.
-struct RunSlot<'a, F: Fn()> {
+struct BazelSlot<'a, F: Fn()> {
     core: &'a Core,
     id: &'a str,
     emit: F,
 }
-impl<F: Fn()> Drop for RunSlot<'_, F> {
+impl<F: Fn()> Drop for BazelSlot<'_, F> {
     fn drop(&mut self) {
         let mut st = self
             .core
@@ -254,12 +260,12 @@ impl<F: Fn()> Drop for RunSlot<'_, F> {
         finish_console(&mut st, self.id);
         let held = still_held(&st, self.id);
         if held {
-            clear_run(&mut st);
+            clear_invocation(&mut st);
         }
         if held && thread::panicking() {
-            st.run_note = Some("Failed to finish processing the run result".into());
+            st.invocation_note = Some("Failed to finish processing the invocation result".into());
         }
-        self.core.run_finished.notify_all();
+        self.core.invocation_finished.notify_all();
         drop(st);
         // Avoid a second panic from an event emission while unwinding.
         if !thread::panicking() {
@@ -281,7 +287,9 @@ pub fn exit_stop(core: &Core) {
         if let Some(pgid) = st.query_pgid {
             let _ = signal_group(pgid, Signal::KILL);
         }
-        st.run.as_ref().map(|run| run.id.clone())
+        st.active_invocation
+            .as_ref()
+            .map(|invocation| invocation.id.clone())
     };
     let Some(id) = id else {
         return;
@@ -292,12 +300,16 @@ pub fn exit_stop(core: &Core) {
         if !still_held(&st, &id) {
             return;
         }
-        if st.run.as_ref().is_some_and(|run| run.pgid.is_none()) {
+        if st
+            .active_invocation
+            .as_ref()
+            .is_some_and(|invocation| invocation.pgid.is_none())
+        {
             wait_for_save(core, st, &id);
             return;
         }
         if Instant::now() >= deadline {
-            kill_run(&st);
+            kill_invocation(&st);
             return;
         }
         drop(st);
@@ -308,41 +320,47 @@ pub fn exit_stop(core: &Core) {
 fn wait_for_save(core: &Core, mut state: std::sync::MutexGuard<'_, CoreState>, id: &str) {
     while still_held(&state, id) {
         state = core
-            .run_finished
+            .invocation_finished
             .wait(state)
             .unwrap_or_else(|error| error.into_inner());
     }
 }
 
-fn kill_run(state: &CoreState) {
-    if let Some(pgid) = state.run.as_ref().and_then(|run| run.pgid)
-        && let Err(error) = signal_run(state, pgid, Signal::KILL)
+fn kill_invocation(state: &CoreState) {
+    if let Some(pgid) = state
+        .active_invocation
+        .as_ref()
+        .and_then(|invocation| invocation.pgid)
+        && let Err(error) = signal_invocation(state, pgid, Signal::KILL)
     {
-        log::warn!("SIGKILL to run group failed: {error}");
+        log::warn!("SIGKILL to invocation group failed: {error}");
     }
 }
 
-/// Whether `id` is still the run in flight: only that run's group may be
-/// signalled and only its slot may be released.
+/// Whether `id` is still the invocation in flight: only that invocation's
+/// group may be signalled and only its slot may be released.
 fn still_held(st: &CoreState, id: &str) -> bool {
-    st.run.as_ref().is_some_and(|run| run.id.as_str() == id)
+    st.active_invocation
+        .as_ref()
+        .is_some_and(|invocation| invocation.id.as_str() == id)
 }
 
-/// Give up on the run `id` after an unconfirmed kill: release its slot and put
-/// up the note that says the exit is unknown. Returns whether it did; a
-/// successor run in the slot is never touched.
+/// Give up on the invocation `id` after an unconfirmed kill: release its slot
+/// and put up the note that says the exit is unknown. Returns whether it did;
+/// a successor invocation in the slot is never touched.
 fn give_up(st: &mut CoreState, id: &str) -> bool {
     if !still_held(st, id) {
         return false;
     }
-    clear_run(st);
-    st.run_note = Some(STOP_UNCONFIRMED.to_string());
+    clear_invocation(st);
+    st.invocation_note = Some(STOP_UNCONFIRMED.to_string());
     true
 }
 
 /// Apply the reap of `id` to the state and return whether this reap belongs to
-/// the run still holding the slot. A `wait` error leaves the process exit
-/// unknown, with the reason in the note. A successor run is never touched.
+/// the invocation still holding the slot. A `wait` error leaves the process
+/// exit unknown, with the reason in the note. A successor invocation is never
+/// touched.
 fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool {
     if !still_held(st, id) {
         return false;
@@ -353,42 +371,44 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool
     {
         return give_up(st, id);
     }
-    clear_run(st);
-    st.run_note = match exit {
+    clear_invocation(st);
+    st.invocation_note = match exit {
         Ok(_) => None,
         Err(e) => Some(format!("Could not confirm the exit: {e}")),
     };
     true
 }
 
-/// Clear the run slot: nothing is in flight, nothing is ours to signal. The
-/// note is the caller's: a recorded exit clears it, an unknown one sets it.
-fn clear_run(st: &mut CoreState) {
-    st.run = None;
+/// Clear the invocation slot: nothing is in flight, nothing is ours to
+/// signal. The note is the caller's: a recorded exit clears it, an unknown one
+/// sets it.
+fn clear_invocation(st: &mut CoreState) {
+    st.active_invocation = None;
 }
 
-/// A run's process group must not address the caller's group (0) or all
-/// signalable processes (1 when negated by kill_process_group).
+/// An invocation's process group must not address the caller's group (0) or
+/// all signalable processes (1 when negated by kill_process_group).
 pub(crate) fn process_group(pgid: i32) -> io::Result<Pid> {
     if pgid <= 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "invalid run process group",
+            "invalid invocation process group",
         ));
     }
-    Ok(Pid::from_raw(pgid).expect("run process group is positive"))
+    Ok(Pid::from_raw(pgid).expect("invocation process group is positive"))
 }
 
-/// Signal the run's session group, or its terminal's foreground job group.
+/// Signal the invocation's session group, or its terminal's foreground job
+/// group.
 pub(crate) fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
     Ok(process::kill_process_group(process_group(pgid)?, signal)?)
 }
 
-fn signal_run(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()> {
+fn signal_invocation(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()> {
     if let Some(foreground) = st
-        .run
+        .active_invocation
         .as_ref()
-        .and_then(|run| run.terminal.foreground_group())
+        .and_then(|invocation| invocation.terminal.foreground_group())
         && foreground != pgid
     {
         let _ = signal_group(foreground, signal);
@@ -401,23 +421,35 @@ mod tests {
     use super::*;
 
     fn held_id(st: &CoreState) -> Option<&str> {
-        st.run.as_ref().map(|run| run.id.as_str())
+        st.active_invocation
+            .as_ref()
+            .map(|invocation| invocation.id.as_str())
     }
 
     fn held_pgid(st: &CoreState) -> Option<i32> {
-        st.run.as_ref().and_then(|run| run.pgid)
+        st.active_invocation
+            .as_ref()
+            .and_then(|invocation| invocation.pgid)
     }
 
     fn is_stopping(st: &CoreState) -> bool {
-        st.run.as_ref().is_some_and(|run| run.stopping)
+        st.active_invocation
+            .as_ref()
+            .is_some_and(|invocation| invocation.stopping)
     }
 
-    /// The state `start` leaves around a spawned child: its run holds the
-    /// slot and a console session exists under the same id.
-    fn hold_run(core: &Core, ws: &Path, id: &str, terminal: crate::terminal::Control, pgid: i32) {
+    /// The state `start` leaves around a spawned child: its invocation holds
+    /// the slot and a console session exists under the same id.
+    fn hold_invocation(
+        core: &Core,
+        ws: &Path,
+        id: &str,
+        terminal: crate::terminal::Control,
+        pgid: i32,
+    ) {
         let mut state = core.state.lock().unwrap();
         state.workspace = Some(ws.to_path_buf());
-        state.run = Some(ActiveRun {
+        state.active_invocation = Some(ActiveInvocation {
             id: id.into(),
             terminal,
             pgid: Some(pgid),
@@ -438,7 +470,8 @@ mod tests {
 
     impl LogDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("zeal-run-log-{}", uuid::Uuid::new_v4()));
+            let path =
+                std::env::temp_dir().join(format!("zeal-invocation-log-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             fs::write(path.join("terminal.log"), b"").unwrap();
             Self(path)
@@ -517,19 +550,19 @@ mod tests {
     }
 
     #[test]
-    fn argv_has_the_command_one_target_and_the_observation_flags() {
-        let dir = Path::new("/data/runs/abc");
-        for (cmd, target) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
-            let args = argv(cmd, target, &[], dir, "grpc://127.0.0.1:12345", "abc");
+    fn argv_has_the_command_one_pattern_and_the_observation_flags() {
+        let dir = Path::new("/data/invocations/abc");
+        for (cmd, pattern) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
+            let args = argv(cmd, pattern, &[], dir, "grpc://127.0.0.1:12345", "abc");
             assert_eq!(args[0], cmd);
-            assert_eq!(args.last().unwrap(), target);
+            assert_eq!(args.last().unwrap(), pattern);
             assert_eq!(
                 &args[1..args.len() - 1],
                 [
                     "--bes_backend=grpc://127.0.0.1:12345",
                     "--bes_proxy=",
                     "--bes_upload_mode=wait_for_upload_complete",
-                    "--profile=/data/runs/abc/profile.gz",
+                    "--profile=/data/invocations/abc/profile.gz",
                     "--experimental_profile_include_primary_output",
                     "--noslim_profile",
                     "--tool_tag=zeal",
@@ -574,7 +607,7 @@ mod tests {
         )
         .unwrap();
         let core = Core::new();
-        hold_run(&core, &ws, &id, terminal, child.id() as i32);
+        hold_invocation(&core, &ws, &id, terminal, child.id() as i32);
         let exit = Ok(child.wait().unwrap().code().unwrap());
         capture.finish().unwrap();
         {
@@ -586,7 +619,7 @@ mod tests {
         }
         assert!(store::read_record(&data, &ws, &id).is_err());
         assert!(crate::terminal::resize(&core, &id, 80, 24).is_ok());
-        assert_eq!(core.dto().console_run.as_deref(), Some(id.as_str()));
+        assert_eq!(core.dto().console_invocation.as_deref(), Some(id.as_str()));
         assert_saved_console(&data, &core, &id, "startup failed\r\n");
     }
 
@@ -657,7 +690,7 @@ mod tests {
                 server,
             }
         }
-        fn command(&self, cmd: &str, target: &str, dir: &Path, id: &str) -> Command {
+        fn command(&self, cmd: &str, pattern: &str, dir: &Path, id: &str) -> Command {
             let mut command = Command::new(&self.bazel);
             command
                 .current_dir(&self.ws)
@@ -666,7 +699,7 @@ mod tests {
                     "--output_user_root={}",
                     self.temp.0.join("bazel").display()
                 ))
-                .args(argv(cmd, target, &[], dir, &self.endpoint, id))
+                .args(argv(cmd, pattern, &[], dir, &self.endpoint, id))
                 .args([
                     "--enable_bzlmod=false",
                     "--enable_workspace=true",
@@ -680,13 +713,13 @@ mod tests {
         }
     }
 
-    async fn check_gui_run(fixture: &GuiBazelFixture, cmd: &'static str, target: &str) {
+    async fn check_gui_run(fixture: &GuiBazelFixture, cmd: &'static str, pattern: &str) {
         let id = uuid::Uuid::new_v4().to_string();
         let dir = store::reserve_invocation(&fixture.data, &id).unwrap();
-        let mut command = fixture.command(cmd, target, &dir, &id);
+        let mut command = fixture.command(cmd, pattern, &dir, &id);
         let (child, terminal, capture) = crate::terminal::spawn(&mut command, &dir).unwrap();
         let core = Arc::new(Core::new());
-        hold_run(&core, &fixture.ws, &id, terminal, child.id() as i32);
+        hold_invocation(&core, &fixture.ws, &id, terminal, child.id() as i32);
         let (release, input) = mpsc::sync_channel(1);
         let owner_core = core.clone();
         let owner_id = id.clone();
@@ -712,17 +745,17 @@ mod tests {
             .unwrap();
         let output = fs::read_to_string(dir.join("terminal.log")).unwrap();
         assert_eq!(code, if cmd == "run" { 23 } else { 0 }, "{cmd}: {output}");
-        assert_gui_record(fixture, cmd, target, &id);
-        assert!(core.state.lock().unwrap().run.is_none());
+        assert_gui_record(fixture, cmd, pattern, &id);
+        assert!(core.state.lock().unwrap().active_invocation.is_none());
         assert_saved_console(&fixture.data, &core, &id, &output);
     }
 
-    /// The BES-recorded invocation: the build's own command, target and exit,
-    /// plus the artifacts the GUI needs to reopen the run.
-    fn assert_gui_record(fixture: &GuiBazelFixture, cmd: &str, target: &str, id: &str) {
+    /// The BES-recorded invocation: the build's own command, pattern and
+    /// exit, plus the artifacts the GUI needs to reopen the invocation.
+    fn assert_gui_record(fixture: &GuiBazelFixture, cmd: &str, pattern: &str, id: &str) {
         let record = store::read_record(&fixture.data, &fixture.ws, id).unwrap();
         assert_eq!(record.cmd.as_deref(), Some(cmd));
-        assert_eq!(record.target.as_deref(), Some(target));
+        assert_eq!(record.pattern.as_deref(), Some(pattern));
         assert_eq!(
             record.exit_code,
             Some(0),
@@ -821,8 +854,8 @@ mod tests {
     }
 
     #[test]
-    fn target_validation_accepts_labels_and_patterns() {
-        for target in [
+    fn pattern_validation_accepts_labels_and_patterns() {
+        for pattern in [
             "//app/lib:parser",
             "//...",
             ":all",
@@ -830,7 +863,7 @@ mod tests {
             "@maven//:guava",
             "//app/...",
             // Shell metacharacters are ordinary label characters here: nothing
-            // splits or evaluates the target, so it reaches bazel verbatim as
+            // splits or evaluates the pattern, so it reaches bazel verbatim as
             // one argument.
             "//app:tar;get",
             "//a:b$(id)",
@@ -843,26 +876,26 @@ mod tests {
             "//a:\u{feff}b",
             "//a:\u{ad}b",
         ] {
-            assert!(validate_target(target).is_ok(), "{target:?}");
+            assert!(validate_pattern(pattern).is_ok(), "{pattern:?}");
             assert_eq!(
                 argv(
                     "build",
-                    target,
+                    pattern,
                     &[],
-                    Path::new("/data/runs/abc"),
+                    Path::new("/data/invocations/abc"),
                     "grpc://127.0.0.1:12345",
                     "abc",
                 )
                 .last()
                 .unwrap(),
-                target
+                pattern
             );
         }
     }
 
     #[test]
-    fn target_validation_rejects_empty_whitespace_control_and_leading_dash() {
-        for target in [
+    fn pattern_validation_rejects_empty_whitespace_control_and_leading_dash() {
+        for pattern in [
             "",
             " ",
             "//a:b ",
@@ -879,10 +912,10 @@ mod tests {
             "\u{9f}",
             "\u{2028}",
         ] {
-            assert!(validate_target(target).is_err(), "{target:?}");
+            assert!(validate_pattern(pattern).is_err(), "{pattern:?}");
         }
         // One message for both rules, and it does not echo the input.
-        let msg = validate_target("a b").unwrap_err();
+        let msg = validate_pattern("a b").unwrap_err();
         assert!(msg.contains("whitespace"), "{msg}");
         assert!(msg.contains("'-'"), "{msg}");
     }
@@ -897,94 +930,104 @@ mod tests {
         }
     }
 
-    /// The escalation's release: the run leaves the slot with the note that
-    /// says the exit is unknown, and the stopping flag goes with it.
+    /// The escalation's release: the invocation leaves the slot with the note
+    /// that says the exit is unknown, and the stopping flag goes with it.
     #[test]
-    fn give_up_releases_the_run_and_says_the_exit_is_unknown() {
+    fn give_up_releases_the_invocation_and_says_the_exit_is_unknown() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some(ActiveRun {
+        st.active_invocation = Some(ActiveInvocation {
             stopping: true,
-            ..ActiveRun::stub("abc", Some(42))
+            ..ActiveInvocation::stub("abc", Some(42))
         });
-        st.run_note = Some("old".to_string());
+        st.invocation_note = Some("old".to_string());
 
         assert!(still_held(&st, "abc"));
         assert!(give_up(&mut st, "abc"));
-        assert!(st.run.is_none());
-        assert!(st.run.is_none(), "the group is no longer ours to signal");
+        assert!(st.active_invocation.is_none());
+        assert!(
+            st.active_invocation.is_none(),
+            "the group is no longer ours to signal"
+        );
         assert!(!is_stopping(&st));
-        assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
+        assert_eq!(st.invocation_note.as_deref(), Some(STOP_UNCONFIRMED));
     }
 
-    /// A successor run is never touched: an escalation that outlived its run
-    /// must not release the run that took the slot.
+    /// A successor invocation is never touched: an escalation that outlived
+    /// its invocation must not release the invocation that took the slot.
     #[test]
-    fn give_up_never_touches_a_successor_run() {
+    fn give_up_never_touches_a_successor_invocation() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some(ActiveRun::stub("def", Some(7)));
-        st.run_note = Some("old".to_string());
+        st.active_invocation = Some(ActiveInvocation::stub("def", Some(7)));
+        st.invocation_note = Some("old".to_string());
 
         assert!(!still_held(&st, "abc"));
         assert!(!give_up(&mut st, "abc"));
         assert_eq!(held_id(&st), Some("def"));
         assert_eq!(held_pgid(&st), Some(7));
-        assert_eq!(st.run_note.as_deref(), Some("old"));
+        assert_eq!(st.invocation_note.as_deref(), Some("old"));
     }
 
-    /// A reap of the run the slot still holds: a recorded exit clears the
-    /// slot and the note.
+    /// A reap of the invocation the slot still holds: a recorded exit
+    /// clears the slot and the note.
     #[test]
-    fn apply_reap_clears_the_held_run_and_its_note() {
+    fn apply_reap_clears_the_held_invocation_and_its_note() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some(ActiveRun {
+        st.active_invocation = Some(ActiveInvocation {
             stopping: true,
-            ..ActiveRun::stub("abc", Some(42))
+            ..ActiveInvocation::stub("abc", Some(42))
         });
-        st.run_note = Some("old".to_string());
+        st.invocation_note = Some("old".to_string());
 
         assert!(apply_reap(&mut st, "abc", &Ok(3)));
-        assert!(st.run.is_none());
-        assert!(st.run.is_none());
+        assert!(st.active_invocation.is_none());
+        assert!(st.active_invocation.is_none());
         assert!(!is_stopping(&st));
-        assert_eq!(st.run_note, None, "a recorded exit clears the note");
+        assert_eq!(st.invocation_note, None, "a recorded exit clears the note");
     }
 
-    /// A wait error still releases the held run's slot and leaves its reason
-    /// in the note.
+    /// A wait error still releases the held invocation's slot and leaves
+    /// its reason in the note.
     #[test]
     fn apply_reap_notes_the_reason_for_an_unknown_exit() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some(ActiveRun::stub("abc", Some(42)));
+        st.active_invocation = Some(ActiveInvocation::stub("abc", Some(42)));
 
         let why = std::io::Error::from_raw_os_error(libc::EINTR);
         assert!(apply_reap(&mut st, "abc", &Err(why)));
-        assert!(st.run.is_none(), "an unknown exit still releases the slot");
-        let note = st.run_note.clone().expect("the reason is shown");
+        assert!(
+            st.active_invocation.is_none(),
+            "an unknown exit still releases the slot"
+        );
+        let note = st.invocation_note.clone().expect("the reason is shown");
         assert!(note.starts_with("Could not confirm the exit:"), "{note}");
     }
 
-    /// A reap after the stop gave up: the slot is no longer this run's, so its
-    /// give-up note stands. A successor run is
+    /// A reap after the stop gave up: the slot is no longer this invocation's,
+    /// so its give-up note stands. A successor invocation is
     /// not ours to reap either.
     #[test]
     fn apply_reap_after_give_up_writes_nothing() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some(ActiveRun {
+        st.active_invocation = Some(ActiveInvocation {
             stopping: true,
-            ..ActiveRun::stub("abc", Some(42))
+            ..ActiveInvocation::stub("abc", Some(42))
         });
         assert!(give_up(&mut st, "abc"));
 
         assert!(!apply_reap(&mut st, "abc", &Ok(0)));
-        assert!(st.run.is_none());
-        assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED), "untouched");
+        assert!(st.active_invocation.is_none());
+        assert_eq!(
+            st.invocation_note.as_deref(),
+            Some(STOP_UNCONFIRMED),
+            "untouched"
+        );
 
-        st.run = Some(ActiveRun::stub("def", Some(7)));
+        st.active_invocation = Some(ActiveInvocation::stub("def", Some(7)));
         assert!(!apply_reap(&mut st, "abc", &Ok(0)));
         assert_eq!(held_id(&st), Some("def"));
     }
@@ -1006,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn run_process_groups_exclude_broadcast_and_invalid_ids() {
+    fn invocation_process_groups_exclude_broadcast_and_invalid_ids() {
         assert_eq!(
             process_group(0).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
@@ -1094,11 +1137,11 @@ mod tests {
             .unwrap();
         assert_eq!(ready.trim(), "ready");
 
-        // Exactly what `start` leaves for a live run.
+        // Exactly what `start` leaves for a live invocation.
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("abc", Some(pgid)));
+            st.active_invocation = Some(ActiveInvocation::stub("abc", Some(pgid)));
         }
 
         let started = Instant::now();
@@ -1138,12 +1181,12 @@ mod tests {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("run", Some(pgid)));
+            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(pgid)));
             begin_stop(&mut st);
         }
         let exit = observe_process(
             &core,
-            "run",
+            "invocation",
             || {
                 child
                     .try_wait()
@@ -1161,12 +1204,12 @@ mod tests {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
+            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
         }
         let started = Instant::now();
         let error = observe_process(
             &core,
-            "run",
+            "invocation",
             || Err(io::Error::from_raw_os_error(libc::ECHILD)),
             Duration::ZERO,
             Duration::ZERO,
@@ -1177,29 +1220,36 @@ mod tests {
         let mut st = core.state.lock().unwrap();
         assert!(held_pgid(&st).is_none());
         assert!(!is_stopping(&st));
-        assert!(apply_reap(&mut st, "run", &Err(error)));
-        assert!(st.run.is_none());
+        assert!(apply_reap(&mut st, "invocation", &Err(error)));
+        assert!(st.active_invocation.is_none());
         assert!(
-            st.run_note
+            st.invocation_note
                 .as_ref()
                 .unwrap()
                 .contains("Could not confirm the exit")
         );
     }
     #[test]
-    fn reap_revokes_signal_ownership_before_the_run_slot_is_released() {
+    fn reap_revokes_signal_ownership_before_the_invocation_slot_is_released() {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
+            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
         }
         assert_eq!(
-            observe_process(&core, "run", || Ok(Some(7)), STOP_GRACE, STOP_CONFIRM).unwrap(),
+            observe_process(
+                &core,
+                "invocation",
+                || Ok(Some(7)),
+                STOP_GRACE,
+                STOP_CONFIRM
+            )
+            .unwrap(),
             7
         );
         let mut st = core.state.lock().unwrap();
         begin_stop(&mut st);
-        assert_eq!(held_id(&st), Some("run"));
+        assert_eq!(held_id(&st), Some("invocation"));
         assert!(held_pgid(&st).is_none());
         assert!(!is_stopping(&st));
     }
@@ -1207,18 +1257,26 @@ mod tests {
     fn repeated_stop_does_not_extend_deadlines() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
+        st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
         begin_stop(&mut st);
-        let first = st.run.as_ref().and_then(|run| run.stop_started);
+        let first = st
+            .active_invocation
+            .as_ref()
+            .and_then(|invocation| invocation.stop_started);
         begin_stop(&mut st);
-        assert_eq!(st.run.as_ref().and_then(|run| run.stop_started), first);
+        assert_eq!(
+            st.active_invocation
+                .as_ref()
+                .and_then(|invocation| invocation.stop_started),
+            first
+        );
     }
     #[test]
     fn old_owner_never_polls_or_signals_a_successor() {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("next", Some(i32::MAX)));
+            st.active_invocation = Some(ActiveInvocation::stub("next", Some(i32::MAX)));
         }
         assert!(
             observe_process(
@@ -1235,28 +1293,29 @@ mod tests {
         assert_eq!(held_pgid(&st), Some(i32::MAX));
     }
     #[test]
-    fn panic_releases_the_run_slot_and_wakes_exit() {
+    fn panic_releases_the_invocation_slot_and_wakes_exit() {
         let core = Arc::new(Core::new());
-        core.state.lock().unwrap().run = Some(ActiveRun::stub("run", None));
+        core.state.lock().unwrap().active_invocation =
+            Some(ActiveInvocation::stub("invocation", None));
         let exiting_core = core.clone();
         let exiting = thread::spawn(move || exit_stop(&exiting_core));
         let owning_core = core.clone();
         let owner = thread::spawn(move || {
-            let _slot = RunSlot {
+            let _slot = BazelSlot {
                 core: &owning_core,
-                id: "run",
+                id: "invocation",
                 emit: || (),
             };
             panic!("injected save panic");
         });
         assert!(owner.join().is_err());
         exiting.join().unwrap();
-        assert!(core.state.lock().unwrap().run.is_none());
+        assert!(core.state.lock().unwrap().active_invocation.is_none());
         assert!(
             core.state
                 .lock()
                 .unwrap()
-                .run_note
+                .invocation_note
                 .as_ref()
                 .unwrap()
                 .contains("finish processing")
@@ -1267,7 +1326,7 @@ mod tests {
         let core = Arc::new(Core::new());
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub("run", Some(i32::MAX)));
+            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
         }
         let (polling_tx, polling_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -1278,7 +1337,7 @@ mod tests {
             Ok(Some(0))
         };
         let owner = thread::spawn(move || {
-            observe_process(&owner_core, "run", poll, STOP_GRACE, STOP_CONFIRM)
+            observe_process(&owner_core, "invocation", poll, STOP_GRACE, STOP_CONFIRM)
         });
         polling_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let (stopping_tx, stopping_rx) = mpsc::sync_channel(1);
@@ -1296,16 +1355,17 @@ mod tests {
         assert!(!is_stopping(&st));
     }
     #[test]
-    fn app_exit_waits_for_a_reaped_runs_save_and_never_signals_it() {
+    fn app_exit_waits_for_a_reaped_invocations_save_and_never_signals_it() {
         let core = Arc::new(Core::new());
-        core.state.lock().unwrap().run = Some(ActiveRun::stub("run", None));
+        core.state.lock().unwrap().active_invocation =
+            Some(ActiveInvocation::stub("invocation", None));
         let (finish_tx, finish_rx) = mpsc::sync_channel(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let finishing_core = core.clone();
         let finishing = thread::spawn(move || {
-            let _slot = RunSlot {
+            let _slot = BazelSlot {
                 core: &finishing_core,
-                id: "run",
+                id: "invocation",
                 emit: || (),
             };
             ready_tx.send(()).unwrap();
@@ -1327,16 +1387,16 @@ mod tests {
         finishing.join().unwrap();
         exiting.join().unwrap();
         let st = core.state.lock().unwrap();
-        assert!(st.run.is_none());
+        assert!(st.active_invocation.is_none());
         assert!(!is_stopping(&st));
         assert!(held_pgid(&st).is_none());
     }
-    /// Stop a stubbed run and observe it with the deadlines already lapsed:
-    /// the owner reports the kill unconfirmed on its first poll.
+    /// Stop a stubbed invocation and observe it with the deadlines already
+    /// lapsed: the owner reports the kill unconfirmed on its first poll.
     fn unconfirmed_exit(core: &Core, id: &str) -> io::Result<i32> {
         {
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun::stub(id, Some(i32::MAX)));
+            st.active_invocation = Some(ActiveInvocation::stub(id, Some(i32::MAX)));
             begin_stop(&mut st);
         }
         observe_process(core, id, || Ok(None), Duration::ZERO, Duration::ZERO)
@@ -1345,23 +1405,23 @@ mod tests {
     #[test]
     fn unconfirmed_kill_releases_the_slot_with_the_unknown_exit_note() {
         let core = Core::new();
-        let exit = unconfirmed_exit(&core, "run");
+        let exit = unconfirmed_exit(&core, "invocation");
         assert_eq!(exit.as_ref().unwrap_err().kind(), io::ErrorKind::TimedOut);
         let mut st = core.state.lock().unwrap();
         assert!(held_pgid(&st).is_none());
-        assert!(apply_reap(&mut st, "run", &exit));
-        assert!(st.run.is_none());
-        assert_eq!(st.run_note.as_deref(), Some(STOP_UNCONFIRMED));
+        assert!(apply_reap(&mut st, "invocation", &exit));
+        assert!(st.active_invocation.is_none());
+        assert_eq!(st.invocation_note.as_deref(), Some(STOP_UNCONFIRMED));
     }
 
     #[test]
     fn an_expired_reap_never_releases_a_successors_slot() {
         let core = Core::new();
-        let exit = unconfirmed_exit(&core, "run");
+        let exit = unconfirmed_exit(&core, "invocation");
         let mut st = core.state.lock().unwrap();
-        assert!(apply_reap(&mut st, "run", &exit));
-        st.run = Some(ActiveRun::stub("next", Some(i32::MAX)));
-        assert!(!apply_reap(&mut st, "run", &exit));
+        assert!(apply_reap(&mut st, "invocation", &exit));
+        st.active_invocation = Some(ActiveInvocation::stub("next", Some(i32::MAX)));
+        assert!(!apply_reap(&mut st, "invocation", &exit));
         assert_eq!(held_id(&st), Some("next"));
         assert_eq!(held_pgid(&st), Some(i32::MAX));
     }

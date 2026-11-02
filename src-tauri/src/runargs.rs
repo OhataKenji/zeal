@@ -1,6 +1,6 @@
-//! The bazel command line Zeal assembles for one run: which commands the
-//! composer may send, which target strings are safe to pass verbatim, and
-//! the observation flags every run carries.
+//! The bazel command line Zeal assembles for one invocation: which commands
+//! the composer may send, which target strings are safe to pass verbatim, and
+//! the observation flags every invocation carries.
 //!
 //! The request rules are deliberately tiny and pure so they can mirror the
 //! UI's `targetError` exactly — the two validations must stay in lockstep.
@@ -11,7 +11,7 @@ use std::path::Path;
 const COMMANDS: [&str; 3] = ["build", "test", "run"];
 
 /// Parse shell-style words, without executing expansions or operators.
-/// Reject malformed input before reserving a run or starting Bazel.
+/// Reject malformed input before reserving an invocation or starting Bazel.
 pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
     if input.contains('\0') {
         return Err("Arguments must not contain NUL characters".to_string());
@@ -24,7 +24,7 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
 /// without any Zeal flags appended to it. User options retain Bazel precedence.
 pub fn argv(
     cmd: &str,
-    target: &str,
+    pattern: &str,
     arguments: &[String],
     dir: &Path,
     endpoint: &str,
@@ -42,7 +42,7 @@ pub fn argv(
         "--color=yes".to_string(),
         "--curses=no".to_string(),
         format!("--invocation_id={id}"),
-        target.to_string(),
+        pattern.to_string(),
     ];
     args.extend_from_slice(arguments);
     args
@@ -57,23 +57,23 @@ pub fn validate_cmd(cmd: &str) -> Result<(), String> {
     }
 }
 
-/// The target is passed to bazel as one `Command::arg`: nothing is split,
-/// quoted or escaped, so whitespace, control characters and a leading `-` are
-/// rejected instead of interpreted. Patterns such as `//...` or `:all` are
-/// bazel's business. The message names both rules, without echoing the input,
-/// which may hold control characters; it must stay in step with the UI's
-/// `targetError`. That rule — Unicode White_Space plus Cc — is what
+/// The target pattern is passed to bazel as one `Command::arg`: nothing is
+/// split, quoted or escaped, so whitespace, control characters and a leading
+/// `-` are rejected instead of interpreted. Patterns such as `//...` or `:all`
+/// are bazel's business. The message names both rules, without echoing the
+/// input, which may hold control characters; it must stay in step with the
+/// UI's `targetError`. That rule — Unicode White_Space plus Cc — is what
 /// `char::is_whitespace` and `char::is_control` test here, and the TS regexp
 /// `/[\p{White_Space}\p{Cc}]/u` is its exact counterpart.
-pub fn validate_target(target: &str) -> Result<(), String> {
-    let ok = !target.is_empty()
-        && !target.starts_with('-')
-        && !target.chars().any(|c| c.is_whitespace() || c.is_control());
+pub fn validate_pattern(pattern: &str) -> Result<(), String> {
+    let ok = !pattern.is_empty()
+        && !pattern.starts_with('-')
+        && !pattern.chars().any(|c| c.is_whitespace() || c.is_control());
     if ok {
         Ok(())
     } else {
         Err(
-            "target must be one label or pattern, without whitespace or control \
+            "pattern must be one label or pattern, without whitespace or control \
              characters, and must not start with '-'"
                 .to_string(),
         )
@@ -151,13 +151,13 @@ mod tests {
             "run",
             "//:app",
             &arguments,
-            Path::new("/data/run"),
+            Path::new("/data/invocations/app"),
             "grpc://127.0.0.1:12345",
             "id",
         );
         let target = args.iter().position(|arg| arg == "//:app").unwrap();
         assert!(args[..target].contains(&"--invocation_id=id".to_string()));
-        assert!(args[..target].contains(&"--profile=/data/run/profile.gz".to_string()));
+        assert!(args[..target].contains(&"--profile=/data/invocations/app/profile.gz".to_string()));
         assert_eq!(&args[target + 1..], arguments);
     }
 
@@ -168,7 +168,7 @@ mod tests {
             "test",
             "//:test",
             &arguments,
-            Path::new("/data/run"),
+            Path::new("/data/invocations/test"),
             "grpc://127.0.0.1:12345",
             "id",
         );

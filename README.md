@@ -2,7 +2,7 @@
 
 A local first Bazel GUI client.
 
-![Zeal target explorer showing source files, dependencies, and run history](docs/screenshots/overview.jpg)
+![Zeal target explorer showing source files, dependencies, and invocation history](docs/screenshots/overview.jpg)
 
 ## Getting Started
 
@@ -22,21 +22,21 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
 ## Features
 
-### Fuzzy Search Target and Run
+### Find a Target and Invoke It
 
 Find Bazel targets by fuzzy-searching their full labels, then choose `build`, `test`, or `run`.
 
-### Run Page
+### Invocation Page
 
-Inspect a run's logs, target results, details, and per-thread timing trace from the history.
+Inspect an invocation's logs, target results, details, and per-thread timing trace from the history.
 
-![Run Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
+![Invocation Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
 
 ### Analytics Page
 
-Filter local build and test history from the GUI and recorded terminal runs to compare run counts, outcomes, total run time, and p50/p95 durations.
+Filter local build and test history from the GUI and recorded terminal invocations to compare invocation counts, outcomes, total invocation time, and p50/p95 durations.
 
-![Analytics Page showing date filters and daily run counts by outcome](docs/screenshots/analytics-page.jpg)
+![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
 
 ## Checks
 
@@ -53,7 +53,7 @@ All of the above run in CI (`.github/workflows/`).
 
 See [docs/prd.md](docs/prd.md) and [docs/design/](docs/design/) for more details.
 
-## Record terminal builds
+## Record terminal invocations
 
 Add to `.bazelrc` and use `bazel build --config=zeal //...` while Zeal is open:
 

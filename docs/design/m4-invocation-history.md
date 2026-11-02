@@ -14,8 +14,8 @@ _Status: Approved_
 
 ### Non Goals
 
-- 自動修復、未完了runの復旧
-- 容量監視、自動整理、共有、同期、export、run同士のdiff
+- 自動修復、未完了invocationの復旧
+- 容量監視、自動整理、共有、同期、export、invocation同士のdiff
 - profile parserの変更、cloud保存、remote execution
 
 ## Overview
@@ -29,7 +29,7 @@ receiverはBEPの入力、時刻、build exitをDBへ保存し、ログを含む
 ```mermaid
 flowchart LR
     BAZEL["Bazel"] --> BES["共通BES receiver"]
-    BES --> DB[("workspace / run")]
+    BES --> DB[("workspace / invocation")]
     BES --> EVENTS["ログ込みevent file"]
     DB --> VIEW["一覧 / 詳細 / Analytics"]
     EVENTS -->|"詳細要求時に一度parse"| VIEW
@@ -45,10 +45,10 @@ WAL、`synchronous=FULL`、foreign keyを有効にし、`PRAGMA user_version=3` 
 
 ```text
 workspace(id TEXT NOT NULL PRIMARY KEY, canonical_path BLOB NOT NULL UNIQUE)
-run(
+invocation(
   id TEXT NOT NULL PRIMARY KEY,
   workspace_id TEXT REFERENCES workspace(id),
-  cmd TEXT, target_raw TEXT,
+  cmd TEXT, target_pattern TEXT,
   started_at_ms INTEGER, finished_at_ms INTEGER, exit_code INTEGER,
   attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0),
   received_complete INTEGER NOT NULL DEFAULT 0 CHECK(received_complete IN (0, 1))
@@ -56,25 +56,25 @@ run(
 ```
 
 workspaceは可能ならcanonicalizeしたpathで照合し、不可能ならBEPの絶対pathを使う。
-runの入力と時刻はBEPで観測するまでNULLとする。
+invocationの入力と時刻はBEPで観測するまでNULLとする。
 `attempt` は現在の受信回、`received_complete` は最後のイベントと正常EOFを確認し保存した事実である。
 
 成功表示や所要時間、画面へ返すデータ(**DTO**)、イベント本体はSQLへ保存しない。
-indexは `run(workspace_id, started_at_ms DESC, id)` とする。
+indexは `invocation(workspace_id, started_at_ms DESC, id)` とする。
 
 #### 起動時の予約
 
-Bazelを起動するときはUUIDだけを予約してcommitし、そのIDを渡す。
+Bazelを起動するときはinvocation IDだけを予約してcommitし、そのIDを渡す。
 既存IDとの衝突はspawn前に拒否する。
 Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻や入力へ代入しない。
 起動失敗時は未受信の予約と既知の一時fileだけを取り消す。
 
 ### event fileと受信
 
-保存先は `<app data dir>/runs/<invocation_uuid>/attempt/<number>/bep.binpb` とする。
+保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb` とする。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
-任意の `terminal.log` は擬似端末(**PTY**)の出力、`profile.gz` は計時情報として `runs/<invocation_uuid>/` に置く。
+任意の `terminal.log` は擬似端末(**PTY**)の出力、`profile.gz` は計時情報として `invocations/<invocation_id>/` に置く。
 これらの有無を起動元の判定に使わない。
 
 ### 正常受信
@@ -101,12 +101,12 @@ flushは電源断後のfile保持を保証しない。
 
 ### 失敗と再送
 
-| 状態                  | 受信動作                                                         |
-| --------------------- | ---------------------------------------------------------------- |
-| 未確定runの再送       | 新しいattemptへ番号1から全部送る                                 |
-| 受信確定済みrunの再送 | 保存を繰り返さず、正常EOF後にACKする。末尾だけの再送も受け付ける |
-| fileやDBの失敗        | ACKしない                                                        |
-| 切断やidle期限切れ    | 可能な範囲を保存するがACKしない。次の接続の全送に委ねる          |
+| 状態                         | 受信動作                                                         |
+| ---------------------------- | ---------------------------------------------------------------- |
+| 未確定invocationの再送       | 新しいattemptへ番号1から全部送る                                 |
+| 受信確定済みinvocationの再送 | 保存を繰り返さず、正常EOF後にACKする。末尾だけの再送も受け付ける |
+| fileやDBの失敗               | ACKしない                                                        |
+| 切断やidle期限切れ           | 可能な範囲を保存するがACKしない。次の接続の全送に委ねる          |
 
 古いattemptからの更新が拒否された場合もACKしない。
 接続内の受信番号は連続昇順とする。
@@ -117,10 +117,10 @@ lifecycle unaryはBEPとは別の通知APIであり、保存せず成功応答�
 
 ### 詳細の読込
 
-`get_run` は、DBのworkspace所属を確認して現在のattemptのfileを一度だけ逐次parseする。
+`get_invocation` は、DBのworkspace所属を確認して現在のattemptのfileを一度だけ逐次parseする。
 同じ走査でBEPの表示データとログを組み立て、全イベントや全ログをメモリへためない。
 Progressのログはstderr、stdoutの順に取り込む。
-任意のprofileは `get_run_profile` で別途読む。
+任意のprofileは `get_invocation_profile` で別途読む。
 
 #### 上限とメモリ
 
@@ -145,7 +145,7 @@ DBの入力やビルド結果は維持する。
 
 ### 履歴とlive process
 
-一覧はworkspaceが判明したrunをBEP開始時刻の新しい順に返す。
+一覧はworkspaceが判明したinvocationをBEP開始時刻の新しい順に返す。
 未観測の入力や時刻は表示でも不明のままにする。
 成功はBuildFinishedのexit、所要時間はBEP開始終了時刻から求める。
 子processのexitや停止操作からビルド結果を補わない。
@@ -155,7 +155,7 @@ Console、stdin、停止はCoreがメモリで保持するlive processを使う�
 履歴が確定してもその操作を続けられる。
 
 process終了後も最後のConsoleを保持して末尾を読む。
-Consoleを表示中のprocessが終了すると、そのrunの詳細へ一度だけ自動で移る。
+Consoleを表示中のprocessが終了すると、そのinvocationの詳細へ一度だけ自動で移る。
 別画面を表示中は移らず、終了済みConsoleを開き直した場合も表示を維持する。
 詳細画面から戻って端末出力を確認できる。
 終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。

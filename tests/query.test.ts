@@ -562,7 +562,7 @@ test("invoke failures land in error and leave results empty", async () => {
   assert.equal(h.state.result?.exitCode, 0);
 });
 
-test("a second run while one is in flight is ignored", async () => {
+test("a second invocation while one is in flight is ignored", async () => {
   const h = harness();
   const first = h.runner.run("deps(//a)", "raw", FLAGS);
   const ignored = h.runner.run("deps(//b)", "graph", FLAGS);
@@ -592,7 +592,7 @@ test("changing output clears the only result and does not run a query", async ()
   assert.equal(h.calls.length, 2);
 });
 
-test("editing during a run discards its reply without releasing the busy slot", async () => {
+test("editing during an invocation discards its reply without releasing the busy slot", async () => {
   const h = harness();
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
   h.runner.clear();
@@ -611,7 +611,7 @@ test("editing during a run discards its reply without releasing the busy slot", 
   assert.deepEqual(h.state.result, OUTPUT);
 });
 
-test("editing during a run discards its late error", async () => {
+test("editing during an invocation discards its late error", async () => {
   const h = harness();
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
   h.runner.clear();
@@ -622,7 +622,7 @@ test("editing during a run discards its late error", async () => {
   assert.equal(h.state.error, null);
 });
 
-test("a new run drops the old result even when the invocation fails", async () => {
+test("a new invocation drops the old result even when it fails", async () => {
   const h = harness();
   const first = h.runner.run("deps(//a)", "raw", FLAGS);
   h.calls[0].resolve(OUTPUT);

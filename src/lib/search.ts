@@ -106,7 +106,7 @@ function arrowAction(
     : { kind: "move", index: 0 };
 }
 
-/** Maps arrows, Enter, and Escape to dropdown actions; it never starts a run. */
+/** Maps arrows, Enter, and Escape to dropdown actions; it never starts an invocation. */
 export function keyAction(
   state: { open: boolean; index: number },
   key: string,

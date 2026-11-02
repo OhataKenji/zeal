@@ -97,14 +97,14 @@ pub(super) fn fail(kind: ErrorKind) -> StoreError {
 /// Observed Bazel facts. Missing fields have not been reported by BEP.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RunRecord {
+pub struct InvocationRecord {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cmd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
+    pub pattern: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,17 +158,17 @@ impl Store {
         if !exists {
             let tx = conn.transaction()?;
             tx.execute_batch("CREATE TABLE workspace(id TEXT NOT NULL PRIMARY KEY,canonical_path BLOB NOT NULL UNIQUE);
-                CREATE TABLE run(id TEXT NOT NULL PRIMARY KEY,workspace_id TEXT REFERENCES workspace(id),
-                    cmd TEXT,target_raw TEXT,started_at_ms INTEGER,finished_at_ms INTEGER,exit_code INTEGER,
+                CREATE TABLE invocation(id TEXT NOT NULL PRIMARY KEY,workspace_id TEXT REFERENCES workspace(id),
+                    cmd TEXT,target_pattern TEXT,started_at_ms INTEGER,finished_at_ms INTEGER,exit_code INTEGER,
                     attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt>=0),
                     received_complete INTEGER NOT NULL DEFAULT 0 CHECK(received_complete IN (0,1)));
-                CREATE INDEX run_workspace_started ON run(workspace_id,started_at_ms DESC,id);
+                CREATE INDEX invocation_workspace_started ON invocation(workspace_id,started_at_ms DESC,id);
                 PRAGMA user_version=3;")?;
             tx.commit()?;
             db.sync_all()?;
             root.sync()?;
         }
-        conn.prepare("SELECT id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code,attempt,received_complete FROM run LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
+        conn.prepare("SELECT id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code,attempt,received_complete FROM invocation LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
         conn.prepare("SELECT id,canonical_path FROM workspace LIMIT 0")
             .map_err(|_| fail(ErrorKind::Corrupt))?;
         Ok(Self {
@@ -177,11 +177,15 @@ impl Store {
             _access: access,
         })
     }
-    pub(super) fn run_dir(&self, run_id: &str, create: bool) -> Result<Dir, StoreError> {
+    pub(super) fn invocation_dir(
+        &self,
+        invocation_id: &str,
+        create: bool,
+    ) -> Result<Dir, StoreError> {
         Ok(self
             .root
-            .child("runs", create)?
-            .child(&id(run_id)?, create)?)
+            .child("invocations", create)?
+            .child(&id(invocation_id)?, create)?)
     }
 }
 
@@ -199,24 +203,24 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub fn reserve_invocation(data: &Path, run_id: &str) -> Result<PathBuf, StoreError> {
-    let run_id = id(run_id)?;
+pub fn reserve_invocation(data: &Path, invocation_id: &str) -> Result<PathBuf, StoreError> {
+    let invocation_id = id(invocation_id)?;
     let mut store = Store::open(data)?;
     let tx = store
         .conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    tx.execute("INSERT INTO run(id) VALUES(?1)", [&run_id])?;
-    let root = Dir::root(data)?.child("runs", true)?;
-    let dir = root.create_child(&run_id)?;
+    tx.execute("INSERT INTO invocation(id) VALUES(?1)", [&invocation_id])?;
+    let root = Dir::root(data)?.child("invocations", true)?;
+    let dir = root.create_child(&invocation_id)?;
     dir.file("terminal.log", true)?;
     tx.commit()?;
     Ok(dir.path().to_owned())
 }
 
-const SELECT: &str = "SELECT r.id,r.cmd,r.target_raw,r.started_at_ms,r.finished_at_ms,r.exit_code FROM run r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
+const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code FROM invocation r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
 /// [`list`] returns at most this many records, newest first.
 pub const LIST_LIMIT: usize = 100;
-fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord> {
+fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<InvocationRecord> {
     fn time(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Option<u64>> {
         row.get::<_, Option<i64>>(column)?
             .map(|v| {
@@ -225,26 +229,30 @@ fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<RunRecord>
             })
             .transpose()
     }
-    Ok(RunRecord {
+    Ok(InvocationRecord {
         id: row.get(0)?,
         workspace: Some(ws.to_string_lossy().into_owned()),
         cmd: row.get(1)?,
-        target: row.get(2)?,
+        pattern: row.get(2)?,
         started_at: time(row, 3)?,
         finished_at: time(row, 4)?,
         exit_code: row.get(5)?,
     })
 }
-pub fn read_record(data: &Path, ws: &Path, run_id: &str) -> Result<RunRecord, StoreError> {
+pub fn read_record(
+    data: &Path,
+    ws: &Path,
+    invocation_id: &str,
+) -> Result<InvocationRecord, StoreError> {
     let ws = workspace_path(ws)?;
     let store = Store::open(data)?;
     Ok(store.conn.query_row(
         &format!("{SELECT} AND r.id=?2"),
-        params![ws.as_os_str().as_bytes(), id(run_id)?],
+        params![ws.as_os_str().as_bytes(), id(invocation_id)?],
         |r| row_record(r, &ws),
     )?)
 }
-pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
+pub fn list(data: &Path, ws: &Path) -> Result<Vec<InvocationRecord>, StoreError> {
     let ws = workspace_path(ws)?;
     let store = Store::open(data)?;
     Ok(store
@@ -255,16 +263,21 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<RunRecord>, StoreError> {
         .query_map([ws.as_os_str().as_bytes()], |r| row_record(r, &ws))?
         .collect::<Result<_, _>>()?)
 }
-pub fn artifact(data: &Path, ws: &Path, run_id: &str, name: &str) -> io::Result<File> {
-    open_artifact(data, ws, run_id, name).map_err(Into::into)
+pub fn artifact(data: &Path, ws: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
+    open_artifact(data, ws, invocation_id, name).map_err(Into::into)
 }
-fn open_artifact(data: &Path, ws: &Path, run_id: &str, name: &str) -> Result<File, StoreError> {
+fn open_artifact(
+    data: &Path,
+    ws: &Path,
+    invocation_id: &str,
+    name: &str,
+) -> Result<File, StoreError> {
     if name == "bep.binpb" {
-        return event_artifact(data, ws, run_id).map(|(file, _)| file);
+        return event_artifact(data, ws, invocation_id).map(|(file, _)| file);
     }
-    read_record(data, ws, run_id)?;
+    read_record(data, ws, invocation_id)?;
     let store = Store::open(data)?;
-    let dir = store.run_dir(run_id, false)?;
+    let dir = store.invocation_dir(invocation_id, false)?;
     let file = match name {
         "profile.gz" => dir.artifact(name)?,
         _ => return Err(fail(ErrorKind::Invalid)),
@@ -273,58 +286,69 @@ fn open_artifact(data: &Path, ws: &Path, run_id: &str, name: &str) -> Result<Fil
 }
 
 /// Snapshot the current receipt and its checked FD before doing any parsing.
-pub fn event_artifact(data: &Path, ws: &Path, run_id: &str) -> Result<(File, bool), StoreError> {
-    read_record(data, ws, run_id)?;
+pub fn event_artifact(
+    data: &Path,
+    ws: &Path,
+    invocation_id: &str,
+) -> Result<(File, bool), StoreError> {
+    read_record(data, ws, invocation_id)?;
     let store = Store::open(data)?;
     let (attempt, complete): (i64, bool) = store.conn.query_row(
-        "SELECT attempt,received_complete FROM run WHERE id=?1",
-        [id(run_id)?],
+        "SELECT attempt,received_complete FROM invocation WHERE id=?1",
+        [id(invocation_id)?],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     if attempt == 0 {
         return Err(fail(ErrorKind::Missing));
     }
     let file = store
-        .run_dir(run_id, false)?
+        .invocation_dir(invocation_id, false)?
         .child("attempt", false)?
         .child(&attempt.to_string(), false)?
         .artifact("bep.binpb")?;
     Ok((file, complete))
 }
-pub fn live_artifact(data: &Path, run_id: &str, name: &str) -> io::Result<File> {
+pub fn live_artifact(data: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
     if name != "terminal.log" {
         return Err(fail(ErrorKind::Invalid).into());
     }
     let store = Store::open(data)?;
     store
         .conn
-        .query_row("SELECT id FROM run WHERE id=?1", [id(run_id)?], |r| {
-            r.get::<_, String>(0)
-        })
+        .query_row(
+            "SELECT id FROM invocation WHERE id=?1",
+            [id(invocation_id)?],
+            |r| r.get::<_, String>(0),
+        )
         .map_err(StoreError::from)?;
-    store.run_dir(run_id, false)?.artifact(name)
+    store.invocation_dir(invocation_id, false)?.artifact(name)
 }
-pub fn abort_reservation(data: &Path, run_id: &str) -> Result<(), StoreError> {
-    let run_id = id(run_id)?;
+pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
+    let invocation_id = id(invocation_id)?;
     let mut store = Store::open(data)?;
     let tx = store
         .conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let attempt: i64 = tx.query_row("SELECT attempt FROM run WHERE id=?1", [&run_id], |r| {
-        r.get(0)
-    })?;
+    let attempt: i64 = tx.query_row(
+        "SELECT attempt FROM invocation WHERE id=?1",
+        [&invocation_id],
+        |r| r.get(0),
+    )?;
     if attempt != 0 {
         return Err(fail(ErrorKind::Conflict));
     }
-    let runs = Dir::root(data)?.child("runs", false)?;
-    let dir = runs.child(&run_id, false)?;
+    let invocations = Dir::root(data)?.child("invocations", false)?;
+    let dir = invocations.child(&invocation_id, false)?;
     for name in ["terminal.log", "profile.gz"] {
         if dir.exists(name)? {
             dir.remove_file(name)?;
         }
     }
-    runs.remove_dir(&run_id)?;
-    tx.execute("DELETE FROM run WHERE id=?1 AND attempt=0", [run_id])?;
+    invocations.remove_dir(&invocation_id)?;
+    tx.execute(
+        "DELETE FROM invocation WHERE id=?1 AND attempt=0",
+        [invocation_id],
+    )?;
     tx.commit()?;
     Ok(())
 }
@@ -348,7 +372,7 @@ mod tests {
                 .unwrap()
                 .collect::<Result<_, _>>()
                 .unwrap();
-            assert_eq!(tables, ["run", "workspace"]);
+            assert_eq!(tables, ["invocation", "workspace"]);
             store
                 .conn
                 .pragma_update(None, "journal_mode", "DELETE")
@@ -381,21 +405,23 @@ mod tests {
         );
     }
     #[test]
-    fn runs_are_invisible_to_unobserved_workspaces() {
+    fn invocations_are_invisible_to_unobserved_workspaces() {
         let f = Fixture::new();
         f.complete();
-        let run = &f.stream.invocation_id;
+        let invocation_id = &f.stream.invocation_id;
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
         assert!(list(&f.data, &other).unwrap().is_empty());
         assert_eq!(
-            read_record(&f.data, &other, run).unwrap_err().kind,
+            read_record(&f.data, &other, invocation_id)
+                .unwrap_err()
+                .kind,
             ErrorKind::Missing
         );
-        assert!(artifact(&f.data, &other, run, "bep.binpb").is_err());
+        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb").is_err());
     }
     #[test]
-    fn workspace_aliases_list_the_same_runs() {
+    fn workspace_aliases_list_the_same_invocations() {
         let f = Fixture::new();
         f.complete();
         let alias = f.root.join("alias");
@@ -406,24 +432,24 @@ mod tests {
         );
     }
     #[test]
-    fn artifact_paths_and_symlinks_cannot_escape_the_run_directory() {
+    fn artifact_paths_and_symlinks_cannot_escape_the_invocation_directory() {
         let f = Fixture::new();
         f.complete();
-        let run = &f.stream.invocation_id;
+        let invocation_id = &f.stream.invocation_id;
         assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb").is_err());
-        assert!(artifact(&f.data, &f.ws, run, "../zeal.db").is_err());
+        assert!(artifact(&f.data, &f.ws, invocation_id, "../zeal.db").is_err());
         let path = f.dir().join("attempt/1/bep.binpb");
         fs::remove_file(&path).unwrap();
         symlink(f.data.join("zeal.db"), &path).unwrap();
         assert_eq!(
-            artifact(&f.data, &f.ws, run, "bep.binpb")
+            artifact(&f.data, &f.ws, invocation_id, "bep.binpb")
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied
         );
     }
     #[test]
-    fn run_records_survive_when_run_details_disappear() {
+    fn invocation_records_survive_when_invocation_details_disappear() {
         let f = Fixture::new();
         f.complete();
         fs::remove_dir_all(f.dir()).unwrap();
@@ -442,28 +468,35 @@ mod tests {
             store
                 .conn
                 .execute(
-                    "INSERT INTO run(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
+                    "INSERT INTO invocation(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
                     params![uuid::Uuid::new_v4().to_string(), ws_id, 2000 + i as i64],
                 )
                 .unwrap();
         }
         drop(store);
-        let runs = list(&f.data, &f.ws).unwrap();
-        assert_eq!(runs.len(), LIST_LIMIT);
-        assert_eq!(runs[0].started_at, Some(2000 + LIST_LIMIT as u64 - 1));
-        assert!(runs.iter().all(|run| run.id != f.stream.invocation_id));
+        let invocations = list(&f.data, &f.ws).unwrap();
+        assert_eq!(invocations.len(), LIST_LIMIT);
+        assert_eq!(
+            invocations[0].started_at,
+            Some(2000 + LIST_LIMIT as u64 - 1)
+        );
+        assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.id != f.stream.invocation_id)
+        );
     }
     #[test]
     fn a_reservation_is_usable_before_any_workspace_observes_it() {
         let f = Fixture::new();
-        let run = &f.stream.invocation_id;
-        let dir = reserve_invocation(&f.data, run).unwrap();
+        let invocation_id = &f.stream.invocation_id;
+        let dir = reserve_invocation(&f.data, invocation_id).unwrap();
         assert_eq!(
-            reserve_invocation(&f.data, run).unwrap_err().kind,
+            reserve_invocation(&f.data, invocation_id).unwrap_err().kind,
             ErrorKind::Conflict
         );
         assert!(list(&f.data, &f.ws).unwrap().is_empty());
-        assert!(live_artifact(&f.data, run, "terminal.log").is_ok());
+        assert!(live_artifact(&f.data, invocation_id, "terminal.log").is_ok());
         assert_eq!(
             fs::metadata(dir.join("terminal.log"))
                 .unwrap()
@@ -476,18 +509,18 @@ mod tests {
     #[test]
     fn aborting_a_reservation_preserves_foreign_files_and_frees_the_invocation() {
         let f = Fixture::new();
-        let run = &f.stream.invocation_id;
-        let dir = reserve_invocation(&f.data, run).unwrap();
+        let invocation_id = &f.stream.invocation_id;
+        let dir = reserve_invocation(&f.data, invocation_id).unwrap();
         fs::write(dir.join("unexpected"), b"keep").unwrap();
-        assert!(abort_reservation(&f.data, run).is_err());
+        assert!(abort_reservation(&f.data, invocation_id).is_err());
         assert!(dir.join("unexpected").exists());
         fs::remove_file(dir.join("unexpected")).unwrap();
-        abort_reservation(&f.data, run).unwrap();
+        abort_reservation(&f.data, invocation_id).unwrap();
         assert!(!dir.exists());
-        reserve_invocation(&f.data, run).unwrap();
+        reserve_invocation(&f.data, invocation_id).unwrap();
     }
     #[test]
-    fn a_completed_run_cannot_be_aborted() {
+    fn a_completed_invocation_cannot_be_aborted() {
         let f = Fixture::new();
         f.complete();
         assert_eq!(

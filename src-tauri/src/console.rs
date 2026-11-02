@@ -19,7 +19,7 @@ pub fn read(data: &Path, core: &Core, id: &str, offset: u64) -> io::Result<Outpu
 
     let finished = {
         let state = core.state.lock().expect("application state lock poisoned");
-        if state.console_run().map(|run| run.as_str()) != Some(id) {
+        if state.console_invocation().map(|id| id.as_str()) != Some(id) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "Console is no longer available",
@@ -32,7 +32,8 @@ pub fn read(data: &Path, core: &Core, id: &str, offset: u64) -> io::Result<Outpu
             .finished
     };
     // The Core read grant authorizes this ID even if Started never associated
-    // it with a workspace in history. Process controls use Core.run instead.
+    // it with a workspace in history. Process controls use Core's active
+    // invocation instead.
     let mut file = store::live_artifact(data, id, "terminal.log")?;
     let length = file.metadata()?.len();
     if offset > length {
@@ -77,7 +78,7 @@ mod tests {
             let core = Core::new();
             let mut state = core.state.lock().unwrap();
             state.workspace = Some(workspace.clone());
-            state.run = Some(crate::state::ActiveRun::stub(&id, None));
+            state.active_invocation = Some(crate::state::ActiveInvocation::stub(&id, None));
             state.console = Some(ConsoleSession {
                 id: id.clone().into(),
                 workspace: workspace.clone(),
@@ -99,8 +100,8 @@ mod tests {
         }
 
         /// The process is gone; the console capture may still be draining.
-        fn end_run(&self) {
-            self.core.state.lock().unwrap().run = None;
+        fn end_invocation(&self) {
+            self.core.state.lock().unwrap().active_invocation = None;
         }
 
         fn finish(&self) {
@@ -128,7 +129,7 @@ mod tests {
         let first = fixture.read(0);
         assert_eq!(first.data.len(), 64 * 1024);
         assert!(!first.done);
-        fixture.end_run();
+        fixture.end_invocation();
         let middle = fixture.read(first.offset);
         assert_eq!(middle.data, vec![0xff; 6 * 1024]);
         assert!(!middle.done);
@@ -138,7 +139,7 @@ mod tests {
     fn a_finished_capture_serves_its_final_bytes_and_replays_the_log() {
         let fixture = Fixture::new();
         std::fs::write(fixture.dir.join("terminal.log"), vec![0xff; 70 * 1024]).unwrap();
-        fixture.end_run();
+        fixture.end_invocation();
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(fixture.dir.join("terminal.log"))
@@ -158,7 +159,7 @@ mod tests {
     fn unobserved_invocation_keeps_its_failure_output_after_capture_finishes() {
         let fixture = Fixture::new();
         std::fs::write(fixture.dir.join("terminal.log"), b"startup failed\n").unwrap();
-        fixture.end_run();
+        fixture.end_invocation();
         fixture.finish();
         assert!(store::read_record(&fixture.data, &fixture.workspace, &fixture.id).is_err());
         let output = fixture.read(0);
@@ -202,7 +203,7 @@ mod tests {
                 .kind(),
             io::ErrorKind::PermissionDenied
         );
-        assert!(fixture.core.dto().console_run.is_none());
+        assert!(fixture.core.dto().console_invocation.is_none());
         {
             let mut state = fixture.core.state.lock().unwrap();
             state.console = None;

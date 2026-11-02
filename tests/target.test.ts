@@ -38,8 +38,14 @@ test("the rejection set matches the core's Unicode White_Space + Cc rule", () =>
 });
 
 test("rejections explain the rule that was broken", () => {
-  assert.equal(targetError(""), "Enter a target");
-  assert.equal(targetError("//a:b "), "A target cannot contain whitespace or control characters");
-  assert.equal(targetError("a\0b"), "A target cannot contain whitespace or control characters");
-  assert.equal(targetError("-//a:b"), 'A target cannot start with "-"');
+  assert.equal(targetError(""), "Enter a target or pattern");
+  assert.equal(
+    targetError("//a:b "),
+    "A target or pattern cannot contain whitespace or control characters",
+  );
+  assert.equal(
+    targetError("a\0b"),
+    "A target or pattern cannot contain whitespace or control characters",
+  );
+  assert.equal(targetError("-//a:b"), 'A target or pattern cannot start with "-"');
 });

@@ -13,20 +13,20 @@
   import { onMount, tick } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
   import { canSend, canStop } from "./lib/session";
-  import { runStatus } from "./lib/run";
+  import { invocationStatus } from "./lib/invocation";
   import { createIndex } from "./lib/search";
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
-  import RunStatus from "./lib/RunStatus.svelte";
+  import InvocationStatus from "./lib/InvocationStatus.svelte";
   import Notice from "./lib/Notice.svelte";
-  import RunView from "./lib/RunView.svelte";
+  import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
   import SearchInput from "./lib/SearchInput.svelte";
-  import type { AppState, RunCmd } from "./lib/types";
+  import type { AppState, BazelCommand } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
   function loadConsole() {
@@ -49,7 +49,7 @@
   let queryOpen = $state(false);
   let revealRequest = $state(0);
   let targetField = $state("");
-  let cmd = $state<RunCmd>("build");
+  let cmd = $state<BazelCommand>("build");
   let argumentsText = $state("");
   let argumentsOpen = $state(false);
   let argumentsToggle: HTMLButtonElement | undefined;
@@ -61,12 +61,12 @@
     !app.view.ready ||
       app.view.starting ||
       app.view.opening ||
-      !!st?.running ||
+      !!st?.activeInvocation ||
       st?.ingest === "running" ||
       st?.query === "running" ||
       st?.detailQuery === "running",
   );
-  const running = $derived(!!st?.running);
+  const running = $derived(!!st?.activeInvocation);
   const actionLabel = $derived(
     running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
   );
@@ -75,7 +75,7 @@
   );
 
   // The composer is the only search entry point. Typing opens the dropdown;
-  // programmatic insertion (tree, relations, run rows) only replaces the
+  // programmatic insertion (tree, relations, invocation rows) only replaces the
   // field. Picking a candidate reveals it in the target tree.
   const index = $derived(snap ? createIndex(snap.targets) : null);
 
@@ -121,7 +121,7 @@
   // Sidebar split: share of height given to the targets pane, and per-pane
   // collapse. The divider drags the boundary like VS Code's stacked views.
   let targetsShare = $state(0.55);
-  let collapsed = $state({ targets: false, runs: false });
+  let collapsed = $state({ targets: false, invocations: false });
 
   function dividerDown(e: PointerEvent) {
     e.preventDefault();
@@ -148,7 +148,7 @@
   function select(label: string | null) {
     analyticsOpen = false;
     queryOpen = false;
-    getSession().selectRun(null);
+    getSession().selectInvocation(null);
     getSession().selectTarget(label);
     if (label) targetField = label;
   }
@@ -175,11 +175,11 @@
       </button>
       <button
         class="analytics-link"
-        class:active={queryOpen && !app.view.selectedRun}
+        class:active={queryOpen && !app.view.selectedInvocation}
         onclick={() => {
           queryOpen = true;
           analyticsOpen = false;
-          getSession().selectRun(null);
+          getSession().selectInvocation(null);
         }}><TreeStructure size={12} /> Query</button
       >
     </div>
@@ -201,71 +201,71 @@
   </section>
 {/snippet}
 
-{#snippet runPane(state: AppState)}
+{#snippet invocationPane(state: AppState)}
   <section
     class="pane"
-    class:collapsed={collapsed.runs}
-    style:flex-grow={collapsed.runs ? 0 : 1 - targetsShare}
+    class:collapsed={collapsed.invocations}
+    style:flex-grow={collapsed.invocations ? 0 : 1 - targetsShare}
   >
     <div class="pane-heading">
       <button
         class="pane-head"
-        aria-expanded={!collapsed.runs}
-        onclick={() => (collapsed.runs = !collapsed.runs)}
+        aria-expanded={!collapsed.invocations}
+        onclick={() => (collapsed.invocations = !collapsed.invocations)}
       >
-        {#if collapsed.runs}<CaretRight size={10} />{:else}<CaretDown
+        {#if collapsed.invocations}<CaretRight size={10} />{:else}<CaretDown
             size={10}
-          />{/if} Runs
+          />{/if} Invocations
       </button>
       <button
         class="analytics-link"
-        class:active={analyticsOpen && !app.view.selectedRun}
+        class:active={analyticsOpen && !app.view.selectedInvocation}
         onclick={() => {
           analyticsOpen = true;
           queryOpen = false;
-          getSession().selectRun(null);
+          getSession().selectInvocation(null);
         }}><ChartBar size={12} /> Analytics</button
       >
     </div>
-    {#if !collapsed.runs}
+    {#if !collapsed.invocations}
       <div class="pane-body">
         <ul class="list">
-          {#each app.view.runs as run (run.id)}
-            {@const status = runStatus(run, state.running, state.stopping)}
+          {#each app.view.invocations as inv (inv.id)}
+            {@const status = invocationStatus(inv, state.activeInvocation, state.stopping)}
             {@const active =
-              app.view.selectedRun === run.id ||
-              (app.view.consoleOpen && app.view.console?.id === run.id)}
+              app.view.selectedInvocation === inv.id ||
+              (app.view.consoleOpen && app.view.console?.id === inv.id)}
             <li>
               <button
-                class="run-row"
-                title={`${run.cmd ?? "Command not recorded"} ${run.target ?? run.id} — ${status.label}`}
-                aria-label={`${run.cmd ?? "Command not recorded"} ${run.target ?? run.id}: ${status.label}`}
+                class="invocation-row"
+                title={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id} — ${status.label}`}
+                aria-label={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id}: ${status.label}`}
                 class:selected={active}
                 aria-current={active ? "true" : undefined}
                 onclick={() =>
-                  run.id === state.running
-                    ? getSession().openConsole(run)
-                    : getSession().selectRun(run.id)}
+                  inv.id === state.activeInvocation
+                    ? getSession().openConsole(inv)
+                    : getSession().selectInvocation(inv.id)}
               >
-                <span class="run-label"
-                  ><RunStatus {...status} compact /><span class="run-command"
-                    >{run.cmd ?? "?"}</span
+                <span class="invocation-label"
+                  ><InvocationStatus {...status} compact /><span class="invocation-command"
+                    >{inv.cmd ?? "?"}</span
                   >
-                  {#if run.startedAt !== undefined}
-                  <time datetime={new Date(run.startedAt).toISOString()}
-                    >{new Date(run.startedAt).toLocaleTimeString([], {
+                  {#if inv.startedAt !== undefined}
+                  <time datetime={new Date(inv.startedAt).toISOString()}
+                    >{new Date(inv.startedAt).toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}</time
                   >{:else}<span>Time not recorded</span>{/if}</span
                 >
-                <span class="run-target">{run.target ?? run.id}</span>
+                <span class="invocation-pattern">{inv.pattern ?? inv.id}</span>
               </button>
             </li>
           {/each}
         </ul>
-        {#if app.view.runsError}<Notice tone="error" onaction={getSession().loadRuns}
-            >{app.view.runsError}</Notice
+        {#if app.view.invocationsError}<Notice tone="error" onaction={getSession().loadInvocations}
+            >{app.view.invocationsError}</Notice
           >
         {/if}
       </div>
@@ -276,14 +276,14 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen || queryOpen}
+    class:invocation-content={app.view.consoleOpen || !!app.view.selectedInvocation || analyticsOpen || queryOpen}
   >
     {#if app.view.console}
       {#key app.view.console.id}
         <div class="console-container" hidden={!app.view.consoleOpen}>
           {#await loadConsole() then { default: ConsoleView }}
-          <ConsoleView record={app.view.runs.find((run) => run.id === app.view.console?.id) ?? app.view.console}
-            visible={app.view.consoleOpen} running={state.running === app.view.console.id} stopping={state.stopping} />
+          <ConsoleView record={app.view.invocations.find((inv) => inv.id === app.view.console?.id) ?? app.view.console}
+            visible={app.view.consoleOpen} running={state.activeInvocation === app.view.console.id} stopping={state.stopping} />
           {/await}
         </div>
       {/key}
@@ -305,12 +305,12 @@
     {#if state.ingest === "running" || app.view.snapshotLoading}
       <p class="dim">Loading targets…</p>
     {/if}
-    {#if app.view.selectedRun}
-      {#key app.view.selectedRun}
-        <RunView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
+    {#if app.view.selectedInvocation}
+      {#key app.view.selectedInvocation}
+        <InvocationView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
       {/key}
     {:else if analyticsOpen}
-      {#key workspace}<AnalyticsView {workspace} runs={app.view.runs} />{/key}
+      {#key workspace}<AnalyticsView {workspace} invocations={app.view.invocations} />{/key}
     {:else if queryOpen}
       {#key workspace}
         <QueryView {snap} />
@@ -337,7 +337,7 @@
         </Notice>
       {:else}
         <p class="dim">
-          {st?.ingest === "running" || st?.query === "running" || st?.running
+          {st?.ingest === "running" || st?.query === "running" || st?.activeInvocation
             ? "Waiting for Bazel…"
             : "Loading target details…"}
         </p>
@@ -424,7 +424,7 @@
         class="button button-ghost arguments-toggle"
         aria-label={argumentsConfigured ? "Arguments (configured)" : "Arguments"}
         aria-expanded={argumentsOpen}
-        aria-controls="run-arguments-popover"
+        aria-controls="command-arguments-popover"
         title={argumentsConfigured ? argumentsText : "Specify arguments"}
         onclick={() => setArgumentsOpen(!argumentsOpen)}
       >
@@ -435,15 +435,15 @@
         <div
           bind:this={argumentsPanel}
           class="arguments-popover"
-          id="run-arguments-popover"
+          id="command-arguments-popover"
         >
           <input
             bind:this={argumentsInput}
             bind:value={argumentsText}
-            id="run-arguments"
+            id="command-arguments"
             class="input arguments-input"
             aria-label="Arguments"
-            placeholder="--config=dev; run program arguments after --"
+            placeholder="--config=dev; program arguments after --"
             title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
             autocomplete="off"
             spellcheck={false}
@@ -467,7 +467,7 @@
     </div>
   </div>
   {#if app.view.error}<Notice tone="error">{app.view.error}</Notice>{/if}
-  {#if st?.runNote}<Notice tone="error">{st.runNote}</Notice>{/if}
+  {#if st?.invocationNote}<Notice tone="error">{st.invocationNote}</Notice>{/if}
   {#if st?.besError}<Notice tone={st.besReady ? "warning" : "error"}
       >BES receiver: {st.besError}</Notice
     >{/if}
@@ -493,11 +493,11 @@
         <div
           class="divider"
           role="separator"
-          aria-label="Resize target and run panes"
+          aria-label="Resize target and invocation panes"
           aria-orientation="horizontal"
           onpointerdown={dividerDown}
         ></div>
-        {@render runPane(st)}
+        {@render invocationPane(st)}
       </aside>
       {@render workspaceContent(st, st.workspace)}
     </div>

@@ -36,7 +36,7 @@ function harness() {
   };
 }
 const RESULT: DailyAnalytics = {
-  filter: { start: "2026-03-01", end: "2026-03-30", cmd: null, outcome: null, target: null },
+  filter: { start: "2026-03-01", end: "2026-03-30", cmd: null, outcome: null, pattern: null },
   today: "2026-03-30",
   days: [
     {
@@ -71,7 +71,7 @@ test("default request uses core calendar and refresh retains all filters", async
   const h = harness();
   const initial = h.model.load();
   assert.deepEqual(h.calls[0].args, {
-    filter: { start: null, end: null, cmd: null, outcome: null, target: null },
+    filter: { start: null, end: null, cmd: null, outcome: null, pattern: null },
   });
   h.calls[0].resolve(RESULT);
   await initial;
@@ -171,7 +171,7 @@ test("reversed dates retain all filters and clear charts without querying, inclu
     start: "2026-03-31",
     cmd: "test" as const,
     outcome: "failed" as const,
-    target: "//:app",
+    pattern: "//:app",
   };
   await h.model.load(filter);
   assert.equal(h.calls.length, 1);

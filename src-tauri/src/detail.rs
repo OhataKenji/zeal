@@ -1,5 +1,6 @@
-//! Read-side views of a saved run: the record plus each observation it left
-//! behind (log, build results, timing profile). Every observation is wrapped
+//! Read-side views of a saved invocation: the record plus each observation it
+//! left behind (log, build results, timing profile). Every observation is
+//! wrapped
 //! in [`Section`] so a missing or unreadable artifact never hides the record
 //! or another observation.
 //!
@@ -7,15 +8,15 @@
 
 use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
-use crate::store::{self, RunRecord};
+use crate::store::{self, InvocationRecord};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
-pub struct RunDetail {
-    pub record: RunRecord,
+pub struct InvocationDetail {
+    pub record: InvocationRecord,
     pub log: Section<String>,
     pub bep: Section<Bep>,
 }
@@ -32,10 +33,11 @@ pub enum Section<T> {
     ReadError { note: String },
 }
 
-/// Read the record and available observations from a run dir. A missing or
-/// unreadable observation never hides the record or another observation.
-#[tracing::instrument(target = "zeal::operations", name = "run.detail", skip_all)]
-pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDetail> {
+/// Read the record and available observations from an invocation dir. A
+/// missing or unreadable observation never hides the record or another
+/// observation.
+#[tracing::instrument(target = "zeal::operations", name = "invocation.detail", skip_all)]
+pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<InvocationDetail> {
     let record = store::read_record(data, workspace, id)?;
     let (log, bep) = match store::event_artifact(data, workspace, id).map_err(io::Error::from) {
         Err(error) => {
@@ -47,7 +49,7 @@ pub fn run_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<RunDeta
         }
         Ok((file, complete)) => event_sections(file, complete)?,
     };
-    Ok(RunDetail { record, log, bep })
+    Ok(InvocationDetail { record, log, bep })
 }
 
 /// Log and build-result views of the open event artifact. A stream that fails
@@ -107,7 +109,7 @@ fn observation<T>(data: T, incomplete: bool, note: &str) -> Section<T> {
 
 /// Read a saved profile, reporting artifact failures as section statuses.
 /// Optional artifacts are independent of invocation result and origin.
-pub fn run_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
+pub fn invocation_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
     store::read_record(data, workspace, id)?;
     Ok({
         match store::artifact(data, workspace, id, "profile.gz") {
@@ -147,12 +149,12 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        let detail = run_detail(&f.data, &f.ws, id).unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(detail.record.exit_code, Some(0));
         assert!(matches!(detail.log, Section::Ok { .. }));
         assert!(matches!(detail.bep, Section::Ok { .. }));
         assert!(matches!(
-            run_profile(&f.data, &f.ws, id).unwrap(),
+            invocation_profile(&f.data, &f.ws, id).unwrap(),
             Section::Missing
         ));
     }
@@ -161,9 +163,9 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        let record = run_detail(&f.data, &f.ws, id).unwrap().record;
+        let record = invocation_detail(&f.data, &f.ws, id).unwrap().record;
         fs::remove_file(f.dir().join("attempt/1/bep.binpb")).unwrap();
-        let missing = run_detail(&f.data, &f.ws, id).unwrap();
+        let missing = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(missing.record, record);
         assert!(matches!(missing.log, Section::Missing));
         assert!(matches!(missing.bep, Section::Missing));
@@ -174,7 +176,7 @@ mod tests {
         f.complete();
         let id = &f.stream.invocation_id;
         fs::write(f.dir().join("attempt/1/bep.binpb"), b"\xff").unwrap();
-        let detail = run_detail(&f.data, &f.ws, id).unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(detail.record.exit_code, Some(0));
         assert!(matches!(detail.log, Section::ParseError { .. }));
         assert!(matches!(detail.bep, Section::ParseError { .. }));
@@ -186,7 +188,7 @@ mod tests {
         let id = &f.stream.invocation_id;
         fs::write(f.dir().join("profile.gz"), b"invalid gzip").unwrap();
         assert!(matches!(
-            run_profile(&f.data, &f.ws, id).unwrap(),
+            invocation_profile(&f.data, &f.ws, id).unwrap(),
             Section::ParseError { .. }
         ));
     }
@@ -197,8 +199,8 @@ mod tests {
         let id = &f.stream.invocation_id;
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
-        assert!(run_detail(&f.data, &other, id).is_err());
-        assert!(run_profile(&f.data, &other, id).is_err());
+        assert!(invocation_detail(&f.data, &other, id).is_err());
+        assert!(invocation_profile(&f.data, &other, id).is_err());
     }
 
     #[test]
@@ -207,7 +209,7 @@ mod tests {
         let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
         receipt.append(&f.ordered(1, f.started())).unwrap();
         receipt.partial().unwrap();
-        let detail = run_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::Incomplete { .. }));
         assert!(matches!(detail.bep, Section::Incomplete { .. }));
         assert_eq!(detail.record.exit_code, None);

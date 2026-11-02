@@ -28,15 +28,16 @@ export function basename(path: string): string {
 // ---------------------------------------------------------------------------
 // Tree
 //
-// The directory hierarchy of packages is the skeleton, with rules inside each
-// package. Files belong in the selected target's attributes, not in this tree.
+// The directory hierarchy of packages is the skeleton, with targets inside
+// each package. Files belong in the selected target's attributes, not in this
+// tree.
 
 /** Directory node used to group targets by Bazel package. */
 export interface DirNode {
   path: string;
   name: string;
   dirs: DirNode[];
-  rules: Target[];
+  targets: Target[];
 }
 
 /** Builds the package tree from target package paths. */
@@ -46,7 +47,7 @@ export function buildTree(index: TargetIndex): DirNode {
     path,
     name: path === "" ? "" : basename(path),
     dirs: [],
-    rules: [],
+    targets: [],
   });
   const root = mk("");
   nodes.set("", root);
@@ -61,12 +62,12 @@ export function buildTree(index: TargetIndex): DirNode {
   };
 
   for (const target of index.targets) {
-    ensure(target.pkg).rules.push(target);
+    ensure(target.pkg).targets.push(target);
   }
 
   const sortNode = (n: DirNode): void => {
     n.dirs.sort((a, b) => a.name.localeCompare(b.name));
-    n.rules.sort((a, b) => a.name.localeCompare(b.name));
+    n.targets.sort((a, b) => a.name.localeCompare(b.name));
     n.dirs.forEach(sortNode);
   };
   sortNode(root);
@@ -77,12 +78,12 @@ export function buildTree(index: TargetIndex): DirNode {
 export interface Row {
   key: string;
   depth: number;
-  kind: "dir" | "rule";
+  kind: "dir" | "target";
   text: string;
   /** For dir rows: the directory path that expand/collapse toggles. */
   dirPath?: string;
   expanded?: boolean;
-  /** For rule rows: the label selecting this row navigates to. */
+  /** For target rows: the label selecting this row navigates to. */
   label?: string;
   ruleClass?: string;
 }
@@ -103,11 +104,11 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
       });
       if (ex) walk(d, depth + 1);
     }
-    for (const t of n.rules) {
+    for (const t of n.targets) {
       rows.push({
         key: `r:${t.label}`,
         depth,
-        kind: "rule",
+        kind: "target",
         text: `:${t.name}`,
         ruleClass: t.ruleClass,
         label: t.label,

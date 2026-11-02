@@ -1,14 +1,14 @@
 import { COMMANDS } from "./commands.ts";
 import type { Transport } from "./session.ts";
 
-/** Date and optional run filters sent to the core analytics query. */
+/** Date and optional invocation filters sent to the core analytics query. */
 export interface AnalyticsFilter {
   start: string | null;
   end: string | null;
   // The store rejects every command outside build/test.
   cmd: "build" | "test" | null;
   outcome: "ok" | "failed" | "interrupted" | null;
-  target: string | null;
+  pattern: string | null;
 }
 /** Daily and per-target aggregates returned by the core. */
 export interface DailyAnalytics {
@@ -26,8 +26,8 @@ export interface DailyAnalytics {
     p95Ms: number;
   }>;
   targets: Array<{
-    target: string;
-    runs: number;
+    pattern: string;
+    invocations: number;
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
@@ -43,7 +43,7 @@ export interface AnalyticsView {
 /** Creates the empty state before the first analytics query. */
 export function emptyAnalytics(): AnalyticsView {
   return {
-    filter: { start: null, end: null, cmd: null, outcome: null, target: null },
+    filter: { start: null, end: null, cmd: null, outcome: null, pattern: null },
     data: null,
     loading: false,
     error: null,

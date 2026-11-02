@@ -14,7 +14,7 @@ PRD のシナリオ1・3を支える機能で、query の見方は [m1](./m1-tar
 ### Non Goals
 
 - `set(...)`、`let ... in ...`、`$name` の変数参照。使われる頻度に対して実装が重いため切り捨てる(worse is better。Code では手書きできる)
-- Sky Query 専用の関数(`allrdeps` 等)
+- SkyQuery 専用の関数(`allrdeps` 等)
 - `cquery`、`aquery`。使える関数と結果の意味が違うため、別モードとして設計する
 - query の履歴・保存・共有
 - 結果の各 target の詳細画面
@@ -34,7 +34,7 @@ PRD のシナリオ1・3を支える機能で、query の見方は [m1](./m1-tar
 - **式ノード**：式の木の1要素。種別は target pattern、関数呼び出し(call)、二項演算(binary)の3種
 - **kind selector**：各式ノードの先頭にある、式の種別を切り替える select。Target pattern・全関数・`intersect`/`union`/`except` を列挙する
 - **Builder / Code**：編集モード。Builder は GUI で組み立て、Code は文字列を直接編集する
-- **snapshot**・**run**：[overview](./overview.md#background) に従う。本機能の ad-hoc query は snapshot 取り込みとは別の `bazel query` 呼び出しである
+- **snapshot**・**invocation**：[overview](./overview.md#background) に従う。本機能の ad-hoc query は snapshot 取り込みとは別の `bazel query` 呼び出しである
 
 command 生成に関わる flag は二つ。
 `--noimplicit_deps` は暗黙の依存を除く。UI の既定は ON(Bazel 既定からずらす)。
@@ -130,9 +130,9 @@ serialize は AST から query 文字列を作る純粋関数とする。
 
 欄エラーがあっても serialize は試み、失敗する場合はその旨を command の欄に出す。
 生成式そのものの表示は持たず、command 表示が式を内包する。
-エラーがある間は Run と Copy command を無効にする。
+エラーがある間は Execute と Copy command を無効にする。
 式・flag・出力形式を変更すると結果と実行エラーを消す。
-Code モードには欄エラーがないため、式が空の間だけ Run と Copy command を無効にする。
+Code モードには欄エラーがないため、式が空の間だけ Execute と Copy command を無効にする。
 
 ### Builder ⇄ Code の往復
 
@@ -154,11 +154,11 @@ serialize は `binary` に常に括弧を付け、記号表記を単語形に正
 式の先頭が `-` の場合、bazel はこれを query ではなく flag と解釈し得る。
 最終的な1引数が `-` で始まる場合は core 側でも実行を拒否する(`--` 区切りで回避できるかは spike で確かめる)。
 
-この Run は composer の run(build・test)ではなく、snapshot 取り込みと同種の `bazel query` 呼び出しである。
-実行は overview の直列化規則に従い、query・run・取り込みのいずれかが実行中なら新しい query を拒否し、理由つきで Run を無効にする。
+Execute は snapshot 取り込みと同種の `bazel query` 呼び出しを起こす(build・test の invocation ではない)。
+実行は overview の直列化規則に従い、query・invocation・取り込みのいずれかが実行中なら新しい query を拒否し、理由つきで Execute を無効にする。
 timeout(目安5分)は snapshot 取り込みと同じ規則を適用する。v1 には Stop を置かない(worse is better)。実行中の query は timeout で終わるかアプリ終了時にグループごと kill されるだけである。
 busy 中の呼び出しはアプリ側で拒否し、外部の bazel が lock を持っている場合は `--noblock_for_lock` で即座に失敗する。
-出力形式の切り替えやプリセット選択では実行しない。Run ボタンまたは Cmd/Ctrl+Enter で明示的に実行する。
+出力形式の切り替えやプリセット選択では実行しない。Execute ボタンまたは Cmd/Ctrl+Enter で明示的に実行する。
 `--keep_going` は付けない。部分結果を知る手段がないため、早く失敗して式を直させる方が扱いやすい。
 
 query が非0終了した場合は、結果欄に exit code と stderr の末尾を表示する。
@@ -169,7 +169,7 @@ query が非0終了した場合は、結果欄に exit code と stderr の末尾
 
 結果は Raw と Graph の二つの見方だけを提供する。
 実行は現在選択中の出力形式で行い、結果は一件だけ保持する。
-出力形式を切り替えたら結果を消し、次の Run を待つ。前の形式に戻しても結果は復元しない。
+出力形式を切り替えたら結果を消し、次の Execute を待つ。前の形式に戻しても結果は復元しない。
 
 - **Raw**：`--output=label` の1行1label テキスト。件数の多い結果の表示は保証範囲に含めない
 - **Graph**：`--output=graph` の DOT を Graphviz で描画し、SVG を `<img>` の blob URL で表示する。v1 では rule class や target の詳細は出さない
@@ -230,7 +230,7 @@ attribute 名は手入力する。
 
 - spawn は shell を介さず引数配列で行う。実行の直列化も [overview](./overview.md#security-concerns) に従う
 - 画面の command 文字列(`'...'`)は表示と Copy command 用であり、実行経路ではない
-- 最終的な1引数が `-` で始まる場合は core 側でも実行を拒否する([m3](./m3-find-and-run.md) と同じ規則)
+- 最終的な1引数が `-` で始まる場合は core 側でも実行を拒否する([m3](./m3-find-and-execute.md) と同じ規則)
 - 結果の label・DOT は workspace 由来の文字列であり、text として表示する。Graphviz の SVG 出力は DOM に埋め込まず、blob URL の `<img>` で表示する(svg の script・外部参照を封じる)
 - 式は任意の `bazel query` を表せるため、高コストな query は bazel server の時間とメモリを消費する。timeout とアプリ終了時の kill で上限を設ける
 
@@ -248,7 +248,7 @@ query と結果には workspace の構造情報が含まれるが、local のま
 - kind selector の切替：`deps`→`rdeps` で `expr` が保たれ `universe` に既定値が入ること、`deps`→`somepath` で `expr` が `from` に移ること、`intersect`→`union` で左右が保たれること
 - Code の parse：括弧、左結合、`^`/`+`/`-` が AST に戻ること。`set`・`let`・`$name` を含む式が Builder に戻らないこと
 - flag の組み合わせで生成 command が変わること
-- 実行経路：検証エラー中の Run 無効、非0終了の表示、同時実行の拒否、式・flag・出力形式の変更時の結果消去、変更後・dispose 後の応答破棄、出力形式を切り替えても Run まで実行されないこと
+- 実行経路：検証エラー中の Execute 無効、非0終了の表示、同時実行の拒否、式・flag・出力形式の変更時の結果消去、変更後・dispose 後の応答破棄、出力形式を切り替えても Execute まで実行されないこと
 - 空の式にも target 入力欄があり、入力を全削除しても同じ欄で編集を続けられること
 - **smoke**：Bazel 8.7以上の小さな repo で catalog 全16関数を実行し、signature・既定値・受理可否を確かめる
 - **smoke**：`--nograph:factored`・`--graph:node_limit` の flag 組と、SVG の `<img>` 表示を実機で確かめる

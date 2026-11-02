@@ -8,10 +8,10 @@ const FORBIDDEN_CHARACTERS = /[\p{White_Space}\p{Cc}]/u;
 
 /** Validates a single target token without trimming or splitting it. */
 export function targetError(raw: string): string | null {
-  if (raw === "") return "Enter a target";
-  if (raw.startsWith("-")) return 'A target cannot start with "-"';
+  if (raw === "") return "Enter a target or pattern";
+  if (raw.startsWith("-")) return 'A target or pattern cannot start with "-"';
   if (FORBIDDEN_CHARACTERS.test(raw)) {
-    return "A target cannot contain whitespace or control characters";
+    return "A target or pattern cannot contain whitespace or control characters";
   }
   return null;
 }

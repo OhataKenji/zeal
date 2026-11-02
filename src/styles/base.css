@@ -223,7 +223,7 @@ button {
 }
 
 .relations,
-.run-details {
+.invocation-details {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
   column-gap: 20px;
@@ -232,14 +232,14 @@ button {
 }
 
 .relations dt,
-.run-details dt {
+.invocation-details dt {
   color: var(--muted-foreground);
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
 }
 
 .relations dd,
-.run-details dd {
+.invocation-details dd {
   margin: 0;
   padding: 10px 0;
   border-bottom: 1px solid var(--border);

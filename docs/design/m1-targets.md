@@ -61,11 +61,11 @@ label の行き先は次の規則で分ける: targets に存在する label と
 query の stdout は streaming parser で逐次読み、全量をメモリに載せない。
 `--noimplicit_deps` と implicit 属性の除外を併用し、暗黙依存が関係表示へ混入するのを防ぐ。
 取り込みは workspace 単位で1本に限る。
-取り込み中と run 実行中の要求は予約せず拒否し、利用者が完了後に refresh する([overview](./overview.md)の直列化)。
+取り込み中と invocation 実行中の要求は予約せず拒否し、利用者が完了後に refresh する([overview](./overview.md)の直列化)。
 query にはタイムアウト(目安 5 分。初回は bazelisk の download と cold cache を含み得るため緩める)を設け、取り込み中・待機中は UI にその状態を出す。
 grpc/grpc での実測では cache ありで約 56ms、clean 後の cold cache で約 19s だった(spike 済み)。この規模なら起動ごとの取り直しが実用的で、cold の間も「取り込み中」と出せばよい。
 取り込みは workspace を開いたとき(バックグラウンド)と手動 refresh で行う。
-run 完了後の自動取り込みは行わない。
+invocation 完了後の自動取り込みは行わない。
 
 新しい snapshot は構築が完了してから参照を一括で差し替え、取り込み途中の失敗・中断では直前のメモリ上の snapshot がそのまま残る。
 新旧が混ざった状態は作らない。
@@ -124,7 +124,7 @@ targets の location(BUILD file と行)を保持し、画面から定義位置�
 - さらに大きい monorepo では `//...` 自体が非現実的になる。roadmap には入れないが、workspace 選択時に package 範囲(例 `//src/...`)を絞る構想はここに置く。query の対象 pattern 化はその延長にある。
 - どの rule の属性にも現れない source file は files に載らず、Attributes にも出ない。
 - `srcs`/`data` が他 rule の生成 file の label を指す場合、その関係は producer の `<rule-output>` と path が一致すれば files 行で見えるが、`deps →`・`used by ←` には現れない(label→producer の辺は作らない)。
-- run 完了ごとの取り込みは BUILD が変わっていなくても全量 query を打つ。計測後に mtime 等の差分検知を検討する余地を残す。
+- invocation 完了ごとの取り込みは BUILD が変わっていなくても全量 query を打つ。計測後に mtime 等の差分検知を検討する余地を残す。
 
 ## Security Concerns
 

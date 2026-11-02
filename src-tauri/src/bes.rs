@@ -9,35 +9,34 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServer};
 
 pub const ADDRESS: &str = "127.0.0.1:4718";
-const MAX_SESSIONS: usize = 4;
+const MAX_STREAMS: usize = 4;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-type HistoryChanged = Arc<dyn Fn() + Send + Sync>;
+type InvocationsChanged = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Receiver {
     data: PathBuf,
-    sessions: Arc<tokio::sync::Semaphore>,
-    history_changed: HistoryChanged,
+    streams: Arc<tokio::sync::Semaphore>,
+    invocations_changed: InvocationsChanged,
 }
 
 impl Receiver {
-    fn new(data: PathBuf, history_changed: HistoryChanged) -> Self {
+    fn new(data: PathBuf, invocations_changed: InvocationsChanged) -> Self {
         Self {
             data,
-            sessions: Arc::new(tokio::sync::Semaphore::new(MAX_SESSIONS)),
-            history_changed,
+            streams: Arc::new(tokio::sync::Semaphore::new(MAX_STREAMS)),
+            invocations_changed,
         }
     }
 
     #[allow(clippy::result_large_err)]
     fn admit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Status> {
-        self.sessions.clone().try_acquire_owned().map_err(|_| {
+        self.streams.clone().try_acquire_owned().map_err(|_| {
             Status::resource_exhausted("BES is handling its maximum number of streams")
         })
     }
@@ -45,14 +44,14 @@ impl Receiver {
 
 /// The blocking worker owns admission together with its receipt, so cancelling
 /// the RPC never permits another worker while this one's disk I/O still runs.
-struct Session {
+struct Stream {
     receipt: Option<Receipt>,
     _permit: tokio::sync::OwnedSemaphorePermit,
-    history_changed: HistoryChanged,
+    invocations_changed: InvocationsChanged,
 }
 
 #[allow(clippy::result_large_err)] // The RPC task reports tonic Status by value.
-impl Session {
+impl Stream {
     async fn append(self, data: PathBuf, event: wire::OrderedBuildEvent) -> Result<Self, Status> {
         tokio::task::spawn_blocking(move || self.append_event(&data, &event))
             .await
@@ -80,7 +79,7 @@ impl Session {
             }
         };
         if changed {
-            (self.history_changed)();
+            (self.invocations_changed)();
         }
         Ok(self)
     }
@@ -89,7 +88,7 @@ impl Session {
         tokio::task::spawn_blocking(move || {
             let receipt = self.receipt.take().expect("nonempty stream has a receipt");
             let range = receipt.finish().map_err(store_status)?;
-            (self.history_changed)();
+            (self.invocations_changed)();
             Ok((self, range))
         })
         .await
@@ -105,7 +104,7 @@ impl Session {
         if let Some(receipt) = self.receipt
             && receipt.partial().is_ok()
         {
-            (self.history_changed)();
+            (self.invocations_changed)();
         }
     }
 }
@@ -136,29 +135,33 @@ impl PublishBuildEvent for Receiver {
     }
 
     type PublishBuildToolEventStreamStream = Pin<
-        Box<dyn Stream<Item = Result<wire::PublishBuildToolEventStreamResponse, Status>> + Send>,
+        Box<
+            dyn tokio_stream::Stream<
+                    Item = Result<wire::PublishBuildToolEventStreamResponse, Status>,
+                > + Send,
+        >,
     >;
 
     async fn publish_build_tool_event_stream(
         &self,
         request: Request<tonic::Streaming<wire::PublishBuildToolEventStreamRequest>>,
     ) -> Result<Response<Self::PublishBuildToolEventStreamStream>, Status> {
-        let mut session = Session {
+        let mut stream = Stream {
             receipt: None,
             _permit: self.admit()?,
-            history_changed: self.history_changed.clone(),
+            invocations_changed: self.invocations_changed.clone(),
         };
         let mut incoming = request.into_inner();
         let data = self.data.clone();
         let (send, receive) = tokio::sync::mpsc::channel(8);
         tokio::spawn(async move {
-            let mut stream = None;
+            let mut stream_id = None;
             loop {
                 let request = match tokio::time::timeout(IDLE_TIMEOUT, incoming.message()).await {
                     Ok(Ok(Some(request))) => request,
                     Ok(Ok(None)) => break,
                     result => {
-                        session.partial().await;
+                        stream.partial().await;
                         let error = match result {
                             Ok(Err(error)) => error,
                             _ => Status::deadline_exceeded("BES stream was idle"),
@@ -168,25 +171,25 @@ impl PublishBuildEvent for Receiver {
                     }
                 };
                 let Some(ordered) = request.ordered_build_event else {
-                    session.partial().await;
+                    stream.partial().await;
                     send_error(&send, Status::invalid_argument("missing ordered event")).await;
                     return;
                 };
-                if stream.is_none() {
-                    stream = ordered.stream_id.clone();
+                if stream_id.is_none() {
+                    stream_id = ordered.stream_id.clone();
                 }
-                session = match session.append(data.clone(), ordered).await {
-                    Ok(session) => session,
+                stream = match stream.append(data.clone(), ordered).await {
+                    Ok(stream) => stream,
                     Err(error) => {
                         send_error(&send, error).await;
                         return;
                     }
                 };
             }
-            let Some(stream) = stream else {
+            let Some(stream_id) = stream_id else {
                 return;
             };
-            let (_session, range) = match session.finish().await {
+            let (_stream, range) = match stream.finish().await {
                 Ok(saved) => saved,
                 Err(error) => {
                     send_error(&send, error).await;
@@ -195,7 +198,7 @@ impl PublishBuildEvent for Receiver {
             };
             for sequence_number in range.first..=range.last {
                 let ack = wire::PublishBuildToolEventStreamResponse {
-                    stream_id: Some(stream.clone()),
+                    stream_id: Some(stream_id.clone()),
                     sequence_number,
                 };
                 if !matches!(
@@ -230,10 +233,10 @@ pub async fn start(
     data: Result<PathBuf, String>,
     core: Arc<Core>,
     state_changed: impl Fn(),
-    history_changed: impl Fn() + Send + Sync + 'static,
+    invocations_changed: impl Fn() + Send + Sync + 'static,
 ) {
-    let history_changed: HistoryChanged = Arc::new(history_changed);
-    if let Err(error) = serve_ready(data, &core, &state_changed, history_changed).await {
+    let invocations_changed: InvocationsChanged = Arc::new(invocations_changed);
+    if let Err(error) = serve_ready(data, &core, &state_changed, invocations_changed).await {
         unavailable(&core, error);
         state_changed();
     }
@@ -243,7 +246,7 @@ async fn serve_ready(
     data: Result<PathBuf, String>,
     core: &Core,
     state_changed: &impl Fn(),
-    history_changed: HistoryChanged,
+    invocations_changed: InvocationsChanged,
 ) -> Result<(), String> {
     let data = data?;
     let listener = bind(ADDRESS).await.map_err(|error| error.to_string())?;
@@ -252,12 +255,14 @@ async fn serve_ready(
     {
         let mut state = core.state.lock().expect("application state lock poisoned");
         state.bes_error = (address.port() != 4718).then(|| {
-            format!("BES port 4718 is occupied; use --bes_backend={endpoint} for terminal builds")
+            format!(
+                "BES port 4718 is occupied; use --bes_backend={endpoint} for terminal invocations"
+            )
         });
         state.bes_endpoint = Some(endpoint);
     }
     state_changed();
-    serve_with_history_changed(listener, data, history_changed)
+    serve_with_invocations_changed(listener, data, invocations_changed)
         .await
         .map_err(|error| error.to_string())?;
     Err("BES receiver stopped".to_string())
@@ -267,19 +272,19 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     data: PathBuf,
 ) -> Result<(), tonic::transport::Error> {
-    serve_with_history_changed(listener, data, Arc::new(|| {})).await
+    serve_with_invocations_changed(listener, data, Arc::new(|| {})).await
 }
 
-async fn serve_with_history_changed(
+async fn serve_with_invocations_changed(
     listener: tokio::net::TcpListener,
     data: PathBuf,
-    history_changed: HistoryChanged,
+    invocations_changed: InvocationsChanged,
 ) -> Result<(), tonic::transport::Error> {
     tonic::transport::Server::builder()
-        .concurrency_limit_per_connection(MAX_SESSIONS)
-        .max_concurrent_streams(MAX_SESSIONS as u32)
+        .concurrency_limit_per_connection(MAX_STREAMS)
+        .max_concurrent_streams(MAX_STREAMS as u32)
         .add_service(
-            PublishBuildEventServer::new(Receiver::new(data, history_changed))
+            PublishBuildEventServer::new(Receiver::new(data, invocations_changed))
                 .max_decoding_message_size(16 * 1024 * 1024),
         )
         .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
@@ -331,8 +336,8 @@ mod tests {
         let data = fixture.data.clone();
         let workspace = fixture.ws.clone();
         let notify = Arc::new(move || {
-            let runs = store::list(&data, &workspace).unwrap();
-            seen.lock().unwrap().push(runs[0].exit_code);
+            let invocations = store::list(&data, &workspace).unwrap();
+            seen.lock().unwrap().push(invocations[0].exit_code);
         });
         Receiver::new(fixture.data.clone(), notify)
     }
@@ -346,22 +351,22 @@ mod tests {
         let fixture = Fixture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let receiver = observed_receiver(&fixture, seen.clone());
-        let session = Session {
+        let stream = Stream {
             receipt: None,
             _permit: receiver.admit().unwrap(),
-            history_changed: receiver.history_changed.clone(),
+            invocations_changed: receiver.invocations_changed.clone(),
         };
-        let session = session
+        let stream = stream
             .append(fixture.data.clone(), fixture.ordered(1, fixture.started()))
             .await
             .unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![None]);
-        let session = session
+        let stream = stream
             .append(fixture.data.clone(), fixture.ordered(2, fixture.finished()))
             .await
             .unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![None]);
-        session.finish().await.unwrap();
+        stream.finish().await.unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![None, Some(0)]);
     }
 
@@ -370,30 +375,30 @@ mod tests {
         let fixture = Fixture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let receiver = observed_receiver(&fixture, seen.clone());
-        let invalid = Session {
+        let invalid = Stream {
             receipt: None,
             _permit: receiver.admit().unwrap(),
-            history_changed: receiver.history_changed.clone(),
+            invocations_changed: receiver.invocations_changed.clone(),
         };
         let mut bad = fixture.ordered(1, fixture.started());
         bad.stream_id = None;
         assert!(invalid.append(fixture.data.clone(), bad).await.is_err());
         assert!(seen.lock().unwrap().is_empty());
 
-        let session = Session {
+        let stream = Stream {
             receipt: None,
             _permit: receiver.admit().unwrap(),
-            history_changed: receiver.history_changed.clone(),
+            invocations_changed: receiver.invocations_changed.clone(),
         };
-        let session = session
+        let stream = stream
             .append(fixture.data.clone(), fixture.ordered(1, fixture.started()))
             .await
             .unwrap();
-        let session = session
+        let stream = stream
             .append(fixture.data.clone(), fixture.ordered(2, fixture.finished()))
             .await
             .unwrap();
-        session.partial().await;
+        stream.partial().await;
         assert_eq!(*seen.lock().unwrap(), vec![None, Some(0)]);
     }
 
@@ -402,7 +407,7 @@ mod tests {
         let temp = Temp::new();
         let data = temp.0.join("data");
         let receiver = silent_receiver(data.clone());
-        let _permits: Vec<_> = (0..MAX_SESSIONS)
+        let _permits: Vec<_> = (0..MAX_STREAMS)
             .map(|_| receiver.admit().unwrap())
             .collect();
         assert_eq!(
@@ -439,25 +444,25 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         let event = ordered(&id, 1, bep::BuildEvent::default());
         let receipt = Receipt::begin(&receiver.data, event.stream_id.as_ref().unwrap()).unwrap();
-        let session = Session {
+        let stream = Stream {
             receipt: Some(receipt),
             _permit: receiver.admit().unwrap(),
-            history_changed: receiver.history_changed.clone(),
+            invocations_changed: receiver.invocations_changed.clone(),
         };
         // Queue the blocking write before cancelling the async caller.
-        let mut rpc = Box::pin(session.append(receiver.data.clone(), event));
+        let mut rpc = Box::pin(stream.append(receiver.data.clone(), event));
         std::future::poll_fn(|cx| {
             assert!(std::future::Future::poll(rpc.as_mut(), cx).is_pending());
             std::task::Poll::Ready(())
         })
         .await;
         drop(rpc);
-        assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
+        assert_eq!(receiver.streams.available_permits(), MAX_STREAMS - 1);
         release.send(()).unwrap();
         blocker.await.unwrap();
         let _permits = tokio::time::timeout(
             Duration::from_secs(5),
-            receiver.sessions.acquire_many(MAX_SESSIONS as u32),
+            receiver.streams.acquire_many(MAX_STREAMS as u32),
         )
         .await
         .unwrap()
@@ -475,21 +480,21 @@ mod tests {
             let receiver = silent_receiver(PathBuf::new());
             let (release, wait) = std::sync::mpsc::channel();
             let blocker = tokio::task::spawn_blocking(move || wait.recv().unwrap());
-            let session = Session {
+            let stream = Stream {
                 receipt: None,
                 _permit: receiver.admit().unwrap(),
-                history_changed: receiver.history_changed.clone(),
+                invocations_changed: receiver.invocations_changed.clone(),
             };
-            let rpc = tokio::spawn(session.partial());
+            let rpc = tokio::spawn(stream.partial());
             tokio::task::yield_now().await;
             rpc.abort();
             assert!(rpc.await.unwrap_err().is_cancelled());
-            assert_eq!(receiver.sessions.available_permits(), MAX_SESSIONS - 1);
+            assert_eq!(receiver.streams.available_permits(), MAX_STREAMS - 1);
             release.send(()).unwrap();
             blocker.await.unwrap();
             let _permits = tokio::time::timeout(
                 Duration::from_secs(5),
-                receiver.sessions.acquire_many(MAX_SESSIONS as u32),
+                receiver.streams.acquire_many(MAX_STREAMS as u32),
             )
             .await
             .unwrap()
