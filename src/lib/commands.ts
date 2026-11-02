@@ -7,7 +7,6 @@ export const COMMANDS = {
   getTargetDetail: "get_target_detail",
   openWorkspace: "open_workspace",
   refresh: "refresh",
-  openLocation: "open_location",
   listInvocations: "list_invocations",
   getInvocation: "get_invocation",
   getInvocationProfile: "get_invocation_profile",

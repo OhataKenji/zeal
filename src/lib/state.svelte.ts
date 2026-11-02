@@ -1,5 +1,4 @@
 import type { TargetScope } from "./types.ts";
-import { COMMANDS } from "./commands.ts";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSession, emptyView } from "./session";
@@ -57,9 +56,4 @@ export function openWorkspace(path: string, scope: TargetScope) {
 /** Requests a workspace refresh through the current session. */
 export function refresh() {
   return session.refresh();
-}
-
-/** Opens a target location using the operating system's configured editor. */
-export function openLocation(path: string): Promise<void> {
-  return invoke(COMMANDS.openLocation, { path });
 }

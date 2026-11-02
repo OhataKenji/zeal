@@ -27,11 +27,6 @@ JavaScript from legitimate code once that JavaScript is running in the same
 window. Rust commands must validate their inputs. Navigation and new-window
 requests must not provide a way to open remote content from the WebView.
 
-The source-file opener accepts only absolute paths to existing, non-executable
-`BUILD`, `BUILD.bazel`, or `.bzl` files, including symlink destinations. External
-Bazel repositories remain supported. Local file associations and concurrent
-filesystem changes remain trusted; this is not an operating-system sandbox.
-
 CSP does not sandbox Rust, Bazel, repository code, or child processes. Open only
 trusted repositories. Do not treat a blocked browser request as proof that the
 application cannot send data through a native command.

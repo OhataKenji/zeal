@@ -3,8 +3,6 @@
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
   import type { TargetDetail, TargetIndex } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
-  import { openLocation } from "./state.svelte";
-  import Notice from "./Notice.svelte";
 
   let {
     index,
@@ -23,22 +21,7 @@
     new Map(index.targets.map((target) => [target.label, target])),
   );
   let query = $state("");
-  let locationError = $state<string | null>(null);
   const expanded = new SvelteSet<string>();
-  $effect(() => {
-    void target;
-    locationError = null;
-  });
-  async function openSource() {
-    const selected = target;
-    if (!selected.location) return;
-    locationError = null;
-    try {
-      await openLocation(selected.location.file);
-    } catch (error) {
-      if (target === selected) locationError = String(error);
-    }
-  }
   function matches(value: string) {
     return value.toLowerCase().includes(query.toLowerCase());
   }
@@ -108,16 +91,11 @@
     <span class="badge">{target.ruleClass}</span>
     <h1>{target.label}</h1>
     {#if target.location}
-      <button
-        class="link source-location"
-        title={target.location.file}
-        onclick={openSource}
-      >
+      <span class="source-location" title={target.location.file}>
         {location(target.location.file, target.location.line)}
-      </button>
+      </span>
     {/if}
   </header>
-  {#if locationError}<Notice tone="error">Could not open source file: {locationError}</Notice>{/if}
   <div class="attributes-head">
     <h2>Attributes</h2>
     <label class="relation-filter"

@@ -4,7 +4,6 @@ mod console;
 mod detail;
 mod ingest;
 mod label;
-mod location;
 mod profile;
 mod protocol;
 mod query;
@@ -361,13 +360,6 @@ async fn get_invocation_profile(
     .map_err(|_| "profile worker failed".to_string())?
 }
 
-/// Open a BUILD/bzl file at its recorded location with the OS default app.
-#[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "file.open", skip_all)]
-fn open_location(path: String) -> Result<(), String> {
-    location::open(Path::new(&path))
-}
-
 /// `~/...` in a typed path expands to the user's home directory.
 fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/")
@@ -446,8 +438,7 @@ pub fn run() {
             list_invocations,
             get_analytics,
             get_invocation,
-            get_invocation_profile,
-            open_location
+            get_invocation_profile
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
