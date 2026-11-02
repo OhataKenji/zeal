@@ -117,6 +117,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let snapshotRequested: number | null = null;
   let targetGeneration = 0;
   let targetRequestInFlight = false;
+  let pendingStart: { workspace: string; cmd: RunCmd; target: string } | null = null;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
   function update(patch: Partial<SessionView>) {
@@ -417,6 +418,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
+    if (
+      pendingStart &&
+      pendingStart.workspace === state.workspace &&
+      state.running &&
+      state.consoleRun === state.running
+    ) {
+      openConsole({ id: state.running, cmd: pendingStart.cmd, target: pendingStart.target });
+    }
     syncTargetData(state, before, contextChanged);
     if (resumed || workspaceChanged || state.running !== before?.running) {
       void loadRuns();
@@ -497,10 +506,31 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
   }
 
+  async function reconcileStartedState(workspace: string) {
+    // Invoke responses and events use different Tauri delivery paths. The
+    // reply may precede its running event, so reconcile before deciding to
+    // read completed files. Events received during this read take priority.
+    const revision = stateRevision;
+    try {
+      const state = await transport.invoke<AppState>(COMMANDS.getState);
+      if (disposed || workspace !== view.state?.workspace) return;
+      if (revision === stateRevision) acceptState(state);
+    } catch (error) {
+      if (workspace === view.state?.workspace && revision === stateRevision) {
+        update({
+          ready: false,
+          error: `The run started, but getting its state failed; waiting for the next update: ${String(error)}`,
+        });
+      }
+    }
+  }
+
   async function start(cmd: RunCmd, target: string, argumentsText = "") {
     if (!canSend(view, target)) return;
     const workspace = view.state?.workspace;
+    if (!workspace) return;
     let startedRun: string | undefined;
+    pendingStart = { workspace, cmd, target };
     update({ starting: true, error: null });
     try {
       // The core parses arguments once; the target stays a separate token.
@@ -509,33 +539,23 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         target,
         arguments: argumentsText,
       });
+      pendingStart = null;
       if (disposed || workspace !== view.state?.workspace) return;
       startedRun = record.id;
-      selectRun(null);
-      // Composer input labels the live Console until build events report it.
-      update({ console: { ...record, cmd, target }, consoleOpen: true });
-      // Invoke responses and events use different Tauri delivery paths. The
-      // reply may precede its running event, so reconcile before deciding to
-      // read completed files. Events received during this read take priority.
-      const revision = stateRevision;
-      try {
-        const state = await transport.invoke<AppState>(COMMANDS.getState);
-        if (disposed || workspace !== view.state?.workspace) return;
-        if (revision === stateRevision) acceptState(state);
-      } catch (error) {
-        if (workspace === view.state?.workspace && revision === stateRevision) {
-          update({
-            ready: false,
-            error: `The run started, but getting its state failed; waiting for the next update: ${String(error)}`,
-          });
-        }
+      if (!view.consoleOpen || view.console?.id !== record.id) {
+        selectRun(null);
+        // Composer input labels the live Console until build events report it.
+        update({ console: { ...record, cmd, target }, consoleOpen: true });
       }
+      await reconcileStartedState(workspace);
+      if (disposed || workspace !== view.state?.workspace) return;
       // The run may already have finished before start_run's reply. Never
       // write that reply back into the authoritative running state.
       void loadRuns();
     } catch (error) {
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
+      pendingStart = null;
       update({ starting: false });
       requestTargetDetail();
       if (!disposed && workspace === view.state?.workspace && view.ready) {
