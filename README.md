@@ -20,6 +20,8 @@ pnpm tauri build -- --locked  # build a release bundle
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 
+On macOS and Linux, Zeal loads your login shell's `PATH` at startup.
+
 ## Features
 
 ### Find a Target and Invoke It
