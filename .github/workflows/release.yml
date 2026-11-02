@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # tauri-action can replace assets even on a published release.
+      # Only a draft from this exact commit may be reused after a failed run.
+      - name: Check release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(jq -r '.version' src-tauri/tauri.conf.json)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Use a stable x.y.z version in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+          export RELEASE_TAG="v$version"
+          tag=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
+          if [ -n "$tag" ]; then
+            echo "::error::Tag $RELEASE_TAG already exists. Use a new version."
+            exit 1
+          fi
+          release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" | \
+            jq -c --arg tag "$RELEASE_TAG" '.[] | select(.tag_name == $tag)')
+          if [ -n "$release" ] && ! jq -e \
+            '.draft == true and .target_commitish == env.GITHUB_SHA' <<< "$release" > /dev/null; then
+            echo "::error::Release $RELEASE_TAG is published or belongs to another commit. Use a new version."
+            exit 1
+          fi
+
+      - name: Check signing credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing release secret: $name"
+              exit 1
+            fi
+          done
+
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build signed DMG and create draft release
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target aarch64-apple-darwin --bundles dmg -- --locked
+          tagName: v__VERSION__
+          releaseName: Zeal v__VERSION__
+          releaseCommitish: ${{ github.sha }}
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: false
+          releaseBody: |
+            Download the DMG for macOS on Apple Silicon.
+            Install Bazelisk or Bazel separately. Updates are installed manually.
+
+            Maintainer: add release notes and complete docs/release-guide.md before publishing.
