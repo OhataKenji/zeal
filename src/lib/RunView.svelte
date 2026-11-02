@@ -34,17 +34,23 @@
     if (panel) panel.scrollTop = 0;
   });
 
+  function nextTabIndex(key: string, index: number): number {
+    switch (key) {
+      case "ArrowRight":
+        return (index + 1) % tabs.length;
+      case "ArrowLeft":
+        return (index + tabs.length - 1) % tabs.length;
+      case "Home":
+        return 0;
+      case "End":
+        return tabs.length - 1;
+      default:
+        return -1;
+    }
+  }
+
   function tabKey(event: KeyboardEvent, index: number) {
-    const next =
-      event.key === "ArrowRight"
-        ? (index + 1) % tabs.length
-        : event.key === "ArrowLeft"
-          ? (index + tabs.length - 1) % tabs.length
-          : event.key === "Home"
-            ? 0
-            : event.key === "End"
-              ? tabs.length - 1
-              : -1;
+    const next = nextTabIndex(event.key, index);
     if (next < 0) return;
     event.preventDefault();
     active = tabs[next];

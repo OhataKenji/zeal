@@ -35,22 +35,8 @@ export function search(index: SnapshotKey<Target>, query: string, limit = 20): M
   }));
 }
 
-/**
- * The runs of `text` to render, alternating between plain and highlighted.
- * Overlapping or adjacent ranges merge into one run.
- */
-export function segments(
-  text: string,
-  indices: ReadonlyArray<readonly [number, number]>,
-): Array<{ text: string; hit: boolean }> {
-  const ranges = indices
-    .map(([start, end]): readonly [number, number] => [
-      Math.max(0, start),
-      Math.min(text.length - 1, end),
-    ])
-    .filter(([start, end]) => start <= end)
-    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-
+/** Merges sorted ranges, combining overlapping or adjacent ones. */
+function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
   const merged: Array<[number, number]> = [];
   for (const [start, end] of ranges) {
     const last = merged.at(-1);
@@ -60,10 +46,30 @@ export function segments(
       merged.push([start, end]);
     }
   }
+  return merged;
+}
+
+/**
+ * The runs of `text` to render, alternating between plain and highlighted.
+ * Overlapping or adjacent ranges merge into one run.
+ */
+export function segments(
+  text: string,
+  indices: ReadonlyArray<readonly [number, number]>,
+): Array<{ text: string; hit: boolean }> {
+  const ranges = mergeRanges(
+    indices
+      .map(([start, end]): readonly [number, number] => [
+        Math.max(0, start),
+        Math.min(text.length - 1, end),
+      ])
+      .filter(([start, end]) => start <= end)
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]),
+  );
 
   const runs: Array<{ text: string; hit: boolean }> = [];
   let at = 0;
-  for (const [start, end] of merged) {
+  for (const [start, end] of ranges) {
     if (start > at) runs.push({ text: text.slice(at, start), hit: false });
     runs.push({ text: text.slice(start, end + 1), hit: true });
     at = end + 1;
@@ -85,6 +91,21 @@ export type KeyAction =
   | { kind: "close" }
   | { kind: "none" };
 
+/**
+ * The arrow-key action: an empty list swallows the key, a closed list reopens
+ * at its first row, an open one moves the highlight by `delta`.
+ */
+function arrowAction(
+  state: { open: boolean; index: number },
+  delta: number,
+  length: number,
+): KeyAction {
+  if (length === 0) return { kind: "none" };
+  return state.open
+    ? { kind: "move", index: moveIndex(state.index, delta, length) }
+    : { kind: "move", index: 0 };
+}
+
 /** Maps arrows, Enter, and Escape to dropdown actions; it never starts a run. */
 export function keyAction(
   state: { open: boolean; index: number },
@@ -94,15 +115,9 @@ export function keyAction(
   const length = matches.length;
   switch (key) {
     case "ArrowDown":
-      if (length === 0) return { kind: "none" };
-      return state.open
-        ? { kind: "move", index: moveIndex(state.index, 1, length) }
-        : { kind: "move", index: 0 };
+      return arrowAction(state, 1, length);
     case "ArrowUp":
-      if (length === 0) return { kind: "none" };
-      return state.open
-        ? { kind: "move", index: moveIndex(state.index, -1, length) }
-        : { kind: "move", index: 0 };
+      return arrowAction(state, -1, length);
     case "Enter": {
       if (!state.open || length === 0) return { kind: "none" };
       const { target } = matches[moveIndex(state.index, 0, length)];

@@ -178,25 +178,29 @@ export function layoutProfile(profile: Profile): Timeline {
     const height = LANE_HEADER + spanRows * ROW_HEIGHT + 8;
     return { tid: lane.tid, name: lane.name, height, spanRows, events, counters };
   });
+  const { start, end } = profileDomain(lanes, profile.phases);
+  return { start, end, lanes };
+}
+
+/** Bounds the timeline by phase and event times, keeping a non-empty range. */
+function profileDomain(lanes: LaneGeometry[], phases: Profile["phases"]): TimeRange {
+  const times = [
+    ...phases.flatMap((phase) => [phase.startUs, phase.endUs]),
+    ...lanes.flatMap((lane) => lane.events.flatMap(eventTimes)),
+  ];
   let start = Infinity;
   let end = -Infinity;
-  const extend = (value: number) => {
-    start = Math.min(start, value);
-    end = Math.max(end, value);
-  };
-  profile.phases.forEach((phase) => {
-    extend(phase.startUs);
-    extend(phase.endUs);
-  });
-  for (const lane of lanes) {
-    for (const event of lane.events) {
-      if (event.start !== null) extend(event.start);
-      if (event.end !== null) extend(event.end);
-    }
+  for (const time of times) {
+    start = Math.min(start, time);
+    end = Math.max(end, time);
   }
   if (!Number.isFinite(start)) start = 0;
   if (!Number.isFinite(end) || end <= start) end = start + 1;
-  return { start, end, lanes };
+  return { start, end };
+}
+
+function eventTimes(event: EventGeometry): number[] {
+  return [event.start, event.end].filter((time): time is number => time !== null);
 }
 
 /** Formats trace microseconds using seconds, milliseconds, or microseconds. */

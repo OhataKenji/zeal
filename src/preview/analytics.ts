@@ -90,26 +90,35 @@ function timing(durations: readonly number[]) {
   };
 }
 
-function dailyAnalytics(
-  runs: readonly AnalyticsRecord[],
-  filter: ResolvedFilter,
-  first: number,
-  spanDays: number,
-): DailyAnalytics["days"] {
+function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
   const days = new Map<string, DaySamples>();
   for (let index = 0; index < spanDays; index++) {
     const date = new Date(first + index * 86400000);
     const day = `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
     days.set(day, { count: 0, ok: 0, failed: 0, interrupted: 0, durations: [] });
   }
+  return days;
+}
+
+function recordRun(days: Map<string, DaySamples>, run: AnalyticsRecord, filter: ResolvedFilter) {
+  if (filter.target != null && run.target !== filter.target) return;
+  const slot = days.get(dayString(new Date(run.startedAt)));
+  if (!slot) throw new Error("Preview analytics day was not initialized.");
+  slot.count += 1;
+  slot[outcome(run)] += 1;
+  const elapsed = duration(run);
+  if (elapsed !== null) slot.durations.push(elapsed);
+}
+
+function dailyAnalytics(
+  runs: readonly AnalyticsRecord[],
+  filter: ResolvedFilter,
+  first: number,
+  spanDays: number,
+): DailyAnalytics["days"] {
+  const days = emptyDays(first, spanDays);
   for (const run of runs) {
-    if (filter.target != null && run.target !== filter.target) continue;
-    const slot = days.get(dayString(new Date(run.startedAt)));
-    if (!slot) throw new Error("Preview analytics day was not initialized.");
-    slot.count += 1;
-    slot[outcome(run)] += 1;
-    const elapsed = duration(run);
-    if (elapsed !== null) slot.durations.push(elapsed);
+    recordRun(days, run, filter);
   }
   return [...days].map(([day, slot]) => ({
     day,

@@ -440,20 +440,23 @@ function parseQuery(text: string): Expr {
     if (peek().type !== "(") return target(word);
     if (!Object.hasOwn(FUNCTIONS, word))
       throw syntaxError(t, `${word} is not supported by this Builder`);
-    take("(");
     const schema = FUNCTIONS[word];
+    const args = callArgs(schema);
+    return { id: nextNodeId++, kind: "call", fn: word, args };
+  }
+  function callArgs(schema: FnSpec): (Expr | string | null)[] {
+    take("(");
     const args: (Expr | string | null)[] = [];
     for (let i = 0; i < schema.args.length; i++) {
-      const arg = schema.args[i];
-      if (peek().type === ")" && arg.optional) {
-        args.push(null);
-        continue;
-      }
-      if (i > 0) take(",");
-      args.push(arg.type === "expr" ? expression() : takeWord());
+      args.push(callArg(schema.args[i], i));
     }
     take(")");
-    return { id: nextNodeId++, kind: "call", fn: word, args };
+    return args;
+  }
+  function callArg(arg: ArgSpec, i: number): Expr | string | null {
+    if (peek().type === ")" && arg.optional) return null;
+    if (i > 0) take(",");
+    return arg.type === "expr" ? expression() : takeWord();
   }
   const root = expression();
   take("eof");
