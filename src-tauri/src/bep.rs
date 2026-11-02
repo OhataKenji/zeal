@@ -111,12 +111,18 @@ pub struct BuildOptions {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct TargetResult {
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect: Option<String>,
     pub ok: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct TestSummary {
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
     /// `overall_status` as Bazel names it, e.g. `PASSED` or `FAILED`.
     pub status: String,
 }
@@ -392,18 +398,23 @@ fn project(event: BuildEvent, bep: &mut Bep) {
         (Id::TargetCompleted(id), Some(Payload::Completed(result))) => {
             bep.targets.push(TargetResult {
                 label: id.label,
+                configuration: id.configuration.map(|c| c.id),
+                aspect: (!id.aspect.is_empty()).then_some(id.aspect),
                 ok: result.success,
             });
         }
         (Id::TargetConfigured(id), Some(Payload::Aborted(_))) => {
             bep.targets.push(TargetResult {
                 label: id.label,
+                configuration: None,
+                aspect: (!id.aspect.is_empty()).then_some(id.aspect),
                 ok: false,
             });
         }
         (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
             bep.tests.push(TestSummary {
                 label: id.label,
+                configuration: id.configuration.map(|c| c.id),
                 status: test_status(summary.overall_status).to_string(),
             });
         }
@@ -416,7 +427,7 @@ mod tests {
     use super::*;
     use crate::protocol::bep::build_event::Payload;
     use crate::protocol::bep::build_event_id::{
-        Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
+        ConfigurationId, Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
     };
     use crate::protocol::bep::{
         Aborted, BuildEventId, TargetComplete, TestSummary as ProtoTestSummary,
@@ -477,10 +488,14 @@ mod tests {
             [
                 TargetResult {
                     label: "//pkg:ok".into(),
+                    configuration: None,
+                    aspect: None,
                     ok: true
                 },
                 TargetResult {
                     label: "//pkg:bad".into(),
+                    configuration: None,
+                    aspect: None,
                     ok: false
                 },
             ]
@@ -489,10 +504,88 @@ mod tests {
             parsed.tests,
             [TestSummary {
                 label: "//pkg:test".into(),
+                configuration: None,
                 status: "FAILED".into()
             }]
         );
         assert!(!parsed.truncated);
+    }
+
+    fn completed_in_configuration(configuration: &str, aspect: &str) -> BuildEvent {
+        let mut event = target("//pkg:test", true);
+        event.id = Some(BuildEventId {
+            id: Some(Id::TargetCompleted(TargetCompletedId {
+                label: "//pkg:test".into(),
+                configuration: Some(ConfigurationId {
+                    id: configuration.into(),
+                }),
+                aspect: aspect.into(),
+            })),
+        });
+        event
+    }
+
+    fn summary_in_configuration(configuration: &str) -> BuildEvent {
+        BuildEvent {
+            id: Some(BuildEventId {
+                id: Some(Id::TestSummary(TestSummaryId {
+                    label: "//pkg:test".into(),
+                    configuration: Some(ConfigurationId {
+                        id: configuration.into(),
+                    }),
+                })),
+            }),
+            payload: Some(Payload::TestSummary(ProtoTestSummary {
+                overall_status: 1,
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn distinguishes_configurations_and_aspects_for_the_same_label() {
+        let mut stream = event(completed_in_configuration("config-a", ""));
+        stream.extend(event(completed_in_configuration("config-b", "my_aspect")));
+        stream.extend(event(summary_in_configuration("config-a")));
+        stream.extend(event(summary_in_configuration("config-b")));
+        let parsed = parse(stream.as_slice());
+        assert_eq!(
+            parsed.targets,
+            [
+                TargetResult {
+                    label: "//pkg:test".into(),
+                    configuration: Some("config-a".into()),
+                    aspect: None,
+                    ok: true
+                },
+                TargetResult {
+                    label: "//pkg:test".into(),
+                    configuration: Some("config-b".into()),
+                    aspect: Some("my_aspect".into()),
+                    ok: true
+                },
+            ]
+        );
+        assert_eq!(
+            parsed.tests,
+            [
+                TestSummary {
+                    label: "//pkg:test".into(),
+                    configuration: Some("config-a".into()),
+                    status: "PASSED".into()
+                },
+                TestSummary {
+                    label: "//pkg:test".into(),
+                    configuration: Some("config-b".into()),
+                    status: "PASSED".into()
+                },
+            ]
+        );
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["targets"][1]["configuration"], "config-b");
+        assert_eq!(json["targets"][1]["aspect"], "my_aspect");
+        assert_eq!(json["tests"][1]["configuration"], "config-b");
     }
 
     #[test]
@@ -693,7 +786,11 @@ mod tests {
     fn ok_fixture_has_all_expected_targets_and_test() {
         let parsed = fixture("ok");
         assert_eq!(
-            parsed.targets,
+            parsed
+                .targets
+                .iter()
+                .map(|t| (t.label.as_str(), t.ok))
+                .collect::<Vec<_>>(),
             [
                 "//pkg:tool",
                 "//pkg:a",
@@ -702,17 +799,15 @@ mod tests {
                 "//pkg:d",
                 "//pkg:t"
             ]
-            .map(|label| TargetResult {
-                label: label.into(),
-                ok: true,
-            })
+            .map(|label| (label, true))
         );
         assert_eq!(
-            parsed.tests,
-            [TestSummary {
-                label: "//pkg:t".into(),
-                status: "PASSED".into(),
-            }]
+            parsed
+                .tests
+                .iter()
+                .map(|t| (t.label.as_str(), t.status.as_str()))
+                .collect::<Vec<_>>(),
+            [("//pkg:t", "PASSED")]
         );
         assert!(!parsed.truncated);
     }
@@ -720,18 +815,20 @@ mod tests {
     #[test]
     fn failed_and_aborted_fixtures_keep_the_failed_target() {
         assert_eq!(
-            fixture("action_failed").targets,
-            [TargetResult {
-                label: "//fail:x".into(),
-                ok: false,
-            }]
+            fixture("action_failed")
+                .targets
+                .iter()
+                .map(|t| (t.label.clone(), t.ok))
+                .collect::<Vec<_>>(),
+            [("//fail:x".to_string(), false)]
         );
         assert_eq!(
-            fixture("analysis_failed").targets,
-            [TargetResult {
-                label: "//dep:x".into(),
-                ok: false,
-            }]
+            fixture("analysis_failed")
+                .targets
+                .iter()
+                .map(|t| (t.label.clone(), t.ok))
+                .collect::<Vec<_>>(),
+            [("//dep:x".to_string(), false)]
         );
     }
 
@@ -739,11 +836,12 @@ mod tests {
     fn empty_and_cached_fixtures_are_complete() {
         assert_eq!(fixture("loading_failed"), Bep::default());
         assert_eq!(
-            fixture("disk_cache_hit").targets,
-            [TargetResult {
-                label: "//pkg:cached".into(),
-                ok: true,
-            }]
+            fixture("disk_cache_hit")
+                .targets
+                .iter()
+                .map(|t| (t.label.clone(), t.ok))
+                .collect::<Vec<_>>(),
+            [("//pkg:cached".to_string(), true)]
         );
     }
 
@@ -775,6 +873,8 @@ mod tests {
             parsed.targets,
             [TargetResult {
                 label: "//dep:x".into(),
+                configuration: None,
+                aspect: None,
                 ok: false
             }]
         );
