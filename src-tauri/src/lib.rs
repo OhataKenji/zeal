@@ -4,12 +4,14 @@ mod console;
 mod detail;
 mod ingest;
 mod label;
+mod location;
 mod profile;
 mod protocol;
 mod query;
 mod runargs;
 mod runner;
 mod scope;
+mod security;
 mod snapshot;
 mod state;
 mod store;
@@ -363,16 +365,7 @@ async fn get_invocation_profile(
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "file.open", skip_all)]
 fn open_location(path: String) -> Result<(), String> {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener)
-        .arg(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    location::open(Path::new(&path))
 }
 
 /// `~/...` in a typed path expands to the user's home directory.
@@ -435,6 +428,7 @@ pub fn run() {
                 .await;
             });
             restore_workspace(app, core);
+            security::create_window(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

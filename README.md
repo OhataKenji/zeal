@@ -52,6 +52,7 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 All of the above run in CI (`.github/workflows/`).
 
 See [docs/prd.md](docs/prd.md) and [docs/design/](docs/design/) for more details.
+See [docs/security.md](docs/security.md) for frontend protection boundaries and verification.
 
 ## Record terminal invocations
 

@@ -4,6 +4,7 @@
   import type { TargetDetail, TargetIndex } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
   import { openLocation } from "./state.svelte";
+  import Notice from "./Notice.svelte";
 
   let {
     index,
@@ -22,7 +23,22 @@
     new Map(index.targets.map((target) => [target.label, target])),
   );
   let query = $state("");
+  let locationError = $state<string | null>(null);
   const expanded = new SvelteSet<string>();
+  $effect(() => {
+    void target;
+    locationError = null;
+  });
+  async function openSource() {
+    const selected = target;
+    if (!selected.location) return;
+    locationError = null;
+    try {
+      await openLocation(selected.location.file);
+    } catch (error) {
+      if (target === selected) locationError = String(error);
+    }
+  }
   function matches(value: string) {
     return value.toLowerCase().includes(query.toLowerCase());
   }
@@ -95,12 +111,13 @@
       <button
         class="link source-location"
         title={target.location.file}
-        onclick={() => target.location && openLocation(target.location.file)}
+        onclick={openSource}
       >
         {location(target.location.file, target.location.line)}
       </button>
     {/if}
   </header>
+  {#if locationError}<Notice tone="error">Could not open source file: {locationError}</Notice>{/if}
   <div class="attributes-head">
     <h2>Attributes</h2>
     <label class="relation-filter"
