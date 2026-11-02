@@ -23,7 +23,7 @@
   const status = $derived(
     runStatus(record, view.state?.running ?? null, view.state?.stopping),
   );
-  const sections = ["Logs", "Targets", "Details", "Timing"] as const;
+  const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections] as const;
   let active = $state<(typeof tabs)[number]>("All");
   let panel = $state<HTMLDivElement>();
@@ -115,7 +115,7 @@
             {#if record}
               <dl class="run-details">
                 <dt>Command</dt>
-                <dd>{#if record.cmd}<code>bazel {record.cmd} {record.target ?? "(target not recorded)"}</code>{:else}Not recorded{/if}</dd>
+                <dd>{#if record.cmd}<code>{record.cmd} {record.target ?? "(target not recorded)"}</code>{:else}Not recorded{/if}</dd>
                 <dt>Workspace</dt>
                 <dd><code>{record.workspace ?? "Not recorded"}</code></dd>
                 <dt>Run ID</dt>
@@ -152,7 +152,7 @@
                   <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
                 {/if}
               </details>
-              <h3 class="run-arguments-heading">Bazel arguments</h3>
+              <h3 class="run-arguments-heading">Arguments</h3>
               {#if bep?.options}
                 <div class="run-command-options">
                   <section class="run-command-block">
