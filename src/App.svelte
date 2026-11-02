@@ -38,6 +38,10 @@
   const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const selected = $derived(app.view.selectedTarget);
+  const consoleVisible = $derived(
+    app.view.consoleOpen &&
+      (!app.view.starting || app.view.state?.running === app.view.console?.id),
+  );
 
   function retryTargets() {
     if (app.view.snapshotError) void getSession().loadSnapshot();
@@ -275,19 +279,19 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:run-content={app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen || queryOpen}
+    class:run-content={app.view.starting || app.view.consoleOpen || !!app.view.selectedRun || analyticsOpen || queryOpen}
   >
     {#if app.view.console}
       {#key app.view.console.id}
-        <div class="console-container" hidden={!app.view.consoleOpen}>
+        <div class="console-container" hidden={!consoleVisible}>
           {#await loadConsole() then { default: ConsoleView }}
           <ConsoleView record={app.view.runs.find((run) => run.id === app.view.console?.id) ?? app.view.console}
-            visible={app.view.consoleOpen} running={state.running === app.view.console.id} stopping={state.stopping} />
+            visible={consoleVisible} running={state.running === app.view.console.id} stopping={state.stopping} />
           {/await}
         </div>
       {/key}
     {/if}
-    {#if !app.view.consoleOpen}
+    {#if !consoleVisible}
     {#if snap?.meta.status === "partial"}
       <Notice tone="warning">
         Skipped some packages (exit {state.lastError?.exitCode ?? "?"}) —
@@ -304,7 +308,9 @@
     {#if state.ingest === "running" || app.view.snapshotLoading}
       <p class="dim">Loading targets…</p>
     {/if}
-    {#if app.view.selectedRun}
+    {#if app.view.starting}
+      <p class="dim" role="status">Starting Bazel…</p>
+    {:else if app.view.selectedRun}
       {#key app.view.selectedRun}
         <RunView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
       {/key}

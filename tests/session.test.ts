@@ -801,6 +801,7 @@ test("an unobserved reservation keeps composer input in the live Console only", 
   await h.session.init();
   const started = h.session.start("run", "//:app");
   h.emit("app-state", { ...IDLE, running: RECORD.id });
+  assert.equal(h.view.consoleOpen, false);
   pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
   await started;
   assert.deepEqual(h.view.console, { id: RECORD.id, cmd: "run", target: "//:app" });
@@ -873,6 +874,8 @@ test("run completing before start response opens its detail after reconciliation
   await h.session.init();
   const started = h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: RECORD.id });
+  assert.equal(h.view.consoleOpen, true);
+  assert.deepEqual(h.view.console, { id: RECORD.id, cmd: "build", target: "//:app" });
   h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
   pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
   await started;
@@ -882,6 +885,49 @@ test("run completing before start response opens its detail after reconciliation
   assert.equal(h.view.console?.id, RECORD.id);
   assert.deepEqual(pendingRequest(h, "get_run").args, { id: RECORD.id });
   assert.deepEqual(pendingRequest(h, "get_run_profile").args, { id: RECORD.id });
+});
+
+test("running state opens Console before the start response and keeps it open", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  assert.equal(h.view.starting, true);
+  assert.equal(h.view.consoleOpen, false);
+  h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: RECORD.id });
+  assert.equal(h.view.consoleOpen, true);
+  const consoleBeforeReply = h.view.console;
+  assert.deepEqual(consoleBeforeReply, { id: RECORD.id, cmd: "build", target: "//:app" });
+  pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
+  await started;
+  assert.equal(h.view.starting, false);
+  assert.equal(h.view.consoleOpen, true);
+  assert.strictEqual(h.view.console, consoleBeforeReply);
+});
+
+test("pending start ignores a running state without its Console grant", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", { ...IDLE, running: RECORD.id, consoleRun: "other-run" });
+  assert.equal(h.view.consoleOpen, false);
+  pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
+  await started;
+});
+
+test("pending start ignores another workspace's running state", async () => {
+  const h = harness();
+  await h.session.init();
+  const started = h.session.start("build", "//:app");
+  h.emit("app-state", {
+    ...IDLE,
+    workspace: "/other",
+    running: RECORD.id,
+    consoleRun: RECORD.id,
+  });
+  assert.equal(h.view.consoleOpen, false);
+  pendingRequest(h, "start_run").reply.resolve({ id: RECORD.id });
+  await started;
+  assert.equal(h.view.consoleOpen, false);
 });
 
 test("start response before the running event reconciles state without reading active observations", async () => {
@@ -1036,6 +1082,8 @@ test("failed spawn is visible and allows another Send", async () => {
   pendingRequest(h, "start_run").reply.reject(new Error("failed to spawn bazel"));
   await started;
   assert.match(h.view.error ?? "", /failed to spawn/);
+  assert.equal(h.view.starting, false);
+  assert.equal(h.view.consoleOpen, false);
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
@@ -1045,6 +1093,8 @@ test("failed spawn leaves a previously completed Console open", async () => {
   h.emit("app-state", { ...IDLE, consoleRun: RECORD.id });
   h.session.openConsole(COMPLETED.record);
   const started = h.session.start("build", "//:other");
+  assert.equal(h.view.starting, true);
+  assert.equal(h.view.console?.id, RECORD.id);
   pendingRequest(h, "start_run").reply.reject(new Error("failed to spawn bazel"));
   await started;
   assert.equal(h.view.consoleOpen, true);
