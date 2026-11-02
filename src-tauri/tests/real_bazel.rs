@@ -97,16 +97,9 @@ impl BazelFixture {
         let output = tokio::task::spawn_blocking(move || process.output().unwrap())
             .await
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{cmd}: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_success(&output, cmd);
         let record = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
-        assert_eq!(record.cmd.as_deref(), Some(cmd));
-        assert_eq!(record.target.as_deref(), Some(target));
-        assert_eq!(record.exit_code, Some(0));
+        assert_invocation(&record, cmd, target);
     }
 
     async fn accepts_standard_input(&self) {
@@ -120,17 +113,10 @@ impl BazelFixture {
         assert!(observed.finished_at.is_some(), "BEP finishes before input");
         let _ = send_input.send(());
         let output = process.await.unwrap();
-        assert!(
-            output.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_success(&output, "run");
         assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
         let observed = zeal_lib::read_run_record(&self.data, &self.ws, &id).unwrap();
-        assert_eq!(observed.cmd.as_deref(), Some("run"));
-        assert_eq!(observed.target.as_deref(), Some("//:double"));
-        assert_eq!(observed.exit_code, Some(0));
+        assert_invocation(&observed, "run", "//:double");
         assert!(observed.finished_at.is_some());
     }
 
@@ -146,6 +132,23 @@ impl BazelFixture {
         .await
         .expect("BEP finishes while the program is waiting");
     }
+}
+
+/// `bazel` must exit zero; on failure show what it printed.
+fn assert_success(output: &std::process::Output, cmd: &str) {
+    assert!(
+        output.status.success(),
+        "{cmd}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The recorded invocation of `cmd target`, exited cleanly.
+fn assert_invocation(record: &zeal_lib::RunRecord, cmd: &str, target: &str) {
+    assert_eq!(record.cmd.as_deref(), Some(cmd));
+    assert_eq!(record.target.as_deref(), Some(target));
+    assert_eq!(record.exit_code, Some(0));
 }
 
 async fn wait_for_build_receipt(

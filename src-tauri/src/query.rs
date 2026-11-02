@@ -11,7 +11,7 @@
 
 use crate::ingest::QUERY_TIMEOUT;
 use crate::runner::signal_group;
-use crate::state::Core;
+use crate::state::{Core, CoreState};
 use rustix::process::Signal;
 use serde::Serialize;
 use std::io::Read;
@@ -255,9 +255,7 @@ fn observe(
         let mut st = core.state.lock().expect("application state lock poisoned");
         match child.try_wait() {
             Ok(Some(status)) => {
-                if st.query_pgid == Some(pgid) {
-                    st.query_pgid = None;
-                }
+                clear_pgid(&mut st, pgid);
                 return Observed {
                     exit: status.code(),
                     timed_out: confirm_end.is_some(),
@@ -268,9 +266,7 @@ fn observe(
             Err(_) => {
                 // A failed wait can mean another reaper consumed the child;
                 // its former pid is no longer safe to signal.
-                if st.query_pgid == Some(pgid) {
-                    st.query_pgid = None;
-                }
+                clear_pgid(&mut st, pgid);
                 return Observed {
                     exit: None,
                     timed_out: confirm_end.is_some(),
@@ -278,17 +274,8 @@ fn observe(
                 };
             }
         }
-        let now = Instant::now();
-        if confirm_end.is_none() && now >= end {
-            if let Err(e) = signal_group(pgid, Signal::KILL) {
-                log::warn!("SIGKILL to query group failed: {e}");
-            }
-            confirm_end = Some(now + kill_confirm);
-        }
-        if confirm_end.is_some_and(|until| now >= until) {
-            if st.query_pgid == Some(pgid) {
-                st.query_pgid = None;
-            }
+        if confirm_expired(&mut confirm_end, pgid, end, kill_confirm) {
+            clear_pgid(&mut st, pgid);
             return Observed {
                 exit: None,
                 timed_out: true,
@@ -298,6 +285,32 @@ fn observe(
         drop(st);
         thread::sleep(poll);
     }
+}
+
+/// Forget a reaped or killed group once its fate is known: the pid is no
+/// longer ours to signal.
+fn clear_pgid(st: &mut CoreState, pgid: i32) {
+    if st.query_pgid == Some(pgid) {
+        st.query_pgid = None;
+    }
+}
+
+/// Once `end` passes the group gets one SIGKILL and `kill_confirm` to be
+/// observed dead; `true` means the confirm window ran out.
+fn confirm_expired(
+    confirm_end: &mut Option<Instant>,
+    pgid: i32,
+    end: Instant,
+    kill_confirm: Duration,
+) -> bool {
+    let now = Instant::now();
+    if confirm_end.is_none() && now >= end {
+        if let Err(e) = signal_group(pgid, Signal::KILL) {
+            log::warn!("SIGKILL to query group failed: {e}");
+        }
+        *confirm_end = Some(now + kill_confirm);
+    }
+    confirm_end.is_some_and(|until| now >= until)
 }
 
 /// A panic in the worker must release the query slot. Only the holder can
@@ -484,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_unsafe_or_unsupported_input() {
+    fn expressions_reject_empty_dash_prefix_control_and_overflow() {
         for expr in [
             "",
             "   ",
@@ -497,6 +510,11 @@ mod tests {
         ] {
             assert!(validate_expr(expr).is_err(), "{expr:?}");
         }
+        assert!(validate_expr(&"a".repeat(MAX_EXPR_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn expressions_accept_queries_whitespace_and_the_length_bound() {
         for expr in [
             "deps(//a:b)",
             "//...",
@@ -506,15 +524,21 @@ mod tests {
         ] {
             assert!(validate_expr(expr).is_ok(), "{expr:?}");
         }
-        let long = "a".repeat(MAX_EXPR_LEN + 1);
-        assert!(validate_expr(&long).is_err());
         assert!(validate_expr(&"a".repeat(MAX_EXPR_LEN)).is_ok());
+    }
+
+    #[test]
+    fn outputs_accept_only_label_and_graph() {
         for output in ["xml", "", "Label"] {
             assert!(validate_output(output).is_err(), "{output:?}");
         }
         for output in ["label", "graph"] {
             assert!(validate_output(output).is_ok(), "{output:?}");
         }
+    }
+
+    #[test]
+    fn validation_errors_name_the_rule_not_the_expression() {
         // Error strings name the rule, never the expression.
         let msg = validate_expr("-deps(//secret:t)").unwrap_err();
         assert!(!msg.contains("secret"), "{msg}");
@@ -522,8 +546,7 @@ mod tests {
         assert!(!msg.contains("bad"), "{msg}");
     }
 
-    /// Each way the slot can be held rejects a new query; a held query rejects
-    /// a second one. The fields `run` leaves behind are all set at acquire.
+    /// Each way the slot can be held rejects a new query.
     #[test]
     fn acquire_rejects_while_any_bazel_invocation_holds_the_slot() {
         let core = Core::new();
@@ -546,7 +569,18 @@ mod tests {
             st.run = None;
             st.query_running = false;
         }
+    }
 
+    /// A held query rejects a second one; the fields `run` leaves behind are
+    /// all set at acquire.
+    #[test]
+    fn a_held_query_rejects_the_next_acquire() {
+        let core = Core::new();
+        {
+            let mut st = core.state.lock().unwrap();
+            st.workspace = Some(PathBuf::from("/ws"));
+            st.bazel = Some(PathBuf::from("/bin/bazel"));
+        }
         let (ws, bazel) = acquire(&core).unwrap();
         assert_eq!(ws, PathBuf::from("/ws"));
         assert_eq!(bazel, PathBuf::from("/bin/bazel"));

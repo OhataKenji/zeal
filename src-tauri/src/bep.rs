@@ -144,59 +144,7 @@ pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
         events: 0,
     };
     let mut display_size = json_size(&parsed.bep);
-    loop {
-        let mut first = [0];
-        match input.read(&mut first) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => {
-                parsed.invalid = true;
-                parsed.read_error = true;
-                break;
-            }
-        }
-        remaining = match remaining.checked_sub(1) {
-            Some(v) => v,
-            None => {
-                parsed.invalid = true;
-                break;
-            }
-        };
-        let mut delimiter = CountingRead {
-            inner: &mut input,
-            count: 0,
-            failed: false,
-        };
-        let length = frame_length(&mut delimiter, first[0]);
-        let consumed = delimiter.count;
-        parsed.read_error = delimiter.failed;
-        let Some(length) = length else {
-            parsed.invalid = true;
-            break;
-        };
-        remaining = match remaining.checked_sub(consumed) {
-            Some(v) => v,
-            None => {
-                parsed.invalid = true;
-                break;
-            }
-        };
-        if length > u64::from(MAX_FRAME_SIZE) || length > remaining {
-            parsed.invalid = true;
-            break;
-        }
-        let mut bytes = vec![0; length as usize];
-        if let Err(error) = input.read_exact(&mut bytes) {
-            parsed.invalid = true;
-            parsed.read_error = error.kind() != io::ErrorKind::UnexpectedEof;
-            break;
-        }
-        remaining -= length;
-        let Ok(event) = BuildEvent::decode(bytes.as_slice()) else {
-            parsed.invalid = true;
-            break;
-        };
+    while let Some(event) = next_event(&mut input, &mut remaining, &mut parsed) {
         parsed.events += 1;
         if let Some(Payload::Progress(progress)) = &event.payload {
             append_tail(&mut parsed.log, &progress.stderr);
@@ -208,6 +156,72 @@ pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
     }
     parsed.bep.truncated |= parsed.invalid;
     parsed
+}
+
+/// The next frame's event. `None` ends the scan: a clean end of stream
+/// leaves `parsed.invalid` clear, anything else sets it.
+fn next_event<R: Read>(
+    input: &mut R,
+    remaining: &mut u64,
+    parsed: &mut Parsed,
+) -> Option<BuildEvent> {
+    let length = declared_len(input, remaining, parsed)?;
+    if length > u64::from(MAX_FRAME_SIZE) || length > *remaining {
+        parsed.invalid = true;
+        return None;
+    }
+    let mut bytes = vec![0; length as usize];
+    if let Err(error) = input.read_exact(&mut bytes) {
+        parsed.invalid = true;
+        parsed.read_error = error.kind() != io::ErrorKind::UnexpectedEof;
+        return None;
+    }
+    *remaining -= length;
+    if let Ok(event) = BuildEvent::decode(bytes.as_slice()) {
+        Some(event)
+    } else {
+        parsed.invalid = true;
+        None
+    }
+}
+
+/// The next frame's declared length, its bytes charged to `remaining`.
+/// `None` ends the scan as in [`next_event`].
+fn declared_len<R: Read>(input: &mut R, remaining: &mut u64, parsed: &mut Parsed) -> Option<u64> {
+    let mut first = [0];
+    loop {
+        match input.read(&mut first) {
+            Ok(0) => return None,
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                parsed.invalid = true;
+                parsed.read_error = true;
+                return None;
+            }
+        }
+    }
+    let Some(rest) = remaining.checked_sub(1) else {
+        parsed.invalid = true;
+        return None;
+    };
+    *remaining = rest;
+    let mut delimiter = CountingRead {
+        inner: &mut *input,
+        count: 0,
+        failed: false,
+    };
+    let length = frame_length(&mut delimiter, first[0]);
+    parsed.read_error = delimiter.failed;
+    let Some(rest) = remaining.checked_sub(delimiter.count) else {
+        parsed.invalid = true;
+        return None;
+    };
+    *remaining = rest;
+    if length.is_none() {
+        parsed.invalid = true;
+    }
+    length
 }
 
 struct CountingRead<R> {
@@ -253,58 +267,52 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
             false
         }
     }
-    for value in delta.targets {
-        if room(
-            size,
-            0,
-            json_size(&value) + usize::from(!bep.targets.is_empty()),
-        ) {
-            bep.targets.push(value);
-        } else {
-            bep.truncated = true;
+    // Push within the budget; the separator byte travels with every entry
+    // after the first. `false` marks the merge truncated.
+    fn push<T: Serialize>(list: &mut Vec<T>, value: T, size: &mut usize) -> bool {
+        let fits = room(size, 0, json_size(&value) + usize::from(!list.is_empty()));
+        if fits {
+            list.push(value);
         }
+        fits
+    }
+    // Swap in an optional field within the budget; `key_bytes` is its
+    // encoded `"name":` size. `false` marks the merge truncated.
+    fn replace<T: Serialize>(
+        field: &mut Option<T>,
+        value: Option<T>,
+        key_bytes: usize,
+        size: &mut usize,
+    ) -> bool {
+        let Some(value) = value else {
+            return true;
+        };
+        let old = field.as_ref().map_or(0, |v| json_size(v) + key_bytes);
+        let fits = room(size, old, json_size(&value) + key_bytes);
+        if fits {
+            *field = Some(value);
+        }
+        fits
+    }
+    for value in delta.targets {
+        bep.truncated |= !push(&mut bep.targets, value, size);
     }
     for value in delta.tests {
-        if room(
-            size,
-            0,
-            json_size(&value) + usize::from(!bep.tests.is_empty()),
-        ) {
-            bep.tests.push(value);
-        } else {
-            bep.truncated = true;
-        }
+        bep.truncated |= !push(&mut bep.tests, value, size);
     }
-    if let Some(options) = delta.options {
-        let old = bep.options.as_ref().map_or(0, |v| json_size(v) + 11);
-        if room(size, old, json_size(&options) + 11) {
-            bep.options = Some(options);
-        } else {
-            bep.truncated = true;
-        }
-    }
-    for (destination, incoming, key_bytes) in [
-        (
-            &mut bep.original_command_line,
-            delta.original_command_line,
-            23,
-        ),
-        (
-            &mut bep.canonical_command_line,
-            delta.canonical_command_line,
-            24,
-        ),
-    ] {
-        let Some(value) = incoming else {
-            continue;
-        };
-        let old = destination.as_ref().map_or(0, |v| json_size(v) + key_bytes);
-        if room(size, old, json_size(&value) + key_bytes) {
-            *destination = Some(value);
-        } else {
-            bep.truncated = true;
-        }
-    }
+    bep.truncated |= !replace(&mut bep.options, delta.options, 11, size);
+    bep.truncated |= !replace(
+        &mut bep.original_command_line,
+        delta.original_command_line,
+        23,
+        size,
+    );
+    bep.truncated |= !replace(
+        &mut bep.canonical_command_line,
+        delta.canonical_command_line,
+        24,
+        size,
+    );
 }
 fn append_tail(log: &mut String, value: &str) {
     if value.len() >= LOG_LIMIT {
@@ -813,8 +821,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn one_scan_bounds_bep_and_unicode_log_but_keeps_logs_after_display_limit() {
+    /// A stream that overflows the display budget, then keeps logging.
+    fn over_limit_stream() -> Vec<u8> {
         let mut stream = Vec::new();
         for _ in 0..10 {
             stream.extend(event(target(&"x".repeat(1024 * 1024), true)));
@@ -835,11 +843,23 @@ mod tests {
             })),
             ..Default::default()
         }));
+        stream
+    }
+
+    #[test]
+    fn one_scan_bounds_the_bep_display_and_marks_it_truncated() {
+        let stream = over_limit_stream();
         let parsed = parse_detail(stream.as_slice(), stream.len() as u64);
         assert!(!parsed.invalid);
         assert!(parsed.bep.truncated);
         assert!(serde_json::to_vec(&parsed.bep).unwrap().len() <= DISPLAY_LIMIT);
         assert!(parsed.bep.options.is_none());
+    }
+
+    #[test]
+    fn the_unicode_log_tail_survives_the_display_limit() {
+        let stream = over_limit_stream();
+        let parsed = parse_detail(stream.as_slice(), stream.len() as u64);
         assert!(parsed.log.len() <= LOG_LIMIT);
         assert!(parsed.log.ends_with("tail"));
         assert!(parsed.log.starts_with('界'));

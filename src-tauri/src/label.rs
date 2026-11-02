@@ -111,11 +111,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonicalizes_labels() {
+    fn canonicalizes_main_repository_labels() {
         assert_eq!(canonical("//app"), "//app:app");
         assert_eq!(canonical("//app/lib"), "//app/lib:lib");
         assert_eq!(canonical("//app:lib"), "//app:lib");
         assert_eq!(canonical("//:root"), "//:root");
+    }
+
+    #[test]
+    fn canonicalizes_repository_labels() {
         assert_eq!(canonical("@@//app:x"), "//app:x");
         assert_eq!(canonical("@@repo//p:n"), "@repo//p:n");
         assert_eq!(canonical("@@repo+//p"), "@repo+//p:p");
@@ -157,11 +161,15 @@ mod tests {
     }
 
     #[test]
-    fn classifies_attributes_and_keys() {
+    fn classifies_dependency_attributes() {
         assert!(is_dep_attr("deps"));
         assert!(!is_dep_attr("visibility"));
         assert!(!is_dep_attr("$cc_toolchain"));
         assert!(!is_dep_attr(":late_bound"));
+    }
+
+    #[test]
+    fn recognizes_the_default_select_key() {
         assert!(is_select_key("//conditions:default"));
         assert!(!is_select_key("//tools/conditions:arm"));
         assert!(!is_select_key("//conditions:inputs"));

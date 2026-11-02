@@ -574,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn byte_event_and_ipc_limits_are_incomplete() {
+    fn byte_limits_are_incomplete() {
         let input = gzip(br#"{"traceEvents":[{"name":"Finishing","ph":"X","ts":10}]}"#);
         assert!(matches!(
             parse_limits(input.as_slice(), input.len() - 1, 1024, 10, 1024),
@@ -584,6 +584,11 @@ mod tests {
             parse_limits(input.as_slice(), 1024, 20, 10, 1024),
             Err(ProfileError::Incomplete(_))
         ));
+    }
+
+    #[test]
+    fn event_and_ipc_limits_are_incomplete() {
+        let input = gzip(br#"{"traceEvents":[{"name":"Finishing","ph":"X","ts":10}]}"#);
         assert!(matches!(
             parse_limits(input.as_slice(), 1024, 1024, 0, 1024),
             Err(ProfileError::Incomplete(_))
@@ -686,6 +691,27 @@ mod tests {
         heavy_event: bool,
         incomplete: bool,
     ) {
+        let (compressed, expanded) = measure_input(padding, event_count, heavy_event);
+        let began = std::time::Instant::now();
+        let result = parse_bounded(compressed.as_slice(), IPC_LIMIT);
+        let milliseconds = began.elapsed().as_secs_f64() * 1000.0;
+        let ipc = ipc_bytes(&result);
+        eprintln!(
+            "profile_measure name={name} expanded_bytes={expanded} compressed_bytes={} input_events={} result_ipc_bytes={ipc} parse_ms={milliseconds:.3} status={}",
+            compressed.len(),
+            event_count + usize::from(heavy_event),
+            if result.is_ok() { "ok" } else { "incomplete" }
+        );
+        if incomplete {
+            assert!(matches!(result, Err(ProfileError::Incomplete(_))));
+        } else {
+            assert!(result.is_ok());
+        }
+    }
+
+    /// The synthetic profile body: padding, a Finishing event, then filler
+    /// events. Returns the gzipped input and its expanded byte count.
+    fn measure_input(padding: usize, event_count: usize, heavy_event: bool) -> (Vec<u8>, usize) {
         let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
         let mut expanded = 0usize;
         let mut write = |bytes: &[u8]| {
@@ -706,29 +732,16 @@ mod tests {
             write(br#""}"#);
         }
         write(b"]}");
-        let compressed = gz.finish().unwrap();
-        let began = std::time::Instant::now();
-        let result = parse_bounded(compressed.as_slice(), IPC_LIMIT);
-        let milliseconds = began.elapsed().as_secs_f64() * 1000.0;
-        let ipc = if let Ok(profile) = &result {
-            let mut budget = JsonBudget {
-                remaining: usize::MAX,
-            };
-            budget.charge(profile).unwrap();
-            usize::MAX - budget.remaining
-        } else {
-            0
+        (gz.finish().unwrap(), expanded)
+    }
+
+    /// The serialized size a successful parse would send over IPC, else 0.
+    fn ipc_bytes(result: &Result<Profile, ProfileError>) -> usize {
+        let Ok(profile) = result else { return 0 };
+        let mut budget = JsonBudget {
+            remaining: usize::MAX,
         };
-        eprintln!(
-            "profile_measure name={name} expanded_bytes={expanded} compressed_bytes={} input_events={} result_ipc_bytes={ipc} parse_ms={milliseconds:.3} status={}",
-            compressed.len(),
-            event_count + usize::from(heavy_event),
-            if result.is_ok() { "ok" } else { "incomplete" }
-        );
-        if incomplete {
-            assert!(matches!(result, Err(ProfileError::Incomplete(_))));
-        } else {
-            assert!(result.is_ok());
-        }
+        budget.charge(profile).unwrap();
+        usize::MAX - budget.remaining
     }
 }

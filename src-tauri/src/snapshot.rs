@@ -5,7 +5,7 @@
 
 use crate::label;
 use crate::label::LabelParts;
-use crate::xml::ParsedQuery;
+use crate::xml::{ParsedQuery, RawRule};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::io::BufRead;
@@ -165,12 +165,25 @@ fn fetched_at() -> u64 {
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.build", skip_all)]
 #[must_use]
 pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
-    let rules = &query.rules;
     let sources: HashSet<String> = query
         .source_files
         .iter()
         .map(|s| label::canonical(s))
         .collect();
+    let (edges, files) = relationships(&query.rules, &sources);
+    Snapshot {
+        meta: Meta {
+            fetched_at: fetched_at(),
+            status,
+        },
+        targets: rule_targets(&query.rules),
+        edges,
+        files,
+    }
+}
+
+/// Sorted target rows, one per parsed rule.
+fn rule_targets(rules: &[RawRule]) -> Vec<Target> {
     let mut targets = Vec::new();
     for r in rules {
         let lbl = label::canonical(&r.label);
@@ -187,58 +200,74 @@ pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
         });
     }
     targets.sort_by(|a, b| a.label.cmp(&b.label));
+    targets
+}
 
+/// Edges and file entries from every rule's dep-ish attrs and declared
+/// outputs. `sources` is the canonical label set of the source files.
+fn relationships(rules: &[RawRule], sources: &HashSet<String>) -> (Vec<Edge>, Vec<FileEntry>) {
     let mut edges = HashSet::new();
     let mut files = HashSet::new();
     for r in rules {
-        let owner = label::canonical(&r.label);
-        for (attr, raw) in &r.label_attrs {
-            if !label::is_dep_attr(attr) {
-                continue;
-            }
-            let to = label::canonical(raw);
-            if label::is_select_key(&to) {
-                continue;
-            }
-            if label::is_external(&to) || !sources.contains(&to) {
-                edges.insert(Edge {
-                    from: owner.clone(),
-                    to,
-                    attr: attr.clone(),
-                });
-            } else {
-                files.insert(FileEntry {
-                    path: label::label_to_path(&to),
-                    owner: owner.clone(),
-                    role: attr.clone(),
-                });
-            }
-        }
-        // Outputs come only from <rule-output>: output-typed attributes like
-        // `outs` arrive as <output> elements and are never label_attrs.
-        for out in &r.outputs {
-            files.insert(FileEntry {
-                path: label::label_to_path(&label::canonical(out)),
-                owner: owner.clone(),
-                role: "out".to_string(),
-            });
-        }
+        rule_relationships(r, sources, &mut edges, &mut files);
     }
 
     let mut edges: Vec<Edge> = edges.into_iter().collect();
     edges.sort_by(|a, b| (&a.from, &a.attr, &a.to).cmp(&(&b.from, &b.attr, &b.to)));
     let mut files: Vec<FileEntry> = files.into_iter().collect();
     files.sort_by(|a, b| (&a.path, &a.owner, &a.role).cmp(&(&b.path, &b.owner, &b.role)));
+    (edges, files)
+}
 
-    Snapshot {
-        meta: Meta {
-            fetched_at: fetched_at(),
-            status,
-        },
-        targets,
-        edges,
-        files,
+/// One rule's references: dep-ish attrs land as edges or file entries, and
+/// declared outputs are always file entries.
+fn rule_relationships(
+    r: &RawRule,
+    sources: &HashSet<String>,
+    edges: &mut HashSet<Edge>,
+    files: &mut HashSet<FileEntry>,
+) {
+    let owner = label::canonical(&r.label);
+    for (attr, raw) in &r.label_attrs {
+        let Some(to) = dep_label(attr, raw) else {
+            continue;
+        };
+        if label::is_external(&to) || !sources.contains(&to) {
+            edges.insert(Edge {
+                from: owner.clone(),
+                to,
+                attr: attr.clone(),
+            });
+            continue;
+        }
+        files.insert(FileEntry {
+            path: label::label_to_path(&to),
+            owner: owner.clone(),
+            role: attr.clone(),
+        });
     }
+    // Outputs come only from <rule-output>: output-typed attributes like
+    // `outs` arrive as <output> elements and are never label_attrs.
+    for out in &r.outputs {
+        files.insert(FileEntry {
+            path: label::label_to_path(&label::canonical(out)),
+            owner: owner.clone(),
+            role: "out".to_string(),
+        });
+    }
+}
+
+/// The canonical label a dep-ish attribute points at, or `None` for attrs and
+/// select() branch keys that never become relationships.
+fn dep_label(attr: &str, raw: &str) -> Option<String> {
+    if !label::is_dep_attr(attr) {
+        return None;
+    }
+    let to = label::canonical(raw);
+    if label::is_select_key(&to) {
+        return None;
+    }
+    Some(to)
 }
 
 #[cfg(test)]
@@ -249,7 +278,7 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn label_kind_builds_only_tree_targets() {
+    fn label_kind_parses_rules_into_sorted_targets() {
         let targets = parse_label_kind(Cursor::new(
             "cc_test rule //app:test\njava_library rule //app/lib\n",
         ))
@@ -260,9 +289,18 @@ mod tests {
         assert_eq!(index.targets[0].rule_class, "java_library");
         assert_eq!(index.targets[1].label, "//app:test");
         assert!(index.targets.iter().all(|target| target.location.is_none()));
-        let json = serde_json::to_value(index).unwrap();
+    }
+
+    #[test]
+    fn target_index_json_omits_snapshot_fields() {
+        let targets = parse_label_kind(Cursor::new("cc_test rule //app:test\n")).unwrap();
+        let json = serde_json::to_value(build_index(targets, Status::Ok)).unwrap();
         assert!(json.get("edges").is_none());
         assert!(json.get("files").is_none());
+    }
+
+    #[test]
+    fn label_kind_rejects_lines_without_rule_marker() {
         assert!(parse_label_kind(Cursor::new("not a rule\n")).is_err());
     }
 
@@ -341,14 +379,17 @@ mod tests {
         assert!(!labels.contains("//app"));
     }
 
-    #[test]
-    fn snapshot_edges_only_from_dep_attrs() {
-        let snap = build(&fixture_rules(), Status::Ok);
-        let edges: HashSet<(&str, &str, &str)> = snap
-            .edges
+    fn edge_set(snap: &Snapshot) -> HashSet<(&str, &str, &str)> {
+        snap.edges
             .iter()
             .map(|e| (e.from.as_str(), e.to.as_str(), e.attr.as_str()))
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn dep_attrs_produce_edges_under_their_attr_name() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let edges = edge_set(&snap);
 
         assert!(edges.contains(&("//app/lib:parser", "//app/lib:parser_proto", "deps")));
         // External-repo label: edge exists, canonical `@@` collapses to `@`.
@@ -362,6 +403,12 @@ mod tests {
         // Non-deps/data attrs still become edges with their attribute name.
         assert!(edges.contains(&("//app:app", "//tools:launcher", "tools")));
         assert!(edges.contains(&("//app/lib:parser_test", "//app/lib:parser", "deps")));
+    }
+
+    #[test]
+    fn non_dep_attrs_produce_no_edges() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let edges = edge_set(&snap);
 
         // Excluded: visibility, implicit `$` attrs, select() branch keys.
         assert!(!edges.iter().any(|e| e.1 == "//visibility:public"));
@@ -371,9 +418,8 @@ mod tests {
         assert!(!edges.iter().any(|e| e.1.contains("SHOULD_NOT")));
     }
 
-    #[test]
-    fn snapshot_files_inputs_outputs_and_multi_owner() {
-        let snap = build(&fixture_rules(), Status::Ok);
+    /// File entries grouped by path as (owner, role) pairs.
+    fn owners_by_path(snap: &Snapshot) -> HashMap<&str, Vec<(&str, &str)>> {
         let mut owners: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
         for f in &snap.files {
             owners
@@ -381,6 +427,13 @@ mod tests {
                 .or_default()
                 .push((f.owner.as_str(), f.role.as_str()));
         }
+        owners
+    }
+
+    #[test]
+    fn file_inputs_carry_owner_and_attr_role() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let owners = owners_by_path(&snap);
 
         // File referenced by two rules' srcs has both owners.
         let mut pj = owners["app/lib/Parser.java"].clone();
@@ -400,6 +453,15 @@ mod tests {
         );
         assert_eq!(owners["app/server.cfg"], [("//app:app", "data")]);
 
+        // rule-input alone never creates a file entry.
+        assert!(!owners.contains_key("tools/BUILD"));
+    }
+
+    #[test]
+    fn declared_outputs_are_files_with_out_role() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let owners = owners_by_path(&snap);
+
         // Outputs carry role `out`; a genrule's `outs` label merges with its
         // <rule-output> into a single entry.
         assert_eq!(
@@ -407,11 +469,11 @@ mod tests {
             [("//app/lib:parser", "out")]
         );
         assert_eq!(owners["tools/launcher.sh"], [("//tools:launcher", "out")]);
+    }
 
-        // rule-input alone never creates a file entry.
-        assert!(!owners.contains_key("tools/BUILD"));
-
-        // Files are unique on (path, owner, role).
+    #[test]
+    fn file_entries_are_unique_per_path_owner_role() {
+        let snap = build(&fixture_rules(), Status::Ok);
         let uniq: HashSet<(&str, &str, &str)> = snap
             .files
             .iter()
