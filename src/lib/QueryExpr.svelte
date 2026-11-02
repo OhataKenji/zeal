@@ -213,7 +213,6 @@
                   aria-invalid={!!argError}
                   aria-describedby={argError ? `${fieldId(i)}-error` : undefined}
                   index={idx}
-                  hints={[]}
                   value={scalarValue(call.args[i])}
                   oninput={(v) =>
                     (call.args[i] = arg.optional && v === "" ? null : v)}
