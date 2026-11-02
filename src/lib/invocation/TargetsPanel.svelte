@@ -14,7 +14,7 @@
 {#if bep}
   {#if bep.targets.length}
     <ul class="result-list">
-      {#each bep.targets as target}<li><span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span><code>{target.label}{#if target.configuration !== undefined} · configuration: {target.configuration}{/if}{#if target.aspect !== undefined} · aspect: {target.aspect}{/if}</code><span>{target.ok ? "Completed" : "Failed"}</span></li>{/each}
+      {#each bep.targets as target}<li><span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span><code>{target.label}</code><span>{target.ok ? "Completed" : "Failed"}</span></li>{/each}
     </ul>
   {:else}
     <p class="panel-empty">No results recorded.</p>
@@ -25,7 +25,7 @@
 {#if bep}
   {#if bep.tests.length}
     <ul class="result-list">
-      {#each bep.tests as test}<li><code>{test.label}{#if test.configuration !== undefined} · configuration: {test.configuration}{/if}</code><span>{test.status}</span></li>{/each}
+      {#each bep.tests as test}<li><code>{test.label}</code><span>{test.status}</span></li>{/each}
     </ul>
   {:else}
     <p class="panel-empty">No results recorded.</p>

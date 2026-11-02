@@ -76,13 +76,19 @@
       {/if}
     </div>
     <label
-      >Command <input
-        type="text"
+      >Command <select
         aria-label="Command"
-        placeholder="All commands"
         value={view.filter.cmd ?? ""}
-        onchange={(e) => filter({ cmd: e.currentTarget.value || null })}
-      /></label
+        onchange={(e) =>
+          filter({
+            // The current target is this view's command selector.
+            cmd: (e.currentTarget.value as AnalyticsFilter["cmd"]) || null,
+          })}
+      >
+        <option value="">All</option><option>build</option><option
+          >test</option
+        >
+      </select></label
     >
     <label
       >Result <select
@@ -97,21 +103,19 @@
       >
         <option value="">All</option><option>ok</option><option
           >failed</option
-        ><option>interrupted</option><option>unknown</option>
+        ><option>interrupted</option>
       </select></label
     >
     <label
-      >Target patterns <input
+      >Pattern <input
         type="text"
-        aria-label="Target patterns"
-        aria-describedby="analytics-pattern-help"
+        aria-label="Pattern"
         placeholder="//app:server"
         value={view.filter.pattern ?? ""}
         onchange={(e) =>
           filter({ pattern: e.currentTarget.value || null })}
       /></label
     >
-    <p id="analytics-pattern-help" class="dim">Match the complete pattern list exactly.</p>
     <button type="button" class="button" onclick={() => controller?.load()}
       >Refresh</button
     >
@@ -123,7 +127,7 @@
   {#if data}
     <section class="analytics-card">
       <h2>Invocations</h2>
-      <p class="dim">{data.filter.start} to {data.filter.end} · Invocations without a recorded start time are excluded.</p>
+      <p class="dim">{data.filter.start} to {data.filter.end}</p>
       <div class="chart-scroll">
         <svg
           viewBox="0 0 {width} 240"
@@ -152,10 +156,8 @@
             {@const h = (day.count / max) * PLOT.height}
             {@const okH = day.count ? (day.ok / day.count) * h : 0}
             {@const failedH = day.count ? (day.failed / day.count) * h : 0}
-            {@const interruptedH = day.count ? (day.interrupted / day.count) * h : 0}
-            {@const unknownH = day.count ? (day.unknown / day.count) * h : 0}
             <g>
-              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted}, unknown ${day.unknown})${day.day === data.today ? " (in progress)" : ""}`}</title>
+              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted})${day.day === data.today ? " (in progress)" : ""}`}</title>
               {#if okH > 0}
                 <rect
                   class="bar-ok"
@@ -174,22 +176,13 @@
                   height={failedH}
                 />
               {/if}
-              {#if interruptedH > 0}
+              {#if h - okH - failedH > 0}
                 <rect
                   class="bar-interrupted"
                   x={PLOT.left + index * step}
-                  y={PLOT.baseline - okH - failedH - interruptedH}
-                  width={Math.max(1, step - 3)}
-                  height={interruptedH}
-                />
-              {/if}
-              {#if unknownH > 0}
-                <rect
-                  class="bar-unknown"
-                  x={PLOT.left + index * step}
                   y={PLOT.baseline - h}
                   width={Math.max(1, step - 3)}
-                  height={unknownH}
+                  height={h - okH - failedH}
                 />
               {/if}
             </g>
@@ -207,7 +200,6 @@
         <span><i class="sw bar-ok"></i>ok</span>
         <span><i class="sw bar-failed"></i>failed</span>
         <span><i class="sw bar-interrupted"></i>interrupted</span>
-        <span><i class="sw bar-unknown"></i>unknown</span>
       </p>
     </section>
     <section class="analytics-card">
@@ -310,20 +302,20 @@
         <span><i class="sw sw-p95"></i>p95</span>
       </p>
     </section>
-    {#if data.patterns.length}
+    {#if data.targets.length}
       <section class="analytics-card">
-        <h2>Target patterns</h2>
-        <p class="dim">Complete pattern lists by total duration</p>
-        <table class="patterns">
+        <h2>Targets</h2>
+        <p class="dim">By total duration</p>
+        <table class="targets">
           <thead
             ><tr
-              ><th>Target patterns</th><th>Invocations</th><th>Total</th><th>p50</th><th
+              ><th>Target</th><th>Invocations</th><th>Total</th><th>p50</th><th
                 >p95</th
               ></tr
             ></thead
           >
           <tbody>
-            {#each data.patterns as t}
+            {#each data.targets as t}
               <tr class:active={view.filter.pattern === t.pattern}>
                 <td
                   ><button
@@ -440,22 +432,14 @@
 
   .bar-ok {
     fill: #a7d6a9;
-    background: #a7d6a9;
   }
 
   .bar-failed {
     fill: #ffdda6;
-    background: #ffdda6;
   }
 
   .bar-interrupted {
     fill: #c5afd4;
-    background: #c5afd4;
-  }
-
-  .bar-unknown {
-    fill: #b2b2b2;
-    background: #b2b2b2;
   }
 
   .legend {
@@ -508,31 +492,31 @@
     background: #c5afd4;
   }
 
-  .patterns {
+  .targets {
     width: 100%;
     margin-top: 10px;
     border-collapse: collapse;
   }
 
-  .patterns th,
-  .patterns td {
+  .targets th,
+  .targets td {
     padding: 4px 8px;
     font-size: 12px;
     text-align: right;
   }
 
-  .patterns th:first-child,
-  .patterns td:first-child {
+  .targets th:first-child,
+  .targets td:first-child {
     text-align: left;
   }
 
-  .patterns thead th {
+  .targets thead th {
     color: var(--muted-foreground);
     font-weight: 500;
     border-bottom: 1px solid var(--border);
   }
 
-  .patterns tr.active td {
+  .targets tr.active td {
     background: var(--accent);
   }
 

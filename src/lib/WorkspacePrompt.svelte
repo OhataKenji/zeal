@@ -69,8 +69,8 @@
     ></textarea>
   </label>
   <p class="scope-help" id="scope-help">
-    One Bazel target pattern per line. Default: //... (all packages in the main
-    repository). The target tree and search show matching rules.
+    One Bazel target pattern per line. Default: //... (entire
+    workspace). Affects the target tree and fuzzy target search.
   </p>
   <div class="ws-actions">
     <button

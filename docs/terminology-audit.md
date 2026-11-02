@@ -104,7 +104,7 @@ invocation で統一されており、Zeal 自身のコード・設計書・テ�
 
 `preview.ts` のモックハンドラも同時に改名。
 
-#### A-3. DB スキーマ
+#### A-3. DB スキーマ (マイグレーション必須)
 
 | `src-tauri/src/store/database.rs` | 現状                          | 改定案                         |
 | :-------------------------------- | :---------------------------- | :----------------------------- |
@@ -113,22 +113,25 @@ invocation で統一されており、Zeal 自身のコード・設計書・テ�
 | L162                              | カラム `target_raw`           | `target_pattern` (後述 B-1)    |
 | L183, 209, 319                    | ディスク上 `runs/<id>/`       | `invocations/<id>/`            |
 
+現状 `user_version` 3 以外の DB は拒否される (database.rs:150-156)。
+テーブル名変更は version 4 へのバンプとマイグレーションロジックが必要。
+
 #### A-4. UI 表示文字列
 
-| 場所                               | 現状                                                     | 改定案                                                       |
-| :--------------------------------- | :------------------------------------------------------- | :----------------------------------------------------------- |
-| `App.svelte:217`                   | ペイン見出し `Runs`                                      | `Invocations`                                                |
-| `App.svelte:488`                   | `Resize target and run panes`                            | `...invocation panes`                                        |
-| `RunView.svelte:108`               | `Run details`                                            | `Invocation details` (または BuildBuddy 準拠の `Details`)    |
-| `RunView.svelte:115`               | `Run ID`                                                 | `Invocation ID`                                              |
-| `RunView.svelte:84,189`            | `Could not load run details`, `after the run finishes`   | invocation に                                                |
-| `AnalyticsView.svelte:126,133,157` | `Runs`, `Runs per day`, `N run(s)`                       | `Invocations`, `Invocations per day`, `N invocation(s)`      |
-| `AnalyticsView.svelte:204-212`     | `Total run time per day`                                 | `Total invocation time per day`                              |
-| `AnalyticsView.svelte:241-249`     | `Per-day run duration percentiles`                       | `Per-day invocation duration percentiles`                    |
-| `AnalyticsView.svelte:309`         | 列見出し `Runs`                                          | `Invocations`                                                |
-| `QueryView.svelte:175,639`         | `a build/test run is in progress`, `The last run failed` | `a Bazel invocation is in progress`, `The last query failed` |
-| `session.ts:522`                   | `The run started, but getting its state failed…`         | `The invocation started,…`                                   |
-| `preview.ts:269,280,287,394`       | `Preview run not found`, `Run ended with exit N`         | invocation に                                                |
+| 場所                               | 現状                                                     | 改定案                                                            |
+| :--------------------------------- | :------------------------------------------------------- | :---------------------------------------------------------------- |
+| `App.svelte:217`                   | ペイン見出し `Runs`                                      | `Invocations`                                                     |
+| `App.svelte:488`                   | `Resize target and run panes`                            | `...invocation panes`                                             |
+| `RunView.svelte:108`               | `Run details`                                            | `Invocation details` (または BuildBuddy 準拠の `Details`)         |
+| `RunView.svelte:115`               | `Run ID`                                                 | `Invocation ID`                                                   |
+| `RunView.svelte:84,189`            | `Could not load run details`, `after the run finishes`   | invocation に                                                     |
+| `AnalyticsView.svelte:126,133,157` | `Runs`, `Runs per day`, `N run(s)`                       | `Invocations`, `Invocations per day`, `N invocation(s)`           |
+| `AnalyticsView.svelte:204-212`     | `Total run time per day`                                 | `Total invocation time per day`                                   |
+| `AnalyticsView.svelte:241-249`     | `Per-day run duration percentiles`                       | `Per-day invocation duration percentiles`                         |
+| `AnalyticsView.svelte:309`         | 列見出し `Runs`                                          | `Invocations`                                                     |
+| `QueryView.svelte:175,639`         | `a build/test run is in progress`, `The last run failed` | `a build/test invocation is in progress`, `The last query failed` |
+| `session.ts:522`                   | `The run started, but getting its state failed…`         | `The invocation started,…`                                        |
+| `preview.ts:269,280,287,394`       | `Preview run not found`, `Run ended with exit N`         | invocation に                                                     |
 
 #### A-5. ファイル名・CSS・span・fixture
 
@@ -156,21 +159,21 @@ invocation で統一されており、Zeal 自身のコード・設計書・テ�
 
 ### B. run 以外の用語修正
 
-| #    | 場所                                                                     | 現状                                                   | 問題                                                                                                                                                             | 改定案                                                            |
-| :--- | :----------------------------------------------------------------------- | :----------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------- |
-| B-1  | `database.rs:107,162`, `types.ts:93`, `analytics.rs:18`, `Filter.target` | `target`, `target_raw`                                 | 格納するのは `//...`/`:all` 等を含む空白区切りの **target pattern**。events.rs:302 の `target_patterns()` 側は正しく pattern と呼ぶ。BuildBuddy 表記も "Pattern" | `pattern` / `target_pattern`                                      |
-| B-2  | `bep.rs:117-122`                                                         | `struct TestResult { label, status }`                  | BEP の `TestResult` は shard×run×attempt 単位のメッセージ。この型は `TestSummary.overall_status` を写すもので名前が衝突                                          | `TestSummary`                                                     |
-| B-3  | `model.ts:35,80`                                                         | `DirNode.rules`, `Row.kind: "rule"`                    | ツリーの子要素は rule ではなく target                                                                                                                            | `targets`, `"target"`                                             |
-| B-4  | `RunView.svelte:111-112`                                                 | `<dt>Command</dt>` が `bazel {cmd} {target}` を表示    | command (動詞) と command line の混同                                                                                                                            | 動詞のみを "Command" として表示し、行全体は "Command line" に分離 |
-| B-5  | `WorkspacePrompt.svelte`                                                 | `//...` の探索範囲                                     | main repository の pattern であり、外部 repository を含む workspace 全体ではない                                                                                 | `main repository`                                                 |
-| B-6  | `AnalyticsView.svelte:203`, `m5:23-25`                                   | `Wait time`                                            | "Wait time" はキュー待ち時間 (queue time) の意味。実際は日別の合計 duration                                                                                      | `Total duration`                                                  |
-| B-7  | `LogPanel.svelte`                                                        | BEP の Progress 出力                                   | build log は Bazel の build/test/run の文脈でも使える。出力元を明確にする                                                                                        | `Bazel output` など                                               |
-| B-8  | `QueryView.svelte:452-457`                                               | `Copy command`                                         | コピーするのは動詞ではなく command line 全体                                                                                                                     | `Copy command line`                                               |
-| B-9  | `RunView.svelte:149`                                                     | `Bazel arguments`                                      | options のみを表示 (target は含まない)                                                                                                                           | `Bazel options` / `Command options`                               |
-| B-10 | `bes.rs:255`, `README:37`                                                | `terminal builds`, `terminal runs`                     | `bazel run` とも PTY (`terminal.log`) とも衝突                                                                                                                   | `terminal invocations` / `invocations recorded from the terminal` |
-| B-11 | `QueryView.svelte:483`, `query-editor.md`                                | Query Editor の `Run` ボタン                           | 動詞用法としては許容範囲だが、設計書が「composer の run ではない」と弁明を要するほど衝突している                                                                 | `Execute` / `Evaluate` (推奨: Execute)                            |
-| B-12 | `target.ts`, `target.test.ts`                                            | `Enter a target`, `A target cannot contain whitespace` | 入力は label または pattern を受理する                                                                                                                           | `Enter a target or pattern` (軽微)                                |
-| B-13 | `query-editor.md:17`                                                     | `Sky Query`                                            | 公式表記は `SkyQuery`                                                                                                                                            | `SkyQuery` (軽微)                                                 |
+| #    | 場所                                                                     | 現状                                                                                 | 問題                                                                                                                                                             | 改定案                                                            |
+| :--- | :----------------------------------------------------------------------- | :----------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------- |
+| B-1  | `database.rs:107,162`, `types.ts:93`, `analytics.rs:18`, `Filter.target` | `target`, `target_raw`                                                               | 格納するのは `//...`/`:all` 等を含む空白区切りの **target pattern**。events.rs:302 の `target_patterns()` 側は正しく pattern と呼ぶ。BuildBuddy 表記も "Pattern" | `pattern` / `target_pattern`                                      |
+| B-2  | `bep.rs:117-122`                                                         | `struct TestResult { label, status }`                                                | BEP の `TestResult` は shard×run×attempt 単位のメッセージ。この型は `TestSummary.overall_status` を写すもので名前が衝突                                          | `TestSummary`                                                     |
+| B-3  | `model.ts:35,80`                                                         | `DirNode.rules`, `Row.kind: "rule"`                                                  | ツリーの子要素は rule ではなく target                                                                                                                            | `targets`, `"target"`                                             |
+| B-4  | `RunView.svelte:111-112`                                                 | `<dt>Command</dt>` が `bazel {cmd} {target}` を表示                                  | command (動詞) と command line の混同                                                                                                                            | 動詞のみを "Command" として表示し、行全体は "Command line" に分離 |
+| B-5  | `WorkspacePrompt.svelte:50,58,73`                                        | ラベル `repository` / プレースホルダ `/path/to/bazel/workspace` / `whole repository` | アプリ内の正規語は `workspace` (`AppState.workspace`, `open_workspace`, RunView "Workspace")                                                                     | `workspace`, `entire workspace` に統一                            |
+| B-6  | `AnalyticsView.svelte:203`, `m5:23-25`                                   | `Wait time`                                                                          | "Wait time" はキュー待ち時間 (queue time) の意味。実際は日別の合計 duration                                                                                      | `Total duration`                                                  |
+| B-7  | `LogPanel.svelte:22,25`                                                  | `Build stdout and stderr`, `Loading build log…`                                      | `bazel test`/`bazel run` の invocation も同じパネルに表示                                                                                                        | `Invocation output` / `bazel output`                              |
+| B-8  | `QueryView.svelte:452-457`                                               | `Copy command`                                                                       | コピーするのは動詞ではなく command line 全体                                                                                                                     | `Copy command line`                                               |
+| B-9  | `RunView.svelte:149`                                                     | `Bazel arguments`                                                                    | options のみを表示 (target は含まない)                                                                                                                           | `Bazel options` / `Command options`                               |
+| B-10 | `bes.rs:255`, `README:37`                                                | `terminal builds`, `terminal runs`                                                   | `bazel run` とも PTY (`terminal.log`) とも衝突                                                                                                                   | `terminal invocations` / `invocations recorded from the terminal` |
+| B-11 | `QueryView.svelte:483`, `query-editor.md`                                | Query Editor の `Run` ボタン                                                         | 動詞用法としては許容範囲だが、設計書が「composer の run ではない」と弁明を要するほど衝突している                                                                 | `Execute` / `Evaluate` (推奨: Execute)                            |
+| B-12 | `target.ts`, `target.test.ts`                                            | `Enter a target`, `A target cannot contain whitespace`                               | 入力は label または pattern を受理する                                                                                                                           | `Enter a target or pattern` (軽微)                                |
+| B-13 | `query-editor.md:17`                                                     | `Sky Query`                                                                          | 公式表記は `SkyQuery`                                                                                                                                            | `SkyQuery` (軽微)                                                 |
 
 ### C. 任意の改善 (優先度低)
 
@@ -201,7 +204,7 @@ invocation で統一されており、Zeal 自身のコード・設計書・テ�
 | `attempt`          | BES 再送試行、`attempt/<n>/bep.binpb` ディスクレイアウト、DB カラム `attempt`、`received_complete` — 全て正しい BES semantics                                                                                                                                                                                                                                                                                       |
 | phase/profile      | "build phase marker"、"Launch Blaze"/"Initialize command"/"Evaluate target patterns" 等の verbatim phase 名、chrome-trace フィールド、counter 名 ("action count", "CPU usage (Bazel)" 等 — BuildBuddy 準拠)、"Timing" タブ名 (BuildBuddy の tab と一致)、"Profile timeline"                                                                                                                                         |
 | test 語彙          | `TestStatus` マッピング (NO_STATUS..TOOL_HALTED_BEFORE_TESTING)、`overall_status`、outcome `ok`/`failed`/`interrupted` (exit 8)                                                                                                                                                                                                                                                                                     |
-| label/pattern 語彙 | canonical label、canonical name (`@@`) と apparent name (`@`) の区別、`is_external` (@repo//)、`is_select_key` (`//conditions:default`)、`$`/`:` 始まりの implicit attr、`kind()` の `<rule_class> rule` 形式、"target pattern"、"label or pattern"、`PATTERN_HINTS`                                                                                                                                                |
+| label/pattern 語彙 | canonical label、`@@`→apparent name、`is_external` (@repo//)、`is_select_key` (`//conditions:default`)、`$`/`:` 始まりの implicit attr、`kind()` の `<rule_class> rule` 形式、"target pattern"、"label or pattern"、`PATTERN_HINTS`                                                                                                                                                                                 |
 | workspace 語彙     | `is_workspace` (MODULE.bazel/WORKSPACE 判定)、`bazelisk`→`bazel` 解決、`--output_user_root`、"Workspace" 表示                                                                                                                                                                                                                                                                                                       |
 | command 語彙       | `cmd` フィールド (BEP `BuildStarted.command` の動詞)、`validate_cmd`/`unsupported command`、"Command" フィルタ、`aria-label="Bazel command"`                                                                                                                                                                                                                                                                        |
 | その他正しい表現   | "Original/Canonical command line"、"Explicit/Effective command options"、"startup options" (OptionsParsed 準拠)、"artifact" (bep.binpb/profile.gz/terminal.log)、"Started"/"Finished"/"Exit code"/"Wall time"、"Targets"/"Details"/"Timing" タブ、"Build phases"/"Skymeld"、Bazel フラグ列 (`--bes_*`, `--tool_tag`, `--invocation_id` 他全て正確)、query 関数カタログ (deps/rdeps/somepath/kind/attr/... 全て実在) |
@@ -212,13 +215,16 @@ invocation で統一されており、Zeal 自身のコード・設計書・テ�
 
 1. **起点は `docs/design/overview.md:32`** — `run` の定義を `invocation` に
    改めることが前提。用語定義を先に確定させる。
-2. **IPC 契約**: Tauri コマンド名・DTO フィールド名 (`consoleRun`,
+2. **DB マイグレーション**: `run` テーブル・`target_raw` カラム・
+   `runs/` ディレクトリは永続データ。`user_version` を 4 に上げ、
+   マイグレーションまたは version ゲートつき再構築が必要。
+3. **IPC 契約**: Tauri コマンド名・DTO フィールド名 (`consoleRun`,
    `runNote`, `running`)・イベント名は frontend/backend で同時に変える。
    `preview.ts` のモック層も同期が必要。
-3. **一括置換の危険**: 「保つ部分」に挙げた `bazel run` 動詞・プロセス状態・
+4. **一括置換の危険**: 「保つ部分」に挙げた `bazel run` 動詞・プロセス状態・
    非 Bazel の run (run-length、連続区間) を巻き込まないよう、
    語義ごとに分けてレビューする。
-4. **UI 表記**: "Invocations" は初学者にやや難しい語だが、PRD の目的
+5. **UI 表記**: "Invocations" は初学者にやや難しい語だが、PRD の目的
    「Bazel に詳しい人の見方を GUI で学ぶ」と一致し、BuildBuddy/bb-portal と
    同じ語でドキュメント・エコシステムとの往還がしやすい。
 
@@ -228,10 +234,10 @@ invocation で統一されており、Zeal 自身のコード・設計書・テ�
 | :---------------------------- | :------------------------------------------------------------- | :------------------------------------------------------------------------------------------------ |
 | **Invocation**                | `bazel <command>` 1 回の実行とその観測記録 (BEP, profile, log) | 型: `InvocationRecord`/`InvocationDetail`/`InvocationId`。UI: "Invocations" 一覧、"Invocation ID" |
 | **Command**                   | サブコマンド動詞 (`build`/`test`/`run`/`query`)                | 型: `BazelCommand`、フィールド `cmd`。UI: "Command"                                               |
-| **Run**                       | 実行。Bazel では `bazel run` や test の run も指す             | コマンドの記録は invocation と呼び、文脈に応じて使う                                              |
+| **Run**                       | `bazel run` に限定。名詞として一般の実行を指さない             | 動詞オプション、プロセス状態 "running" のみ                                                       |
 | **Attempt**                   | BES ストリームの再送番号、flaky test の再試行                  | `attempt/` ディレクトリ、DB カラム                                                                |
-| **Pattern**                   | `//...`, `:all` や単一 label などの target pattern             | 複数 pattern を連結した記録は pattern 列として区別する                                            |
-| **Target**                    | label で識別される rule、file、package group など              | ツリーは rule target に限定。詳細と結果一覧では対象を明示                                         |
-| **Build**                     | ビルド処理、またはその結果。`bazel build` はコマンド名         | `bazel test` や `bazel run` に含まれるビルドにも使える                                            |
-| **Workspace**                 | main repository と定義された外部 repository を含む環境         | workspace root は main repository のルート                                                        |
+| **Pattern**                   | `//...`, `:all`, ラベル列など target pattern                   | 入力欄、DB カラム `target_pattern`、BuildBuddy "Pattern" 準拠                                     |
+| **Target**                    | 解決済みの単一ターゲット (label + rule class)                  | ツリー、詳細、結果一覧                                                                            |
+| **Build**                     | `bazel build` 動詞。名詞としては CI の `build_id` 束ね単位のみ | ログ表示を安易に "build log" と呼ばない                                                           |
+| **Workspace**                 | MODULE.bazel/WORKSPACE を持つローカルルート                    | repository との混用を避ける                                                                       |
 | **Duration / Total duration** | invocation の所要時間                                          | "Wait time" はキュー待ちを示唆するため使わない                                                    |

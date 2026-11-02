@@ -101,7 +101,7 @@ pub fn parse_label_kind(input: impl BufRead) -> Result<Vec<Target>, String> {
         if rule_class.is_empty() || !label.starts_with("//") {
             return Err("invalid target list output".to_string());
         }
-        let label = label::normalize(label);
+        let label = label::canonical(label);
         let LabelParts { package, name } = label::split(&label);
         targets.push(Target {
             label,
@@ -159,7 +159,7 @@ fn fetched_at() -> u64 {
         .unwrap_or(0)
 }
 
-/// Build a snapshot from parsed rules. Labels are normalized before being
+/// Build a snapshot from parsed rules. Labels are canonicalized before being
 /// classified: only explicit source-file metadata identifies input files.
 /// Other references remain edges, including targets outside the selected scope.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.build", skip_all)]
@@ -168,7 +168,7 @@ pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
     let sources: HashSet<String> = query
         .source_files
         .iter()
-        .map(|s| label::normalize(s))
+        .map(|s| label::canonical(s))
         .collect();
     let (edges, files) = relationships(&query.rules, &sources);
     Snapshot {
@@ -186,7 +186,7 @@ pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
 fn rule_targets(rules: &[RawRule]) -> Vec<Target> {
     let mut targets = Vec::new();
     for r in rules {
-        let lbl = label::normalize(&r.label);
+        let lbl = label::canonical(&r.label);
         let LabelParts { package, name } = label::split(&lbl);
         targets.push(Target {
             label: lbl,
@@ -204,7 +204,7 @@ fn rule_targets(rules: &[RawRule]) -> Vec<Target> {
 }
 
 /// Edges and file entries from every rule's dep-ish attrs and declared
-/// outputs. `sources` is the normalized label set of the source files.
+/// outputs. `sources` is the canonical label set of the source files.
 fn relationships(rules: &[RawRule], sources: &HashSet<String>) -> (Vec<Edge>, Vec<FileEntry>) {
     let mut edges = HashSet::new();
     let mut files = HashSet::new();
@@ -227,7 +227,7 @@ fn rule_relationships(
     edges: &mut HashSet<Edge>,
     files: &mut HashSet<FileEntry>,
 ) {
-    let owner = label::normalize(&r.label);
+    let owner = label::canonical(&r.label);
     for (attr, raw) in &r.label_attrs {
         let Some(to) = dep_label(attr, raw) else {
             continue;
@@ -250,20 +250,20 @@ fn rule_relationships(
     // `outs` arrive as <output> elements and are never label_attrs.
     for out in &r.outputs {
         files.insert(FileEntry {
-            path: label::label_to_path(&label::normalize(out)),
+            path: label::label_to_path(&label::canonical(out)),
             owner: owner.clone(),
             role: "out".to_string(),
         });
     }
 }
 
-/// The normalized label a dep-ish attribute points at, or `None` for attrs and
+/// The canonical label a dep-ish attribute points at, or `None` for attrs and
 /// select() branch keys that never become relationships.
 fn dep_label(attr: &str, raw: &str) -> Option<String> {
     if !label::is_dep_attr(attr) {
         return None;
     }
-    let to = label::normalize(raw);
+    let to = label::canonical(raw);
     if label::is_select_key(&to) {
         return None;
     }
@@ -371,10 +371,10 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_targets_normalize_bare_labels() {
+    fn snapshot_targets_canonicalize_bare_labels() {
         let snap = build(&fixture_rules(), Status::Ok);
         let labels: HashSet<&str> = snap.targets.iter().map(|t| t.label.as_str()).collect();
-        // `//app` normalizes to `//app:app`.
+        // `//app` canonicalizes to `//app:app`.
         assert!(labels.contains("//app:app"));
         assert!(!labels.contains("//app"));
     }
@@ -392,10 +392,10 @@ mod tests {
         let edges = edge_set(&snap);
 
         assert!(edges.contains(&("//app/lib:parser", "//app/lib:parser_proto", "deps")));
-        // External canonical names are not apparent names without a repo mapping.
+        // External-repo label: edge exists, canonical `@@` collapses to `@`.
         assert!(edges.contains(&(
             "//app/lib:parser",
-            "@@maven+//:com_google_guava_guava",
+            "@maven+//:com_google_guava_guava",
             "deps"
         )));
         // `data` pointing at a rule is an edge, not a file.

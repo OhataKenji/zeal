@@ -55,8 +55,8 @@ file target は別途 query せず、file を指す label(srcs・data 等の属�
 `<rule-output>` は宣言済みの出力のみを含むため、出力を宣言しない rule class では files の出力側が空になり得る。
 
 label の行き先は次の規則で分ける: targets に存在する label と `@`/`@@` で始まる label は edges、それ以外は file として files に入る。
-照合の前に label の省略形を補う(`//app` → `//app:app`。XML の出力は絶対 label なので相対形はここに現れない)。
-外部 repo の canonical 名(`@@`)と apparent 名(`@`)は repo mapping なしでは変換できないため、元の形式のまま比較・表示する。
+照合の前に label を canonical 化する(`//app` → `//app:app`。XML の出力は絶対 label なので相対形はここに現れない)。
+`@@` 形は repo mapping が取れる範囲で apparent 名へ正規化して比較し、変換できない場合は raw のまま比較・表示する(手段は spike で確かめる)。
 `select()` の分岐 key(`//conditions:default` 等)は除外する(key が XML の属性値に現れるかは spike で確かめる)。
 query の stdout は streaming parser で逐次読み、全量をメモリに載せない。
 `--noimplicit_deps` と implicit 属性の除外を併用し、暗黙依存が関係表示へ混入するのを防ぐ。
@@ -118,7 +118,7 @@ targets の location(BUILD file と行)を保持し、画面から定義位置�
 - `@repo//` 形式の label は edges 先として存在だけを示し、内部には入らない。
 - 削除済み target を指す label は振り分け規則上 file に落ち得る(targets にも `@` にも合致しないため)。実害は小さいとして許容する。
 - macro 経由で生成された rule の location は BUILD ではなく .bzl file 内を指し得る。実出力は Test Plan の spike で確かめる。
-- Bzlmod 環境では label が `@@repo//` の canonical 形で返る版がある。repo mapping がないため canonical 名のまま表示する。
+- Bzlmod 環境では label が `@@repo//` の canonical 形で返る版があり得る。表示は apparent 名に正規化するか、版差として Test Plan で実出力を確かめる。
 - configurable な属性(`select()`)は XML 上は全分岐の和集合で出るため、現在の設定で有効でない依存が edge に混ざる。M1 では設定による絞り込みはしない。
 - 巨大な repo では cold cache の初回取り込みに数十秒かかり得る(grpc で実測 19s)。その間は「取り込み中」を出し、表示が空であることを許容する。それを超える規模では対象 pattern を絞る設計に見直す。
 - さらに大きい monorepo では `//...` 自体が非現実的になる。roadmap には入れないが、workspace 選択時に package 範囲(例 `//src/...`)を絞る構想はここに置く。query の対象 pattern 化はその延長にある。

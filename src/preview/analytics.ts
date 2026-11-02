@@ -7,13 +7,12 @@ type AnalyticsRecord = Pick<InvocationRecord, "exitCode" | "finishedAt"> & {
   startedAt: number;
 };
 type ResolvedFilter = Partial<AnalyticsFilter> & { start: string; end: string };
-type Outcome = "ok" | "failed" | "interrupted" | "unknown";
+type Outcome = "ok" | "failed" | "interrupted";
 interface DaySamples {
   count: number;
   ok: number;
   failed: number;
   interrupted: number;
-  unknown: number;
   durations: number[];
 }
 
@@ -52,9 +51,8 @@ function resolveFilter(requested: Partial<AnalyticsFilter>, now: number) {
   // Mirror the backend contract: reject, never silently truncate.
   if (
     !(spanDays >= 1 && spanDays <= 366) ||
-    (filter.cmd != null && !/^[a-zA-Z0-9_-]{1,64}$/.test(filter.cmd)) ||
-    (filter.outcome != null &&
-      !["ok", "failed", "interrupted", "unknown"].includes(filter.outcome)) ||
+    (filter.cmd != null && !["build", "test"].includes(filter.cmd)) ||
+    (filter.outcome != null && !["ok", "failed", "interrupted"].includes(filter.outcome)) ||
     (filter.pattern != null && new TextEncoder().encode(filter.pattern).length > 64 * 1024)
   ) {
     throw new Error("invalid analytics filter");
@@ -63,7 +61,6 @@ function resolveFilter(requested: Partial<AnalyticsFilter>, now: number) {
 }
 
 function outcome(inv: AnalyticsRecord): Outcome {
-  if (inv.exitCode === undefined) return "unknown";
   if (inv.exitCode === 0) return "ok";
   return inv.exitCode === 8 ? "interrupted" : "failed";
 }
@@ -71,6 +68,8 @@ function outcome(inv: AnalyticsRecord): Outcome {
 function matchesPeriod(inv: AnalyticsRecord, filter: ResolvedFilter): boolean {
   const day = dayString(new Date(inv.startedAt));
   return (
+    inv.exitCode !== undefined &&
+    ["build", "test"].includes(inv.cmd) &&
     day >= filter.start &&
     day <= filter.end &&
     (filter.cmd == null || inv.cmd === filter.cmd) &&
@@ -96,7 +95,7 @@ function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
   for (let index = 0; index < spanDays; index++) {
     const date = new Date(first + index * 86400000);
     const day = `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-    days.set(day, { count: 0, ok: 0, failed: 0, interrupted: 0, unknown: 0, durations: [] });
+    days.set(day, { count: 0, ok: 0, failed: 0, interrupted: 0, durations: [] });
   }
   return days;
 }
@@ -132,22 +131,20 @@ function dailyAnalytics(
     ok: slot.ok,
     failed: slot.failed,
     interrupted: slot.interrupted,
-    unknown: slot.unknown,
     ...timing(slot.durations),
   }));
 }
 
-function patternAnalytics(invocations: readonly AnalyticsRecord[]): DailyAnalytics["patterns"] {
-  const patterns = new Map<string, { invocations: number; durations: number[] }>();
+function targetAnalytics(invocations: readonly AnalyticsRecord[]): DailyAnalytics["targets"] {
+  const targets = new Map<string, { invocations: number; durations: number[] }>();
   for (const inv of invocations) {
-    if (!inv.pattern) continue;
-    const slot = patterns.get(inv.pattern) ?? { invocations: 0, durations: [] };
+    const slot = targets.get(inv.pattern) ?? { invocations: 0, durations: [] };
     slot.invocations += 1;
     const elapsed = duration(inv);
     if (elapsed !== null) slot.durations.push(elapsed);
-    patterns.set(inv.pattern, slot);
+    targets.set(inv.pattern, slot);
   }
-  return [...patterns]
+  return [...targets]
     .map(([pattern, slot]) => ({
       pattern,
       invocations: slot.invocations,
@@ -172,7 +169,7 @@ export function previewAnalytics(
     filter,
     today: dayString(new Date(now)),
     days: dailyAnalytics(invocations, filter, first, spanDays),
-    // The ranking intentionally ignores the selected pattern list.
-    patterns: patternAnalytics(invocations),
+    // The ranking intentionally ignores the selected target.
+    targets: targetAnalytics(invocations),
   };
 }
