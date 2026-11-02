@@ -55,7 +55,7 @@
       disabled={busy}
     />
   </label>
-  <p class="warn">Do not open an untrusted repository.</p>
+  <Notice tone="warning">Do not open an untrusted repository.</Notice>
   <label>
     target patterns
     <textarea
@@ -69,8 +69,8 @@
     ></textarea>
   </label>
   <p class="scope-help" id="scope-help">
-    One Bazel target pattern per line. This scope controls target
-    discovery; dependencies may point outside it. Default: //... (whole repository). Narrow it to limit discovery.
+    One Bazel target pattern per line. Default: //... (whole
+    repository). Affects the target tree and fuzzy target search.
   </p>
   <div class="ws-actions">
     <button
