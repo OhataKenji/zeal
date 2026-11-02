@@ -5,12 +5,11 @@ import type { Transport } from "./session.ts";
 export interface AnalyticsFilter {
   start: string | null;
   end: string | null;
-  // The store rejects every command outside build/test.
-  cmd: "build" | "test" | null;
-  outcome: "ok" | "failed" | "interrupted" | null;
+  cmd: string | null;
+  outcome: "ok" | "failed" | "interrupted" | "unknown" | null;
   pattern: string | null;
 }
-/** Daily and per-target aggregates returned by the core. */
+/** Daily and per-pattern-list aggregates returned by the core. */
 export interface DailyAnalytics {
   filter: AnalyticsFilter;
   today: string;
@@ -21,11 +20,12 @@ export interface DailyAnalytics {
     ok: number;
     failed: number;
     interrupted: number;
+    unknown: number;
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
   }>;
-  targets: Array<{
+  patterns: Array<{
     pattern: string;
     invocations: number;
     totalMs: number;
