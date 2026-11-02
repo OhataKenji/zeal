@@ -1,42 +1,42 @@
-//! Bazel label helpers: canonicalization, package/name split, file path derivation.
+//! Bazel label helpers: normalization, package/name split, file path derivation.
 
-/// Canonical form for labels found in `bazel query --output=xml` output.
-/// The XML always carries absolute labels. `@@x//` collapses to `@x//` (an
-/// approximate apparent-name normalization; without a repo mapping this is the
-/// most stable form to compare and display) and `@@//` to `//`.
+/// Normalize absolute labels found in `bazel query --output=xml` output.
+/// Keep canonical (`@@repo`) and apparent (`@repo`) repository names distinct:
+/// converting between them requires the referring repository's mapping.
+/// The main repository's `@@//` is equivalent to `//` in this query context.
 /// `//pkg` expands to `//pkg:<last segment>`; likewise `@repo//pkg`.
 /// Anything else is returned unchanged.
 #[must_use]
-pub fn canonical(raw: &str) -> String {
+pub fn normalize(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix("@@") {
         return match rest.split_once("//") {
-            Some(("", p)) => canonical_main(p),
-            Some((repo, p)) => format!("@{}", canonical_repo(repo, p)),
-            None => format!("@{rest}"),
+            Some(("", p)) => normalize_main(p),
+            Some((repo, p)) => format!("@@{}", normalize_repo(repo, p)),
+            None => raw.to_string(),
         };
     }
     if let Some(rest) = raw.strip_prefix('@') {
         if let Some((repo, p)) = rest.split_once("//") {
-            return format!("@{}", canonical_repo(repo, p));
+            return format!("@{}", normalize_repo(repo, p));
         }
         return raw.to_string();
     }
     if let Some(rest) = raw.strip_prefix("//") {
-        return canonical_main(rest);
+        return normalize_main(rest);
     }
     raw.to_string()
 }
 
-/// `pkg` or `pkg:name` after `//` -> canonical `//pkg:name`.
-fn canonical_main(rest: &str) -> String {
+/// `pkg` or `pkg:name` after `//` -> fully qualified `//pkg:name`.
+fn normalize_main(rest: &str) -> String {
     match rest.split_once(':') {
         Some(_) => format!("//{rest}"),
         None => format!("//{rest}:{}", last_segment(rest)),
     }
 }
 
-/// `pkg` or `pkg:name` after `@repo//` -> canonical `repo//pkg:name`.
-fn canonical_repo(repo: &str, p: &str) -> String {
+/// `pkg` or `pkg:name` after a repository prefix -> `repo//pkg:name`.
+fn normalize_repo(repo: &str, p: &str) -> String {
     match p.split_once(':') {
         Some(_) => format!("{repo}//{p}"),
         None => format!("{repo}//{p}:{}", last_segment(p)),
@@ -111,19 +111,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonicalizes_main_repository_labels() {
-        assert_eq!(canonical("//app"), "//app:app");
-        assert_eq!(canonical("//app/lib"), "//app/lib:lib");
-        assert_eq!(canonical("//app:lib"), "//app:lib");
-        assert_eq!(canonical("//:root"), "//:root");
+    fn normalizes_main_repository_labels() {
+        assert_eq!(normalize("//app"), "//app:app");
+        assert_eq!(normalize("//app/lib"), "//app/lib:lib");
+        assert_eq!(normalize("//app:lib"), "//app:lib");
+        assert_eq!(normalize("//:root"), "//:root");
     }
 
     #[test]
-    fn canonicalizes_repository_labels() {
-        assert_eq!(canonical("@@//app:x"), "//app:x");
-        assert_eq!(canonical("@@repo//p:n"), "@repo//p:n");
-        assert_eq!(canonical("@@repo+//p"), "@repo+//p:p");
-        assert_eq!(canonical("@maven//:guava"), "@maven//:guava");
+    fn preserves_repository_name_kind() {
+        assert_eq!(normalize("@@//app:x"), "//app:x");
+        assert_eq!(normalize("@@repo//p:n"), "@@repo//p:n");
+        assert_eq!(normalize("@@repo+//p"), "@@repo+//p:p");
+        assert_eq!(normalize("@repo//p:n"), "@repo//p:n");
+        assert_eq!(normalize("@@repo"), "@@repo");
+        assert_eq!(normalize("@maven//:guava"), "@maven//:guava");
     }
 
     #[test]
