@@ -408,7 +408,6 @@ export function installPreview() {
       return structuredClone(state);
     },
     refresh: () => void emit("app-state", structuredClone(state)),
-    open_location: () => {},
     start_invocation: (payload) => startInvocation(String(payload?.cmd), String(payload?.pattern)),
     stop_invocation: () => stopInvocation(),
     run_query: (payload) => {

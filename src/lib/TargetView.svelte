@@ -3,7 +3,6 @@
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
   import type { TargetDetail, TargetIndex } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
-  import { openLocation } from "./state.svelte";
 
   let {
     index,
@@ -92,13 +91,9 @@
     <span class="badge">{target.ruleClass}</span>
     <h1>{target.label}</h1>
     {#if target.location}
-      <button
-        class="link source-location"
-        title={target.location.file}
-        onclick={() => target.location && openLocation(target.location.file)}
-      >
+      <span class="source-location" title={target.location.file}>
         {location(target.location.file, target.location.line)}
-      </button>
+      </span>
     {/if}
   </header>
   <div class="attributes-head">
