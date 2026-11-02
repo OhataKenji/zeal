@@ -32,19 +32,6 @@
         "form-action": "'none'",
         "frame-src": "'none'",
         "frame-ancestors": "'none'"
-      },
-      "devCsp": {
-        "default-src": "'none'",
-        "script-src": "'self'",
-        "worker-src": "'self'",
-        "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' blob:",
-        "connect-src": "'self' ipc: http://ipc.localhost ws://localhost:1420",
-        "object-src": "'none'",
-        "base-uri": "'none'",
-        "form-action": "'none'",
-        "frame-src": "'none'",
-        "frame-ancestors": "'none'"
       }
     }
   },
