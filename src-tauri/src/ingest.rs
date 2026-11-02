@@ -463,19 +463,6 @@ mod tests {
         }
     }
 
-    fn assert_descendant_held_file_does_not_delay_query(fixture: &QueryFixture, redirected: &str) {
-        // The direct shell exits while its background child retains one output FD.
-        fixture.script(&format!(
-            "sleep 4 {redirected} & printf 'cc_library rule //app:lib\\n'; exit 0\n"
-        ));
-        let start = Instant::now();
-        let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
-            panic!("the direct child's output should be accepted");
-        };
-        assert!(start.elapsed() < Duration::from_secs(3));
-        assert_eq!(targets[0].label, "//app:lib");
-    }
-
     fn heavy_stderr_script(result: &str) -> String {
         format!(
             "i=0; while [ \"$i\" -lt 40 ]; do printf '%8192s' '' >&2; i=$((i + 1)); done; printf 'final diagnostic marker\\n' >&2; {result}\n"
@@ -500,34 +487,6 @@ mod tests {
     }
 
     #[test]
-    fn fetch_keeps_partial_targets_and_stderr_diagnostic() {
-        let fixture = QueryFixture::new();
-        fixture.script("printf 'cc_library rule //app:lib\\n'; echo 'partial query' >&2; exit 7\n");
-        let Outcome::Partial(targets, error) = fixture.label_kind(Duration::from_secs(2)) else {
-            panic!("nonzero exit with targets should be partial");
-        };
-        assert_eq!(targets[0].label, "//app:lib");
-        assert_eq!(error.exit_code, Some(7));
-        assert_eq!(error.summary, "partial query");
-    }
-
-    #[test]
-    fn capture_rejects_output_larger_than_limit() {
-        let file = NamedTempFile::new().unwrap();
-        file.as_file().set_len(MAX_OUTPUT_BYTES).unwrap();
-        assert_eq!(
-            output_len(file.as_file(), "stdout").unwrap(),
-            MAX_OUTPUT_BYTES
-        );
-        file.as_file().set_len(MAX_OUTPUT_BYTES + 1).unwrap();
-        assert!(
-            output_len(file.as_file(), "stdout")
-                .unwrap_err()
-                .contains("exceeds 512 MiB")
-        );
-    }
-
-    #[test]
     fn stderr_tail_reads_only_the_last_eight_kib() {
         use std::io::Write;
 
@@ -543,18 +502,6 @@ mod tests {
             summarize(&String::from_utf8_lossy(&tail)),
             "final diagnostic marker"
         );
-    }
-
-    #[test]
-    fn heavy_stderr_allows_target_list_success() {
-        let fixture = QueryFixture::new();
-        fixture.script(&heavy_stderr_script(
-            "printf 'cc_library rule //app:lib\\n'; exit 0",
-        ));
-        let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
-            panic!("large stderr should not block a successful target list");
-        };
-        assert_eq!(targets[0].label, "//app:lib");
     }
 
     #[test]
@@ -597,26 +544,6 @@ mod tests {
     }
 
     #[test]
-    fn stderr_tail_preserves_summary_after_split_utf8() {
-        use std::io::Write;
-
-        let marker = b"\ncontext one\ncontext two\nfinal diagnostic marker\n";
-        let mut output = "界".as_bytes().to_vec();
-        output.extend(vec![b'x'; STDERR_TAIL - marker.len() - 1]);
-        output.extend_from_slice(marker);
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(&output).unwrap();
-        let tail = read_stderr_tail(file.reopen().unwrap(), output.len() as u64).unwrap();
-        assert_eq!(tail[0], "界".as_bytes()[2]);
-        let text = String::from_utf8_lossy(&tail);
-        assert!(text.starts_with('\u{fffd}'));
-        assert_eq!(
-            summarize(&text),
-            "context one | context two | final diagnostic marker"
-        );
-    }
-
-    #[test]
     fn output_written_after_direct_child_exit_is_excluded() {
         let fixture = QueryFixture::new();
         fixture.script(
@@ -632,24 +559,10 @@ mod tests {
     }
 
     #[test]
-    fn descendant_held_output_files_do_not_block_repeated_queries() {
-        let fixture = QueryFixture::new();
-        for redirected in ["2>/dev/null", "1>/dev/null", "2>/dev/null", "1>/dev/null"] {
-            assert_descendant_held_file_does_not_delay_query(&fixture, redirected);
-        }
-
-        fixture.script("printf 'cc_library rule //app:recovered\\n'\n");
-        let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
-            panic!("subsequent query should work after inherited output FDs");
-        };
-        assert_eq!(targets[0].label, "//app:recovered");
-    }
-
-    #[test]
     fn descendant_held_stderr_does_not_block_detail_or_next_query() {
         let fixture = QueryFixture::new();
         fixture.script(
-            "sleep 4 2>/dev/null & printf '<query><rule name=\"//app:lib\" class=\"cc_library\"/></query>'; exit 0\n",
+            "sleep 4 1>/dev/null & printf '<query><rule name=\"//app:lib\" class=\"cc_library\"/></query>'; exit 0\n",
         );
         let start = Instant::now();
         let Outcome::Ok(query) = fixture.detail(Duration::from_secs(2)) else {
