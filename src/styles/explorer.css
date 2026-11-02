@@ -98,10 +98,6 @@
   color: var(--muted-foreground);
 }
 
-.tree .row.test svg {
-  color: var(--warning);
-}
-
 .tree .dir {
   font-weight: 650;
 }
