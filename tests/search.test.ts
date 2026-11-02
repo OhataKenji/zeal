@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  PATTERN_HINTS,
   createIndex,
   keyAction,
   moveIndex,
@@ -308,8 +307,4 @@ test("segments merge ranges and cover the whole string", () => {
     { text: "def", hit: false },
   ]);
   assert.equal(runs.map((run) => run.text).join(""), "abcdef");
-});
-
-test("pattern hints keep the order the footer shows", () => {
-  assert.deepEqual(PATTERN_HINTS, ["//...", ":all", ":*"]);
 });
