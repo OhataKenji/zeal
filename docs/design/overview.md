@@ -25,7 +25,7 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 
 用語を以下に定める。
 
-- **workspace**: Zeal が対象とする、Bazel workspace を持つローカルのリポジトリルート
+- **workspace**: main repository と定義された外部 repository を含む Bazel の環境。Zeal では workspace root（main repository のルート）を開く
 - **target / label / package / rule class**: Bazel の通常の意味。`//app/lib:parser` の `java_library` が rule class
 - **composer**: toolbar にある実行の唯一の入口。cmd 選択・target 欄・Send の三点
 - **content**: ウィンドウ本体の3状態(target / invocation / analytics)
