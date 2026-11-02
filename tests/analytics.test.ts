@@ -46,12 +46,13 @@ const RESULT: DailyAnalytics = {
       ok: 1,
       failed: 1,
       interrupted: 0,
+      unknown: 0,
       totalMs: 5000,
       p50Ms: 2000,
       p95Ms: 3000,
     },
   ],
-  targets: [],
+  patterns: [],
 };
 function day(count: number, extra: Partial<DailyAnalytics["days"][number]> = {}) {
   return {
@@ -61,6 +62,7 @@ function day(count: number, extra: Partial<DailyAnalytics["days"][number]> = {})
     ok: count,
     failed: 0,
     interrupted: 0,
+    unknown: 0,
     totalMs: 0,
     p50Ms: 0,
     p95Ms: 0,

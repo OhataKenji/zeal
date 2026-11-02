@@ -25,6 +25,7 @@ pub struct Day {
     pub ok: i64,
     pub failed: i64,
     pub interrupted: i64,
+    pub unknown: i64,
     /// Invocations carrying a recorded finish time; the denominator of the
     /// duration series. `count - timed` rows contribute nothing to it.
     pub timed: i64,
@@ -36,7 +37,7 @@ pub struct Day {
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TargetDuration {
+pub struct PatternDuration {
     pub pattern: String,
     pub invocations: i64,
     pub total_ms: i64,
@@ -48,15 +49,14 @@ pub struct Analytics {
     pub filter: Filter,
     pub today: String,
     pub days: Vec<Day>,
-    pub targets: Vec<TargetDuration>,
+    pub patterns: Vec<PatternDuration>,
 }
 
 // Local-date and outcome rules apply to the common invocation table.
 const MATCH: &str = "started_at_ms >= :start AND started_at_ms < :end
-    AND exit_code IS NOT NULL AND cmd IN ('build','test')
     AND (:cmd IS NULL OR cmd=:cmd)
     AND (:outcome IS NULL OR
-        CASE WHEN exit_code=0 THEN 'ok' WHEN exit_code=8 THEN 'interrupted'
+        CASE WHEN exit_code IS NULL THEN 'unknown' WHEN exit_code=0 THEN 'ok' WHEN exit_code=8 THEN 'interrupted'
         ELSE 'failed' END = :outcome)
     AND date(started_at_ms / 1000,'unixepoch','localtime') BETWEEN :first_day AND :last_day";
 
@@ -136,11 +136,11 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         || filter
             .cmd
             .as_deref()
-            .is_some_and(|s| !["build", "test"].contains(&s))
+            .is_some_and(|s| s.is_empty() || s.len() > 64 || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
         || filter
             .outcome
             .as_deref()
-            .is_some_and(|s| !["ok", "failed", "interrupted"].contains(&s))
+            .is_some_and(|s| !["ok", "failed", "interrupted", "unknown"].contains(&s))
         // Matches the target-pattern fact limit in store::events.
         || filter.pattern.as_deref().is_some_and(|s| s.len() > 64 * 1024)
     {
@@ -168,6 +168,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 ok: 0,
                 failed: 0,
                 interrupted: 0,
+                unknown: 0,
                 total_ms: 0,
                 p50_ms: 0,
                 p95_ms: 0,
@@ -198,19 +199,19 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             },
         )?
         .collect::<Result<Vec<_>, _>>()?;
-    let (days, targets) = summarize(days, rows, filter.pattern.as_deref())?;
+    let (days, patterns) = summarize(days, rows, filter.pattern.as_deref())?;
     Ok(Analytics {
         filter,
         today,
         days,
-        targets,
+        patterns,
     })
 }
 
 struct Observation {
     day: String,
-    exit_code: i64,
-    pattern: String,
+    exit_code: Option<i64>,
+    pattern: Option<String>,
     duration_ms: Option<i64>,
 }
 
@@ -219,9 +220,9 @@ fn summarize(
     mut days: Vec<Day>,
     rows: Vec<Observation>,
     pattern_filter: Option<&str>,
-) -> Result<(Vec<Day>, Vec<TargetDuration>), StoreError> {
+) -> Result<(Vec<Day>, Vec<PatternDuration>), StoreError> {
     let mut durations: Vec<Vec<i64>> = vec![Vec::new(); days.len()];
-    let mut by_pattern: HashMap<String, TargetAgg> = HashMap::new();
+    let mut by_pattern: HashMap<String, PatternAgg> = HashMap::new();
     for Observation {
         day,
         exit_code,
@@ -231,12 +232,12 @@ fn summarize(
     {
         // A clock jump backwards must not corrupt the series.
         let duration = duration_ms.map(|ms| ms.max(0));
-        let entry = by_pattern.entry(pattern.clone()).or_default();
-        entry.invocations += 1;
-        if let Some(duration) = duration {
-            entry.durations.push(duration);
+        if let Some(pattern) = pattern.as_ref().filter(|s| !s.is_empty()) {
+            let entry = by_pattern.entry(pattern.clone()).or_default();
+            entry.invocations += 1;
+            entry.durations.extend(duration);
         }
-        if pattern_filter.is_some_and(|t| t != pattern) {
+        if pattern_filter.is_some_and(|t| Some(t) != pattern.as_deref()) {
             continue;
         }
         let i = days
@@ -245,9 +246,10 @@ fn summarize(
         let slot = &mut days[i];
         slot.count += 1;
         match exit_code {
-            0 => slot.ok += 1,
-            8 => slot.interrupted += 1,
-            _ => slot.failed += 1,
+            Some(0) => slot.ok += 1,
+            Some(8) => slot.interrupted += 1,
+            Some(_) => slot.failed += 1,
+            None => slot.unknown += 1,
         }
         if let Some(duration) = duration {
             slot.timed += 1;
@@ -260,12 +262,12 @@ fn summarize(
         days[i].p50_ms = percentile(sorted, 50);
         days[i].p95_ms = percentile(sorted, 95);
     }
-    let mut targets: Vec<TargetDuration> = by_pattern
+    let mut patterns: Vec<PatternDuration> = by_pattern
         .into_iter()
         .map(|(pattern, agg)| {
             let mut sorted = agg.durations;
             sorted.sort_unstable();
-            TargetDuration {
+            PatternDuration {
                 pattern,
                 invocations: agg.invocations,
                 total_ms: sorted.iter().fold(0i64, |sum, ms| sum.saturating_add(*ms)),
@@ -274,15 +276,15 @@ fn summarize(
             }
         })
         .collect();
-    targets.sort_by(|a, b| b.total_ms.cmp(&a.total_ms).then(a.pattern.cmp(&b.pattern)));
-    targets.truncate(TARGET_LIMIT);
-    Ok((days, targets))
+    patterns.sort_by(|a, b| b.total_ms.cmp(&a.total_ms).then(a.pattern.cmp(&b.pattern)));
+    patterns.truncate(PATTERN_LIMIT);
+    Ok((days, patterns))
 }
 
-const TARGET_LIMIT: usize = 10;
+const PATTERN_LIMIT: usize = 10;
 
 #[derive(Default)]
-struct TargetAgg {
+struct PatternAgg {
     invocations: i64,
     durations: Vec<i64>,
 }
@@ -420,9 +422,10 @@ mod tests {
         let all = f.query(f.filter());
         assert_eq!(
             all.days.iter().map(|d| d.count).collect::<Vec<_>>(),
-            vec![2, 0, 1]
+            vec![3, 0, 1]
         );
-        assert_eq!(total(&all), 3);
+        assert_eq!(total(&all), 4);
+        assert_eq!(all.days[0].unknown, 1);
         let selected = f.query(Filter {
             cmd: Some("build".into()),
             outcome: Some("ok".into()),
@@ -439,6 +442,66 @@ mod tests {
             ..f.filter()
         });
         assert_eq!(total(&failed), 1);
+    }
+
+    #[test]
+    fn all_commands_and_unknown_outcomes_are_counted_without_a_pattern() {
+        let f = Fixture::new();
+        f.insert("2026-03-07 10:00:00", "run", Some(0));
+        let pending = f.insert("2026-03-07 11:00:00", "coverage", None);
+        Store::open(&f.data)
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE invocation SET target_pattern=NULL WHERE id=?1",
+                [&pending],
+            )
+            .unwrap();
+
+        let all = f.query(f.filter());
+        assert_eq!(
+            (all.days[0].count, all.days[0].ok, all.days[0].unknown),
+            (2, 1, 1)
+        );
+        assert_eq!(all.patterns.len(), 1);
+        let unknown = f.query(Filter {
+            outcome: Some("unknown".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&unknown), 1);
+        assert!(unknown.patterns.is_empty());
+        let coverage = f.query(Filter {
+            cmd: Some("coverage".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&coverage), 1);
+        let run = f.query(Filter {
+            cmd: Some("run".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&run), 1);
+    }
+
+    #[test]
+    fn pattern_filter_matches_the_complete_list() {
+        let f = Fixture::new();
+        f.insert_at(
+            "2026-03-07 10:00:00",
+            "build",
+            Some(0),
+            "//a/... //b/...",
+            None,
+        );
+        let partial = f.query(Filter {
+            pattern: Some("//a/...".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&partial), 0);
+        let whole = f.query(Filter {
+            pattern: Some("//a/... //b/...".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&whole), 1);
     }
     #[test]
     fn daily_duration_statistics_use_only_observed_invocations() {
@@ -468,8 +531,9 @@ mod tests {
 
         let result = f.query(f.filter());
         let first = &result.days[0];
-        assert_eq!(first.count, 3);
+        assert_eq!(first.count, 4);
         assert_eq!((first.ok, first.failed, first.interrupted), (2, 1, 0));
+        assert_eq!(first.unknown, 1);
         assert_eq!(first.timed, 3);
         assert_eq!(first.total_ms, 60_000);
         assert_eq!((first.p50_ms, first.p95_ms), (20_000, 30_000));
@@ -516,13 +580,13 @@ mod tests {
         f.insert("2026-03-07 13:00:00", "build", None);
 
         let result = f.query(f.filter());
-        assert_eq!(result.targets.len(), 2);
-        assert_eq!(result.targets[0].pattern, "//a:x");
-        assert_eq!(result.targets[0].invocations, 3);
-        assert_eq!(result.targets[0].total_ms, 40_000);
-        assert_eq!(result.targets[0].p50_ms, 10_000);
-        assert_eq!(result.targets[1].pattern, "//b:y");
-        assert_eq!(result.targets[1].invocations, 1);
+        assert_eq!(result.patterns.len(), 3);
+        assert_eq!(result.patterns[0].pattern, "//a:x");
+        assert_eq!(result.patterns[0].invocations, 3);
+        assert_eq!(result.patterns[0].total_ms, 40_000);
+        assert_eq!(result.patterns[0].p50_ms, 10_000);
+        assert_eq!(result.patterns[1].pattern, "//b:y");
+        assert_eq!(result.patterns[1].invocations, 1);
     }
 
     #[test]
@@ -552,7 +616,7 @@ mod tests {
         assert_eq!(scoped.days[0].count, 2);
         assert_eq!(scoped.days[0].total_ms, 40_000);
         assert_eq!(scoped.days[1].count, 1);
-        assert_eq!(scoped.targets.len(), 2);
+        assert_eq!(scoped.patterns.len(), 2);
     }
 
     #[test]
@@ -566,8 +630,8 @@ mod tests {
             outcome: Some("failed".into()),
             ..f.filter()
         });
-        assert_eq!(failed.targets.len(), 1);
-        assert_eq!(failed.targets[0].pattern, "//b:y");
+        assert_eq!(failed.patterns.len(), 1);
+        assert_eq!(failed.patterns[0].pattern, "//b:y");
     }
 
     #[test]
@@ -616,10 +680,10 @@ mod tests {
             Some("2026-03-08 12:00:01"),
         );
         let result = f.query(f.filter());
-        assert_eq!(result.targets.len(), TARGET_LIMIT);
-        assert_eq!(result.targets[0].pattern, "//t:heavy");
+        assert_eq!(result.patterns.len(), PATTERN_LIMIT);
+        assert_eq!(result.patterns[0].pattern, "//t:heavy");
         // Every 1s target ties; the byte order of the label breaks the tie.
-        let tied: Vec<&str> = result.targets[1..]
+        let tied: Vec<&str> = result.patterns[1..]
             .iter()
             .map(|t| t.pattern.as_str())
             .collect();

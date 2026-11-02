@@ -19,14 +19,15 @@ test("pattern selection limits daily counts but preserves the ranking and untime
   assert.deepEqual(result.days, [
     {
       day: "2026-03-30",
-      count: 2,
-      timed: 1,
-      ok: 1,
+      count: 4,
+      timed: 2,
+      ok: 2,
       failed: 1,
       interrupted: 0,
-      totalMs: 100,
+      unknown: 1,
+      totalMs: 1000,
       p50Ms: 100,
-      p95Ms: 100,
+      p95Ms: 900,
     },
     {
       day: "2026-03-31",
@@ -35,14 +36,15 @@ test("pattern selection limits daily counts but preserves the ranking and untime
       ok: 0,
       failed: 0,
       interrupted: 0,
+      unknown: 0,
       totalMs: 0,
       p50Ms: 0,
       p95Ms: 0,
     },
   ]);
-  assert.deepEqual(result.targets, [
+  assert.deepEqual(result.patterns, [
+    { pattern: "//:a", invocations: 4, totalMs: 1000, p50Ms: 100, p95Ms: 900 },
     { pattern: "//:b", invocations: 1, totalMs: 500, p50Ms: 500, p95Ms: 500 },
-    { pattern: "//:a", invocations: 2, totalMs: 100, p50Ms: 100, p95Ms: 100 },
   ]);
   assert.deepEqual(records, before);
 });
@@ -60,8 +62,26 @@ test("command and outcome selection apply to both daily results and ranking", ()
   assert.equal(result.days[0].interrupted, 1);
   assert.equal(result.days[0].count, 1);
   assert.deepEqual(
-    result.targets.map((row) => row.pattern),
+    result.patterns.map((row) => row.pattern),
     ["//:b"],
+  );
+});
+
+test("unknown outcomes and commands outside build and test are counted and filterable", () => {
+  const records = [
+    { cmd: "run", pattern: "//a/... //b/...", startedAt: NOW, exitCode: 0 },
+    { cmd: "coverage", pattern: "", startedAt: NOW },
+  ];
+  const all = previewAnalytics(records, PERIOD, NOW);
+  assert.equal(all.days[0].count, 2);
+  assert.equal(all.days[0].unknown, 1);
+  assert.equal(all.patterns.length, 1);
+  assert.equal(previewAnalytics(records, { ...PERIOD, cmd: "coverage" }, NOW).days[0].count, 1);
+  assert.equal(previewAnalytics(records, { ...PERIOD, outcome: "unknown" }, NOW).days[0].count, 1);
+  assert.equal(previewAnalytics(records, { ...PERIOD, pattern: "//a/..." }, NOW).days[0].count, 0);
+  assert.equal(
+    previewAnalytics(records, { ...PERIOD, pattern: "//a/... //b/..." }, NOW).days[0].count,
+    1,
   );
 });
 
@@ -76,7 +96,7 @@ test("timings clamp negative durations and use nearest-rank percentiles", () => 
     PERIOD,
     NOW,
   );
-  assert.deepEqual(result.targets, [
+  assert.deepEqual(result.patterns, [
     { pattern: "//:a", invocations: 4, totalMs: 600, p50Ms: 100, p95Ms: 300 },
   ]);
 });
@@ -124,12 +144,11 @@ test("invalid calendars and excessive or reversed periods are rejected", () => {
 
 test("unsupported filters and patterns exceeding the UTF-8 byte limit are rejected", () => {
   assert.throws(
-    () => previewAnalytics([], { ...PERIOD, cmd: "run" } as unknown as AnalyticsFilter, NOW),
+    () => previewAnalytics([], { ...PERIOD, cmd: "build;test" }, NOW),
     /invalid analytics filter/,
   );
   assert.throws(
-    () =>
-      previewAnalytics([], { ...PERIOD, outcome: "unknown" } as unknown as AnalyticsFilter, NOW),
+    () => previewAnalytics([], { ...PERIOD, outcome: "other" } as unknown as AnalyticsFilter, NOW),
     /invalid analytics filter/,
   );
   assert.throws(
