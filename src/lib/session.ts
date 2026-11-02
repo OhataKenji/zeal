@@ -136,21 +136,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const generation = ++listGeneration;
     try {
       const runs = await transport.invoke<RunRecord[]>(COMMANDS.listRuns);
-      if (generation === listGeneration && !disposed) {
-        if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
-          update({ runs, runsError: null });
-        }
-        const selected = runs.find((run) => run.id === view.selectedRun);
-        if (
-          selected &&
-          view.detail &&
-          !view.detailLoading &&
-          !view.detailError &&
-          JSON.stringify(selected) !== JSON.stringify(view.detail.record)
-        ) {
-          void loadDetail();
-        }
-      }
+      acceptLoadedRuns(generation, runs);
     } catch (error) {
       if (generation === listGeneration) {
         update({ runsError: String(error) });
@@ -162,6 +148,25 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         void loadRuns();
       }
     }
+  }
+
+  // A changed selected record means its saved observation may have completed.
+  function acceptLoadedRuns(generation: number, runs: RunRecord[]) {
+    if (generation !== listGeneration || disposed) return;
+    if (JSON.stringify(runs) !== JSON.stringify(view.runs) || view.runsError) {
+      update({ runs, runsError: null });
+    }
+    const selected = runs.find((run) => run.id === view.selectedRun);
+    if (
+      !selected ||
+      !view.detail ||
+      view.detailLoading ||
+      view.detailError ||
+      JSON.stringify(selected) === JSON.stringify(view.detail.record)
+    ) {
+      return;
+    }
+    void loadDetail();
   }
 
   // The DTO carries only the snapshot's fetchedAt; its data is fetched when
@@ -188,15 +193,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         acceptLoadedSnapshot(snapshot);
       }
     } catch (error) {
-      if (generation === snapshotGeneration) {
-        snapshotRequested = null;
-        update({
-          snapshotLoading: false,
-          snapshotError: `Could not load the workspace snapshot: ${String(error)}`,
-          ...(view.selectedTarget ? { targetDetailError: "Could not load the target list" } : {}),
-        });
-      }
+      failSnapshotLoad(generation, error);
     }
+  }
+
+  function failSnapshotLoad(generation: number, error: unknown) {
+    if (generation !== snapshotGeneration) return;
+    snapshotRequested = null;
+    update({
+      snapshotLoading: false,
+      snapshotError: `Could not load the workspace snapshot: ${String(error)}`,
+      ...(view.selectedTarget ? { targetDetailError: "Could not load the target list" } : {}),
+    });
   }
 
   function targetBusy(): boolean {
@@ -364,6 +372,39 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     });
   }
 
+  function resetWorkspaceData() {
+    update({
+      console: null,
+      consoleOpen: false,
+      runs: [],
+      runsError: null,
+      selectedRun: null,
+      detail: null,
+      detailLoading: false,
+      detailError: null,
+      profile: null,
+      profileLoading: false,
+      profileError: null,
+      snapshot: null,
+      snapshotLoading: false,
+      snapshotError: null,
+      selectedTarget: null,
+      targetDetail: null,
+      targetDetailError: null,
+    });
+  }
+
+  function resetTargetData() {
+    update({
+      snapshot: null,
+      snapshotLoading: false,
+      snapshotError: null,
+      selectedTarget: null,
+      targetDetail: null,
+      targetDetailError: null,
+    });
+  }
+
   function acceptState(state: AppState) {
     if (disposed) return;
     const before = view.state;
@@ -384,57 +425,41 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       snapshotRequested = null;
     }
     if (workspaceChanged) {
-      update({
-        console: null,
-        consoleOpen: false,
-        runs: [],
-        runsError: null,
-        selectedRun: null,
-        detail: null,
-        detailLoading: false,
-        detailError: null,
-        profile: null,
-        profileLoading: false,
-        profileError: null,
-        snapshot: null,
-        snapshotLoading: false,
-        snapshotError: null,
-        selectedTarget: null,
-        targetDetail: null,
-        targetDetailError: null,
-      });
+      resetWorkspaceData();
     } else if (scopeChanged) {
-      update({
-        snapshot: null,
-        snapshotLoading: false,
-        snapshotError: null,
-        selectedTarget: null,
-        targetDetail: null,
-        targetDetailError: null,
-      });
+      resetTargetData();
     }
     update({
       state,
       ready: true,
       ...(resumed ? { error: null } : {}),
     });
-    if (
-      pendingStart &&
-      pendingStart.workspace === state.workspace &&
-      state.running &&
-      state.consoleRun === state.running
-    ) {
-      openConsole({ id: state.running, cmd: pendingStart.cmd, target: pendingStart.target });
-    }
+    openPendingConsole(state);
     syncTargetData(state, before, contextChanged);
     if (resumed || workspaceChanged || state.running !== before?.running) {
       void loadRuns();
     }
+    syncCompletedRun(state, before, resumed);
+  }
+
+  // A started run claims the Console only when its own workspace grants it.
+  function openPendingConsole(state: AppState) {
+    if (
+      !pendingStart ||
+      pendingStart.workspace !== state.workspace ||
+      !state.running ||
+      state.consoleRun !== state.running
+    ) {
+      return;
+    }
+    openConsole({ id: state.running, cmd: pendingStart.cmd, target: pendingStart.target });
+  }
+
+  function syncCompletedRun(state: AppState, before: AppState | null, resumed: boolean) {
     if (!resumed && (!before?.running || before.running === state.running)) return;
     const completed = before?.running ?? (resumed ? state.consoleRun : undefined);
-    if (!selectCompletedConsole(completed) && (resumed || view.selectedRun === completed)) {
-      loadSelected();
-    }
+    if (selectCompletedConsole(completed)) return;
+    if (resumed || view.selectedRun === completed) loadSelected();
   }
 
   function syncTargetData(state: AppState, before: AppState | null, contextChanged: boolean) {
@@ -447,13 +472,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     }
     const wantFetchedAt = state.snapshotFetchedAt;
     if (wantFetchedAt === null) {
-      // Defensive: the core drops its snapshot only on a workspace switch,
-      // which the reset above already clears.
-      if (view.snapshot || view.snapshotError || snapshotRequested) {
-        snapshotRequested = null;
-        ++snapshotGeneration;
-        update({ snapshot: null, snapshotLoading: false, snapshotError: null });
-      }
+      clearSnapshot();
       if (view.selectedTarget) selectTarget(null);
     } else if (
       // A fetch for this snapshot may already be in flight; re-issuing would
@@ -466,6 +485,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     requestTargetDetail();
   }
 
+  // Defensive: the core drops its snapshot only on a workspace switch,
+  // which the reset above already clears.
+  function clearSnapshot() {
+    if (view.snapshot || view.snapshotError || snapshotRequested) {
+      snapshotRequested = null;
+      ++snapshotGeneration;
+      update({ snapshot: null, snapshotLoading: false, snapshotError: null });
+    }
+  }
+
   function dispose() {
     disposed = true;
     unlisten?.();
@@ -475,27 +504,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function init() {
-    try {
-      const removeHistory = await transport.listen<void>("history-changed", () => {
-        void loadRuns();
-      });
-      if (disposed) {
-        removeHistory();
-        return;
-      }
-      unlistenHistory = removeHistory;
-      const remove = await transport.listen<AppState>("app-state", acceptState);
-      if (disposed) {
-        remove();
-        return;
-      }
-      unlisten = remove;
-    } catch (error) {
-      unlistenHistory?.();
-      unlistenHistory = undefined;
-      if (!disposed) update({ error: `Could not connect: ${String(error)}` });
-      return;
-    }
+    if (!(await subscribe())) return;
     try {
       const revision = stateRevision;
       const state = await transport.invoke<AppState>(COMMANDS.getState);
@@ -503,6 +512,32 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     } catch (error) {
       // A state event can recover a failed read, or already have superseded it.
       if (!view.ready) update({ error: `Could not connect: ${String(error)}` });
+    }
+  }
+
+  // Returns false when disposed mid-registration or a subscription failed.
+  async function subscribe() {
+    try {
+      const removeHistory = await transport.listen<void>("history-changed", () => {
+        void loadRuns();
+      });
+      if (disposed) {
+        removeHistory();
+        return false;
+      }
+      unlistenHistory = removeHistory;
+      const remove = await transport.listen<AppState>("app-state", acceptState);
+      if (disposed) {
+        remove();
+        return false;
+      }
+      unlisten = remove;
+      return true;
+    } catch (error) {
+      unlistenHistory?.();
+      unlistenHistory = undefined;
+      if (!disposed) update({ error: `Could not connect: ${String(error)}` });
+      return false;
     }
   }
 
@@ -542,11 +577,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       pendingStart = null;
       if (disposed || workspace !== view.state?.workspace) return;
       startedRun = record.id;
-      if (!view.consoleOpen || view.console?.id !== record.id) {
-        selectRun(null);
-        // Composer input labels the live Console until build events report it.
-        update({ console: { ...record, cmd, target }, consoleOpen: true });
-      }
+      openStartedConsole(record, cmd, target);
       await reconcileStartedState(workspace);
       if (disposed || workspace !== view.state?.workspace) return;
       // The run may already have finished before start_run's reply. Never
@@ -555,13 +586,23 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     } catch (error) {
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
-      pendingStart = null;
-      update({ starting: false });
-      requestTargetDetail();
-      if (!disposed && workspace === view.state?.workspace && view.ready) {
-        if (!selectCompletedConsole(startedRun)) loadSelected();
-      }
+      finishStart(workspace, startedRun);
     }
+  }
+
+  function openStartedConsole(record: RunRecord, cmd: RunCmd, target: string) {
+    if (view.consoleOpen && view.console?.id === record.id) return;
+    selectRun(null);
+    // Composer input labels the live Console until build events report it.
+    update({ console: { ...record, cmd, target }, consoleOpen: true });
+  }
+
+  function finishStart(workspace: string, startedRun: string | undefined) {
+    pendingStart = null;
+    update({ starting: false });
+    requestTargetDetail();
+    if (disposed || workspace !== view.state?.workspace || !view.ready) return;
+    if (!selectCompletedConsole(startedRun)) loadSelected();
   }
 
   async function stop() {

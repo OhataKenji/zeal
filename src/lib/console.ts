@@ -43,17 +43,22 @@ export function createConsole(
     }
   }
 
+  /** Sends one chunk of the input queue; false stops the flush loop. */
+  async function writeChunk(): Promise<boolean> {
+    const data = Array.from(pending.subarray(0, 8192));
+    const count = await transport.invoke<number>(COMMANDS.writeConsole, { id, data });
+    if (disposed) return false;
+    pending = pending.slice(count);
+    if (count > 0) setError("write", null);
+    return count > 0; // Backpressure: the next poll retries the same bytes.
+  }
+
   async function flush() {
     if (disposed || done || !running || writing || !pending.length) return;
     writing = true;
     try {
       while (!disposed && !done && running && pending.length) {
-        const data = Array.from(pending.subarray(0, 8192));
-        const count = await transport.invoke<number>(COMMANDS.writeConsole, { id, data });
-        if (disposed) return;
-        pending = pending.slice(count);
-        if (count > 0) setError("write", null);
-        if (count === 0) break; // Backpressure: the next poll retries the same bytes.
+        if (!(await writeChunk())) break;
       }
     } catch (error) {
       pending = new Uint8Array();
@@ -76,21 +81,26 @@ export function createConsole(
     void flush();
   }
 
+  /** Reads and displays one chunk; false stops the read loop. */
+  async function readChunk(): Promise<boolean> {
+    const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, { id, offset });
+    if (disposed) return false;
+    if (result.data.length) await display(Uint8Array.from(result.data));
+    if (disposed) return false;
+    offset = result.offset;
+    done = result.done;
+    setError("read", null);
+    if (done) pending = new Uint8Array();
+    return result.data.length >= 64 * 1024 && !result.done;
+  }
+
   async function poll() {
     void flush();
     if (disposed || done || reading) return;
     reading = true;
     try {
       do {
-        const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, { id, offset });
-        if (disposed) return;
-        if (result.data.length) await display(Uint8Array.from(result.data));
-        if (disposed) return;
-        offset = result.offset;
-        done = result.done;
-        setError("read", null);
-        if (done) pending = new Uint8Array();
-        if (result.data.length < 64 * 1024 || done) break;
+        if (!(await readChunk())) break;
       } while (!disposed);
     } catch (error) {
       setError("read", String(error));

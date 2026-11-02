@@ -6,6 +6,7 @@ import {
   timeToX,
   counterPointY,
   formatRulerTime,
+  type CounterSeries,
   type EventGeometry,
   type TimeRange,
   type TimelineTrack,
@@ -76,7 +77,7 @@ export function drawRuler(context: CanvasRenderingContext2D, frame: TimelineAxis
  * the label gutter stays fixed while plots use the shared time transform.
  */
 export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineFrame): EventHit[] {
-  const { width, height, gutter, range, ticks, scrollTop, tracks, theme } = frame;
+  const { width, height, gutter, range, ticks, tracks, theme } = frame;
   const hits: EventHit[] = [];
 
   // Grid, ruler, phase bands and event hit regions share the same time transform.
@@ -89,34 +90,7 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
     context.stroke();
   }
   for (const track of tracks) {
-    const trackTop = track.top - scrollTop;
-    const trackBottom = trackTop + track.height;
-    if (trackBottom < 0 || trackTop > height) continue;
-    const contentTop = trackTop + (track.kind === "events" ? LANE_HEADER : 0);
-    const contentHeight = trackBottom - contentTop;
-    if (track.kind === "events") {
-      context.fillStyle = theme.muted;
-      context.fillRect(gutter, trackTop, Math.max(1, width - gutter), LANE_HEADER);
-      context.strokeStyle = theme.border;
-      context.beginPath();
-      context.moveTo(gutter, trackBottom - 0.5);
-      context.lineTo(width, trackBottom - 0.5);
-      context.stroke();
-      if (track.collapsed) continue;
-    }
-    // Plots share one clip. DOM labels remain fixed in the gutter.
-    context.save();
-    context.beginPath();
-    context.rect(gutter, contentTop, Math.max(1, width - gutter), contentHeight);
-    context.clip();
-    if (track.kind === "events") {
-      drawEvents(context, track, trackTop, frame, hits);
-    } else {
-      drawCounterSeries(context, track, trackTop, frame, hits);
-    }
-    context.restore();
-    context.fillStyle = theme.sidebar;
-    context.fillRect(0, contentTop, gutter, contentHeight);
+    drawTrack(context, track, frame, hits);
   }
 
   context.strokeStyle = theme.border;
@@ -125,6 +99,71 @@ export function drawTimeline(context: CanvasRenderingContext2D, frame: TimelineF
   context.lineTo(gutter - 0.5, height);
   context.stroke();
   return hits;
+}
+
+function drawTrack(
+  context: CanvasRenderingContext2D,
+  track: TimelineTrack,
+  frame: TimelineFrame,
+  hits: EventHit[],
+) {
+  const { height, scrollTop } = frame;
+  const trackTop = track.top - scrollTop;
+  const trackBottom = trackTop + track.height;
+  if (trackBottom < 0 || trackTop > height) return;
+  if (track.kind === "events") {
+    drawEventsTrack(context, track, trackTop, trackBottom, frame, hits);
+  } else {
+    drawCounterTrack(context, track, trackTop, trackBottom, frame, hits);
+  }
+}
+
+function drawEventsTrack(
+  context: CanvasRenderingContext2D,
+  track: Extract<TimelineTrack, { kind: "events" }>,
+  trackTop: number,
+  trackBottom: number,
+  frame: TimelineFrame,
+  hits: EventHit[],
+) {
+  const { width, gutter, theme } = frame;
+  context.fillStyle = theme.muted;
+  context.fillRect(gutter, trackTop, Math.max(1, width - gutter), LANE_HEADER);
+  context.strokeStyle = theme.border;
+  context.beginPath();
+  context.moveTo(gutter, trackBottom - 0.5);
+  context.lineTo(width, trackBottom - 0.5);
+  context.stroke();
+  if (track.collapsed) return;
+  const contentTop = trackTop + LANE_HEADER;
+  // Plots share one clip. DOM labels remain fixed in the gutter.
+  context.save();
+  context.beginPath();
+  context.rect(gutter, contentTop, Math.max(1, width - gutter), trackBottom - contentTop);
+  context.clip();
+  drawEvents(context, track, trackTop, frame, hits);
+  context.restore();
+  context.fillStyle = theme.sidebar;
+  context.fillRect(0, contentTop, gutter, trackBottom - contentTop);
+}
+
+function drawCounterTrack(
+  context: CanvasRenderingContext2D,
+  track: Extract<TimelineTrack, { kind: "counter" }>,
+  trackTop: number,
+  trackBottom: number,
+  frame: TimelineFrame,
+  hits: EventHit[],
+) {
+  const { width, gutter, theme } = frame;
+  context.save();
+  context.beginPath();
+  context.rect(gutter, trackTop, Math.max(1, width - gutter), trackBottom - trackTop);
+  context.clip();
+  drawCounterSeries(context, track, trackTop, frame, hits);
+  context.restore();
+  context.fillStyle = theme.sidebar;
+  context.fillRect(0, trackTop, gutter, trackBottom - trackTop);
 }
 
 function drawEvents(
@@ -173,25 +212,9 @@ function drawEvent(
   const selected = selection?.tid === tid && selection.index === event.index;
   context.fillStyle = selected ? theme.foreground : eventColor(event.event);
   if (event.kind === "span") {
-    context.fillRect(eventLeft, eventTop, eventWidth, ROW_HEIGHT - 1);
-    if (eventWidth > 28) {
-      context.fillStyle = selected ? theme.background : theme.foreground;
-      drawClippedLabel(
-        context,
-        eventName(event.event),
-        eventLeft + 3,
-        eventTop + 12,
-        eventWidth - 5,
-      );
-    }
+    drawSpanBar(context, eventName(event.event), eventLeft, eventTop, eventWidth, selected, theme);
   } else {
-    context.beginPath();
-    context.moveTo(eventLeft, eventTop + 2);
-    context.lineTo(eventLeft + 3, eventTop + 8);
-    context.lineTo(eventLeft, eventTop + 14);
-    context.lineTo(eventLeft - 3, eventTop + 8);
-    context.closePath();
-    context.fill();
+    drawMarkDiamond(context, eventLeft, eventTop);
   }
   if (selected) {
     context.strokeStyle = theme.foreground;
@@ -209,6 +232,31 @@ function drawEvent(
   };
 }
 
+function drawSpanBar(
+  context: CanvasRenderingContext2D,
+  name: string,
+  left: number,
+  top: number,
+  width: number,
+  selected: boolean,
+  theme: TimelineTheme,
+) {
+  context.fillRect(left, top, width, ROW_HEIGHT - 1);
+  if (width <= 28) return;
+  context.fillStyle = selected ? theme.background : theme.foreground;
+  drawClippedLabel(context, name, left + 3, top + 12, width - 5);
+}
+
+function drawMarkDiamond(context: CanvasRenderingContext2D, left: number, top: number) {
+  context.beginPath();
+  context.moveTo(left, top + 2);
+  context.lineTo(left + 3, top + 8);
+  context.lineTo(left, top + 14);
+  context.lineTo(left - 3, top + 8);
+  context.closePath();
+  context.fill();
+}
+
 function drawCounterSeries(
   context: CanvasRenderingContext2D,
   track: Extract<TimelineTrack, { kind: "counter" }>,
@@ -216,8 +264,8 @@ function drawCounterSeries(
   frame: TimelineFrame,
   hits: EventHit[],
 ) {
-  const { width, gutter, range, selection, theme } = frame;
-  const { lane, counter } = track;
+  const { width, gutter, range, theme } = frame;
+  const { counter } = track;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
   const valueY = (value: number) => trackTop + counterPointY(counter, value);
   context.strokeStyle = theme.chartBar;
@@ -232,35 +280,49 @@ function drawCounterSeries(
   }
   context.stroke();
   for (const point of counter.points) {
-    const pointX = timeX(point.time);
-    if (pointX < gutter || pointX > width) continue;
-    const pointY = valueY(point.value);
-    // Cached builds can record only one sample. A moveTo-only path has no
-    // stroke, so paint that sample even when it has not been selected.
-    if (counter.points.length === 1) {
-      context.fillStyle = theme.chartBar;
-      context.beginPath();
-      context.arc(pointX, pointY, 2, 0, Math.PI * 2);
-      context.fill();
-    }
-    if (selection?.tid === lane.tid && selection.index === point.index) {
-      context.save();
-      context.strokeStyle = theme.foreground;
-      context.beginPath();
-      context.arc(pointX, pointY, 4, 0, Math.PI * 2);
-      context.stroke();
-      context.restore();
-    }
-    hits.push({
-      x: pointX - 4,
-      y: pointY - 4,
-      width: 8,
-      height: 8,
-      tid: lane.tid,
-      index: point.index,
-    });
+    drawCounterPoint(context, track, point, timeX, valueY, frame, hits);
   }
   context.lineWidth = 1;
+}
+
+function drawCounterPoint(
+  context: CanvasRenderingContext2D,
+  track: Extract<TimelineTrack, { kind: "counter" }>,
+  point: CounterSeries["points"][number],
+  timeX: (time: number) => number,
+  valueY: (value: number) => number,
+  frame: TimelineFrame,
+  hits: EventHit[],
+) {
+  const { width, gutter, selection, theme } = frame;
+  const { lane, counter } = track;
+  const pointX = timeX(point.time);
+  if (pointX < gutter || pointX > width) return;
+  const pointY = valueY(point.value);
+  // Cached builds can record only one sample. A moveTo-only path has no
+  // stroke, so paint that sample even when it has not been selected.
+  if (counter.points.length === 1) {
+    context.fillStyle = theme.chartBar;
+    context.beginPath();
+    context.arc(pointX, pointY, 2, 0, Math.PI * 2);
+    context.fill();
+  }
+  if (selection?.tid === lane.tid && selection.index === point.index) {
+    context.save();
+    context.strokeStyle = theme.foreground;
+    context.beginPath();
+    context.arc(pointX, pointY, 4, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+  }
+  hits.push({
+    x: pointX - 4,
+    y: pointY - 4,
+    width: 8,
+    height: 8,
+    tid: lane.tid,
+    index: point.index,
+  });
 }
 
 function drawClippedLabel(

@@ -257,6 +257,19 @@
       windowRange = panRange(range, layout, event.start - visibleCenter);
     }
   }
+  const keyActions: Record<string, () => void> = {
+    w: () => zoom(1.5, pointerAnchor),
+    "+": () => zoom(1.5, pointerAnchor),
+    "=": () => zoom(1.5, pointerAnchor),
+    s: () => zoom(1 / 1.5, pointerAnchor),
+    "-": () => zoom(1 / 1.5, pointerAnchor),
+    a: () => pan(span * -0.15),
+    d: () => pan(span * 0.15),
+    f: () => fit(),
+    arrowleft: () => void moveEvent(-1),
+    arrowright: () => void moveEvent(1),
+  };
+
   function keydown(event: KeyboardEvent) {
     if (event.key === "Escape" && selection) {
       selection = null;
@@ -273,19 +286,8 @@
       return;
     }
     const key = event.key.toLowerCase();
-    if (key === "w" || key === "+" || key === "=") {
-      zoom(1.5, pointerAnchor);
-    } else if (key === "s" || key === "-") {
-      zoom(1 / 1.5, pointerAnchor);
-    } else if (key === "a" || key === "d") {
-      pan(span * (key === "a" ? -0.15 : 0.15));
-    } else if (key === "f") {
-      fit();
-    } else if (key === "arrowleft" || key === "arrowright") {
-      void moveEvent(key === "arrowleft" ? -1 : 1);
-    } else {
-      return;
-    }
+    if (!Object.hasOwn(keyActions, key)) return;
+    keyActions[key]();
     event.preventDefault();
   }
 </script>

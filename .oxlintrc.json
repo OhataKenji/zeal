@@ -6,7 +6,7 @@
     "correctness": "error"
   },
   "rules": {
-    "sonarjs/cognitive-complexity": ["warn", 15]
+    "sonarjs/cognitive-complexity": ["warn", 8]
   },
   "env": {
     "builtin": true
