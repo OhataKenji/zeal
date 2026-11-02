@@ -1,18 +1,16 @@
 <script lang="ts">
-  import { optionId, PATTERN_HINTS, segments, type Match } from "./search";
+  import { optionId, segments, type Match } from "./search";
 
   let {
     matches,
     index,
     onpick,
     listId,
-    hints = PATTERN_HINTS,
   }: {
     matches: Match[];
     index: number;
     onpick: (value: string) => void;
     listId: string;
-    hints?: readonly string[];
   } = $props();
 
   // The list is taller than the window shows, so the row Enter would pick has
@@ -51,10 +49,5 @@
         <span class="label">{match.target.ruleClass}</span>
       </button>
     {/each}
-  {/if}
-  {#if hints.length > 0}
-    <div class="foot">
-      {#each hints as hint (hint)}<code>{hint}</code>{/each}
-    </div>
   {/if}
 </div>
