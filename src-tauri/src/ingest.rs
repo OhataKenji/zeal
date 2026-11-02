@@ -6,7 +6,7 @@
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
 use crate::xml::{self, ParsedQuery};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command, Stdio};
@@ -18,6 +18,10 @@ use tauri::AppHandle;
 /// Upper bound for one `bazel query`. First runs may include a bazelisk
 /// download and a cold analysis cache.
 pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Maximum retained stderr diagnostic payload. Read storage, allocation
+/// capacity, UTF-8 conversion, and total process memory are separate.
+const STDERR_TAIL_BYTES: usize = 8 * 1024;
 
 enum Outcome<T> {
     Ok(T),
@@ -181,11 +185,7 @@ fn fetch<T: Send + 'static>(
     let stdout = child.stdout.take().expect("stdout piped");
     let parse_handle = thread::spawn(move || parse(BufReader::new(stdout)));
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let stderr_handle = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
+    let stderr_handle = thread::spawn(move || capture_stderr_tail(&mut stderr));
 
     let deadline = Instant::now() + QUERY_TIMEOUT;
     let status = loop {
@@ -217,8 +217,7 @@ fn fetch<T: Send + 'static>(
 
     let parsed = parse_handle.join();
     let stderr_bytes = stderr_handle.join().unwrap_or_default();
-    let stderr_tail =
-        String::from_utf8_lossy(&stderr_bytes[stderr_bytes.len().saturating_sub(8192)..]);
+    let stderr_tail = String::from_utf8_lossy(&stderr_bytes);
     let code = status.code();
     let data = match parsed {
         Ok(Ok(data)) => data,
@@ -251,6 +250,27 @@ fn fetch<T: Send + 'static>(
     }
 }
 
+/// Drain stderr while retaining at most its final diagnostic bytes.
+fn capture_stderr_tail(stderr: &mut impl Read) -> Vec<u8> {
+    let mut tail = Vec::with_capacity(STDERR_TAIL_BYTES);
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        match stderr.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let kept = n.min(STDERR_TAIL_BYTES);
+                let dropped = (tail.len() + kept).saturating_sub(STDERR_TAIL_BYTES);
+                tail.drain(..dropped);
+                tail.extend_from_slice(&chunk[n - kept..n]);
+                debug_assert!(tail.len() <= STDERR_TAIL_BYTES);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    tail
+}
+
 /// Last non-empty stderr lines, truncated; bazel writes its errors there.
 fn summarize(stderr_tail: &str) -> String {
     let lines: Vec<&str> = stderr_tail
@@ -271,6 +291,159 @@ fn summarize(stderr_tail: &str) -> String {
 mod tests {
     use super::*;
     use crate::snapshot::{Meta, TargetIndex};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn stderr_tail_is_bounded_independently_of_total_output() {
+        let mut output = vec![b'x'; 300_000];
+        output.extend_from_slice(b"\nfinal diagnostic marker\n");
+        let mut reader = output.as_slice();
+        let tail = capture_stderr_tail(&mut reader);
+        assert!(reader.is_empty(), "stderr was not fully drained");
+        assert_eq!(tail.len(), STDERR_TAIL_BYTES);
+        assert_eq!(tail, output[output.len() - STDERR_TAIL_BYTES..]);
+    }
+
+    #[test]
+    fn stderr_tail_handles_split_utf8_and_keeps_a_valid_summary() {
+        let marker = b"\ncontext one\ncontext two\nfinal diagnostic marker\n";
+        let mut output = "界".as_bytes().to_vec();
+        output.extend(vec![b'x'; STDERR_TAIL_BYTES - marker.len() - 1]);
+        output.extend_from_slice(marker);
+        let mut reader = (&output[..2]).chain(&output[2..]);
+        let tail = capture_stderr_tail(&mut reader);
+        assert_eq!(tail.len(), STDERR_TAIL_BYTES);
+        assert_eq!(tail[0], "界".as_bytes()[2]);
+        let text = String::from_utf8_lossy(&tail);
+        assert!(text.starts_with('\u{fffd}'));
+        assert_eq!(
+            summarize(&text),
+            "context one | context two | final diagnostic marker"
+        );
+    }
+
+    struct QueryFixture {
+        workspace: PathBuf,
+        bazel: PathBuf,
+    }
+
+    impl QueryFixture {
+        fn new() -> Self {
+            let workspace =
+                std::env::temp_dir().join(format!("zeal-ingest-stderr-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&workspace).unwrap();
+            let bazel = workspace.join("bazel");
+            fs::write(
+                &bazel,
+                r#"#!/bin/sh
+i=0
+while [ "$i" -lt 40 ]; do
+  printf '%8192s' '' >&2
+  i=$((i + 1))
+done
+printf 'final diagnostic marker\n' >&2
+case "$2" in
+  success) code=0 ;;
+  partial) code=9 ;;
+  failed) code=7 ;;
+  *) exit 99 ;;
+esac
+if [ "$2" != failed ]; then
+  case "$3" in
+    --output=label_kind) printf 'cc_library rule //app:chosen\n' ;;
+    --output=xml) printf '<query><rule class="cc_library" name="//app:chosen"/></query>\n' ;;
+    *) exit 99 ;;
+  esac
+fi
+exit "$code"
+"#,
+            )
+            .unwrap();
+            fs::set_permissions(&bazel, fs::Permissions::from_mode(0o700)).unwrap();
+            Self { workspace, bazel }
+        }
+    }
+
+    impl Drop for QueryFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.workspace);
+        }
+    }
+
+    fn fetch_list(fixture: &QueryFixture, scenario: &str) -> Outcome<Vec<Target>> {
+        fetch(
+            &fixture.workspace,
+            &fixture.bazel,
+            scenario,
+            "label_kind",
+            snapshot::parse_label_kind,
+            |targets: &Vec<Target>| !targets.is_empty(),
+        )
+    }
+
+    fn fetch_detail(fixture: &QueryFixture, scenario: &str) -> Outcome<ParsedQuery> {
+        fetch(
+            &fixture.workspace,
+            &fixture.bazel,
+            scenario,
+            "xml",
+            |output| Ok(xml::parse_query(output)),
+            |query: &ParsedQuery| !query.rules.is_empty(),
+        )
+    }
+
+    #[test]
+    fn heavy_stderr_does_not_block_target_list_success() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_list(&fixture, "success"), Outcome::Ok(targets) if targets.len() == 1)
+        );
+    }
+
+    #[test]
+    fn heavy_stderr_preserves_partial_target_list() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_list(&fixture, "partial"), Outcome::Partial(targets, error)
+            if targets.len() == 1 && error.exit_code == Some(9) && error.summary == "final diagnostic marker")
+        );
+    }
+
+    #[test]
+    fn heavy_stderr_reports_failed_target_list() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_list(&fixture, "failed"), Outcome::Failed(error)
+            if error.exit_code == Some(7) && error.summary == "final diagnostic marker")
+        );
+    }
+
+    #[test]
+    fn heavy_stderr_does_not_block_selected_target_detail_success() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_detail(&fixture, "success"), Outcome::Ok(query) if query.rules.len() == 1)
+        );
+    }
+
+    #[test]
+    fn heavy_stderr_preserves_partial_selected_target_detail() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_detail(&fixture, "partial"), Outcome::Partial(query, error)
+            if query.rules.len() == 1 && error.exit_code == Some(9) && error.summary == "final diagnostic marker")
+        );
+    }
+
+    #[test]
+    fn heavy_stderr_reports_failed_selected_target_detail() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_detail(&fixture, "failed"), Outcome::Failed(error)
+            if error.exit_code == Some(7) && error.summary == "final diagnostic marker")
+        );
+    }
 
     #[test]
     fn detail_requires_the_current_index_label_and_free_bazel_slot() {
