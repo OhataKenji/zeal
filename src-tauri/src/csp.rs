@@ -1,8 +1,8 @@
-//! WebView boundaries beyond the document's CSP.
+//! Apply CSP to workers as well as the document.
 
 use std::borrow::Cow;
 use tauri::http::{Request, Response, header};
-use tauri::{App, Url, WebviewWindowBuilder};
+use tauri::{App, WebviewWindowBuilder};
 
 // Viz embeds its Wasm bytes. Workers need neither network access nor more scripts.
 const WORKER_CSP: &str = "default-src 'none'; script-src 'wasm-unsafe-eval'";
@@ -14,40 +14,11 @@ pub fn create_window(app: &App) -> tauri::Result<()> {
         .windows
         .first()
         .expect("main window configuration");
-    // Match Tauri's custom-protocol origin on each platform.
-    let origin = if cfg!(windows) || cfg!(target_os = "android") {
-        if config.use_https_scheme {
-            "https://tauri.localhost/"
-        } else {
-            "http://tauri.localhost/"
-        }
-    } else {
-        "tauri://localhost/"
-    };
-    let app_url = if tauri::is_dev() {
-        app.config().build.dev_url.clone()
-    } else {
-        None
-    }
-    .unwrap_or_else(|| Url::parse(origin).expect("valid app origin"));
-
+    // Build manually so the worker policy is attached before any asset loads.
     WebviewWindowBuilder::from_config(app, config)?
-        .on_navigation(move |url| navigation_allowed(url, &app_url))
-        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .on_web_resource_request(|request, response| restrict_scripts(&request, response))
         .build()?;
     Ok(())
-}
-
-fn navigation_allowed(url: &Url, app_url: &Url) -> bool {
-    url.scheme() == app_url.scheme()
-        && url.host_str() == app_url.host_str()
-        && url.port_or_known_default() == app_url.port_or_known_default()
-        && url.username().is_empty()
-        && url.password().is_none()
-        && matches!(url.path(), "" | "/" | "/index.html")
-        && url.query().is_none()
-        && url.fragment().is_none()
 }
 
 fn restrict_scripts(request: &Request<Vec<u8>>, response: &mut Response<Cow<'static, [u8]>>) {
@@ -80,67 +51,9 @@ fn restrict_scripts(request: &Request<Vec<u8>>, response: &mut Response<Cow<'sta
 
 #[cfg(test)]
 mod tests {
-    use super::{WORKER_CSP, navigation_allowed, restrict_scripts};
+    use super::{WORKER_CSP, restrict_scripts};
     use std::borrow::Cow;
-    use tauri::Url;
     use tauri::http::{Request, Response, header};
-
-    fn allowed(candidate: &str, entry: &str) -> bool {
-        navigation_allowed(&Url::parse(candidate).unwrap(), &Url::parse(entry).unwrap())
-    }
-
-    #[test]
-    fn permits_only_the_app_entry_documents() {
-        assert!(allowed("tauri://localhost/", "tauri://localhost/"));
-        assert!(allowed(
-            "tauri://localhost/index.html",
-            "tauri://localhost/"
-        ));
-        assert!(!allowed(
-            "tauri://localhost/assets/app.js",
-            "tauri://localhost/"
-        ));
-        assert!(!allowed(
-            "tauri://localhost/?secret=value",
-            "tauri://localhost/"
-        ));
-        assert!(!allowed(
-            "tauri://localhost/#fragment",
-            "tauri://localhost/"
-        ));
-    }
-
-    #[test]
-    fn rejects_other_origins_and_credentials() {
-        assert!(!allowed("https://example.org/", "tauri://localhost/"));
-        assert!(!allowed(
-            "tauri://localhost.example.org/",
-            "tauri://localhost/"
-        ));
-        assert!(!allowed("tauri://localhost:1420/", "tauri://localhost/"));
-        assert!(!allowed("tauri://user@localhost/", "tauri://localhost/"));
-        assert!(!allowed(
-            "tauri://user:password@localhost/",
-            "tauri://localhost/"
-        ));
-        assert!(!allowed("javascript:alert(1)", "tauri://localhost/"));
-        assert!(!allowed("data:text/html,hello", "tauri://localhost/"));
-    }
-
-    #[test]
-    fn dev_navigation_is_limited_to_the_configured_server() {
-        assert!(allowed("http://localhost:1420/", "http://localhost:1420/"));
-        assert!(!allowed("http://localhost:1421/", "http://localhost:1420/"));
-        assert!(!allowed("http://127.0.0.1:1420/", "http://localhost:1420/"));
-        assert!(!allowed(
-            "https://localhost:1420/",
-            "http://localhost:1420/"
-        ));
-        assert!(!allowed(
-            "http://localhost:1420/@fs/private",
-            "http://localhost:1420/"
-        ));
-    }
 
     fn response(mime: &str) -> Response<Cow<'static, [u8]>> {
         Response::builder()

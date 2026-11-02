@@ -1,6 +1,7 @@
 mod bep;
 mod bes;
 mod console;
+mod csp;
 mod detail;
 mod ingest;
 mod label;
@@ -10,7 +11,6 @@ mod query;
 mod runargs;
 mod runner;
 mod scope;
-mod security;
 mod snapshot;
 mod state;
 mod store;
@@ -420,7 +420,7 @@ pub fn run() {
                 .await;
             });
             restore_workspace(app, core);
-            security::create_window(app)?;
+            csp::create_window(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
