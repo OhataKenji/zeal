@@ -1,7 +1,6 @@
 mod bep;
 mod bes;
 mod console;
-mod csp;
 mod detail;
 mod ingest;
 mod label;
@@ -420,7 +419,6 @@ pub fn run() {
                 .await;
             });
             restore_workspace(app, core);
-            csp::create_window(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

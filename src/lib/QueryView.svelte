@@ -233,7 +233,8 @@
   });
 
   // A successful graph invocation's DOT becomes an SVG blob URL; Graphviz output is
-  // never appended to the DOM: SVG links are an injection surface even with CSP.
+  // never appended to the DOM (CSP is unset and SVG links are an injection
+  // surface).
   const graphDot = $derived(
     resultView === "graph" &&
       stored &&
