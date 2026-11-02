@@ -152,6 +152,16 @@
   max-width: 180px;
 }
 
+.workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.workspace-actions .icon-button {
+  width: 24px;
+}
+
 .composer {
   position: relative;
   min-width: 0;
