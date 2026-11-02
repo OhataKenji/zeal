@@ -25,7 +25,7 @@ tree と dropdown は target 欄を置き換え、cmd は利用者が `build` / 
 ```mermaid
 flowchart LR
     pick["検索 / tree / pattern"] --> input["target 欄"]
-    input --> send["入力を検証しIDを予約"]
+    input --> send["入力を検証しinvocation IDを予約"]
     send --> bazel["Bazel を起動"]
     bazel -->|"共通BES receiver"| result["BEP事実とログ込みeventを保存"]
     result --> view["保存したログと結果を表示"]
@@ -57,8 +57,8 @@ cmdは `build` / `test` / `run` を受け付ける。
 
 workspace と bazel が利用可能で、取り込みと実行のどちらも動いていなければ Send を受け付ける。
 snapshot がなくても手入力で実行できる。
-ID予約、擬似端末(**PTY**)、Bazelイベントを受けるreceiverの準備に失敗したらspawnしない。
-cwdはworkspace root、stdinはPTYで扱い、観測flagはZealが組み立てる([M2](./m2-run-detail.md))。
+invocation ID予約、擬似端末(**PTY**)、Bazelイベントを受けるreceiverの準備に失敗したらspawnしない。
+cwdはworkspace root、stdinはPTYで扱い、観測flagはZealが組み立てる([M2](./m2-invocation-detail.md))。
 
 ### ログと更新
 
@@ -69,20 +69,20 @@ Bazel clientのwaitはlive実行枠を解放し、UIへ状態を通知する。
 保存済みのBEPとprofileは詳細要求時に読む。
 
 target の取り込みは workspace を開いたときと手動 refresh のみ行う。
-query または run の実行中の refresh は予約せず拒否し、run が終わっても自動取り込みしない。
+query または invocation の実行中の refresh は予約せず拒否し、invocation が終わっても自動取り込みしない。
 workspace 切替も処理中は拒否する。
 古い snapshot と部分結果は状態と時刻を示す。
 
 ### 中断と不明な結果
 
-stop は現在保持しているプロセスグループへ SIGINT を送り、3秒後も run を保持していれば SIGKILL を送る。
+stop は現在保持しているプロセスグループへ SIGINT を送り、3秒後も invocation を保持していれば SIGKILL を送る。
 さらに2秒経っても終了を確認できなければ「停止を確認できません」と示し、実行枠を解放する。
 wait エラーでも理由を示して実行枠を解放する。
 この場合、processの終了は不明と示す。
 履歴のビルド結果はBEPの事実を維持し、processの状態から補完しない。
 自動再実行、自動 query、無期限の復旧ループを持たず、残存プロセスへの対処を利用者に任せる。
 以前のセッションのプロセスには signal を送らない。
-アプリ終了時も現在の run に限り SIGINT と短い猶予後の SIGKILL を試みる。
+アプリ終了時も現在の invocation に限り SIGINT と短い猶予後の SIGKILL を試みる。
 
 ## Caveats
 
@@ -95,7 +95,7 @@ wait エラーでも理由を示して実行枠を解放する。
 ## Security and Privacy
 
 入力制約と shell を介さない引数渡しは [overview](./overview.md#security-concerns) に従う。
-成果物は local の run ディレクトリに保存し、Zeal から外部へ共有しない。
+成果物は local の invocation ディレクトリに保存し、Zeal から外部へ共有しない。
 対象のコード自体を隔離するものではないため、既知のリポジトリで試す。
 
 ## Test Plan

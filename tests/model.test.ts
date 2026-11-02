@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ancestorsOf, buildTree, flatten, relations, splitLabel } from "../src/lib/model.ts";
 import type { TargetDetail, TargetIndex } from "../src/lib/types.ts";
 
-test("target tree lists packages and rules without input or output files", () => {
+test("target tree lists packages and targets without input or output files", () => {
   const snapshot: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: [
@@ -21,7 +21,7 @@ test("target tree lists packages and rules without input or output files", () =>
     rows.map((row) => ({ kind: row.kind, text: row.text })),
     [
       { kind: "dir", text: "app/" },
-      { kind: "rule", text: ":parser_test" },
+      { kind: "target", text: ":parser_test" },
     ],
   );
   assert.equal(rows[1].label, "//app:parser_test");
@@ -53,7 +53,7 @@ test("revealing a target expands every ancestor and keeps other branches open", 
   assert.ok(flatten(tree, new Set()).some((row) => row.label === "//:root"));
 });
 
-test("forward attributes retain rule and file inputs under their original names", () => {
+test("forward attributes retain target and file inputs under their original names", () => {
   const detail: TargetDetail = {
     target: {
       label: "//app:generated",

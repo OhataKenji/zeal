@@ -1,4 +1,4 @@
-# Zeal 設計 M2: 一回の run の説明
+# Zeal 設計 M2: 一回の invocation の説明
 
 _OhataKenji_
 _Last update: 2026/10/31_
@@ -6,7 +6,7 @@ _Status: Approved_
 
 ## Goal
 
-一回の run の profile を可視化し、自分のコマンドと Bazel 内部の処理の時系列を結びつけられるようにする。
+一回の invocation の profile を可視化し、自分のコマンドと Bazel 内部の処理の時系列を結びつけられるようにする。
 phase の区切りとスレッド上の event を示し、観測できる範囲で処理の流れを説明できるようにする([PRD](../prd.md) シナリオ2と M2)。
 
 ### Non Goals
@@ -15,16 +15,16 @@ phase の区切りとスレッド上の event を示し、観測できる範囲�
 - exec log の取得と parse、実行されなかった action の推定
 - action の内部ログ(stdout/stderr)の再生
 - remote cache と remote execution の詳細な内訳
-- 二回の run の diff。比較用の追加の条件収集と合わせて次版で扱う
+- 二回の invocation の diff。比較用の追加の条件収集と合わせて次版で扱う
 - stop、中断、`bazel run`
 
 ## Background
 
-run、snapshot、BEP などの共通用語は [overview](./overview.md#background) に従う。
+invocation、snapshot、BEP などの共通用語は [overview](./overview.md#background) に従う。
 **BEP**(Build Event Protocol)は、Bazelが報告するイベント列である。
 targetとtestの結果を含み、Zeal内のBuild Event Service(**BES**) receiverが受信する。
 **profile** は Bazel の JSON trace 形式の計測記録で、phase の marker とスレッドごとの event を持つ。
-runの終了結果にはBEPのBuildFinishedのexit codeを使う。
+invocationの終了結果にはBEPのBuildFinishedのexit codeを使う。
 
 Bazel の loading、analysis、execution は、常に独立した時間帯として観測できるとは限らない。
 Bazel 8 の既定の Skymeld では analysis と execution が重なり、profile の marker は `Evaluate target patterns`、`Load, analyze dependencies and build artifacts`、`Complete build` などになる。
@@ -37,7 +37,7 @@ Bazel server、解析済みの情報、既存出力の維持も速度に関わ�
 
 ## Overview
 
-SendでBazelを起動し、共通BES receiverがログを含むBEPをrunのUUIDディレクトリに残す。
+SendでBazelを起動し、共通BES receiverがログを含むBEPをinvocation IDのディレクトリに残す。
 profileは任意の計時fileとして保存する。
 
 入力と結果はSQLiteの元事実から表示し、詳細を開くたびに保存したfileをparseする。
@@ -57,8 +57,8 @@ flowchart LR
 
 ### 起動と保存
 
-M2 では snapshot の query 中か run 中なら Send を disabled にし、実行待ちの queue を持たない。
-保存先とDBの規則は[M4](./m4-run-history.md)に従う。
+M2 では snapshot の query 中か invocation 中なら Send を disabled にし、実行待ちの queue を持たない。
+保存先とDBの規則は[M4](./m4-invocation-history.md)に従う。
 
 - `attempt/<number>/bep.binpb`：receiverが保存するログ込みBuildEvent
 - `profile.gz`：Bazelが書く計時情報
@@ -90,8 +90,8 @@ BEP表示データとログを一度の逐次parseで組み立て、別のログ
 
 ### 表示時の parse
 
-`get_run` でBEPとログを一度に読む。
-`get_run_profile` ではprofileを別途読み、いずれも解析結果を保存しない。
+`get_invocation` でBEPとログを一度に読む。
+`get_invocation_profile` ではprofileを別途読み、いずれも解析結果を保存しない。
 
 BEP は length-delimited protobuf event として parse し、末尾の frame が欠けた場合も受理できた結果を使う。
 frame は 16 MiB まで読み、長さ prefix の overflow や不正 protobuf も incomplete とする。
@@ -121,7 +121,7 @@ phase の帯は、profile の `build phase marker` を時刻順に並べ、次�
 最後の区間は `Finishing` event までとする。
 現在の parser は `Finishing` がなければ profile 全体を parse error とし、timing を表示しない。
 Skymeld で analysis と execution が重なることを注記する。
-スレッド上の span を合計して run の経過時間や短縮可能時間とは扱わない。
+スレッド上の span を合計して invocation の経過時間や短縮可能時間とは扱わない。
 
 ### 観測の負担と追加検証
 

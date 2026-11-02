@@ -330,7 +330,7 @@
     <h4 class="trace-event-title" id="trace-event-title">
       {eventName(selected.event)}
     </h4>
-    <dl class="run-details">
+    <dl class="invocation-details">
       <dt>Thread</dt>
       <dd>{lane.name || "thread"} · tid {lane.tid}</dd>
       <dt>Start</dt>

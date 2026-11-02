@@ -9,7 +9,7 @@ export interface ConsoleOutput {
 }
 
 /**
- * Creates a terminal stream reader and bounded input queue for one run.
+ * Creates a terminal stream reader and bounded input queue for one invocation.
  * Polling advances from the saved offset; a zero-length write waits for the
  * next poll to retry the same queued bytes.
  */

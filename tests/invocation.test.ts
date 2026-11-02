@@ -1,35 +1,43 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runStatus, sectionData, sectionMessage, sectionNoticeTone } from "../src/lib/run.ts";
-import type { RunRecord } from "../src/lib/types.ts";
+import {
+  invocationStatus,
+  sectionData,
+  sectionMessage,
+  sectionNoticeTone,
+} from "../src/lib/invocation.ts";
+import type { InvocationRecord } from "../src/lib/types.ts";
 
-const RECORD: RunRecord = {
+const RECORD: InvocationRecord = {
   id: "one",
   workspace: "/workspace",
   cmd: "build",
-  target: "//:app",
+  pattern: "//:app",
   startedAt: 1,
 };
 
 test("outcome distinguishes active, stopping, unfinished, succeeded and failed records", () => {
-  assert.equal(runStatus(RECORD, "one").label, "● running");
-  assert.equal(runStatus(RECORD, "one", true).label, "■ stopping");
-  assert.equal(runStatus(RECORD, null).label, "? outcome unknown");
-  assert.equal(runStatus(RECORD, "other", true).label, "? outcome unknown");
-  assert.equal(runStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, null).label, "✓ succeeded");
+  assert.equal(invocationStatus(RECORD, "one").label, "● running");
+  assert.equal(invocationStatus(RECORD, "one", true).label, "■ stopping");
+  assert.equal(invocationStatus(RECORD, null).label, "? outcome unknown");
+  assert.equal(invocationStatus(RECORD, "other", true).label, "? outcome unknown");
   assert.equal(
-    runStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, null).label,
+    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, null).label,
+    "✓ succeeded",
+  );
+  assert.equal(
+    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, null).label,
     "✗ failed (exit 3)",
   );
 });
 
 test("stopping never replaces a result the observation already confirmed", () => {
   assert.equal(
-    runStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, RECORD.id, true).label,
+    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, RECORD.id, true).label,
     "✓ succeeded",
   );
   assert.equal(
-    runStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, RECORD.id, true).label,
+    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, RECORD.id, true).label,
     "✗ failed (exit 3)",
   );
 });
@@ -55,7 +63,10 @@ test("missing and unreadable observations remain distinct without changing a kno
     sectionMessage({ status: "not_available", note: "still running" }),
     "not available — still running",
   );
-  assert.equal(runStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, null).label, "✓ succeeded");
+  assert.equal(
+    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, null).label,
+    "✓ succeeded",
+  );
 });
 
 test("section notices distinguish broken reads, partial data, and absent records", () => {
@@ -71,32 +82,35 @@ test("section notices distinguish broken reads, partial data, and absent records
 });
 
 test("build exit determines outcome even when its finish time was not recorded", () => {
-  assert.equal(runStatus({ ...RECORD, exitCode: 0 }, null).kind, "succeeded");
-  assert.equal(runStatus({ ...RECORD, exitCode: 3 }, null).kind, "failed");
+  assert.equal(invocationStatus({ ...RECORD, exitCode: 0 }, null).kind, "succeeded");
+  assert.equal(invocationStatus({ ...RECORD, exitCode: 3 }, null).kind, "failed");
 });
 
 test("missing build exit remains unknown even when its finish time was recorded", () => {
-  assert.equal(runStatus({ ...RECORD, finishedAt: 2 }, null).kind, "unknown");
-  assert.equal(runStatus(undefined, null).kind, "unknown");
+  assert.equal(invocationStatus({ ...RECORD, finishedAt: 2 }, null).kind, "unknown");
+  assert.equal(invocationStatus(undefined, null).kind, "unknown");
 });
 
 test("an unobserved invocation has no invented input or result", () => {
-  assert.deepEqual(runStatus({ id: "reserved" }, null), {
+  assert.deepEqual(invocationStatus({ id: "reserved" }, null), {
     kind: "unknown",
     label: "? outcome unknown",
   });
-  assert.equal(runStatus({ id: "reserved" }, "reserved").kind, "running");
+  assert.equal(invocationStatus({ id: "reserved" }, "reserved").kind, "running");
 });
 
 test("icon status and description agree when completion races with stop", () => {
-  assert.deepEqual(runStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, RECORD.id, true), {
+  assert.deepEqual(invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, RECORD.id, true), {
     kind: "succeeded",
     label: "✓ succeeded",
   });
-  assert.deepEqual(runStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, RECORD.id, true), {
+  assert.deepEqual(invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, RECORD.id, true), {
     kind: "failed",
     label: "✗ failed (exit 3)",
   });
-  assert.deepEqual(runStatus(RECORD, RECORD.id), { kind: "running", label: "● running" });
-  assert.deepEqual(runStatus(RECORD, RECORD.id, true), { kind: "stopping", label: "■ stopping" });
+  assert.deepEqual(invocationStatus(RECORD, RECORD.id), { kind: "running", label: "● running" });
+  assert.deepEqual(invocationStatus(RECORD, RECORD.id, true), {
+    kind: "stopping",
+    label: "■ stopping",
+  });
 });

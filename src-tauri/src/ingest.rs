@@ -1,7 +1,7 @@
 //! Fast target-list ingestion and on-demand XML details for one target.
 //!
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
-//! no pending query or post-run refresh is kept.
+//! no pending query or post-invocation refresh is kept.
 
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-/// Upper bound for one `bazel query`. First runs may include a bazelisk
+/// Upper bound for one `bazel query`. First invocations may include a bazelisk
 /// download and a cold analysis cache.
 pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 

@@ -144,7 +144,7 @@ pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, C
                 loop {
                     if finished.load(Ordering::Acquire) {
                         let since = draining.get_or_insert_with(Instant::now);
-                        // Descendants retaining the slave must not keep an ended run alive.
+                        // Descendants retaining the slave must not keep an ended invocation alive.
                         if since.elapsed() >= Duration::from_millis(100) {
                             break;
                         }
@@ -197,30 +197,33 @@ pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
         return Err("terminal input chunk is too large".into());
     }
     let mut st = core.state.lock().expect("application state lock poisoned");
-    let Some(run) = st.run.as_mut() else {
+    let Some(invocation) = st.active_invocation.as_mut() else {
         return Err("terminal is no longer running".into());
     };
-    if run.id.as_str() != id || run.pgid.is_none() || run.stopping {
+    if invocation.id.as_str() != id || invocation.pgid.is_none() || invocation.stopping {
         return Err("terminal is no longer running".into());
     }
-    run.terminal.write(bytes).map_err(|e| e.to_string())
+    invocation.terminal.write(bytes).map_err(|e| e.to_string())
 }
 
 pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String> {
     let st = core.state.lock().expect("application state lock poisoned");
-    let Some(run) = st.run.as_ref() else {
+    let Some(invocation) = st.active_invocation.as_ref() else {
         return Ok(());
     };
-    if run.id.as_str() != id || run.pgid.is_none() {
+    if invocation.id.as_str() != id || invocation.pgid.is_none() {
         return Ok(());
     }
-    run.terminal.resize(cols, rows).map_err(|e| e.to_string())
+    invocation
+        .terminal
+        .resize(cols, rows)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ActiveRun;
+    use crate::state::ActiveInvocation;
     use crate::store;
 
     struct Fixture {
@@ -243,7 +246,7 @@ mod tests {
                 spawn(Command::new("sh").args(["-c", script]), &dir).unwrap();
             let core = Core::new();
             let mut st = core.state.lock().unwrap();
-            st.run = Some(ActiveRun {
+            st.active_invocation = Some(ActiveInvocation {
                 id: id.clone().into(),
                 terminal: control,
                 pgid: Some(child.id() as i32),
@@ -277,9 +280,9 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .run
+                .active_invocation
                 .as_mut()
-                .map(|run| run.pgid = None);
+                .map(|invocation| invocation.pgid = None);
             code
         }
     }
@@ -340,7 +343,7 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .run
+                .active_invocation
                 .as_ref()
                 .unwrap()
                 .terminal
@@ -354,7 +357,7 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .run
+                .active_invocation
                 .as_ref()
                 .unwrap()
                 .terminal
@@ -369,7 +372,7 @@ mod tests {
             "test -t 0 && test -t 1 && test -t 2 || exit 9; printf 'ready>'; read value; stty size; printf 'answer=%s\\n' $((value * 2))",
         );
         f.wait_for("ready>");
-        assert!(write(&f.core, "old-run", b"999\n").is_err());
+        assert!(write(&f.core, "old-invocation", b"999\n").is_err());
         resize(&f.core, &f.id, 120, 40).unwrap();
         f.send(b"21\r");
         assert_eq!(f.finish(), 0);

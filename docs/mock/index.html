@@ -390,13 +390,13 @@
     <div class="page">
       <h1>Zeal — wireframe mock</h1>
       <div class="sub">
-        window 1種・content 3状態（target / run / analytics）・実行入口は composer だけ。
+        window 1種・content 3状態（target / invocation / analytics）・実行入口は composer だけ。
       </div>
       <div class="toc">
         <a href="#section-core">コア</a>
         <a href="#section-target">target</a>
-        <a href="#section-running">run（実行中）</a>
-        <a href="#section-completed">run（完了）</a>
+        <a href="#section-running">invocation（実行中）</a>
+        <a href="#section-completed">invocation（完了）</a>
         <a href="#section-analytics">analytics</a>
         <a href="#section-find">find</a>
       </div>
@@ -422,11 +422,11 @@
             <td>実行の唯一の入口。自分のコマンドとして残る</td>
           </tr>
           <tr>
-            <td>run</td>
+            <td>invocation</td>
             <td>timing / log</td>
           </tr>
           <tr>
-            <td>runs</td>
+            <td>invocations</td>
             <td>local に溜まる履歴。集計すると傾向になる</td>
           </tr>
           <tr>
@@ -457,7 +457,7 @@
     </div>
 
     <div class="page" id="section-running">
-      <h2>run（実行中）</h2>
+      <h2>invocation（実行中）</h2>
       <div class="win" data-target="//app:server" data-stop data-side="min" data-sel="r1">
         <h3>timing</h3>
         <div class="box empty-state">not available</div>
@@ -467,7 +467,7 @@
     </div>
 
     <div class="page" id="section-completed">
-      <h2>run（完了）</h2>
+      <h2>invocation（完了）</h2>
       <div class="win" data-target="//app:server" data-side="min" data-sel="r2">
         <h3>timing</h3>
         <div class="timeline">
@@ -578,7 +578,7 @@
   ▸ proto/<br>
   ▸ tools/`;
 
-      const RUNS = [
+      const INVOCATIONS = [
         ["●", "build //app:server", "r1", "now"],
         ["✓", "test //app/lib:all", "r2", "3m"],
         ["✗", "build //app:server", "r3", "1h"],
@@ -589,10 +589,10 @@
       const sidebar = (side, sel) => `
   <h3>targets</h3>
   <div class="tree ${side === "min" ? "tree-compact dim" : ""}">${side === "min" ? "…" : TREE}</div>
-  <h3 class="sidebar-heading">runs</h3>
+  <h3 class="sidebar-heading">invocations</h3>
   <ul class="list">
     <li${"a" === sel ? ' class="selected"' : ""}><span>▤ analytics</span></li>
-    ${RUNS.map(
+    ${INVOCATIONS.map(
       ([icon, t, id, time]) =>
         `<li${id === sel ? ' class="selected"' : ""}><span>${icon} ${t}</span>${time ? `<span class="label">${time}</span>` : ""}</li>`,
     ).join("")}

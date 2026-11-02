@@ -79,7 +79,7 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
         response.message().await.unwrap().unwrap().sequence_number,
         1
     );
-    let record = zeal_lib::read_run_record(&data, &temp.0, &id).unwrap();
+    let record = zeal_lib::read_invocation_record(&data, &temp.0, &id).unwrap();
     assert_eq!(record.cmd.as_deref(), Some("build"));
     assert_eq!(record.exit_code, None);
     assert_eq!(
@@ -87,10 +87,15 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
         2
     );
     assert!(response.message().await.unwrap().is_none());
-    let file = zeal_lib::open_run_artifact(&data, &temp.0, &id, "bep.binpb").unwrap();
+    let file = zeal_lib::open_invocation_artifact(&data, &temp.0, &id, "bep.binpb").unwrap();
     assert!(file.metadata().unwrap().len() > 0);
-    assert_eq!(zeal_lib::list_run_records(&data, &temp.0).unwrap().len(), 1);
-    assert!(!data.join("runs").join(&id).join("log.txt").exists());
+    assert_eq!(
+        zeal_lib::list_invocation_records(&data, &temp.0)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(!data.join("invocations").join(&id).join("log.txt").exists());
     server.abort();
 }
 

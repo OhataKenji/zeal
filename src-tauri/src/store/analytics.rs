@@ -13,9 +13,9 @@ pub struct Filter {
     pub end: Option<String>,
     pub cmd: Option<String>,
     pub outcome: Option<String>,
-    /// Exact `target_raw` pattern match. Restricts the daily series only; the
-    /// target ranking always reflects every pattern in the filtered period.
-    pub target: Option<String>,
+    /// Exact `target_pattern` match. Restricts the daily series only; the
+    /// pattern ranking always reflects every pattern in the filtered period.
+    pub pattern: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,10 +25,10 @@ pub struct Day {
     pub ok: i64,
     pub failed: i64,
     pub interrupted: i64,
-    /// Runs carrying a recorded finish time; the denominator of the
+    /// Invocations carrying a recorded finish time; the denominator of the
     /// duration series. `count - timed` rows contribute nothing to it.
     pub timed: i64,
-    /// Wall-clock total of runs with a recorded finish time.
+    /// Wall-clock total of invocations with a recorded finish time.
     pub total_ms: i64,
     /// Nearest-rank percentiles over the day's recorded durations.
     pub p50_ms: i64,
@@ -37,8 +37,8 @@ pub struct Day {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetDuration {
-    pub target: String,
-    pub runs: i64,
+    pub pattern: String,
+    pub invocations: i64,
     pub total_ms: i64,
     pub p50_ms: i64,
     pub p95_ms: i64,
@@ -141,8 +141,8 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             .outcome
             .as_deref()
             .is_some_and(|s| !["ok", "failed", "interrupted"].contains(&s))
-        // Matches the target fact limit in store::events.
-        || filter.target.as_deref().is_some_and(|s| s.len() > 64 * 1024)
+        // Matches the target-pattern fact limit in store::events.
+        || filter.pattern.as_deref().is_some_and(|s| s.len() > 64 * 1024)
     {
         return Err(super::fail(ErrorKind::Invalid));
     }
@@ -177,8 +177,8 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
     // Overflowing subtraction promotes to REAL rather than wrapping;
     // reading it back as i64 then fails closed as Corrupt.
     let sql = format!(
-        "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),exit_code,target_raw,
-            finished_at_ms - started_at_ms FROM run WHERE workspace_id=:workspace AND {MATCH}"
+        "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),exit_code,target_pattern,
+            finished_at_ms - started_at_ms FROM invocation WHERE workspace_id=:workspace AND {MATCH}"
     );
     let mut statement = tx.prepare(&sql)?;
     let rows = statement
@@ -192,13 +192,13 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 Ok(Observation {
                     day: r.get(0)?,
                     exit_code: r.get(1)?,
-                    target: r.get(2)?,
+                    pattern: r.get(2)?,
                     duration_ms: r.get(3)?,
                 })
             },
         )?
         .collect::<Result<Vec<_>, _>>()?;
-    let (days, targets) = summarize(days, rows, filter.target.as_deref())?;
+    let (days, targets) = summarize(days, rows, filter.pattern.as_deref())?;
     Ok(Analytics {
         filter,
         today,
@@ -210,33 +210,33 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
 struct Observation {
     day: String,
     exit_code: i64,
-    target: String,
+    pattern: String,
     duration_ms: Option<i64>,
 }
 
-/// Daily filtering never removes runs from the all-target ranking.
+/// Daily filtering never removes invocations from the all-pattern ranking.
 fn summarize(
     mut days: Vec<Day>,
     rows: Vec<Observation>,
-    target_filter: Option<&str>,
+    pattern_filter: Option<&str>,
 ) -> Result<(Vec<Day>, Vec<TargetDuration>), StoreError> {
     let mut durations: Vec<Vec<i64>> = vec![Vec::new(); days.len()];
-    let mut by_target: HashMap<String, TargetAgg> = HashMap::new();
+    let mut by_pattern: HashMap<String, TargetAgg> = HashMap::new();
     for Observation {
         day,
         exit_code,
-        target,
+        pattern,
         duration_ms,
     } in rows
     {
         // A clock jump backwards must not corrupt the series.
         let duration = duration_ms.map(|ms| ms.max(0));
-        let entry = by_target.entry(target.clone()).or_default();
-        entry.runs += 1;
+        let entry = by_pattern.entry(pattern.clone()).or_default();
+        entry.invocations += 1;
         if let Some(duration) = duration {
             entry.durations.push(duration);
         }
-        if target_filter.is_some_and(|t| t != target) {
+        if pattern_filter.is_some_and(|t| t != pattern) {
             continue;
         }
         let i = days
@@ -260,21 +260,21 @@ fn summarize(
         days[i].p50_ms = percentile(sorted, 50);
         days[i].p95_ms = percentile(sorted, 95);
     }
-    let mut targets: Vec<TargetDuration> = by_target
+    let mut targets: Vec<TargetDuration> = by_pattern
         .into_iter()
-        .map(|(target, agg)| {
+        .map(|(pattern, agg)| {
             let mut sorted = agg.durations;
             sorted.sort_unstable();
             TargetDuration {
-                target,
-                runs: agg.runs,
+                pattern,
+                invocations: agg.invocations,
                 total_ms: sorted.iter().fold(0i64, |sum, ms| sum.saturating_add(*ms)),
                 p50_ms: percentile(&sorted, 50),
                 p95_ms: percentile(&sorted, 95),
             }
         })
         .collect();
-    targets.sort_by(|a, b| b.total_ms.cmp(&a.total_ms).then(a.target.cmp(&b.target)));
+    targets.sort_by(|a, b| b.total_ms.cmp(&a.total_ms).then(a.pattern.cmp(&b.pattern)));
     targets.truncate(TARGET_LIMIT);
     Ok((days, targets))
 }
@@ -283,7 +283,7 @@ const TARGET_LIMIT: usize = 10;
 
 #[derive(Default)]
 struct TargetAgg {
-    runs: i64,
+    invocations: i64,
     durations: Vec<i64>,
 }
 
@@ -348,7 +348,7 @@ mod tests {
             started: &str,
             cmd: &str,
             code: Option<i32>,
-            target: &str,
+            pattern: &str,
             finished: Option<&str>,
         ) -> String {
             let store = Store::open(&self.data).unwrap();
@@ -369,9 +369,9 @@ mod tests {
             store
                 .conn
                 .execute(
-                    "INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,finished_at_ms,exit_code)
+                    "INSERT INTO invocation(id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code)
                 VALUES(?1,?2,?3,?4,unixepoch(?5,'utc')*1000,unixepoch(?6,'utc')*1000,?7)",
-                    params![id, ws_id, cmd, target, started, finished, code],
+                    params![id, ws_id, cmd, pattern, started, finished, code],
                 )
                 .unwrap();
             id
@@ -381,7 +381,7 @@ mod tests {
                 .unwrap()
                 .conn
                 .execute(
-                    "UPDATE run SET started_at_ms=?1 WHERE id=?2",
+                    "UPDATE invocation SET started_at_ms=?1 WHERE id=?2",
                     params![millis, id],
                 )
                 .unwrap();
@@ -416,7 +416,7 @@ mod tests {
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
         let other_id = f.register(&other);
-        Store::open(&f.data).unwrap().conn.execute("INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,exit_code) VALUES(?1,?2,'build','//:other',unixepoch('2026-03-07','utc')*1000,0)",params![uuid::Uuid::new_v4().to_string(),other_id]).unwrap();
+        Store::open(&f.data).unwrap().conn.execute("INSERT INTO invocation(id,workspace_id,cmd,target_pattern,started_at_ms,exit_code) VALUES(?1,?2,'build','//:other',unixepoch('2026-03-07','utc')*1000,0)",params![uuid::Uuid::new_v4().to_string(),other_id]).unwrap();
         let all = f.query(f.filter());
         assert_eq!(
             all.days.iter().map(|d| d.count).collect::<Vec<_>>(),
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(total(&failed), 1);
     }
     #[test]
-    fn daily_duration_statistics_use_only_observed_runs() {
+    fn daily_duration_statistics_use_only_observed_invocations() {
         let f = Fixture::new();
         f.insert_at(
             "2026-03-07 10:00:00",
@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn untimed_runs_keep_outcome_counts_without_duration_statistics() {
+    fn untimed_invocations_keep_outcome_counts_without_duration_statistics() {
         let f = Fixture::new();
         f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
 
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn target_ranking_aggregates_runs_across_days() {
+    fn pattern_ranking_aggregates_invocations_across_days() {
         let f = Fixture::new();
         f.insert_at(
             "2026-03-07 10:00:00",
@@ -517,16 +517,16 @@ mod tests {
 
         let result = f.query(f.filter());
         assert_eq!(result.targets.len(), 2);
-        assert_eq!(result.targets[0].target, "//a:x");
-        assert_eq!(result.targets[0].runs, 3);
+        assert_eq!(result.targets[0].pattern, "//a:x");
+        assert_eq!(result.targets[0].invocations, 3);
         assert_eq!(result.targets[0].total_ms, 40_000);
         assert_eq!(result.targets[0].p50_ms, 10_000);
-        assert_eq!(result.targets[1].target, "//b:y");
-        assert_eq!(result.targets[1].runs, 1);
+        assert_eq!(result.targets[1].pattern, "//b:y");
+        assert_eq!(result.targets[1].invocations, 1);
     }
 
     #[test]
-    fn target_filter_narrows_daily_series_but_not_ranking() {
+    fn pattern_filter_narrows_daily_series_but_not_ranking() {
         let f = Fixture::new();
         f.insert_at(
             "2026-03-07 10:00:00",
@@ -546,7 +546,7 @@ mod tests {
         f.insert_at("2026-03-07 12:00:00", "test", Some(1), "//b:y", None);
 
         let scoped = f.query(Filter {
-            target: Some("//a:x".into()),
+            pattern: Some("//a:x".into()),
             ..f.filter()
         });
         assert_eq!(scoped.days[0].count, 2);
@@ -556,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn outcome_filter_narrows_target_ranking() {
+    fn outcome_filter_narrows_pattern_ranking() {
         let f = Fixture::new();
         f.insert_at("2026-03-07 10:00:00", "build", Some(0), "//a:x", None);
         f.insert_at("2026-03-08 12:00:00", "build", Some(8), "//a:x", None);
@@ -567,18 +567,18 @@ mod tests {
             ..f.filter()
         });
         assert_eq!(failed.targets.len(), 1);
-        assert_eq!(failed.targets[0].target, "//b:y");
+        assert_eq!(failed.targets[0].pattern, "//b:y");
     }
 
     #[test]
-    fn oversized_target_filter_is_rejected() {
+    fn oversized_pattern_filter_is_rejected() {
         let f = Fixture::new();
         assert_eq!(
             query(
                 &f.data,
                 &f.ws,
                 Filter {
-                    target: Some("x".repeat(64 * 1024 + 1)),
+                    pattern: Some("x".repeat(64 * 1024 + 1)),
                     ..f.filter()
                 }
             )
@@ -588,7 +588,7 @@ mod tests {
         );
     }
     #[test]
-    fn target_ranking_is_ordered_and_truncated() {
+    fn pattern_ranking_is_ordered_and_truncated() {
         let f = Fixture::new();
         for i in 0..12 {
             f.insert_at(
@@ -599,7 +599,8 @@ mod tests {
                 Some("2026-03-07 12:00:01"),
             );
         }
-        // One heavier run and a same-total pair to pin the label tie-break.
+        // One heavier invocation and a same-total pair to pin the label
+        // tie-break.
         f.insert_at(
             "2026-03-07 12:00:00",
             "build",
@@ -616,11 +617,11 @@ mod tests {
         );
         let result = f.query(f.filter());
         assert_eq!(result.targets.len(), TARGET_LIMIT);
-        assert_eq!(result.targets[0].target, "//t:heavy");
+        assert_eq!(result.targets[0].pattern, "//t:heavy");
         // Every 1s target ties; the byte order of the label breaks the tie.
         let tied: Vec<&str> = result.targets[1..]
             .iter()
-            .map(|t| t.target.as_str())
+            .map(|t| t.pattern.as_str())
             .collect();
         assert_eq!(
             tied,
@@ -850,7 +851,7 @@ mod tests {
             .unwrap()
             .conn
             .execute(
-                "UPDATE run SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",
+                "UPDATE invocation SET started_at_ms=unixepoch('1988-10-30 02:00:30')*1000 WHERE id=?1",
                 [early],
             )
             .unwrap();
@@ -858,7 +859,7 @@ mod tests {
             .unwrap()
             .conn
             .execute(
-                "UPDATE run SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",
+                "UPDATE invocation SET started_at_ms=unixepoch('1988-10-30 03:00:00')*1000 WHERE id=?1",
                 [previous],
             )
             .unwrap();
@@ -898,7 +899,7 @@ mod tests {
         ];
         let tx = store.conn.transaction().unwrap();
         for i in 0..5000 {
-            tx.execute("INSERT INTO run(id,workspace_id,cmd,target_raw,started_at_ms,exit_code) VALUES(?1,?2,?3,'//synthetic:target',unixepoch('2026-03-01',?4,'utc')*1000,?5)",
+            tx.execute("INSERT INTO invocation(id,workspace_id,cmd,target_pattern,started_at_ms,exit_code) VALUES(?1,?2,?3,'//synthetic:target',unixepoch('2026-03-01',?4,'utc')*1000,?5)",
                 params![uuid::Uuid::new_v4().to_string(),ids[i%2],["build","build","test","test"][i%4],format!("+{} days",i%30),[0,1,8][i%3]]).unwrap();
         }
         tx.commit().unwrap();

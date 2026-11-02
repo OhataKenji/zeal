@@ -5,7 +5,7 @@
   import type { Target } from "./types";
 
   /**
-   * The fuzzy combobox used by the run composer and every query input that
+   * The fuzzy combobox used by the command composer and every query input that
    * has candidates. `value` is controlled: the component reports every change
    * through `oninput`, and additionally fires `onpick` when a candidate is
    * chosen (Enter or click) so callers can react beyond filling the field.

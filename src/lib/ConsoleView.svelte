@@ -5,14 +5,14 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { invoke } from "@tauri-apps/api/core";
   import "@xterm/xterm/css/xterm.css";
-  import type { RunRecord } from "./types";
+  import type { InvocationRecord } from "./types";
   import { createConsole } from "./console";
   import { TERMINAL_FONT, TERMINAL_THEME } from "./terminal_style";
-  import RunHeader from "./RunHeader.svelte";
-  import { runStatus } from "./run";
+  import InvocationHeader from "./InvocationHeader.svelte";
+  import { invocationStatus } from "./invocation";
 
   let { record, running, stopping = false, visible }: {
-    record: RunRecord;
+    record: InvocationRecord;
     running: boolean;
     stopping?: boolean;
     visible: boolean;
@@ -21,7 +21,7 @@
   let terminal = $state.raw<Terminal>();
   let connection = $state.raw<ReturnType<typeof createConsole>>();
   let error = $state<string | null>(null);
-  const status = $derived(runStatus(record, running ? record.id : null, stopping));
+  const status = $derived(invocationStatus(record, running ? record.id : null, stopping));
 
   $effect(() => {
     if (terminal) terminal.options.disableStdin = !running;
@@ -69,10 +69,10 @@
   });
 </script>
 
-<section class="run-page console-page">
-  <RunHeader {record} {status} />
+<section class="invocation-page console-page">
+  <InvocationHeader {record} {status} />
   {#if error}<Notice tone="error">{error}</Notice>{/if}
-  <div class="run-panel">
+  <div class="invocation-panel">
     <div class="panel-heading console-log-spacer" aria-hidden="true">Logs</div>
     <div class="console-terminal" bind:this={host}></div>
   </div>

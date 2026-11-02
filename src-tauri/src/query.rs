@@ -2,7 +2,8 @@
 //!
 //! Distinct from ingest's fixed `bazel query //...` snapshot fetch: the
 //! expression and the output format come from the editor. Execution holds the
-//! same serialized bazel slot as ingest and run, and keeps bounded output:
+//! same serialized bazel slot as ingest and invocation, and keeps bounded
+//! output:
 //! the first bytes of stdout and the tail of stderr.
 //!
 //! There is no stop: a running query ends by exit, by the timeout kill, or by
@@ -126,8 +127,9 @@ fn validate_expr(expr: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run one ad-hoc `bazel query` in the open workspace. Busy requests — a run,
-/// an ingest or another query in flight — are rejected rather than queued.
+/// Run one ad-hoc `bazel query` in the open workspace. Busy requests — an
+/// invocation, an ingest or another query in flight — are rejected rather than
+/// queued.
 /// Blocks until the query exits, times out, or is given up on.
 #[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
 pub fn run(
@@ -210,9 +212,9 @@ pub fn run(
     })
 }
 
-/// Take the serialized bazel slot for this query: reject while a run, an
-/// ingest or another query holds it, and require an open workspace with a
-/// resolved bazel.
+/// Take the serialized bazel slot for this query: reject while an
+/// invocation, an ingest or another query holds it, and require an open
+/// workspace with a resolved bazel.
 fn acquire(core: &Core) -> Result<(PathBuf, PathBuf), String> {
     let mut st = core.state.lock().expect("application state lock poisoned");
     if st.bazel_busy() {
@@ -558,7 +560,7 @@ mod tests {
         }
         let holds: [fn(&mut CoreState); 3] = [
             |st| st.ingest_running = true,
-            |st| st.run = Some(crate::state::ActiveRun::stub("r", None)),
+            |st| st.active_invocation = Some(crate::state::ActiveInvocation::stub("r", None)),
             |st| st.query_running = true,
         ];
         for hold in holds {
@@ -566,7 +568,7 @@ mod tests {
             assert!(acquire(&core).is_err());
             let mut st = core.state.lock().unwrap();
             st.ingest_running = false;
-            st.run = None;
+            st.active_invocation = None;
             st.query_running = false;
         }
     }

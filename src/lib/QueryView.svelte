@@ -166,13 +166,13 @@
     untrack(() => controller?.clear());
   });
 
-  // Runs serialize with build/test and ingest in the core; the reason text
-  // doubles as the disabled-Run explanation.
+  // Invocations serialize with build/test and ingest in the core; the reason
+  // text doubles as the disabled-Execute explanation.
   const busyReason = $derived.by((): string | null => {
     if (!app.view.ready) return "not connected to Bazel";
     if (app.view.opening) return "the workspace is changing";
-    if (app.view.starting) return "a run is starting";
-    if (st?.running) return "a build/test run is in progress";
+    if (app.view.starting) return "an invocation is starting";
+    if (st?.activeInvocation) return "a build/test invocation is in progress";
     if (st?.ingest === "running") return "targets are loading";
     if (st?.query === "running" && !qstate.running)
       return "a query is already running";
@@ -192,7 +192,7 @@
 
   // Editing the query clears the result rather than marking it stale.
   const stored = $derived(qstate.result);
-  // Only one run is ever in flight; which view started it does not matter —
+  // Only one invocation is ever in flight; which view started it does not matter —
   // either pane may as well show the spinner.
   const runningThisView = $derived(qstate.running);
   const failedOutput = $derived.by(() => {
@@ -221,7 +221,7 @@
       ? `${rawLines.length} target${rawLines.length === 1 ? "" : "s"}`
       : "",
   );
-  // A successful graph run can still drop nodes (`--graph:node_limit`); bazel
+  // A successful graph invocation can still drop nodes (`--graph:node_limit`); bazel
   // only says so on stderr.
   const graphWarn = $derived.by(() => {
     if (resultView !== "graph" || !stored || failedOutput || qstate.running)
@@ -232,7 +232,7 @@
     return lines.length ? lines.join("\n") : null;
   });
 
-  // A successful graph run's DOT becomes an SVG blob URL; Graphviz output is
+  // A successful graph invocation's DOT becomes an SVG blob URL; Graphviz output is
   // never appended to the DOM (CSP is unset and SVG links are an injection
   // surface).
   const graphDot = $derived(
@@ -308,7 +308,7 @@
     void controller?.run(exprText, resultView, flags);
   }
 
-  // Mirrors the core's `validate_expr` so Run is never enabled for an
+  // Mirrors the core's `validate_expr` so Execute is never enabled for an
   // expression the command would reject. Tab/LF/CR stay allowed.
   // oxlint-disable-next-line no-control-regex -- control characters are the thing being rejected
   const CTRL_REJECT = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/;
@@ -453,8 +453,8 @@
             <button
               type="button"
               class="query-copy"
-              aria-label="Copy command"
-              title="Copy command"
+              aria-label="Copy command line"
+              title="Copy command line"
               disabled={!valid}
               onclick={() => void copyToClipboard(command, "command")}
             >
@@ -480,9 +480,9 @@
                 type="button"
                 class="button button-primary"
                 disabled={!canRun}
-                title={runBlockReason ?? "Run query"}
+                title={runBlockReason ?? "Execute query"}
                 onclick={run}
-                >{qstate.running ? "Running…" : "Run"}</button
+                >{qstate.running ? "Executing…" : "Execute"}</button
               >
             </div>
           </div>
@@ -530,7 +530,7 @@
         {/if}
         <div class="query-results-body">
           {#if runningThisView}
-            <p class="query-empty" role="status">Running…</p>
+            <p class="query-empty" role="status">Executing…</p>
           {:else if stored && !failedOutput}
             {#if resultView === "raw"}
               {#if rawLines.length === 0}
@@ -636,11 +636,11 @@
               <p class="query-empty" role="status">Rendering graph…</p>
             {/if}
           {:else if failedOutput}
-            <p class="query-empty">The last run failed — see the error above.</p>
+            <p class="query-empty">The last query failed — see the error above.</p>
           {:else if busyReason}
             <p class="query-empty">Waiting — {busyReason}.</p>
           {:else}
-            <p class="query-empty">Select Run to fetch results.</p>
+            <p class="query-empty">Select Execute to fetch results.</p>
           {/if}
         </div>
       </section>

@@ -61,7 +61,7 @@ export interface TargetScope {
 /** Current core state. A workspace switch clears workspace-scoped data. */
 export interface AppState {
   besError?: string | null;
-  /** A receiver is available for new Bazel runs, even if its preferred port is occupied. */
+  /** A receiver is available for new Bazel invocations, even if its preferred port is occupied. */
   besReady: boolean;
   workspace: string | null;
   scope: TargetScope;
@@ -70,27 +70,27 @@ export interface AppState {
   /** `TargetIndex.meta.fetchedAt`; its data loads through `get_snapshot`. */
   snapshotFetchedAt: number | null;
   lastError: IngestError | null;
-  running: string | null;
+  activeInvocation: string | null;
   // The current workspace's last Console remains readable after process exit.
-  consoleRun?: string | null;
-  // Stop is best-effort. An unconfirmed exit releases the slot with runNote.
+  consoleInvocation?: string | null;
+  // Stop is best-effort. An unconfirmed exit releases the slot with invocationNote.
   stopping: boolean;
-  runNote: string | null;
-  // An ad-hoc query-editor `bazel query`, distinct from a run or snapshot ingest.
+  invocationNote: string | null;
+  // An ad-hoc query-editor `bazel query`, distinct from an invocation or snapshot ingest.
   query: "idle" | "running";
   // A selected target's detail query, serialized with the other Bazel operations.
   detailQuery: "idle" | "running";
 }
 
-/** Commands accepted by the run composer. */
-export type RunCmd = "build" | "test" | "run";
+/** Commands accepted by the command composer. */
+export type BazelCommand = "build" | "test" | "run";
 
 /** An invocation and the facts observed in its build events. */
-export interface RunRecord {
+export interface InvocationRecord {
   id: string;
   workspace?: string;
   cmd?: string;
-  target?: string;
+  pattern?: string;
   startedAt?: number;
   finishedAt?: number;
   exitCode?: number;
@@ -103,7 +103,7 @@ export type Section<T> =
   | { status: "missing" }
   | { status: "parse_error" | "read_error" | "not_available"; note: string };
 
-/** Parsed build-event data retained for inspection in the run view. */
+/** Parsed build-event data retained for inspection in the invocation view. */
 export interface Bep {
   targets: Array<{ label: string; ok: boolean }>;
   tests: Array<{ label: string; status: string }>;
@@ -121,15 +121,15 @@ export interface Bep {
 /** Raw trace events stay intact; timeline geometry is a separate projection. */
 export type TraceEvent = Record<string, unknown>;
 
-/** Timing data returned for a run, before layout and viewport projection. */
+/** Timing data returned for an invocation, before layout and viewport projection. */
 export interface Profile {
   phases: Array<{ name: string; startUs: number; endUs: number }>;
   lanes: Array<{ tid: number; name: string; events: TraceEvent[] }>;
 }
 
-/** Saved detail sections associated with a run record. */
-export interface RunDetail {
-  record: RunRecord;
+/** Saved detail sections associated with an invocation record. */
+export interface InvocationDetail {
+  record: InvocationRecord;
   log: Section<string>;
   bep: Section<Bep>;
 }

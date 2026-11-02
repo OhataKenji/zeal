@@ -6,8 +6,8 @@ import type {
   AppState,
   Edge,
   FileEntry,
+  InvocationRecord,
   Profile,
-  RunRecord,
   Target,
   TargetDetail,
   TargetIndex,
@@ -130,30 +130,30 @@ const PREVIEW_TARGETS = [
   "//...",
 ];
 const dayIndices = Array.from({ length: 30 }).keys();
-type PreviewRecord = RunRecord & {
+type PreviewRecord = InvocationRecord & {
   workspace: string;
   cmd: string;
-  target: string;
+  pattern: string;
   startedAt: number;
 };
 const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
   const dayDate = new Date(NOW);
   dayDate.setDate(dayDate.getDate() - dayIndex);
-  const runCount = (dayIndex * 7 + 3) % 9;
-  const runIndices = Array.from({ length: runCount }).keys();
-  return Array.from(runIndices, (runIndex) => {
-    const startedAt = dayDate.getTime() - runIndex * 600000;
+  const invocationCount = (dayIndex * 7 + 3) % 9;
+  const invocationIndices = Array.from({ length: invocationCount }).keys();
+  return Array.from(invocationIndices, (invocationIndex) => {
+    const startedAt = dayDate.getTime() - invocationIndex * 600000;
     return {
-      id: `preview-${dayIndex}-${runIndex}`,
+      id: `preview-${dayIndex}-${invocationIndex}`,
       workspace: WORKSPACE,
-      cmd: runIndex % 3 === 1 ? "test" : "build",
-      target: PREVIEW_TARGETS[(dayIndex + runIndex) % PREVIEW_TARGETS.length],
+      cmd: invocationIndex % 3 === 1 ? "test" : "build",
+      pattern: PREVIEW_TARGETS[(dayIndex + invocationIndex) % PREVIEW_TARGETS.length],
       startedAt,
       // This record has an exit code but no finish time: counted, never timed.
-      ...(runIndex === 4
+      ...(invocationIndex === 4
         ? {}
-        : { finishedAt: startedAt + 4180 + runIndex * 1200 + (dayIndex % 5) * 900 }),
-      exitCode: runIndex === 2 ? 1 : runIndex === 5 ? 8 : 0,
+        : { finishedAt: startedAt + 4180 + invocationIndex * 1200 + (dayIndex % 5) * 900 }),
+      exitCode: invocationIndex === 2 ? 1 : invocationIndex === 5 ? 8 : 0,
     };
   });
 }).flat();
@@ -165,9 +165,9 @@ const state: AppState = {
   ingest: "idle",
   snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
   lastError: null,
-  running: null,
+  activeInvocation: null,
   stopping: false,
-  runNote: null,
+  invocationNote: null,
   query: "idle",
   detailQuery: "idle",
 };
@@ -253,48 +253,48 @@ function readConsole(id: string, offset: number) {
   return {
     data,
     offset: offset + data.length,
-    done: state.running !== id && offset + data.length === bytes.length,
+    done: state.activeInvocation !== id && offset + data.length === bytes.length,
   };
 }
 
 function writeConsole(id: string, data: unknown) {
   if (!Array.isArray(data)) throw new Error("Preview console input must be a byte array.");
-  if (state.running !== id) throw new Error("Preview process has ended");
+  if (state.activeInvocation !== id) throw new Error("Preview process has ended");
   const text = new TextDecoder().decode(Uint8Array.from(data));
   const result = interpretConsoleInput(consoleInput.get(id) ?? "", text);
   consoleInput.set(id, result.input);
   consoleOutput.set(id, (consoleOutput.get(id) ?? "") + result.output);
   if (result.exitCode !== null) {
-    const record = records.find((run) => run.id === id);
-    if (!record) throw new Error("Preview run was not found.");
+    const record = records.find((inv) => inv.id === id);
+    if (!record) throw new Error("Preview invocation was not found.");
     record.finishedAt = Date.now();
     record.exitCode = result.exitCode;
-    state.running = null;
+    state.activeInvocation = null;
     void emit("app-state", structuredClone(state));
   }
   return data.length;
 }
 
-function getRun(id: unknown) {
-  const record = records.find((run) => run.id === id);
-  if (!record) throw new Error("Preview run not found");
+function getInvocation(id: unknown) {
+  const record = records.find((inv) => inv.id === id);
+  if (!record) throw new Error("Preview invocation not found");
   return {
     record,
     log: {
       status: "ok",
       data:
         consoleOutput.get(record.id) ??
-        `INFO: ${record.cmd} ${record.target}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Run ended with exit ${record.exitCode}`}\n`,
+        `INFO: ${record.cmd} ${record.pattern}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Invocation ended with exit ${record.exitCode}`}\n`,
     },
     bep: {
       status: "ok",
       data: {
-        targets: [{ label: record.target, ok: record.exitCode === 0 }],
+        targets: [{ label: record.pattern, ok: record.exitCode === 0 }],
         tests: [],
         ...(record.id === records[0]?.id
           ? {
-              originalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root ${record.cmd} --config=dev --define='message=hello world' ${record.target}`,
-              canonicalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root --batch ${record.cmd} --jobs=8 --keep_going --define='message=hello world' ${record.target}`,
+              originalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root ${record.cmd} --config=dev --define='message=hello world' ${record.pattern}`,
+              canonicalCommandLine: `bazel --output_user_root=/tmp/zeal-preview-root --batch ${record.cmd} --jobs=8 --keep_going --define='message=hello world' ${record.pattern}`,
               options: {
                 startupOptions: ["--output_user_root=/tmp/zeal-preview-root", "--batch"],
                 explicitStartupOptions: ["--output_user_root=/tmp/zeal-preview-root"],
@@ -323,37 +323,37 @@ function getRun(id: unknown) {
   };
 }
 
-function startRun(cmd: string, target: string) {
+function startInvocation(cmd: string, pattern: string) {
   const record: PreviewRecord = {
     id: `preview-${crypto.randomUUID()}`,
     workspace: WORKSPACE,
     cmd,
-    target,
+    pattern,
     startedAt: Date.now(),
   };
   records.unshift(record);
-  state.running = record.id;
-  state.consoleRun = record.id;
+  state.activeInvocation = record.id;
+  state.consoleInvocation = record.id;
   consoleOutput.set(
     record.id,
-    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.target}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
   );
   if (record.cmd !== "run") {
     record.finishedAt = Date.now();
     record.exitCode = 0;
-    state.running = null;
+    state.activeInvocation = null;
   }
   void emit("app-state", structuredClone(state));
   return structuredClone(record);
 }
 
-function stopRun() {
-  const record = records.find((run) => run.id === state.running);
+function stopInvocation() {
+  const record = records.find((inv) => inv.id === state.activeInvocation);
   if (record) {
     record.finishedAt = Date.now();
     record.exitCode = 8;
   }
-  state.running = null;
+  state.activeInvocation = null;
   void emit("app-state", structuredClone(state));
 }
 
@@ -384,14 +384,14 @@ export function installPreview() {
         status: "ok",
       });
     },
-    list_runs: () => structuredClone(records),
+    list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
     resize_console: () => {},
     write_console: (payload) => writeConsole(String(payload?.id), payload?.data),
-    get_run: (payload) => getRun(payload?.id),
-    get_run_profile: (payload) => {
-      if (!records.some((run) => run.id === payload?.id)) {
-        throw new Error("Preview run not found");
+    get_invocation: (payload) => getInvocation(payload?.id),
+    get_invocation_profile: (payload) => {
+      if (!records.some((inv) => inv.id === payload?.id)) {
+        throw new Error("Preview invocation not found");
       }
       return { status: "ok", data: PROFILE };
     },
@@ -407,10 +407,14 @@ export function installPreview() {
     },
     refresh: () => void emit("app-state", structuredClone(state)),
     open_location: () => {},
-    start_run: (payload) => startRun(String(payload?.cmd), String(payload?.target)),
-    stop_run: () => stopRun(),
+    start_invocation: (payload) => startInvocation(String(payload?.cmd), String(payload?.pattern)),
+    stop_invocation: () => stopInvocation(),
     run_query: (payload) => {
-      if (state.ingest === "running" || state.running !== null || state.query === "running") {
+      if (
+        state.ingest === "running" ||
+        state.activeInvocation !== null ||
+        state.query === "running"
+      ) {
         throw new Error("bazel is busy");
       }
       const output = String(payload?.output ?? "label");

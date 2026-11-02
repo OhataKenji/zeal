@@ -21,7 +21,7 @@ const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct Bep {
     pub targets: Vec<TargetResult>,
-    pub tests: Vec<TestResult>,
+    pub tests: Vec<TestSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<BuildOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,7 +115,7 @@ pub struct TargetResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub struct TestResult {
+pub struct TestSummary {
     pub label: String,
     /// `overall_status` as Bazel names it, e.g. `PASSED` or `FAILED`.
     pub status: String,
@@ -402,7 +402,7 @@ fn project(event: BuildEvent, bep: &mut Bep) {
             });
         }
         (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
-            bep.tests.push(TestResult {
+            bep.tests.push(TestSummary {
                 label: id.label,
                 status: test_status(summary.overall_status).to_string(),
             });
@@ -418,7 +418,9 @@ mod tests {
     use crate::protocol::bep::build_event_id::{
         Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
     };
-    use crate::protocol::bep::{Aborted, BuildEventId, TargetComplete, TestSummary};
+    use crate::protocol::bep::{
+        Aborted, BuildEventId, TargetComplete, TestSummary as ProtoTestSummary,
+    };
     use crate::protocol::generated::command_line::{ChunkList, CommandLineSection, OptionList};
     use prost::Message;
 
@@ -430,7 +432,7 @@ mod tests {
 
     fn fixture(case: &str) -> Bep {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/run")
+            .join("tests/fixtures/invocation")
             .join(case)
             .join("bep.binpb");
         parse(std::fs::File::open(path).unwrap())
@@ -463,7 +465,7 @@ mod tests {
                     ..Default::default()
                 })),
             }),
-            payload: Some(Payload::TestSummary(TestSummary {
+            payload: Some(Payload::TestSummary(ProtoTestSummary {
                 overall_status: 4,
                 ..Default::default()
             })),
@@ -485,7 +487,7 @@ mod tests {
         );
         assert_eq!(
             parsed.tests,
-            [TestResult {
+            [TestSummary {
                 label: "//pkg:test".into(),
                 status: "FAILED".into()
             }]
@@ -707,7 +709,7 @@ mod tests {
         );
         assert_eq!(
             parsed.tests,
-            [TestResult {
+            [TestSummary {
                 label: "//pkg:t".into(),
                 status: "PASSED".into(),
             }]

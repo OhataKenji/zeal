@@ -22,11 +22,11 @@ mod xml;
 pub use bes::serve as serve_build_events;
 pub use protocol::{bep as build_event_protocol, bes as build_event_service_protocol};
 pub use store::{
-    ErrorKind, RunRecord, StoreError, artifact as open_run_artifact, list as list_run_records,
-    read_record as read_run_record,
+    ErrorKind, InvocationRecord, StoreError, artifact as open_invocation_artifact,
+    list as list_invocation_records, read_record as read_invocation_record,
 };
 
-use detail::{RunDetail, Section};
+use detail::{InvocationDetail, Section};
 use profile::Profile;
 use query::QueryOutput;
 use state::{AppStateDto, Core};
@@ -81,7 +81,8 @@ async fn get_target_detail(
 }
 
 /// Open a directory as the Bazel workspace: validate it, resolve bazel, and
-/// start a background snapshot ingestion. Refused while a run is in flight: its
+/// start a background snapshot ingestion. Refused while an invocation is in
+/// flight: its
 /// process group belongs to the workspace it was started in.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "workspace.open", skip_all)]
@@ -103,8 +104,8 @@ fn open_workspace(
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
         // Keep the busy check and workspace assignment atomic with any bazel
-        // invocation (ingest, run, editor query). Filesystem validation above
-        // holds no shared state.
+        // invocation (ingest, invocation, editor query). Filesystem validation
+        // above holds no shared state.
         if st.bazel_busy() {
             return Err("cannot change workspace while bazel is busy".to_string());
         }
@@ -116,9 +117,10 @@ fn open_workspace(
         // A different workspace has no shared snapshot with the previous one.
         st.snapshot = None;
         st.last_error = None;
-        // The note can describe a run that was released without a confirmed
-        // exit, and it belongs to the workspace that run was started in.
-        st.run_note = None;
+        // The note can describe an invocation that was released without a
+        // confirmed exit, and it belongs to the workspace that invocation was
+        // started in.
+        st.invocation_note = None;
     }
     if let Ok(dir) = app.path().app_data_dir() {
         workspace::save(&dir, &ws, &scope);
@@ -136,38 +138,39 @@ fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
 
 /// Start `bazel build|test|run <target>`. Fails while bazel is busy.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "run.start", skip_all)]
-fn start_run(
+#[tracing::instrument(target = "zeal::operations", name = "invocation.start", skip_all)]
+fn start_invocation(
     app: AppHandle,
     core: State<Arc<Core>>,
     cmd: String,
-    target: String,
+    pattern: String,
     arguments: Option<String>,
-) -> Result<RunRecord, String> {
+) -> Result<InvocationRecord, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     runner::start(
         app,
         core.inner().clone(),
         &data,
         &cmd,
-        &target,
+        &pattern,
         arguments.as_deref().unwrap_or_default(),
     )
 }
 
-/// Stop the run in flight: SIGINT to its process group, then SIGKILL if it does
-/// not exit. Does nothing when no run is held or a stop is already in flight.
+/// Stop the invocation in flight: SIGINT to its process group, then SIGKILL if
+/// it does not exit. Does nothing when no invocation is held or a stop is
+/// already in flight.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "run.stop", skip_all)]
-fn stop_run(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
+#[tracing::instrument(target = "zeal::operations", name = "invocation.stop", skip_all)]
+fn stop_invocation(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
 }
 
 /// Run an ad-hoc `bazel query` from the query editor. Serialized with ingest
-/// and run through the same busy slot; the blocking work is spawned so this
-/// command does not hold the main thread for the whole query.
+/// and invocation through the same busy slot; the blocking work is spawned so
+/// this command does not hold the main thread for the whole query.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "query.run", skip_all)]
+#[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
 async fn run_query(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -220,10 +223,14 @@ async fn read_console(
     .map_err(|_| "terminal read worker failed".to_string())?
 }
 
-/// Runs of the open workspace, newest first, at most [`store::LIST_LIMIT`].
+/// Invocations of the open workspace, newest first, at most
+/// [`store::LIST_LIMIT`].
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "runs.list", skip_all)]
-async fn list_runs(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<Vec<RunRecord>, String> {
+#[tracing::instrument(target = "zeal::operations", name = "invocations.list", skip_all)]
+async fn list_invocations(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+) -> Result<Vec<InvocationRecord>, String> {
     let Some(ws) = core
         .state
         .lock()
@@ -285,14 +292,18 @@ impl Drop for ArtifactWorker {
 /// Return the saved record, log and build results.
 /// Reject the request if another detail read is active.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "run.detail.request", skip_all)]
-async fn get_run(
+#[tracing::instrument(
+    target = "zeal::operations",
+    name = "invocation.detail.request",
+    skip_all
+)]
+async fn get_invocation(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     id: String,
-) -> Result<RunDetail, String> {
+) -> Result<InvocationDetail, String> {
     let id = uuid::Uuid::parse_str(&id)
-        .map_err(|_| "invalid run id".to_string())?
+        .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
     let Some(ws) = core
         .state
@@ -304,26 +315,30 @@ async fn get_run(
         return Err("no workspace".to_string());
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "run detail worker busy")?;
+    let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "invocation detail worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        detail::run_detail(&data, &ws, &id).map_err(|e| e.to_string())
+        detail::invocation_detail(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|_| "run detail worker failed".to_string())?
+    .map_err(|_| "invocation detail worker failed".to_string())?
 }
 
 /// Return the saved timing profile and its availability status.
 /// Reject the request if another profile read is active.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "run.profile.request", skip_all)]
-async fn get_run_profile(
+#[tracing::instrument(
+    target = "zeal::operations",
+    name = "invocation.profile.request",
+    skip_all
+)]
+async fn get_invocation_profile(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     id: String,
 ) -> Result<Section<Profile>, String> {
     let id = uuid::Uuid::parse_str(&id)
-        .map_err(|_| "invalid run id".to_string())?
+        .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
     let Some(ws) = core
         .state
@@ -338,7 +353,7 @@ async fn get_run_profile(
     let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _worker = worker;
-        detail::run_profile(&data, &ws, &id).map_err(|e| e.to_string())
+        detail::invocation_profile(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "profile worker failed".to_string())?
@@ -386,9 +401,9 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
     }
 }
 
-fn emit_history_changed(app: &AppHandle) {
-    if let Err(error) = app.emit("history-changed", ()) {
-        log::warn!("emit history-changed failed: {error}");
+fn emit_invocations_changed(app: &AppHandle) {
+    if let Err(error) = app.emit("invocations-changed", ()) {
+        log::warn!("emit invocations-changed failed: {error}");
     }
 }
 
@@ -410,12 +425,12 @@ pub fn run() {
             let receiver_core = core.clone();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let history_handle = handle.clone();
+                let invocations_handle = handle.clone();
                 bes::start(
                     data,
                     receiver_core.clone(),
                     || receiver_core.emit(&handle),
-                    move || emit_history_changed(&history_handle),
+                    move || emit_invocations_changed(&invocations_handle),
                 )
                 .await;
             });
@@ -431,13 +446,13 @@ pub fn run() {
             resize_console,
             open_workspace,
             refresh,
-            start_run,
-            stop_run,
+            start_invocation,
+            stop_invocation,
             run_query,
-            list_runs,
+            list_invocations,
             get_analytics,
-            get_run,
-            get_run_profile,
+            get_invocation,
+            get_invocation_profile,
             open_location
         ])
         .build(tauri::generate_context!())

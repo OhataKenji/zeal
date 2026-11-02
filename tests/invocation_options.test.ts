@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatOptions, quoteShellArgument } from "../src/lib/run/options.ts";
+import { formatOptions, quoteShellArgument } from "../src/lib/invocation/options.ts";
 
 test("quotes every argv token without changing its shell argument boundary", () => {
   assert.equal(

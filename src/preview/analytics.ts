@@ -1,9 +1,9 @@
 import type { AnalyticsFilter, DailyAnalytics } from "../lib/analytics.ts";
-import type { RunRecord } from "../lib/types.ts";
+import type { InvocationRecord } from "../lib/types.ts";
 
-type AnalyticsRecord = Pick<RunRecord, "exitCode" | "finishedAt"> & {
+type AnalyticsRecord = Pick<InvocationRecord, "exitCode" | "finishedAt"> & {
   cmd: string;
-  target: string;
+  pattern: string;
   startedAt: number;
 };
 type ResolvedFilter = Partial<AnalyticsFilter> & { start: string; end: string };
@@ -53,32 +53,32 @@ function resolveFilter(requested: Partial<AnalyticsFilter>, now: number) {
     !(spanDays >= 1 && spanDays <= 366) ||
     (filter.cmd != null && !["build", "test"].includes(filter.cmd)) ||
     (filter.outcome != null && !["ok", "failed", "interrupted"].includes(filter.outcome)) ||
-    (filter.target != null && new TextEncoder().encode(filter.target).length > 64 * 1024)
+    (filter.pattern != null && new TextEncoder().encode(filter.pattern).length > 64 * 1024)
   ) {
     throw new Error("invalid analytics filter");
   }
   return { filter, first, spanDays };
 }
 
-function outcome(run: AnalyticsRecord): Outcome {
-  if (run.exitCode === 0) return "ok";
-  return run.exitCode === 8 ? "interrupted" : "failed";
+function outcome(inv: AnalyticsRecord): Outcome {
+  if (inv.exitCode === 0) return "ok";
+  return inv.exitCode === 8 ? "interrupted" : "failed";
 }
 
-function matchesPeriod(run: AnalyticsRecord, filter: ResolvedFilter): boolean {
-  const day = dayString(new Date(run.startedAt));
+function matchesPeriod(inv: AnalyticsRecord, filter: ResolvedFilter): boolean {
+  const day = dayString(new Date(inv.startedAt));
   return (
-    run.exitCode !== undefined &&
-    ["build", "test"].includes(run.cmd) &&
+    inv.exitCode !== undefined &&
+    ["build", "test"].includes(inv.cmd) &&
     day >= filter.start &&
     day <= filter.end &&
-    (filter.cmd == null || run.cmd === filter.cmd) &&
-    (filter.outcome == null || outcome(run) === filter.outcome)
+    (filter.cmd == null || inv.cmd === filter.cmd) &&
+    (filter.outcome == null || outcome(inv) === filter.outcome)
   );
 }
 
-function duration(run: AnalyticsRecord): number | null {
-  return run.finishedAt === undefined ? null : Math.max(0, run.finishedAt - run.startedAt);
+function duration(inv: AnalyticsRecord): number | null {
+  return inv.finishedAt === undefined ? null : Math.max(0, inv.finishedAt - inv.startedAt);
 }
 
 function timing(durations: readonly number[]) {
@@ -100,25 +100,29 @@ function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
   return days;
 }
 
-function recordRun(days: Map<string, DaySamples>, run: AnalyticsRecord, filter: ResolvedFilter) {
-  if (filter.target != null && run.target !== filter.target) return;
-  const slot = days.get(dayString(new Date(run.startedAt)));
+function recordInvocation(
+  days: Map<string, DaySamples>,
+  inv: AnalyticsRecord,
+  filter: ResolvedFilter,
+) {
+  if (filter.pattern != null && inv.pattern !== filter.pattern) return;
+  const slot = days.get(dayString(new Date(inv.startedAt)));
   if (!slot) throw new Error("Preview analytics day was not initialized.");
   slot.count += 1;
-  slot[outcome(run)] += 1;
-  const elapsed = duration(run);
+  slot[outcome(inv)] += 1;
+  const elapsed = duration(inv);
   if (elapsed !== null) slot.durations.push(elapsed);
 }
 
 function dailyAnalytics(
-  runs: readonly AnalyticsRecord[],
+  invocations: readonly AnalyticsRecord[],
   filter: ResolvedFilter,
   first: number,
   spanDays: number,
 ): DailyAnalytics["days"] {
   const days = emptyDays(first, spanDays);
-  for (const run of runs) {
-    recordRun(days, run, filter);
+  for (const inv of invocations) {
+    recordInvocation(days, inv, filter);
   }
   return [...days].map(([day, slot]) => ({
     day,
@@ -131,19 +135,24 @@ function dailyAnalytics(
   }));
 }
 
-function targetAnalytics(runs: readonly AnalyticsRecord[]): DailyAnalytics["targets"] {
-  const targets = new Map<string, { runs: number; durations: number[] }>();
-  for (const run of runs) {
-    const slot = targets.get(run.target) ?? { runs: 0, durations: [] };
-    slot.runs += 1;
-    const elapsed = duration(run);
+function targetAnalytics(invocations: readonly AnalyticsRecord[]): DailyAnalytics["targets"] {
+  const targets = new Map<string, { invocations: number; durations: number[] }>();
+  for (const inv of invocations) {
+    const slot = targets.get(inv.pattern) ?? { invocations: 0, durations: [] };
+    slot.invocations += 1;
+    const elapsed = duration(inv);
     if (elapsed !== null) slot.durations.push(elapsed);
-    targets.set(run.target, slot);
+    targets.set(inv.pattern, slot);
   }
   return [...targets]
-    .map(([target, slot]) => ({ target, runs: slot.runs, ...timing(slot.durations) }))
+    .map(([pattern, slot]) => ({
+      pattern,
+      invocations: slot.invocations,
+      ...timing(slot.durations),
+    }))
     .sort(
-      (a, b) => b.totalMs - a.totalMs || (a.target < b.target ? -1 : a.target > b.target ? 1 : 0),
+      (a, b) =>
+        b.totalMs - a.totalMs || (a.pattern < b.pattern ? -1 : a.pattern > b.pattern ? 1 : 0),
     )
     .slice(0, 10);
 }
@@ -155,12 +164,12 @@ export function previewAnalytics(
   now: number,
 ): Omit<DailyAnalytics, "filter"> & { filter: ResolvedFilter } {
   const { filter, first, spanDays } = resolveFilter(requested, now);
-  const runs = records.filter((run) => matchesPeriod(run, filter));
+  const invocations = records.filter((inv) => matchesPeriod(inv, filter));
   return {
     filter,
     today: dayString(new Date(now)),
-    days: dailyAnalytics(runs, filter, first, spanDays),
+    days: dailyAnalytics(invocations, filter, first, spanDays),
     // The ranking intentionally ignores the selected target.
-    targets: targetAnalytics(runs),
+    targets: targetAnalytics(invocations),
   };
 }

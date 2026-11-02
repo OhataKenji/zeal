@@ -1,17 +1,17 @@
 <script lang="ts">
   import { Check, X, Circle, ArrowClockwise, Stop } from "phosphor-svelte";
-  import type { RunStatus } from "./run";
+  import type { InvocationStatus } from "./invocation";
 
   let {
     kind,
     label,
     compact = false,
-  }: RunStatus & { compact?: boolean } = $props();
+  }: InvocationStatus & { compact?: boolean } = $props();
   const size = $derived(compact ? 12 : 24);
 </script>
 
 <span
-  class="run-status-icon"
+  class="invocation-status-icon"
   class:compact
   class:success={kind === "succeeded"}
   class:failed={kind === "failed"}
@@ -47,7 +47,7 @@
     }
   }
 
-  .run-status-icon {
+  .invocation-status-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;

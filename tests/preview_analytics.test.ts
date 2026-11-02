@@ -6,16 +6,16 @@ import type { AnalyticsFilter } from "../src/lib/analytics.ts";
 const NOW = new Date(2026, 2, 30, 12).getTime();
 const PERIOD = { start: "2026-03-30", end: "2026-03-31" };
 
-test("target selection limits daily counts but preserves the ranking and untimed runs", () => {
+test("pattern selection limits daily counts but preserves the ranking and untimed invocations", () => {
   const records = [
-    { cmd: "build", target: "//:a", startedAt: NOW, finishedAt: NOW + 100, exitCode: 0 },
-    { cmd: "build", target: "//:a", startedAt: NOW, exitCode: 1 },
-    { cmd: "test", target: "//:b", startedAt: NOW, finishedAt: NOW + 500, exitCode: 8 },
-    { cmd: "run", target: "//:a", startedAt: NOW, finishedAt: NOW + 900, exitCode: 0 },
-    { cmd: "build", target: "//:a", startedAt: NOW },
+    { cmd: "build", pattern: "//:a", startedAt: NOW, finishedAt: NOW + 100, exitCode: 0 },
+    { cmd: "build", pattern: "//:a", startedAt: NOW, exitCode: 1 },
+    { cmd: "test", pattern: "//:b", startedAt: NOW, finishedAt: NOW + 500, exitCode: 8 },
+    { cmd: "run", pattern: "//:a", startedAt: NOW, finishedAt: NOW + 900, exitCode: 0 },
+    { cmd: "build", pattern: "//:a", startedAt: NOW },
   ];
   const before = structuredClone(records);
-  const result = previewAnalytics(records, { ...PERIOD, target: "//:a" }, NOW);
+  const result = previewAnalytics(records, { ...PERIOD, pattern: "//:a" }, NOW);
   assert.deepEqual(result.days, [
     {
       day: "2026-03-30",
@@ -41,8 +41,8 @@ test("target selection limits daily counts but preserves the ranking and untimed
     },
   ]);
   assert.deepEqual(result.targets, [
-    { target: "//:b", runs: 1, totalMs: 500, p50Ms: 500, p95Ms: 500 },
-    { target: "//:a", runs: 2, totalMs: 100, p50Ms: 100, p95Ms: 100 },
+    { pattern: "//:b", invocations: 1, totalMs: 500, p50Ms: 500, p95Ms: 500 },
+    { pattern: "//:a", invocations: 2, totalMs: 100, p50Ms: 100, p95Ms: 100 },
   ]);
   assert.deepEqual(records, before);
 });
@@ -50,9 +50,9 @@ test("target selection limits daily counts but preserves the ranking and untimed
 test("command and outcome selection apply to both daily results and ranking", () => {
   const result = previewAnalytics(
     [
-      { cmd: "build", target: "//:a", startedAt: NOW, finishedAt: NOW + 100, exitCode: 8 },
-      { cmd: "test", target: "//:b", startedAt: NOW, finishedAt: NOW + 500, exitCode: 8 },
-      { cmd: "test", target: "//:c", startedAt: NOW, finishedAt: NOW + 900, exitCode: 0 },
+      { cmd: "build", pattern: "//:a", startedAt: NOW, finishedAt: NOW + 100, exitCode: 8 },
+      { cmd: "test", pattern: "//:b", startedAt: NOW, finishedAt: NOW + 500, exitCode: 8 },
+      { cmd: "test", pattern: "//:c", startedAt: NOW, finishedAt: NOW + 900, exitCode: 0 },
     ],
     { ...PERIOD, cmd: "test", outcome: "interrupted" },
     NOW,
@@ -60,7 +60,7 @@ test("command and outcome selection apply to both daily results and ranking", ()
   assert.equal(result.days[0].interrupted, 1);
   assert.equal(result.days[0].count, 1);
   assert.deepEqual(
-    result.targets.map((row) => row.target),
+    result.targets.map((row) => row.pattern),
     ["//:b"],
   );
 });
@@ -68,16 +68,16 @@ test("command and outcome selection apply to both daily results and ranking", ()
 test("timings clamp negative durations and use nearest-rank percentiles", () => {
   const result = previewAnalytics(
     [
-      { cmd: "build", target: "//:a", startedAt: NOW, finishedAt: NOW - 1, exitCode: 0 },
-      { cmd: "build", target: "//:a", startedAt: NOW, finishedAt: NOW + 100, exitCode: 0 },
-      { cmd: "build", target: "//:a", startedAt: NOW, finishedAt: NOW + 200, exitCode: 0 },
-      { cmd: "build", target: "//:a", startedAt: NOW, finishedAt: NOW + 300, exitCode: 0 },
+      { cmd: "build", pattern: "//:a", startedAt: NOW, finishedAt: NOW - 1, exitCode: 0 },
+      { cmd: "build", pattern: "//:a", startedAt: NOW, finishedAt: NOW + 100, exitCode: 0 },
+      { cmd: "build", pattern: "//:a", startedAt: NOW, finishedAt: NOW + 200, exitCode: 0 },
+      { cmd: "build", pattern: "//:a", startedAt: NOW, finishedAt: NOW + 300, exitCode: 0 },
     ],
     PERIOD,
     NOW,
   );
   assert.deepEqual(result.targets, [
-    { target: "//:a", runs: 4, totalMs: 600, p50Ms: 100, p95Ms: 300 },
+    { pattern: "//:a", invocations: 4, totalMs: 600, p50Ms: 100, p95Ms: 300 },
   ]);
 });
 
@@ -122,7 +122,7 @@ test("invalid calendars and excessive or reversed periods are rejected", () => {
   );
 });
 
-test("unsupported filters and targets exceeding the UTF-8 byte limit are rejected", () => {
+test("unsupported filters and patterns exceeding the UTF-8 byte limit are rejected", () => {
   assert.throws(
     () => previewAnalytics([], { ...PERIOD, cmd: "run" } as unknown as AnalyticsFilter, NOW),
     /invalid analytics filter/,
@@ -133,8 +133,8 @@ test("unsupported filters and targets exceeding the UTF-8 byte limit are rejecte
     /invalid analytics filter/,
   );
   assert.throws(
-    () => previewAnalytics([], { ...PERIOD, target: "é".repeat(32769) }, NOW),
+    () => previewAnalytics([], { ...PERIOD, pattern: "é".repeat(32769) }, NOW),
     /invalid analytics filter/,
   );
-  assert.equal(previewAnalytics([], { ...PERIOD, target: "é".repeat(32768) }, NOW).days.length, 2);
+  assert.equal(previewAnalytics([], { ...PERIOD, pattern: "é".repeat(32768) }, NOW).days.length, 2);
 });

@@ -1,17 +1,17 @@
-import type { RunRecord, Section } from "./types.ts";
+import type { InvocationRecord, Section } from "./types.ts";
 
-/** Display status and label for one run record. */
-export interface RunStatus {
+/** Display status and label for one invocation record. */
+export interface InvocationStatus {
   kind: "succeeded" | "failed" | "running" | "stopping" | "unknown";
   label: string;
 }
 
-/** Resolves a run's result while preserving an unknown state for partial data. */
-export function runStatus(
-  record: RunRecord | undefined,
+/** Resolves an invocation's result while preserving an unknown state for partial data. */
+export function invocationStatus(
+  record: InvocationRecord | undefined,
   running: string | null,
   stopping = false,
-): RunStatus {
+): InvocationStatus {
   if (record?.exitCode !== undefined) {
     return record.exitCode === 0
       ? { kind: "succeeded", label: "✓ succeeded" }
@@ -48,7 +48,7 @@ export function sectionNoticeTone(section: Section<unknown>): "error" | "warning
   }
 }
 
-/** Summarizes the status of a run detail section. */
+/** Summarizes the status of an invocation detail section. */
 export function sectionMessage(section: Section<unknown>): string {
   switch (section.status) {
     case "ok":

@@ -10,9 +10,12 @@
     segments,
     type AnalyticsFilter,
   } from "./analytics";
-  import type { RunRecord } from "./types";
+  import type { InvocationRecord } from "./types";
 
-  let { workspace, runs }: { workspace: string; runs: RunRecord[] } = $props();
+  let { workspace, invocations }: {
+    workspace: string;
+    invocations: InvocationRecord[];
+  } = $props();
   let view = $state.raw(emptyAnalytics());
   let controller = $state<ReturnType<typeof createAnalytics> | null>(null);
   $effect(() => {
@@ -23,7 +26,7 @@
     return next.dispose;
   });
   $effect(() => {
-    void runs;
+    void invocations;
     if (controller) void controller.load();
   });
   const dateError = $derived(analyticsDateError(view.filter));
@@ -104,13 +107,13 @@
       </select></label
     >
     <label
-      >Target <input
+      >Pattern <input
         type="text"
-        aria-label="Target"
+        aria-label="Pattern"
         placeholder="//app:server"
-        value={view.filter.target ?? ""}
+        value={view.filter.pattern ?? ""}
         onchange={(e) =>
-          filter({ target: e.currentTarget.value || null })}
+          filter({ pattern: e.currentTarget.value || null })}
       /></label
     >
     <button type="button" class="button" onclick={() => controller?.load()}
@@ -123,17 +126,17 @@
     </Notice>{/if}
   {#if data}
     <section class="analytics-card">
-      <h2>Runs</h2>
+      <h2>Invocations</h2>
       <p class="dim">{data.filter.start} to {data.filter.end}</p>
       <div class="chart-scroll">
         <svg
           viewBox="0 0 {width} 240"
           style:width="{width}px"
           role="img"
-          aria-label="Runs per day"
+          aria-label="Invocations per day"
           aria-describedby="analytics-daily-counts"
         >
-          <title>Runs per day</title>
+          <title>Invocations per day</title>
           <desc id="analytics-daily-counts">
             {data.days
               .map(
@@ -154,7 +157,7 @@
             {@const okH = day.count ? (day.ok / day.count) * h : 0}
             {@const failedH = day.count ? (day.failed / day.count) * h : 0}
             <g>
-              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "run" : "runs"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted})${day.day === data.today ? " (in progress)" : ""}`}</title>
+              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted})${day.day === data.today ? " (in progress)" : ""}`}</title>
               {#if okH > 0}
                 <rect
                   class="bar-ok"
@@ -200,16 +203,16 @@
       </p>
     </section>
     <section class="analytics-card">
-      <h2>Wait time</h2>
-      <p class="dim">Total run time per day</p>
+      <h2>Total duration</h2>
+      <p class="dim">Total duration per day</p>
       <div class="chart-scroll">
         <svg
           viewBox="0 0 {width} 240"
           style:width="{width}px"
           role="img"
-          aria-label="Total run time per day"
+          aria-label="Total duration per day"
         >
-          <title>Total run time per day</title>
+          <title>Total duration per day</title>
           <line x1="50" y1="20" x2="50" y2={PLOT.baseline} />
           <line x1="50" y1={PLOT.baseline} x2={width - 10} y2={PLOT.baseline} />
           <text x="4" y="16">{fmtMs(maxTotal)}</text><text x="30" y={PLOT.baseline}
@@ -238,15 +241,15 @@
     </section>
     <section class="analytics-card">
       <h2>Duration</h2>
-      <p class="dim">Per-day run duration percentiles</p>
+      <p class="dim">Per-day invocation duration percentiles</p>
       <div class="chart-scroll">
         <svg
           viewBox="0 0 {width} 240"
           style:width="{width}px"
           role="img"
-          aria-label="Run duration percentiles per day"
+          aria-label="Per-day invocation duration percentiles"
         >
-          <title>Run duration percentiles per day</title>
+          <title>Per-day invocation duration percentiles</title>
           <line x1="50" y1="20" x2="50" y2={PLOT.baseline} />
           <line x1="50" y1={PLOT.baseline} x2={width - 10} y2={PLOT.baseline} />
           <text x="4" y="16">{fmtMs(maxP95)}</text><text x="30" y={PLOT.baseline}>0</text>
@@ -302,30 +305,30 @@
     {#if data.targets.length}
       <section class="analytics-card">
         <h2>Targets</h2>
-        <p class="dim">By total wait time</p>
+        <p class="dim">By total duration</p>
         <table class="targets">
           <thead
             ><tr
-              ><th>Target</th><th>Runs</th><th>Total</th><th>p50</th><th
+              ><th>Target</th><th>Invocations</th><th>Total</th><th>p50</th><th
                 >p95</th
               ></tr
             ></thead
           >
           <tbody>
             {#each data.targets as t}
-              <tr class:active={view.filter.target === t.target}>
+              <tr class:active={view.filter.pattern === t.pattern}>
                 <td
                   ><button
                     type="button"
                     class="target-link"
                     onclick={() =>
                       filter({
-                        target:
-                          view.filter.target === t.target ? null : t.target,
-                      })}>{t.target}</button
+                        pattern:
+                          view.filter.pattern === t.pattern ? null : t.pattern,
+                      })}>{t.pattern}</button
                   ></td
                 >
-                <td>{t.runs}</td>
+                <td>{t.invocations}</td>
                 <td>{fmtMs(t.totalMs)}</td>
                 <td>{fmtMs(t.p50Ms)}</td>
                 <td>{fmtMs(t.p95Ms)}</td>
