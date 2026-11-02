@@ -193,25 +193,6 @@ button:disabled {
   color: var(--destructive);
 }
 
-.link {
-  border: none;
-  background: none;
-  padding: 0;
-  font: inherit;
-  color: var(--foreground);
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.link:hover {
-  text-decoration: underline;
-}
-
-.link:disabled {
-  color: var(--muted-foreground);
-  cursor: default;
-}
-
 button,
 input,
 select {

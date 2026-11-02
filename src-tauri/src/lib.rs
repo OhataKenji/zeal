@@ -359,22 +359,6 @@ async fn get_invocation_profile(
     .map_err(|_| "profile worker failed".to_string())?
 }
 
-/// Open a BUILD/bzl file at its recorded location with the OS default app.
-#[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "file.open", skip_all)]
-fn open_location(path: String) -> Result<(), String> {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener)
-        .arg(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
 /// `~/...` in a typed path expands to the user's home directory.
 fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/")
@@ -452,8 +436,7 @@ pub fn run() {
             list_invocations,
             get_analytics,
             get_invocation,
-            get_invocation_profile,
-            open_location
+            get_invocation_profile
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
