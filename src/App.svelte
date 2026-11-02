@@ -5,6 +5,7 @@
     CaretRight,
     ChartBar,
     ArrowClockwise,
+    Gear,
     Play,
     Stop,
     TreeStructure,
@@ -367,18 +368,21 @@
     <div class="workspace-picker">
       <Cube size={22} weight="fill" class="brand-icon" />
       {#if st?.workspace}
+        <span class="label" title={st.workspace}
+          >{st.workspace.split(/[\\/]/).filter(Boolean).at(-1) ??
+            st.workspace}</span
+        >
         <button
-          class="link label"
-          title={st.workspace}
+          type="button"
+          class="button button-ghost icon-button"
+          aria-label="Switch workspace"
+          aria-expanded={switchingWs}
+          title="Switch workspace"
           disabled={busy}
           onclick={() => (switchingWs = !switchingWs)}
-          >{st.workspace.split(/[\\/]/).filter(Boolean).at(-1) ??
-            st.workspace}</button
         >
-      {:else}
-        <strong>Zeal</strong>
-      {/if}
-      {#if st?.workspace}
+          <Gear size={14} />
+        </button>
         <button
           type="button"
           class="button button-ghost icon-button"
@@ -389,6 +393,8 @@
         >
           <ArrowClockwise size={14} />
         </button>
+      {:else}
+        <strong>Zeal</strong>
       {/if}
     </div>
     <div class="composer" class:composer-invalid={!!inputError}>
