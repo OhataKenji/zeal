@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Start each version with a new tag and release, including drafts.
+      - name: Check release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(jq -er '.version' src-tauri/tauri.conf.json)
+          release_tag="v$version"
+          tag=$(git ls-remote --tags origin "refs/tags/$release_tag")
+          release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" | \
+            jq -c --arg tag "$release_tag" '.[] | select(.tag_name == $tag)')
+          if [ -n "$tag" ] || [ -n "$release" ]; then
+            echo "::error::Tag or release $release_tag already exists. Use a new version."
+            exit 1
+          fi
+
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build DMG and create draft release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          args: --target aarch64-apple-darwin --bundles dmg -- --locked
+          tagName: v__VERSION__
+          releaseName: Zeal v__VERSION__
+          releaseCommitish: ${{ github.sha }}
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: false
+          releaseBody: |
+            Download the DMG for macOS on Apple Silicon.
+            This app is ad-hoc signed and is not notarized by Apple.
+            Install Bazelisk or Bazel separately. Updates are installed manually.
+
+            Maintainer: add release notes and complete docs/release-guide.md before publishing.
