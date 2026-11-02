@@ -476,6 +476,12 @@ mod tests {
         assert_eq!(targets[0].label, "//app:lib");
     }
 
+    fn heavy_stderr_script(result: &str) -> String {
+        format!(
+            "i=0; while [ \"$i\" -lt 40 ]; do printf '%8192s' '' >&2; i=$((i + 1)); done; printf 'final diagnostic marker\\n' >&2; {result}\n"
+        )
+    }
+
     #[test]
     fn fetch_parses_target_list_and_selected_target_xml() {
         let fixture = QueryFixture::new();
@@ -526,12 +532,88 @@ mod tests {
         use std::io::Write;
 
         let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"xx").unwrap();
-        file.write_all(&vec![b'a'; STDERR_TAIL]).unwrap();
+        let mut output = vec![b' '; 320_000];
+        output.extend_from_slice(b"\nfinal diagnostic marker\n");
+        file.write_all(&output).unwrap();
         let reader = file.reopen().unwrap();
-        let tail = read_stderr_tail(reader, (STDERR_TAIL + 2) as u64).unwrap();
+        let tail = read_stderr_tail(reader, output.len() as u64).unwrap();
         assert_eq!(tail.len(), STDERR_TAIL);
-        assert!(tail.iter().all(|byte| *byte == b'a'));
+        assert_eq!(tail, output[output.len() - STDERR_TAIL..]);
+        assert_eq!(
+            summarize(&String::from_utf8_lossy(&tail)),
+            "final diagnostic marker"
+        );
+    }
+
+    #[test]
+    fn heavy_stderr_allows_target_list_success() {
+        let fixture = QueryFixture::new();
+        fixture.script(&heavy_stderr_script(
+            "printf 'cc_library rule //app:lib\\n'; exit 0",
+        ));
+        let Outcome::Ok(targets) = fixture.label_kind(Duration::from_secs(2)) else {
+            panic!("large stderr should not block a successful target list");
+        };
+        assert_eq!(targets[0].label, "//app:lib");
+    }
+
+    #[test]
+    fn heavy_stderr_preserves_partial_query() {
+        let fixture = QueryFixture::new();
+        fixture.script(&heavy_stderr_script(
+            "printf 'cc_library rule //app:lib\\n'; exit 9",
+        ));
+        let Outcome::Partial(targets, error) = fixture.label_kind(Duration::from_secs(2)) else {
+            panic!("large stderr and valid stdout should produce a partial result");
+        };
+        assert_eq!(targets[0].label, "//app:lib");
+        assert_eq!(error.exit_code, Some(9));
+        assert_eq!(error.summary, "final diagnostic marker");
+    }
+
+    #[test]
+    fn heavy_stderr_preserves_partial_detail() {
+        let fixture = QueryFixture::new();
+        fixture.script(&heavy_stderr_script(
+            "printf '<query><rule name=\"//app:lib\" class=\"cc_library\"/></query>'; exit 9",
+        ));
+        let Outcome::Partial(query, error) = fixture.detail(Duration::from_secs(2)) else {
+            panic!("large stderr and valid XML should produce a partial result");
+        };
+        assert_eq!(query.rules[0].label, "//app:lib");
+        assert_eq!(error.exit_code, Some(9));
+        assert_eq!(error.summary, "final diagnostic marker");
+    }
+
+    #[test]
+    fn heavy_stderr_reports_failed_detail() {
+        let fixture = QueryFixture::new();
+        fixture.script(&heavy_stderr_script("exit 7"));
+        let Outcome::Failed(error) = fixture.detail(Duration::from_secs(2)) else {
+            panic!("large stderr without XML should be a failed detail query");
+        };
+        assert_eq!(error.exit_code, Some(7));
+        assert_eq!(error.summary, "final diagnostic marker");
+    }
+
+    #[test]
+    fn stderr_tail_preserves_summary_after_split_utf8() {
+        use std::io::Write;
+
+        let marker = b"\ncontext one\ncontext two\nfinal diagnostic marker\n";
+        let mut output = "界".as_bytes().to_vec();
+        output.extend(vec![b'x'; STDERR_TAIL - marker.len() - 1]);
+        output.extend_from_slice(marker);
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&output).unwrap();
+        let tail = read_stderr_tail(file.reopen().unwrap(), output.len() as u64).unwrap();
+        assert_eq!(tail[0], "界".as_bytes()[2]);
+        let text = String::from_utf8_lossy(&tail);
+        assert!(text.starts_with('\u{fffd}'));
+        assert_eq!(
+            summarize(&text),
+            "context one | context two | final diagnostic marker"
+        );
     }
 
     #[test]
