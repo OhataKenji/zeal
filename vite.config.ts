@@ -4,6 +4,10 @@ import { defineConfig } from "vite";
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [svelte()],
+  // Pre-bundle lazy Console dependencies so its first open does not reload the app.
+  optimizeDeps: {
+    include: ["@xterm/addon-fit", "@xterm/xterm"],
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
