@@ -61,5 +61,8 @@ tracing = { version = "0.1", default-features = false, features = ["attributes",
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 tracing-opentelemetry = { version = "0.34", default-features = false }
 
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
+
 [dev-dependencies]
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
