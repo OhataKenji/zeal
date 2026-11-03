@@ -127,6 +127,7 @@ pub const LOG_LIMIT: usize = 512 * 1024;
 const COMPRESSED_LIMIT: u64 = 32 * 1024 * 1024;
 const EXPANDED_LIMIT: u64 = 64 * 1024 * 1024;
 
+#[derive(Default)]
 pub struct Parsed {
     pub bep: Bep,
     pub log: String,
@@ -147,75 +148,49 @@ fn parse_gzip_with_limits<R: Read>(
     compressed_limit: u64,
     expanded_limit: u64,
 ) -> Parsed {
-    let mut compressed = Limited::new(input.take(length), compressed_limit);
-    let mut expanded = Limited::new(MultiGzDecoder::new(&mut compressed), expanded_limit);
+    if length > compressed_limit {
+        let mut parsed = Parsed {
+            input_limit_exceeded: true,
+            invalid: true,
+            ..Default::default()
+        };
+        parsed.bep.truncated = true;
+        return parsed;
+    }
+    let mut compressed = CountingRead {
+        inner: input.take(length),
+        count: 0,
+        failed: false,
+    };
+    let mut expanded = MultiGzDecoder::new(&mut compressed).take(expanded_limit);
     let mut parsed = parse_detail(&mut expanded, u64::MAX);
-    let expanded_exceeded = expanded.exceeded;
+    if expanded.limit() == 0 {
+        // Take reports EOF at its limit; validate the gzip trailer or detect overflow.
+        // copy retries Interrupted and keeps decoder errors distinct from clean EOF.
+        match io::copy(&mut expanded.get_mut().take(1), &mut io::sink()) {
+            Ok(0) => {}
+            Ok(_) => {
+                parsed.input_limit_exceeded = true;
+                parsed.invalid = true;
+            }
+            Err(_) => {
+                parsed.invalid = true;
+                parsed.read_error = true;
+            }
+        }
+    }
     drop(expanded);
-    parsed.input_limit_exceeded = compressed.exceeded || expanded_exceeded;
     // A gzip checksum/header failure is invalid data, not a disk read failure.
     parsed.read_error &= compressed.failed;
+    parsed.bep.truncated |= parsed.invalid;
     parsed
-}
-
-struct Limited<R> {
-    inner: R,
-    remaining: u64,
-    exceeded: bool,
-    failed: bool,
-}
-
-impl<R> Limited<R> {
-    fn new(inner: R, remaining: u64) -> Self {
-        Self {
-            inner,
-            remaining,
-            exceeded: false,
-            failed: false,
-        }
-    }
-}
-
-impl<R: Read> Read for Limited<R> {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        if bytes.is_empty() {
-            return Ok(0);
-        }
-        if self.remaining > 0 {
-            let size = self.remaining.min(bytes.len() as u64) as usize;
-            let count = self
-                .inner
-                .read(&mut bytes[..size])
-                .inspect_err(|_| self.failed = true)?;
-            self.remaining -= count as u64;
-            return Ok(count);
-        }
-        // Probe after an exact bound so a valid trailer/EOF is still checked.
-        if self
-            .inner
-            .read(&mut [0])
-            .inspect_err(|_| self.failed = true)?
-            == 0
-        {
-            return Ok(0);
-        }
-        self.exceeded = true;
-        Err(io::Error::other("BEP input limit exceeded"))
-    }
 }
 
 /// One bounded pass builds both display sections. No event collection survives
 /// a frame, and reaching the BEP display limit does not stop log extraction.
 #[tracing::instrument(target = "zeal::operations", name = "detail.bep_parse", skip_all)]
 pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
-    let mut parsed = Parsed {
-        bep: Bep::default(),
-        log: String::new(),
-        invalid: false,
-        read_error: false,
-        events: 0,
-        input_limit_exceeded: false,
-    };
+    let mut parsed = Parsed::default();
     let mut display_size = json_size(&parsed.bep);
     while let Some(event) = next_event(&mut input, &mut remaining, &mut parsed) {
         parsed.events += 1;
@@ -1023,10 +998,16 @@ mod gzip_tests {
     }
 
     #[test]
-    fn truncated_trailer_preserves_prefix_as_invalid() {
-        let mut encoded = gzip(&frame());
+    fn truncated_trailer_at_exact_limit_preserves_prefix_as_invalid() {
+        let frame = frame();
+        let mut encoded = gzip(&frame);
         encoded.truncate(encoded.len() - 1);
-        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        let parsed = parse_gzip_with_limits(
+            encoded.as_slice(),
+            encoded.len() as u64,
+            1024,
+            frame.len() as u64,
+        );
         assert_eq!(parsed.log, "output");
         assert!(parsed.invalid);
     }
@@ -1072,13 +1053,62 @@ mod gzip_tests {
     }
 
     #[test]
+    fn expanded_limit_at_frame_boundary_keeps_only_the_accepted_prefix() {
+        let frame = frame();
+        // The one-byte empty frame must not reach the projection through the probe.
+        let encoded = gzip(&[frame.as_slice(), &[0]].concat());
+        let parsed = parse_gzip_with_limits(
+            encoded.as_slice(),
+            encoded.len() as u64,
+            1024,
+            frame.len() as u64,
+        );
+        assert_eq!(parsed.log, "output");
+        assert_eq!(parsed.events, 1);
+        assert!(parsed.input_limit_exceeded);
+        assert!(parsed.invalid);
+        assert!(parsed.bep.truncated);
+    }
+
+    #[test]
+    fn member_after_exact_expanded_limit_is_overflow() {
+        let frame = frame();
+        let mut encoded = gzip(&frame);
+        encoded.extend(gzip(&frame));
+        let parsed = parse_gzip_with_limits(
+            encoded.as_slice(),
+            encoded.len() as u64,
+            1024,
+            frame.len() as u64,
+        );
+        assert_eq!(parsed.log, "output");
+        assert_eq!(parsed.events, 1);
+        assert!(parsed.input_limit_exceeded);
+        assert!(parsed.invalid);
+        assert!(parsed.bep.truncated);
+    }
+
+    #[test]
+    fn physical_input_failure_is_a_read_error() {
+        let path = std::env::temp_dir().join(format!("zeal-bep-read-{}", uuid::Uuid::new_v4()));
+        let write_only = std::fs::File::create(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let parsed = parse_gzip(write_only, 1);
+        assert!(parsed.invalid);
+        assert!(parsed.read_error);
+    }
+
+    #[test]
     fn compressed_limit_bounds_empty_members() {
         let mut encoded = gzip(&[]);
         encoded.extend(gzip(&[]));
         encoded.extend(gzip(&[]));
-        let parsed = parse_gzip_with_limits(encoded.as_slice(), encoded.len() as u64, 25, 1024);
+        let mut input = encoded.as_slice();
+        let parsed = parse_gzip_with_limits(&mut input, encoded.len() as u64, 25, 1024);
         assert!(parsed.input_limit_exceeded);
         assert!(parsed.invalid);
+        assert_eq!(parsed.events, 0);
+        assert_eq!(input.len(), encoded.len());
     }
 
     #[test]
