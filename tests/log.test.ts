@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { logSpans } from "../src/lib/log.ts";
+import { logLines, logSpans, logWindow } from "../src/lib/log.ts";
 import { TERMINAL_COLORS } from "../src/lib/terminal_style.ts";
 
 test("Bazel color labels keep their text, color and reset across lines", () => {
@@ -35,6 +35,39 @@ test("extended colors are rendered and a new snapshot does not inherit old style
   assert.equal(red.style, "color:rgb(255, 0, 0)");
   assert.equal(custom.style, "color:rgb(10, 20, 30)");
   assert.deepEqual(logSpans("plain"), [{ text: "plain", style: "" }]);
+});
+
+test("logLines splits styled spans at LF, CR and CRLF boundaries", () => {
+  const lines = logLines("\x1b[32mone\ntwo\x1b[0m\rthree\r\nfour");
+  assert.deepEqual(
+    lines.map((line) => line.map((span) => span.text).join("")),
+    ["one", "two", "three", "four"],
+  );
+  // ANSI styling carries across the split until it is reset.
+  assert.ok(lines[1][0].style.includes(`color:${TERMINAL_COLORS.green}`));
+  assert.equal(lines[2][0].style, "");
+});
+
+test("logLines keeps blank lines and a trailing newline's empty row", () => {
+  const lines = logLines("a\n\nb\n");
+  assert.deepEqual(
+    lines.map((line) => line.map((span) => span.text).join("")),
+    ["a", "", "b", ""],
+  );
+  assert.deepEqual(logLines(""), [[]]);
+});
+
+test("logWindow mounts only the viewport plus an overscan skirt", () => {
+  // A 150px viewport shows 10 rows at 15px each.
+  assert.deepEqual(logWindow(1000, 0, 150), { first: 0, last: 27 });
+  assert.deepEqual(logWindow(1000, 15 * 500, 150), { first: 492, last: 519 });
+  assert.equal(logWindow(1000, 15 * 999, 150).last, 1000);
+});
+
+test("logWindow clamps a stale scroll offset when the log shrinks", () => {
+  assert.deepEqual(logWindow(10, 15 * 999, 150), { first: 10, last: 10 });
+  assert.deepEqual(logWindow(0, 0, 150), { first: 0, last: 0 });
+  assert.deepEqual(logWindow(5, 0, 150), { first: 0, last: 5 });
 });
 
 test("HTML-looking output stays literal text without generated markup", () => {

@@ -34,5 +34,8 @@ export const TERMINAL_THEME = {
   ...TERMINAL_COLORS,
 };
 
+/** Fixed pixel height of one log line; matches the previously computed height at Menlo 13px. Virtualization depends on it staying fixed. */
+export const LOG_LINE_HEIGHT = 15;
+
 /** Inline CSS used to make non-xterm console output match terminal metrics. */
-export const TERMINAL_TEXT_STYLE = `font-family:${TERMINAL_FONT.fontFamily};font-size:${TERMINAL_FONT.fontSize}px;line-height:normal;color:${TERMINAL_THEME.foreground};background:${TERMINAL_THEME.background};--terminal-selection:${TERMINAL_THEME.selectionBackground}`;
+export const TERMINAL_TEXT_STYLE = `font-family:${TERMINAL_FONT.fontFamily};font-size:${TERMINAL_FONT.fontSize}px;line-height:${LOG_LINE_HEIGHT}px;color:${TERMINAL_THEME.foreground};background:${TERMINAL_THEME.background};--terminal-selection:${TERMINAL_THEME.selectionBackground}`;

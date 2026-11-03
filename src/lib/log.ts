@@ -1,5 +1,5 @@
 import Anser from "anser";
-import { TERMINAL_COLORS } from "./terminal_style.ts";
+import { LOG_LINE_HEIGHT, TERMINAL_COLORS } from "./terminal_style.ts";
 
 const ANSI_COLORS: Record<string, string> = Object.fromEntries(
   Object.entries(TERMINAL_COLORS).map(([name, value]) => [
@@ -22,6 +22,41 @@ function color(name: string, truecolor: string): string | undefined {
     const n = index - 16;
     return `rgb(${levels[Math.floor(n / 36)]}, ${levels[Math.floor(n / 6) % 6]}, ${levels[n % 6]})`;
   }
+}
+
+/** One display line of styled log text, ready for row-at-a-time rendering. */
+export type LogLine = Array<{ text: string; style: string }>;
+
+/** Splits parsed log spans into display lines; `\r` and `\n` both break lines. */
+export function logLines(log: string): LogLine[] {
+  const lines: LogLine[] = [[]];
+  const append = (text: string, style: string) => {
+    if (text) lines[lines.length - 1].push({ text, style });
+  };
+  for (const span of logSpans(log)) {
+    for (const [index, text] of span.text.split(/\r\n|\r|\n/).entries()) {
+      if (index > 0) lines.push([]);
+      append(text, span.style);
+    }
+  }
+  return lines;
+}
+
+/** Extra lines mounted above and below the viewport to hide scroll popping. */
+const OVERSCAN = 8;
+
+/**
+ * First and last line index to mount, clamped so a shrinking log cannot
+ * strand the viewport behind an oversized top spacer.
+ */
+export function logWindow(
+  count: number,
+  scrollTop: number,
+  viewHeight: number,
+): { first: number; last: number } {
+  const first = Math.min(Math.max(0, Math.floor(scrollTop / LOG_LINE_HEIGHT) - OVERSCAN), count);
+  const last = Math.min(count, first + Math.ceil(viewHeight / LOG_LINE_HEIGHT) + 2 * OVERSCAN + 1);
+  return { first, last };
 }
 
 /** Parse styles only. Content stays text so log output can never become HTML. */

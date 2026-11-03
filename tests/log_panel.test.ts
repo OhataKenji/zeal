@@ -60,6 +60,18 @@ test("LogPanel displays the available log and its section status", async (t) => 
       assert.doesNotMatch(html, /class="notice|aria-label="Invocation output"/);
     });
 
+    await t.test("a long log mounts only the first window of lines", () => {
+      const data = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n");
+      const html = output({ status: "ok", data });
+      assert.match(html, /line 32</);
+      assert.doesNotMatch(html, /line 33</);
+      // 240px viewport / 15px rows = 16 rows + 16 overscan + 1 = 33 mounted lines.
+      assert.equal(html.match(/class="log-line"/g)?.length, 33);
+      // Spacers carry the unmounted rows: 0 above, (5000 - 33) * 15px below.
+      assert.match(html, /height:\s*0px/);
+      assert.match(html, /height:\s*74505px/);
+    });
+
     await t.test("an unreadable log shows its error without inventing log content", () => {
       const html = output({ status: "read_error", note: "permission denied" });
       assert.match(html, /read error — permission denied/);
