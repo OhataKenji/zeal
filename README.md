@@ -61,11 +61,11 @@ On macOS and Linux, Zeal loads your login shell's `PATH`.
 Add to `.bazelrc`:
 
 ```bazelrc
-build:zeal --bes_backend=grpc://127.0.0.1:4718
-build:zeal --bes_timeout=5s
+build --bes_backend=grpc://127.0.0.1:4718
+build --bes_timeout=5s
 ```
 
-While Zeal is open, run `bazel build --config=zeal //...`.
+While Zeal is open, run `bazel build //...`.
 
 ## Development
 
