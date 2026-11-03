@@ -1,6 +1,7 @@
 # AGENTS.md
 
-see README.md
+See [README.md](README.md) for the project overview and
+[docs/development.md](docs/development.md) for development setup and checks.
 
 ## Workflow
 
