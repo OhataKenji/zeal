@@ -11,6 +11,7 @@ use crate::protocol::generated::command_line::command_line_section::SectionType;
 use crate::protocol::generated::command_line::{
     CommandLine, CommandLineSection, Option as CommandLineOption,
 };
+use flate2::read::MultiGzDecoder;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -124,6 +125,7 @@ pub struct TestSummary {
 pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
 pub const LOG_LIMIT: usize = 512 * 1024;
 
+#[derive(Default)]
 pub struct Parsed {
     pub bep: Bep,
     pub log: String,
@@ -132,17 +134,24 @@ pub struct Parsed {
     pub events: usize,
 }
 
+/// Decode only the saved snapshot into the bounded BEP display.
+pub fn parse_gzip<R: Read>(input: R, length: u64) -> Parsed {
+    let mut compressed = CountingRead {
+        inner: input.take(length),
+        count: 0,
+        failed: false,
+    };
+    let mut parsed = parse_detail(MultiGzDecoder::new(&mut compressed), u64::MAX);
+    // A gzip checksum/header failure is invalid data, not a disk read failure.
+    parsed.read_error &= compressed.failed;
+    parsed
+}
+
 /// One bounded pass builds both display sections. No event collection survives
 /// a frame, and reaching the BEP display limit does not stop log extraction.
 #[tracing::instrument(target = "zeal::operations", name = "detail.bep_parse", skip_all)]
 pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
-    let mut parsed = Parsed {
-        bep: Bep::default(),
-        log: String::new(),
-        invalid: false,
-        read_error: false,
-        events: 0,
-    };
+    let mut parsed = Parsed::default();
     let mut display_size = json_size(&parsed.bep);
     while let Some(event) = next_event(&mut input, &mut remaining, &mut parsed) {
         parsed.events += 1;
@@ -890,5 +899,85 @@ mod tests {
                 "TOOL_HALTED_BEFORE_TESTING",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod gzip_tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    struct FailingRead;
+
+    impl Read for FailingRead {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("input read failed"))
+        }
+    }
+
+    fn frame() -> Vec<u8> {
+        BuildEvent {
+            payload: Some(Payload::Progress(crate::protocol::bep::Progress {
+                stdout: "output".into(),
+                stderr: String::new(),
+            })),
+            ..Default::default()
+        }
+        .encode_length_delimited_to_vec()
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut writer = GzEncoder::new(Vec::new(), Compression::default());
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap()
+    }
+
+    #[test]
+    fn gzip_progress_is_decoded() {
+        let encoded = gzip(&frame());
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        assert_eq!(parsed.log, "output");
+        assert_eq!(parsed.events, 1);
+        assert!(!parsed.invalid);
+    }
+
+    #[test]
+    fn snapshot_excludes_later_appends() {
+        let mut encoded = gzip(&frame());
+        let length = encoded.len() as u64;
+        encoded.extend(b"later invalid gzip");
+        let parsed = parse_gzip(encoded.as_slice(), length);
+        assert_eq!(parsed.log, "output");
+        assert!(!parsed.invalid);
+    }
+
+    #[test]
+    fn truncated_trailer_preserves_prefix_as_invalid() {
+        let frame = frame();
+        let mut encoded = gzip(&frame);
+        encoded.truncate(encoded.len() - 1);
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        assert_eq!(parsed.log, "output");
+        assert!(parsed.invalid);
+    }
+
+    #[test]
+    fn corrupt_crc_preserves_prefix_as_invalid() {
+        let frame = frame();
+        let mut encoded = gzip(&frame);
+        let crc = encoded.len() - 8;
+        encoded[crc] ^= 1;
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        assert_eq!(parsed.log, "output");
+        assert!(parsed.invalid);
+    }
+
+    #[test]
+    fn physical_input_failure_is_a_read_error() {
+        let parsed = parse_gzip(FailingRead, 1);
+        assert!(parsed.invalid);
+        assert!(parsed.read_error);
     }
 }

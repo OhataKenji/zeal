@@ -271,7 +271,7 @@ fn open_artifact(
     invocation_id: &str,
     name: &str,
 ) -> Result<File, StoreError> {
-    if name == "bep.binpb" {
+    if name == "bep.binpb.gz" {
         return event_artifact(data, ws, invocation_id).map(|(file, _)| file);
     }
     read_record(data, ws, invocation_id)?;
@@ -285,7 +285,7 @@ fn open_artifact(
 }
 
 /// Snapshot the current receipt and its checked FD before doing any parsing.
-pub fn event_artifact(
+pub(crate) fn event_artifact(
     data: &Path,
     ws: &Path,
     invocation_id: &str,
@@ -304,7 +304,7 @@ pub fn event_artifact(
         .invocation_dir(invocation_id, false)?
         .child("attempt", false)?
         .child(&attempt.to_string(), false)?
-        .artifact("bep.binpb")?;
+        .artifact("bep.binpb.gz")?;
     Ok((file, complete))
 }
 pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
@@ -400,7 +400,7 @@ mod tests {
                 .kind,
             ErrorKind::Missing
         );
-        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb").is_err());
+        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb.gz").is_err());
     }
     #[test]
     fn workspace_aliases_list_the_same_invocations() {
@@ -418,13 +418,13 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let invocation_id = &f.stream.invocation_id;
-        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb").is_err());
+        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb.gz").is_err());
         assert!(artifact(&f.data, &f.ws, invocation_id, "../zeal.db").is_err());
-        let path = f.dir().join("attempt/1/bep.binpb");
+        let path = f.dir().join("attempt/1/bep.binpb.gz");
         fs::remove_file(&path).unwrap();
         symlink(f.data.join("zeal.db"), &path).unwrap();
         assert_eq!(
-            artifact(&f.data, &f.ws, invocation_id, "bep.binpb")
+            artifact(&f.data, &f.ws, invocation_id, "bep.binpb.gz")
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied
