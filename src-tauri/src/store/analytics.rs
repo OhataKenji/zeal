@@ -3,7 +3,6 @@
 use super::{ErrorKind, Store, StoreError};
 use rusqlite::{Connection, named_params, params};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -146,7 +145,6 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
     {
         return Err(super::fail(ErrorKind::Invalid));
     }
-    let (from, until) = bounds(&tx, &start, &end)?;
     let ws_id: Option<String> = tx
         .query_row(
             "SELECT id FROM workspace WHERE canonical_path=?1",
@@ -175,31 +173,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             })
         })?
         .collect::<Result<_, _>>()?;
-    // Overflowing subtraction promotes to REAL rather than wrapping;
-    // reading it back as i64 then fails closed as Corrupt.
-    let sql = format!(
-        "SELECT date(started_at_ms / 1000,'unixepoch','localtime'),exit_code,target_pattern,
-            finished_at_ms - started_at_ms FROM invocation WHERE workspace_id=:workspace AND {MATCH}"
-    );
-    let mut statement = tx.prepare(&sql)?;
-    let rows = statement
-        .query_map(
-            named_params! {
-                ":workspace":ws_id, ":start":from, ":end":until,
-                ":first_day":start, ":last_day":end,
-                ":cmd":filter.cmd, ":outcome":filter.outcome,
-            },
-            |r| {
-                Ok(Observation {
-                    day: r.get(0)?,
-                    exit_code: r.get(1)?,
-                    pattern: r.get(2)?,
-                    duration_ms: r.get(3)?,
-                })
-            },
-        )?
-        .collect::<Result<Vec<_>, _>>()?;
-    let (days, patterns) = summarize(days, rows, filter.pattern.as_deref())?;
+    let (days, patterns) = aggregate(&tx, ws_id.as_ref(), &filter, &start, &end, days)?;
     Ok(Analytics {
         filter,
         today,
@@ -208,94 +182,149 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
     })
 }
 
-struct Observation {
-    day: String,
-    exit_code: Option<i64>,
-    pattern: Option<String>,
-    duration_ms: Option<i64>,
-}
-
-/// Daily filtering never removes invocations from the all-pattern ranking.
-fn summarize(
+/// Runs the aggregate queries and merges the daily rows into the zero-filled
+/// calendar. Days absent from the result keep their zero counts.
+fn aggregate(
+    tx: &Connection,
+    ws_id: Option<&String>,
+    filter: &Filter,
+    start: &str,
+    end: &str,
     mut days: Vec<Day>,
-    rows: Vec<Observation>,
-    pattern_filter: Option<&str>,
 ) -> Result<(Vec<Day>, Vec<PatternDuration>), StoreError> {
-    let mut durations: Vec<Vec<i64>> = vec![Vec::new(); days.len()];
-    let mut by_pattern: HashMap<String, PatternAgg> = HashMap::new();
-    for Observation {
-        day,
-        exit_code,
-        pattern,
-        duration_ms,
-    } in rows
-    {
-        // A clock jump backwards must not corrupt the series.
-        let duration = duration_ms.map(|ms| ms.max(0));
-        if let Some(pattern) = pattern.as_ref().filter(|s| !s.is_empty()) {
-            let entry = by_pattern.entry(pattern.clone()).or_default();
-            entry.invocations += 1;
-            entry.durations.extend(duration);
-        }
-        if pattern_filter.is_some_and(|t| Some(t) != pattern.as_deref()) {
-            continue;
-        }
+    let (from, until) = bounds(tx, start, end)?;
+    let mut statement = tx.prepare(&days_sql())?;
+    let found = statement.query_map(
+        named_params! {
+            ":workspace":ws_id, ":start":from, ":end":until,
+            ":first_day":start, ":last_day":end,
+            ":cmd":filter.cmd, ":outcome":filter.outcome,
+            ":pattern":filter.pattern,
+        },
+        |r| {
+            Ok(Day {
+                day: r.get(0)?,
+                count: r.get(1)?,
+                ok: r.get(2)?,
+                failed: r.get(3)?,
+                interrupted: r.get(4)?,
+                unknown: r.get(5)?,
+                timed: r.get(6)?,
+                total_ms: r.get(7)?,
+                p50_ms: r.get(8)?,
+                p95_ms: r.get(9)?,
+            })
+        },
+    )?;
+    for row in found {
+        let day = row?;
         let i = days
-            .binary_search_by(|d| d.day.cmp(&day))
+            .binary_search_by(|d| d.day.cmp(&day.day))
             .map_err(|_| super::fail(ErrorKind::Invalid))?;
-        let slot = &mut days[i];
-        slot.count += 1;
-        match exit_code {
-            Some(0) => slot.ok += 1,
-            Some(8) => slot.interrupted += 1,
-            Some(_) => slot.failed += 1,
-            None => slot.unknown += 1,
-        }
-        if let Some(duration) = duration {
-            slot.timed += 1;
-            slot.total_ms = slot.total_ms.saturating_add(duration);
-            durations[i].push(duration);
-        }
+        days[i] = day;
     }
-    for (i, sorted) in durations.iter_mut().enumerate() {
-        sorted.sort_unstable();
-        days[i].p50_ms = percentile(sorted, 50);
-        days[i].p95_ms = percentile(sorted, 95);
-    }
-    let mut patterns: Vec<PatternDuration> = by_pattern
-        .into_iter()
-        .map(|(pattern, agg)| {
-            let mut sorted = agg.durations;
-            sorted.sort_unstable();
-            PatternDuration {
-                pattern,
-                invocations: agg.invocations,
-                total_ms: sorted.iter().fold(0i64, |sum, ms| sum.saturating_add(*ms)),
-                p50_ms: percentile(&sorted, 50),
-                p95_ms: percentile(&sorted, 95),
-            }
-        })
-        .collect();
-    patterns.sort_by(|a, b| b.total_ms.cmp(&a.total_ms).then(a.pattern.cmp(&b.pattern)));
-    patterns.truncate(PATTERN_LIMIT);
+    let patterns: Vec<PatternDuration> = tx
+        .prepare(&patterns_sql())?
+        .query_map(
+            named_params! {
+                ":workspace":ws_id, ":start":from, ":end":until,
+                ":first_day":start, ":last_day":end,
+                ":cmd":filter.cmd, ":outcome":filter.outcome,
+            },
+            |r| {
+                Ok(PatternDuration {
+                    pattern: r.get(0)?,
+                    invocations: r.get(1)?,
+                    total_ms: r.get(2)?,
+                    p50_ms: r.get(3)?,
+                    p95_ms: r.get(4)?,
+                })
+            },
+        )?
+        .collect::<Result<_, _>>()?;
     Ok((days, patterns))
 }
 
 const PATTERN_LIMIT: usize = 10;
 
-#[derive(Default)]
-struct PatternAgg {
-    invocations: i64,
-    durations: Vec<i64>,
+// Aggregation stays inside SQLite so the full invocation set never enters
+// memory; the percentile sorts spill to SQLite-managed storage. `matched`
+// is referenced twice, so MATERIALIZED keeps it a single scan. Scalar MAX
+// returns NULL on a NULL argument, so `ms` is the duration clamped to zero
+// for a backwards clock jump and NULL for an unfinished invocation, making
+// COUNT(ms) the timed denominator. An overflowing subtraction promotes to
+// REAL and still fails closed when a percentile or total is read back as
+// i64. The nearest-rank index ceil(n*p/100) is (n*p+99)/100 in integers,
+// and comparisons against a NULL exit code yield NULL, which FILTER skips:
+// `exit_code NOT IN (0,8)` leaves only the failed residue. The pattern
+// predicate narrows only this daily series; the ranking query below always
+// reflects every pattern.
+fn days_sql() -> String {
+    format!(
+        "WITH matched AS MATERIALIZED (
+            SELECT date(started_at_ms / 1000,'unixepoch','localtime') AS day,exit_code,
+                MAX(finished_at_ms - started_at_ms,0) AS ms
+            FROM invocation WHERE workspace_id=:workspace AND {MATCH}
+                AND (:pattern IS NULL OR target_pattern=:pattern)
+        ),
+        daily AS (
+            SELECT day,COUNT(*) AS count,
+                COUNT(*) FILTER (WHERE exit_code=0) AS ok,
+                COUNT(*) FILTER (WHERE exit_code NOT IN (0,8)) AS failed,
+                COUNT(*) FILTER (WHERE exit_code=8) AS interrupted,
+                COUNT(*) FILTER (WHERE exit_code IS NULL) AS unknown,
+                COUNT(ms) AS timed,COALESCE(SUM(ms),0) AS total_ms
+            FROM matched GROUP BY day
+        ),
+        ranked AS (
+            SELECT day,
+                MAX(CASE WHEN rn=(n*50+99)/100 THEN ms END) AS p50,
+                MAX(CASE WHEN rn=(n*95+99)/100 THEN ms END) AS p95
+            FROM (
+                SELECT day,ms,
+                    ROW_NUMBER() OVER (PARTITION BY day ORDER BY ms) AS rn,
+                    COUNT(*) OVER (PARTITION BY day) AS n
+                FROM matched WHERE ms IS NOT NULL
+            ) GROUP BY day
+        )
+        SELECT daily.day,daily.count,daily.ok,daily.failed,daily.interrupted,
+            daily.unknown,daily.timed,daily.total_ms,
+            COALESCE(ranked.p50,0),COALESCE(ranked.p95,0)
+        FROM daily LEFT JOIN ranked USING(day)"
+    )
 }
 
-/// Nearest-rank percentile over a sorted series; empty input reports zero.
-fn percentile(sorted: &[i64], p: u64) -> i64 {
-    debug_assert!((1..=100).contains(&p));
-    if sorted.is_empty() {
-        return 0;
-    }
-    sorted[((sorted.len() as u64 * p).div_ceil(100) - 1) as usize]
+// Daily filtering never removes invocations from the all-pattern ranking:
+// this query carries no :pattern predicate at all.
+fn patterns_sql() -> String {
+    format!(
+        "WITH matched AS MATERIALIZED (
+            SELECT target_pattern AS pattern,
+                MAX(finished_at_ms - started_at_ms,0) AS ms
+            FROM invocation WHERE workspace_id=:workspace AND {MATCH}
+                AND target_pattern<>''
+        ),
+        top AS (
+            SELECT pattern,COUNT(*) AS invocations,COALESCE(SUM(ms),0) AS total_ms
+            FROM matched GROUP BY pattern
+            ORDER BY total_ms DESC,pattern LIMIT {PATTERN_LIMIT}
+        ),
+        ranked AS (
+            SELECT pattern,
+                MAX(CASE WHEN rn=(n*50+99)/100 THEN ms END) AS p50,
+                MAX(CASE WHEN rn=(n*95+99)/100 THEN ms END) AS p95
+            FROM (
+                SELECT pattern,ms,
+                    ROW_NUMBER() OVER (PARTITION BY pattern ORDER BY ms) AS rn,
+                    COUNT(*) OVER (PARTITION BY pattern) AS n
+                FROM matched WHERE ms IS NOT NULL
+            ) GROUP BY pattern
+        )
+        SELECT top.pattern,top.invocations,top.total_ms,
+            COALESCE(ranked.p50,0),COALESCE(ranked.p95,0)
+        FROM top LEFT JOIN ranked USING(pattern)
+        ORDER BY top.total_ms DESC,top.pattern"
+    )
 }
 
 #[cfg(test)]
