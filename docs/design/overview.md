@@ -178,7 +178,7 @@ content は target / invocation / analytics の3状態で、sidebar の tree と
 
 ## Privacy Concerns
 
-- Zeal の観測記録は local に保存する。開発版は明示した `ZEAL_OTLP_ENDPOINT` がある場合だけ、操作と処理時間を OTLP trace として外部ツールへ送る。通常版は送信しない。設定と送信項目は [README](../../README.md#development-traces) に定める。
+- Zeal の観測記録は local に保存する。開発版は明示した `ZEAL_OTLP_ENDPOINT` がある場合だけ、操作と処理時間を OTLP trace として外部ツールへ送る。通常版は送信しない。設定と送信項目は [development guide](../development.md#development-traces) に定める。
 - アプリが起動するBazelは、自分のreceiverへの `bes_backend`、`bes_upload_mode=wait_for_upload_complete`、空の `bes_proxy` を指定する。`.bazelrc` の別BES先とproxyを上書きし、同時転送は行わない。remote cacheやRBE等の通信は既存設定に従う。
 - invocation の成果物には build log が含まれるため、共有・同期の仕組みは設けない。
 - リポジトリは公開のため、文書・コードともに機微情報を含めない(AGENTS.md の方針に従う)。
