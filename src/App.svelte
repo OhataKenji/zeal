@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    Cube,
     CaretDown,
     CaretRight,
     ChartBar,
@@ -361,7 +360,17 @@
 <div class="win">
   <div class="toolbar">
     <div class="workspace-picker">
-      <Cube size={22} weight="fill" class="brand-icon" />
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="76 76 360 360"
+        width="22"
+        height="22"
+        class="brand-icon zeal-logo"
+        aria-hidden="true"
+      >
+        <polygon points="84,104 428,104 428,216 276,216 164,304 84,304" fill="#34d399" />
+        <polygon points="428,208 348,208 236,296 84,296 84,408 428,408" fill="#0891b2" />
+      </svg>
       {#if st?.workspace}
         <span class="label" title={st.workspace}
           >{st.workspace.split(/[\\/]/).filter(Boolean).at(-1) ??
