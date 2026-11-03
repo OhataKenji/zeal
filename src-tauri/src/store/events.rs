@@ -514,6 +514,12 @@ mod tests {
         let mut receipt = receipt_with_result(&f);
         let event = profile_event(&source);
         receipt.append(&f.ordered(3, event.clone())).unwrap();
+        assert_eq!(
+            artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
         receipt.finish().unwrap();
         // Later Bazel runs or completed BES replays must not change the copy.
         std::fs::write(&source, b"replaced").unwrap();

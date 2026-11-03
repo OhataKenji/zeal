@@ -209,7 +209,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     ) {
       return;
     }
-    void loadDetail();
+    loadSelected();
   }
 
   // The DTO carries only the snapshot's fetchedAt; its data is fetched when

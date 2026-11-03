@@ -4,7 +4,7 @@
 //! in [`Section`] so a missing or unreadable artifact never hides the record
 //! or another observation.
 //!
-//! Writing these artifacts is `runner`'s job; this module only reads.
+//! The BES receiver writes these artifacts; this module only reads.
 
 use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};

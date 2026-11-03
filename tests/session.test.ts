@@ -207,13 +207,13 @@ test("logs and results arrive while profile parsing is still pending", async () 
   assert.equal(h.view.profileLoading, false);
 });
 
-test("history notification refreshes a selected terminal invocation after completion", async () => {
+test("history notification refreshes terminal details and missing timing after completion", async () => {
   const h = harness();
   await h.session.init();
   await selectRecord(h);
   const earlier = { ...COMPLETED, record: RECORD };
   pendingRequest(h, "get_invocation").reply.resolve(earlier);
-  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  pendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
   await settle();
 
   h.emit("invocations-changed", undefined);
@@ -223,11 +223,13 @@ test("history notification refreshes a selected terminal invocation after comple
   assert.equal(h.view.detail, earlier);
   assert.equal(h.view.detailLoading, true);
   assert.equal(h.view.selectedInvocation, RECORD.id);
-  assert.equal(h.view.profile, PROFILE);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.equal(h.view.profileLoading, true);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail, COMPLETED);
+  assert.equal(h.view.profile, PROFILE);
 });
 
 test("history notifications during a list read trigger one follow-up read", async () => {

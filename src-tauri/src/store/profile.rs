@@ -16,33 +16,25 @@ pub(super) fn import(logs: &bep::BuildToolLogs, dir: &Dir) -> io::Result<()> {
         return Ok(());
     };
     let source = open_source(uri)?;
-    let mut copy = dir.file("profile.tmp", true)?;
-    let result = (|| {
-        if io::copy(&mut source.take(COMPRESSED_LIMIT as u64 + 1), &mut copy)?
-            > COMPRESSED_LIMIT as u64
-        {
-            return Err(io::Error::other("profile exceeds byte limit"));
-        }
-        copy.sync_all()?;
-        dir.rename_file("profile.tmp", "profile.json.gz")
-    })();
-    if result.is_err() {
-        let _ = dir.remove_file("profile.tmp");
+    // Readers wait for the receipt to complete before opening this file.
+    let mut copy = dir.file("profile.json.gz", true)?;
+    let size = io::copy(&mut source.take(COMPRESSED_LIMIT as u64 + 1), &mut copy)?;
+    if size > COMPRESSED_LIMIT as u64 {
+        return Err(io::Error::other("profile exceeds byte limit"));
     }
-    result
+    Ok(())
 }
 
 fn open_source(uri: &str) -> io::Result<File> {
     let path = Url::parse(uri)
         .ok()
         .and_then(|url| url.to_file_path().ok())
-        .ok_or_else(|| io::Error::other("profile must reference a local file"))?
-        .canonicalize()?;
-    // Resolve Bazel's latest-profile symlink, then check and read the same FD.
-    // NONBLOCK prevents a replaced source from hanging on a FIFO open.
+        .ok_or_else(|| io::Error::other("profile must reference a local file"))?;
+    // Follow Bazel's latest-profile symlink, then check and read the same FD.
+    // NONBLOCK prevents a FIFO source from hanging on open.
     let file = File::from(rustix::fs::open(
         &path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
     )?);
     let metadata = file.metadata()?;
@@ -78,12 +70,12 @@ mod tests {
     }
 
     #[test]
-    fn oversized_profile_leaves_no_saved_or_partial_copy() {
+    fn oversized_profile_copy_stops_at_the_limit_probe() {
         let fixture = Fixture::new();
         let source = fixture.root.join("source");
         File::create(&source)
             .unwrap()
-            .set_len(COMPRESSED_LIMIT as u64 + 1)
+            .set_len(COMPRESSED_LIMIT as u64 + 2)
             .unwrap();
         let logs = bep::BuildToolLogs {
             log: vec![bep::File {
@@ -96,7 +88,13 @@ mod tests {
         };
         let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
         assert!(import(&logs, &dir).is_err());
-        assert!(!dir.exists("profile.json.gz").unwrap());
-        assert!(!dir.exists("profile.tmp").unwrap());
+        assert_eq!(
+            dir.artifact("profile.json.gz")
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .len(),
+            COMPRESSED_LIMIT as u64 + 1
+        );
     }
 }

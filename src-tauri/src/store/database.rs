@@ -293,7 +293,7 @@ fn attempt_artifact(
         [id(invocation_id)?],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    if attempt == 0 {
+    if attempt == 0 || (name == "profile.json.gz" && !complete) {
         return Err(fail(ErrorKind::Missing));
     }
     let file = store
@@ -366,7 +366,7 @@ mod tests {
         root.file("zeal.db-wal", true).unwrap();
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);
         assert!(!f.data.join("zeal.db").exists());
-        root.remove_file("zeal.db-wal").unwrap();
+        fs::remove_file(f.data.join("zeal.db-wal")).unwrap();
         fs::write(f.data.join("zeal.db"), b"invalid").unwrap();
         fs::set_permissions(f.data.join("zeal.db"), fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);

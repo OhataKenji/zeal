@@ -77,6 +77,7 @@ BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderr
 任意の `profile.json.gz` はBEPと同じ `attempt/<number>/` に置き、その有無を起動元の判定に使わない。
 Zeal実行もCLI実行も、receiverが `BuildToolLogs` のローカル参照からgzip profileをコピーする。
 DBが選ぶ現在のattemptだけを読み、古い接続や完了後の再送でprofileを上書きしない。
+profileは `received_complete=1` になってから読み、途中の受信では欠損として扱う。
 端末出力はConsole表示用の一時file `terminal.log` へ書き、永続化しない。履歴のログ表示はevent内のProgressから復元する。
 
 ### 正常受信
