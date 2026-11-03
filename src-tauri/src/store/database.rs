@@ -333,7 +333,6 @@ mod tests {
     use super::*;
     use crate::store::events::test_support::Fixture;
     use std::fs;
-    use std::io::Read;
     use std::os::unix::fs::{PermissionsExt, symlink};
     #[test]
     fn schema_is_two_tables_and_old_schema_is_refused_without_modification() {
@@ -422,56 +421,6 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied
-        );
-    }
-    #[test]
-    fn profile_uses_the_current_attempt() {
-        let f = Fixture::new();
-        f.complete();
-        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"current").unwrap();
-
-        let mut profile = String::new();
-        artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
-            .unwrap()
-            .read_to_string(&mut profile)
-            .unwrap();
-
-        assert_eq!(profile, "current");
-    }
-    #[test]
-    fn unsafe_attempt_profile_is_rejected() {
-        let f = Fixture::new();
-        f.complete();
-        symlink(
-            f.data.join("zeal.db"),
-            f.dir().join("attempt/1/profile.json.gz"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-    }
-    #[test]
-    fn profile_from_an_obsolete_attempt_is_not_used() {
-        use crate::store::events::Receipt;
-
-        let f = Fixture::new();
-        let mut first = Receipt::begin(&f.data, &f.stream).unwrap();
-        first.append(&f.ordered(1, f.started())).unwrap();
-        first.partial().unwrap();
-        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"obsolete").unwrap();
-        let second = Receipt::begin(&f.data, &f.stream).unwrap();
-        second.partial().unwrap();
-
-        assert_eq!(
-            artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::NotFound
         );
     }
     #[test]

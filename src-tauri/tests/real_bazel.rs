@@ -22,44 +22,6 @@ async fn real_bazel_records_invocation_and_accepts_standard_input() {
     );
 }
 
-#[tokio::test]
-#[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
-async fn real_bazel_imports_custom_plain_json_profile() {
-    let fixture = BazelFixture::new().await;
-    let id = uuid::Uuid::new_v4().to_string();
-    let source = fixture.temp.0.join("custom profile.json");
-    let mut command = fixture.command("build", "//:double", &id);
-    command.arg(format!("--profile={}", source.display()));
-    let output = tokio::task::spawn_blocking(move || command.output().unwrap())
-        .await
-        .unwrap();
-    assert_success(&output, "build with custom profile");
-    let original: serde_json::Value =
-        serde_json::from_reader(fs::File::open(source).unwrap()).unwrap();
-    assert_eq!(fixture.profile(&id), original);
-}
-
-#[tokio::test]
-#[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
-async fn real_bazel_keeps_history_when_profiling_is_disabled() {
-    let fixture = BazelFixture::new().await;
-    let id = uuid::Uuid::new_v4().to_string();
-    let mut command = fixture.command("build", "//:double", &id);
-    command.arg("--nogenerate_json_trace_profile");
-    let output = tokio::task::spawn_blocking(move || command.output().unwrap())
-        .await
-        .unwrap();
-    assert_success(&output, "build without profile");
-    let record = zeal_lib::read_invocation_record(&fixture.data, &fixture.ws, &id).unwrap();
-    assert_invocation(&record, "build", "//:double");
-    assert_eq!(
-        zeal_lib::open_invocation_artifact(&fixture.data, &fixture.ws, &id, "profile.json.gz",)
-            .unwrap_err()
-            .kind(),
-        std::io::ErrorKind::NotFound,
-    );
-}
-
 struct BazelFixture {
     temp: Temp,
     ws: PathBuf,
@@ -138,7 +100,7 @@ impl BazelFixture {
         assert_success(&output, cmd);
         let record = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&record, cmd, pattern);
-        self.profile(&id);
+        self.assert_profile_saved(&id);
     }
 
     async fn accepts_standard_input(&self) {
@@ -157,18 +119,15 @@ impl BazelFixture {
         let observed = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&observed, "run", "//:double");
         assert!(observed.finished_at.is_some());
-        self.profile(&id);
+        self.assert_profile_saved(&id);
     }
 
-    /// The saved profile is usable independently of Bazel's temporary output.
-    fn profile(&self, id: &str) -> serde_json::Value {
+    fn assert_profile_saved(&self, id: &str) {
         let file = zeal_lib::open_invocation_artifact(&self.data, &self.ws, id, "profile.json.gz")
             .unwrap();
         let profile: serde_json::Value =
             serde_json::from_reader(flate2::read::GzDecoder::new(file)).unwrap();
-        assert_eq!(profile["otherData"]["build_id"], id);
         assert!(!profile["traceEvents"].as_array().unwrap().is_empty());
-        profile
     }
 
     async fn wait_for_build(

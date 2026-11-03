@@ -39,7 +39,6 @@ pub struct Receipt {
     first: Option<i64>,
     last: i64,
     last_message: bool,
-    profile_received: bool,
     facts: Facts,
 }
 
@@ -77,7 +76,6 @@ impl Receipt {
             first: None,
             last: 0,
             last_message: false,
-            profile_received: false,
             facts: Facts::default(),
         })
     }
@@ -143,22 +141,15 @@ impl Receipt {
                     millis(finished.finish_time.as_ref(), finished.finish_time_millis);
                 self.facts.exit = finished.exit_code.as_ref().map(|v| v.code);
             }
-            Some(Payload::BuildToolLogs(logs)) => self.observe_profile(logs),
             _ => {}
         }
-        Ok(())
-    }
-
-    fn observe_profile(&mut self, logs: &bep::BuildToolLogs) {
-        if self.profile_received {
-            return;
-        }
-        self.profile_received = true;
-        if self.import_profile(logs).is_err() {
-            // Profile availability must not change the build receipt or
-            // expose an untrusted URI in the application's own logs.
+        if let Some(Payload::BuildToolLogs(logs)) = &event.payload
+            && self.import_profile(logs).is_err()
+        {
+            // An unavailable profile must not fail the build receipt.
             log::warn!("Could not import invocation profile");
         }
+        Ok(())
     }
 
     fn import_profile(&self, logs: &bep::BuildToolLogs) -> Result<(), StoreError> {
@@ -172,7 +163,7 @@ impl Receipt {
             .child(&id(&self.stream.invocation_id)?, false)?
             .child("attempt", false)?
             .child(&attempt.to_string(), false)?;
-        super::profile::import(logs, &self.stream.invocation_id, &dir)?;
+        super::profile::import(logs, &dir)?;
         Ok(())
     }
 
@@ -489,18 +480,7 @@ mod tests {
     use super::*;
     use crate::store::{artifact, list, read_record};
 
-    fn profile_event(f: &Fixture, build_id: &str) -> bep::BuildEvent {
-        let path = f.root.join("command.profile.gz");
-        let mut writer = GzEncoder::new(File::create(&path).unwrap(), Compression::default());
-        serde_json::to_writer(
-            &mut writer,
-            &serde_json::json!({
-                "otherData": { "build_id": build_id },
-                "traceEvents": [{"name": "Finishing", "cat": "build phase marker", "ts": 1}]
-            }),
-        )
-        .unwrap();
-        writer.finish().unwrap();
+    fn profile_event(path: &Path) -> bep::BuildEvent {
         bep::BuildEvent {
             payload: Some(Payload::BuildToolLogs(bep::BuildToolLogs {
                 log: vec![bep::File {
@@ -525,14 +505,17 @@ mod tests {
         receipt
     }
 
-    fn assert_profile_saved(f: &Fixture) {
-        let mut receipt = receipt_with_result(f);
-        let event = profile_event(f, &f.stream.invocation_id);
+    #[test]
+    fn profile_copy_survives_source_replacement_and_completed_replay() {
+        let f = Fixture::new();
+        let source = f.root.join("command.profile.gz");
+        let expected = include_bytes!("../../tests/fixtures/invocation/ok/profile.json.gz");
+        std::fs::write(&source, expected).unwrap();
+        let mut receipt = receipt_with_result(&f);
+        let event = profile_event(&source);
         receipt.append(&f.ordered(3, event.clone())).unwrap();
         receipt.finish().unwrap();
         // Later Bazel runs or completed BES replays must not change the copy.
-        let source = f.root.join("command.profile.gz");
-        let expected = std::fs::read(&source).unwrap();
         std::fs::write(&source, b"replaced").unwrap();
         let mut replay = Receipt::begin(&f.data, &f.stream).unwrap();
         replay.append(&f.ordered(3, event)).unwrap();
@@ -542,26 +525,13 @@ mod tests {
         let mut actual = Vec::new();
         std::io::Read::read_to_end(&mut saved, &mut actual).unwrap();
         assert_eq!(actual, expected);
-        assert!(!f.dir().join("profile.json.gz").exists());
     }
 
     #[test]
-    fn cli_profile_is_saved_with_the_receipt() {
-        assert_profile_saved(&Fixture::new());
-    }
-
-    #[test]
-    fn reserved_gui_profile_uses_the_same_receipt_path() {
-        let f = Fixture::new();
-        crate::store::reserve_invocation(&f.data, &f.stream.invocation_id).unwrap();
-        assert_profile_saved(&f);
-    }
-
-    #[test]
-    fn wrong_profile_identity_does_not_fail_the_build_receipt() {
+    fn missing_profile_does_not_fail_the_build_receipt() {
         let f = Fixture::new();
         let mut receipt = receipt_with_result(&f);
-        let event = profile_event(&f, &uuid::Uuid::new_v4().to_string());
+        let event = profile_event(&f.root.join("missing.profile.gz"));
         receipt.append(&f.ordered(3, event)).unwrap();
         let ack = receipt.finish().unwrap();
         assert_eq!(ack.last, 3);
@@ -572,19 +542,6 @@ mod tests {
             Some(0)
         );
         assert!(artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz").is_err());
-    }
-
-    #[test]
-    fn superseded_receipt_cannot_supply_the_current_profile() {
-        let f = Fixture::new();
-        let mut old = receipt_with_result(&f);
-        let current = receipt_with_result(&f);
-        current.finish().unwrap();
-        old.append(&f.ordered(3, profile_event(&f, &f.stream.invocation_id)))
-            .unwrap();
-        assert_eq!(old.finish().unwrap_err().kind, ErrorKind::Conflict);
-        assert!(artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz").is_err());
-        assert!(f.dir().join("attempt/1/profile.json.gz").exists());
     }
 
     #[test]

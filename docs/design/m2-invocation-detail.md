@@ -72,12 +72,9 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 toolの識別には `--tool_tag=zeal` を付ける。
 profileの保存先と補助flagは上書きせず、Zeal実行もCLI実行もBazelの設定に従う。
 
-receiverは `BuildToolLogs` の `command.profile.gz` または `command.profile.json` が参照するローカルfileを取り込む。
-gzipと未圧縮JSONの両方を受け付け、保存形式をgzipに揃える。
-取り込み時にJSONの完結とinvocation IDの一致を確認し、受信attemptの一時fileからrenameして公開する。
-入力の上限はgzipが32 MiB、未圧縮JSONが64 MiBで、展開後も64 MiBを上限とする。
-保存するgzipは32 MiB以内とする。
-取り込み失敗やremote URIはprofile欠損として扱い、BEPの保存とACKを妨げない。
+receiverは `BuildToolLogs` の `command.profile.gz` が参照するローカルfileを、32 MiBを上限にコピーする。
+内容は表示時に既存のprofile parserで読む。
+コピーできなくてもBEPの保存とACKは続ける。
 
 profile の詳細度は Bazel の設定に従う。Bazel の既定では、大量の短い event をまとめる slim profile を使う。
 細かい処理を調べるときは、引数欄で `--noslim_profile` を指定できる。

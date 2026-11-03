@@ -70,11 +70,9 @@ build --bes_timeout=5s
 
 While Zeal is open, run `bazel build //...`.
 
-Zeal and terminal runs use the same receiver to save build events and timing
-profiles. Zeal copies the local profile referenced by Bazel's build events, so
-Bazel must run on the same machine. Both gzip and plain JSON profiles are supported.
-Profile generation and detail follow your Bazel configuration. Disabled profiles
-and remote profile URLs leave timing unavailable; build history is still saved.
+Zeal and terminal runs save profiles through the same receiver. It copies Bazel's
+standard gzip profile from the same machine. Profiling follows your Bazel
+configuration. Unavailable profiles do not prevent build history from being saved.
 
 ## Development
 
