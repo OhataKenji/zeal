@@ -2,7 +2,7 @@
   import type { Section } from "../types";
   import { sectionData, sectionMessage, sectionNoticeTone } from "../invocation";
   import Notice from "../Notice.svelte";
-  import { logLines, logWindow } from "../log";
+  import { logColumns, logLines, logWindow } from "../log";
   import { LOG_LINE_HEIGHT, TERMINAL_TEXT_STYLE } from "../terminal_style";
 
   let { section, loading }: {
@@ -11,7 +11,7 @@
   } = $props();
   const log = $derived(sectionData(section));
   const lines = $derived(log === null ? [] : logLines(log));
-  const plainLog = $derived(lines.map((line) => line.map((span) => span.text).join("")).join("\n"));
+  const columns = $derived(logColumns(lines));
 
   // Rows have a fixed height, so only the viewport plus an overscan skirt needs
   // to exist in the DOM. Spacers preserve the full scroll range, matching how
@@ -39,8 +39,7 @@
       bind:clientHeight={viewHeight}
       onscroll={(event) => (scrollTop = event.currentTarget.scrollTop)}
     >
-      <div class="log-width-sizer" aria-hidden="true">{plainLog}</div>
-      <div style="height:{win.first * LOG_LINE_HEIGHT}px"></div>
+      <div style="height:{win.first * LOG_LINE_HEIGHT}px;width:{columns}ch"></div>
       {#each visible as line}
         <div class="log-line" style="height:{LOG_LINE_HEIGHT}px"
           >{#each line as span}<span style={span.style}>{span.text}</span>{/each}</div

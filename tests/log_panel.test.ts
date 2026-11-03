@@ -61,10 +61,12 @@ test("LogPanel displays the available log and its section status", async (t) => 
     });
 
     await t.test("a long log mounts only the first window of lines", () => {
-      const data = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n");
-      const html = output({ status: "ok", data });
+      const lines = Array.from({ length: 5000 }, (_, i) => `line ${i}`);
+      lines[4500] = "offscreen-widest-line".padEnd(200, "x");
+      const html = output({ status: "ok", data: lines.join("\n") });
       assert.match(html, /line 32</);
-      assert.doesNotMatch(html, /line 33</);
+      assert.doesNotMatch(html, /line 33|offscreen-widest-line/);
+      assert.match(html, /width:\s*200ch/);
       // 240px viewport / 15px rows = 16 rows + 16 overscan + 1 = 33 mounted lines.
       assert.equal(html.match(/class="log-line"/g)?.length, 33);
       // Spacers carry the unmounted rows: 0 above, (5000 - 33) * 15px below.
