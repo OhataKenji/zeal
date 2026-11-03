@@ -73,23 +73,35 @@ export function emptyView(): SessionView {
   };
 }
 
+/** Serialized Bazel slots; the core emits each as a binary "idle" | "running" flag. */
+const RUNNING_SLOTS = ["ingest", "query", "detailQuery"] as const;
+
+/** Whether a serialized Bazel operation occupies the workspace. Matches the core's bazel_busy. */
+function bazelBusy(state: AppState | null): boolean {
+  return !!(state?.activeInvocation || RUNNING_SLOTS.some((slot) => state?.[slot] === "running"));
+}
+
+/** Whether the session is not ready or a lifecycle request is in flight. */
+function lifecycleBusy(view: SessionView): boolean {
+  return !view.ready || view.opening || view.starting;
+}
+
+/** Whether a lifecycle transition or a serialized Bazel operation is in flight. */
+export function sessionBusy(view: SessionView): boolean {
+  return lifecycleBusy(view) || bazelBusy(view.state);
+}
+
+/** Whether the core knows the workspace and its Bazel binary. */
+function workspaceReady(view: SessionView): boolean {
+  return !!(view.state?.workspace && view.state.bazel);
+}
+
 /**
  * Returns whether manual target input can start now. A loaded snapshot is not
  * required, so the composer remains usable after ingestion errors settle.
  */
 export function canSend(view: SessionView, target: string): boolean {
-  return !!(
-    view.ready &&
-    !view.starting &&
-    !view.opening &&
-    view.state?.workspace &&
-    view.state.bazel &&
-    view.state.ingest === "idle" &&
-    !view.state.activeInvocation &&
-    view.state.query !== "running" &&
-    view.state.detailQuery !== "running" &&
-    targetError(target) === null
-  );
+  return !!(!sessionBusy(view) && workspaceReady(view) && targetError(target) === null);
 }
 
 /**
@@ -209,18 +221,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function targetBusy(): boolean {
-    const state = view.state;
-    return !!(
-      !view.ready ||
-      view.opening ||
-      view.starting ||
-      !state?.workspace ||
-      !state.bazel ||
-      state.ingest === "running" ||
-      state.activeInvocation ||
-      state.query === "running" ||
-      state.detailQuery === "running"
-    );
+    return sessionBusy(view) || !workspaceReady(view);
   }
 
   function requestTargetDetail() {
@@ -639,15 +640,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function openWorkspace(path: string, scope: TargetScope) {
-    if (
-      !view.ready ||
-      view.opening ||
-      view.starting ||
-      view.state?.activeInvocation ||
-      view.state?.ingest === "running" ||
-      view.state?.query === "running" ||
-      view.state?.detailQuery === "running"
-    ) {
+    if (sessionBusy(view)) {
       throw new Error(
         "Wait for the current Bazel operation to finish before changing the workspace",
       );
@@ -664,15 +657,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function refresh() {
-    if (
-      !view.ready ||
-      view.starting ||
-      view.opening ||
-      view.state?.activeInvocation ||
-      view.state?.ingest === "running" ||
-      view.state?.query === "running" ||
-      view.state?.detailQuery === "running"
-    ) {
+    if (sessionBusy(view)) {
       return;
     }
     try {
