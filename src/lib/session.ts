@@ -127,6 +127,36 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     changed(view);
   }
 
+  // Clearing a slice invalidates its in-flight loads, so a late response
+  // cannot repopulate cleared data.
+  function clearDetail() {
+    ++detailGeneration;
+    return { detail: null, detailLoading: false, detailError: null };
+  }
+  function clearProfile() {
+    ++profileGeneration;
+    return { profile: null, profileLoading: false, profileError: null };
+  }
+  function clearInvocations() {
+    ++listGeneration;
+    return { invocations: [], invocationsError: null };
+  }
+  function clearTargetDetail() {
+    ++targetGeneration;
+    return { targetDetail: null, targetDetailError: null };
+  }
+  function clearTargets() {
+    ++snapshotGeneration;
+    snapshotRequested = null;
+    return {
+      snapshot: null,
+      snapshotLoading: false,
+      snapshotError: null,
+      selectedTarget: null,
+      ...clearTargetDetail(),
+    };
+  }
+
   async function loadInvocations() {
     if (!view.state?.workspace || disposed) return;
     if (listing) {
@@ -267,12 +297,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   function selectTarget(label: string | null) {
     if (label === view.selectedTarget && !view.targetDetailError) return;
-    ++targetGeneration;
-    update({
-      selectedTarget: label,
-      targetDetail: null,
-      targetDetailError: null,
-    });
+    update({ selectedTarget: label, ...clearTargetDetail() });
     requestTargetDetail();
   }
 
@@ -335,17 +360,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function selectInvocation(id: string | null) {
-    ++detailGeneration;
-    ++profileGeneration;
     update({
       consoleOpen: false,
       selectedInvocation: id,
-      detail: null,
-      detailError: null,
-      detailLoading: false,
-      profile: null,
-      profileLoading: false,
-      profileError: null,
+      ...clearDetail(),
+      ...clearProfile(),
     });
     loadSelected();
   }
@@ -372,18 +391,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       return;
     }
     if (view.consoleOpen && view.console?.id === record.id) return;
-    ++detailGeneration;
-    ++profileGeneration;
     update({
       console: record,
       consoleOpen: true,
       selectedInvocation: null,
-      detail: null,
-      detailError: null,
-      detailLoading: false,
-      profile: null,
-      profileLoading: false,
-      profileError: null,
+      ...clearDetail(),
+      ...clearProfile(),
     });
   }
 
@@ -391,33 +404,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       console: null,
       consoleOpen: false,
-      invocations: [],
-      invocationsError: null,
       selectedInvocation: null,
-      detail: null,
-      detailLoading: false,
-      detailError: null,
-      profile: null,
-      profileLoading: false,
-      profileError: null,
-      snapshot: null,
-      snapshotLoading: false,
-      snapshotError: null,
-      selectedTarget: null,
-      targetDetail: null,
-      targetDetailError: null,
+      ...clearInvocations(),
+      ...clearDetail(),
+      ...clearProfile(),
+      ...clearTargets(),
     });
   }
 
   function resetTargetData() {
-    update({
-      snapshot: null,
-      snapshotLoading: false,
-      snapshotError: null,
-      selectedTarget: null,
-      targetDetail: null,
-      targetDetailError: null,
-    });
+    update(clearTargets());
   }
 
   function acceptState(state: AppState) {
@@ -429,16 +425,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
     const contextChanged = workspaceChanged || scopeChanged;
     ++stateRevision;
-    if (workspaceChanged) {
-      ++listGeneration;
-      ++detailGeneration;
-      ++profileGeneration;
-    }
-    if (contextChanged) {
-      ++snapshotGeneration;
-      ++targetGeneration;
-      snapshotRequested = null;
-    }
     if (workspaceChanged) {
       resetWorkspaceData();
     } else if (scopeChanged) {
@@ -487,11 +473,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   function syncTargetData(state: AppState, before: AppState | null, contextChanged: boolean) {
     if (!contextChanged && state.snapshotFetchedAt !== before?.snapshotFetchedAt) {
-      ++targetGeneration;
-      update({
-        targetDetail: null,
-        targetDetailError: null,
-      });
+      update(clearTargetDetail());
     }
     const wantFetchedAt = state.snapshotFetchedAt;
     if (wantFetchedAt === null) {
