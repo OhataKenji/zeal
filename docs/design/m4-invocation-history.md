@@ -72,15 +72,15 @@ Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻�
 ### event fileと受信
 
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
-保存に失敗したデータには、受取確認（**ACK**）を返さない。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
-任意の `terminal.log` は擬似端末(**PTY**)の出力、`profile.gz` は計時情報として `invocations/<invocation_id>/` に置く。
-これらの有無を起動元の判定に使わない。
+任意の `profile.json.gz` は計時情報として `invocations/<invocation_id>/` に置き、その有無を起動元の判定に使わない。
+端末出力はConsole表示用の一時file `terminal.log` へ書き、永続化しない。履歴のログ表示はevent内のProgressから復元する。
 
 ### 正常受信
 
 **EOF**は、この接続での送信終了を示す。
+受取確認を**ACK**と呼ぶ。
 
 `received_complete=1` にするには、最後のBEPイベントを示す `last_message` も必要である。
 last_messageがなければ、正常EOFをACKしても `received_complete=0` とする。

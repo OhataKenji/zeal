@@ -212,7 +212,6 @@ pub fn reserve_invocation(data: &Path, invocation_id: &str) -> Result<PathBuf, S
     tx.execute("INSERT INTO invocation(id) VALUES(?1)", [&invocation_id])?;
     let root = Dir::root(data)?.child("invocations", true)?;
     let dir = root.create_child(&invocation_id)?;
-    dir.file("terminal.log", true)?;
     tx.commit()?;
     Ok(dir.path().to_owned())
 }
@@ -279,7 +278,7 @@ fn open_artifact(
     let store = Store::open(data)?;
     let dir = store.invocation_dir(invocation_id, false)?;
     let file = match name {
-        "profile.gz" => dir.artifact(name)?,
+        "profile.json.gz" => dir.artifact(name)?,
         _ => return Err(fail(ErrorKind::Invalid)),
     };
     Ok(file)
@@ -308,21 +307,6 @@ pub(crate) fn event_artifact(
         .artifact("bep.binpb.gz")?;
     Ok((file, complete))
 }
-pub fn live_artifact(data: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
-    if name != "terminal.log" {
-        return Err(fail(ErrorKind::Invalid).into());
-    }
-    let store = Store::open(data)?;
-    store
-        .conn
-        .query_row(
-            "SELECT id FROM invocation WHERE id=?1",
-            [id(invocation_id)?],
-            |r| r.get::<_, String>(0),
-        )
-        .map_err(StoreError::from)?;
-    store.invocation_dir(invocation_id, false)?.artifact(name)
-}
 pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
     let invocation_id = id(invocation_id)?;
     let mut store = Store::open(data)?;
@@ -339,10 +323,8 @@ pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreEr
     }
     let invocations = Dir::root(data)?.child("invocations", false)?;
     let dir = invocations.child(&invocation_id, false)?;
-    for name in ["terminal.log", "profile.gz"] {
-        if dir.exists(name)? {
-            dir.remove_file(name)?;
-        }
+    if dir.exists("profile.json.gz")? {
+        dir.remove_file("profile.json.gz")?;
     }
     invocations.remove_dir(&invocation_id)?;
     tx.execute(
@@ -496,15 +478,7 @@ mod tests {
             ErrorKind::Conflict
         );
         assert!(list(&f.data, &f.ws).unwrap().is_empty());
-        assert!(live_artifact(&f.data, invocation_id, "terminal.log").is_ok());
-        assert_eq!(
-            fs::metadata(dir.join("terminal.log"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
+        assert!(!dir.join("terminal.log").exists());
     }
     #[test]
     fn aborting_a_reservation_preserves_foreign_files_and_frees_the_invocation() {

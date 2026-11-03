@@ -62,7 +62,7 @@ cwdはworkspace root、stdinはPTYで扱い、観測flagはZealが組み立て�
 
 ### ログと更新
 
-live出力はPTYのConsoleへ表示し、端末出力を `terminal.log` に残す。
+live出力はPTYのConsoleへ表示し、端末出力はConsoleセッションの一時file `terminal.log` へ書く。
 履歴はBuild Event Service(**BES**) receiverが、Bazelのイベント列(**BEP**)から保存する。
 process終了からビルド結果を補完しない。
 Bazel clientのwaitはlive実行枠を解放し、UIへ状態を通知する。

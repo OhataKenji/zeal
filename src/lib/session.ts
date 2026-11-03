@@ -73,23 +73,35 @@ export function emptyView(): SessionView {
   };
 }
 
+/** Serialized Bazel slots; the core emits each as a binary "idle" | "running" flag. */
+const RUNNING_SLOTS = ["ingest", "query", "detailQuery"] as const;
+
+/** Whether a serialized Bazel operation occupies the workspace. Matches the core's bazel_busy. */
+function bazelBusy(state: AppState | null): boolean {
+  return !!(state?.activeInvocation || RUNNING_SLOTS.some((slot) => state?.[slot] === "running"));
+}
+
+/** Whether the session is not ready or a lifecycle request is in flight. */
+function lifecycleBusy(view: SessionView): boolean {
+  return !view.ready || view.opening || view.starting;
+}
+
+/** Whether a lifecycle transition or a serialized Bazel operation is in flight. */
+export function sessionBusy(view: SessionView): boolean {
+  return lifecycleBusy(view) || bazelBusy(view.state);
+}
+
+/** Whether the core knows the workspace and its Bazel binary. */
+function workspaceReady(view: SessionView): boolean {
+  return !!(view.state?.workspace && view.state.bazel);
+}
+
 /**
  * Returns whether manual target input can start now. A loaded snapshot is not
  * required, so the composer remains usable after ingestion errors settle.
  */
 export function canSend(view: SessionView, target: string): boolean {
-  return !!(
-    view.ready &&
-    !view.starting &&
-    !view.opening &&
-    view.state?.workspace &&
-    view.state.bazel &&
-    view.state.ingest === "idle" &&
-    !view.state.activeInvocation &&
-    view.state.query !== "running" &&
-    view.state.detailQuery !== "running" &&
-    targetError(target) === null
-  );
+  return !!(!sessionBusy(view) && workspaceReady(view) && targetError(target) === null);
 }
 
 /**
@@ -125,6 +137,36 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (disposed) return;
     view = { ...view, ...patch };
     changed(view);
+  }
+
+  // Clearing a slice invalidates its in-flight loads, so a late response
+  // cannot repopulate cleared data.
+  function clearDetail() {
+    ++detailGeneration;
+    return { detail: null, detailLoading: false, detailError: null };
+  }
+  function clearProfile() {
+    ++profileGeneration;
+    return { profile: null, profileLoading: false, profileError: null };
+  }
+  function clearInvocations() {
+    ++listGeneration;
+    return { invocations: [], invocationsError: null };
+  }
+  function clearTargetDetail() {
+    ++targetGeneration;
+    return { targetDetail: null, targetDetailError: null };
+  }
+  function clearTargets() {
+    ++snapshotGeneration;
+    snapshotRequested = null;
+    return {
+      snapshot: null,
+      snapshotLoading: false,
+      snapshotError: null,
+      selectedTarget: null,
+      ...clearTargetDetail(),
+    };
   }
 
   async function loadInvocations() {
@@ -209,18 +251,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function targetBusy(): boolean {
-    const state = view.state;
-    return !!(
-      !view.ready ||
-      view.opening ||
-      view.starting ||
-      !state?.workspace ||
-      !state.bazel ||
-      state.ingest === "running" ||
-      state.activeInvocation ||
-      state.query === "running" ||
-      state.detailQuery === "running"
-    );
+    return sessionBusy(view) || !workspaceReady(view);
   }
 
   function requestTargetDetail() {
@@ -267,12 +298,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   function selectTarget(label: string | null) {
     if (label === view.selectedTarget && !view.targetDetailError) return;
-    ++targetGeneration;
-    update({
-      selectedTarget: label,
-      targetDetail: null,
-      targetDetailError: null,
-    });
+    update({ selectedTarget: label, ...clearTargetDetail() });
     requestTargetDetail();
   }
 
@@ -335,17 +361,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function selectInvocation(id: string | null) {
-    ++detailGeneration;
-    ++profileGeneration;
     update({
       consoleOpen: false,
       selectedInvocation: id,
-      detail: null,
-      detailError: null,
-      detailLoading: false,
-      profile: null,
-      profileLoading: false,
-      profileError: null,
+      ...clearDetail(),
+      ...clearProfile(),
     });
     loadSelected();
   }
@@ -372,18 +392,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       return;
     }
     if (view.consoleOpen && view.console?.id === record.id) return;
-    ++detailGeneration;
-    ++profileGeneration;
     update({
       console: record,
       consoleOpen: true,
       selectedInvocation: null,
-      detail: null,
-      detailError: null,
-      detailLoading: false,
-      profile: null,
-      profileLoading: false,
-      profileError: null,
+      ...clearDetail(),
+      ...clearProfile(),
     });
   }
 
@@ -391,33 +405,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       console: null,
       consoleOpen: false,
-      invocations: [],
-      invocationsError: null,
       selectedInvocation: null,
-      detail: null,
-      detailLoading: false,
-      detailError: null,
-      profile: null,
-      profileLoading: false,
-      profileError: null,
-      snapshot: null,
-      snapshotLoading: false,
-      snapshotError: null,
-      selectedTarget: null,
-      targetDetail: null,
-      targetDetailError: null,
+      ...clearInvocations(),
+      ...clearDetail(),
+      ...clearProfile(),
+      ...clearTargets(),
     });
   }
 
   function resetTargetData() {
-    update({
-      snapshot: null,
-      snapshotLoading: false,
-      snapshotError: null,
-      selectedTarget: null,
-      targetDetail: null,
-      targetDetailError: null,
-    });
+    update(clearTargets());
   }
 
   function acceptState(state: AppState) {
@@ -429,16 +426,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
     const contextChanged = workspaceChanged || scopeChanged;
     ++stateRevision;
-    if (workspaceChanged) {
-      ++listGeneration;
-      ++detailGeneration;
-      ++profileGeneration;
-    }
-    if (contextChanged) {
-      ++snapshotGeneration;
-      ++targetGeneration;
-      snapshotRequested = null;
-    }
     if (workspaceChanged) {
       resetWorkspaceData();
     } else if (scopeChanged) {
@@ -487,11 +474,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   function syncTargetData(state: AppState, before: AppState | null, contextChanged: boolean) {
     if (!contextChanged && state.snapshotFetchedAt !== before?.snapshotFetchedAt) {
-      ++targetGeneration;
-      update({
-        targetDetail: null,
-        targetDetailError: null,
-      });
+      update(clearTargetDetail());
     }
     const wantFetchedAt = state.snapshotFetchedAt;
     if (wantFetchedAt === null) {
@@ -639,15 +622,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function openWorkspace(path: string, scope: TargetScope) {
-    if (
-      !view.ready ||
-      view.opening ||
-      view.starting ||
-      view.state?.activeInvocation ||
-      view.state?.ingest === "running" ||
-      view.state?.query === "running" ||
-      view.state?.detailQuery === "running"
-    ) {
+    if (sessionBusy(view)) {
       throw new Error(
         "Wait for the current Bazel operation to finish before changing the workspace",
       );
@@ -664,15 +639,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function refresh() {
-    if (
-      !view.ready ||
-      view.starting ||
-      view.opening ||
-      view.state?.activeInvocation ||
-      view.state?.ingest === "running" ||
-      view.state?.query === "running" ||
-      view.state?.detailQuery === "running"
-    ) {
+    if (sessionBusy(view)) {
       return;
     }
     try {

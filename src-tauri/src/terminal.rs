@@ -1,12 +1,12 @@
-//! Unix PTY ownership and durable output. A Console view never owns the child.
+//! Unix PTY ownership and captured output. A Console view never owns the child.
 use crate::state::Core;
 use rustix::event::{self, PollFd, PollFlags, Timespec};
 use rustix::fs::{self, OFlags};
 use rustix::termios::{self, Winsize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,11 +88,23 @@ impl Drop for Capture {
     }
 }
 
+/// The console session's captured output: a temp file unlinked on creation,
+/// so it disappears once every handle closes.
+pub fn session_log() -> io::Result<File> {
+    let path = std::env::temp_dir().join(format!("zeal-{}.log", uuid::Uuid::new_v4()));
+    let log = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    std::fs::remove_file(&path)?;
+    Ok(log)
+}
+
 #[tracing::instrument(target = "zeal::operations", name = "bazel.spawn", skip_all)]
-pub fn spawn(command: &mut Command, dir: &Path) -> io::Result<(Child, Control, Capture)> {
-    let mut log = OpenOptions::new()
-        .append(true)
-        .open(dir.join("terminal.log"))?;
+pub fn spawn(command: &mut Command, log: &File) -> io::Result<(Child, Control, Capture)> {
+    let mut log = log.try_clone()?;
     let size = Winsize {
         ws_row: 24,
         ws_col: 80,
@@ -224,11 +236,9 @@ pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String>
 mod tests {
     use super::*;
     use crate::state::ActiveInvocation;
-    use crate::store;
 
     struct Fixture {
-        root: std::path::PathBuf,
-        dir: std::path::PathBuf,
+        log: File,
         id: String,
         child: Child,
         capture: Capture,
@@ -236,14 +246,10 @@ mod tests {
     }
     impl Fixture {
         fn new(script: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("zeal-pty-{}", uuid::Uuid::new_v4()));
-            let ws = root.join("workspace");
-            let data = root.join("data");
-            std::fs::create_dir_all(&ws).unwrap();
+            let log = session_log().unwrap();
             let id = uuid::Uuid::new_v4().to_string();
-            let dir = store::reserve_invocation(&data, &id).unwrap();
             let (child, control, capture) =
-                spawn(Command::new("sh").args(["-c", script]), &dir).unwrap();
+                spawn(Command::new("sh").args(["-c", script]), &log).unwrap();
             let core = Core::new();
             let mut st = core.state.lock().unwrap();
             st.active_invocation = Some(ActiveInvocation {
@@ -255,8 +261,7 @@ mod tests {
             });
             drop(st);
             Self {
-                root,
-                dir,
+                log,
                 id,
                 child,
                 capture,
@@ -264,7 +269,7 @@ mod tests {
             }
         }
         fn output(&self) -> String {
-            std::fs::read_to_string(self.dir.join("terminal.log")).unwrap()
+            String::from_utf8(read_log(&self.log)).unwrap()
         }
         fn wait_for(&self, text: &str) {
             wait_for_output(self, text);
@@ -273,7 +278,7 @@ mod tests {
             assert_eq!(write(&self.core, &self.id, data).unwrap(), data.len());
         }
         fn finish(&mut self) -> i32 {
-            let code = wait_for_exit(&mut self.child, &self.dir);
+            let code = wait_for_exit(&mut self.child, &self.log);
             self.capture.finish().unwrap();
             _ = self
                 .core
@@ -297,14 +302,21 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
     }
-    fn wait_for_exit(child: &mut Child, dir: &Path) -> i32 {
+    fn read_log(log: &File) -> Vec<u8> {
+        use std::os::unix::fs::FileExt;
+        let mut bytes = vec![0; log.metadata().unwrap().len() as usize];
+        log.read_exact_at(&mut bytes, 0).unwrap();
+        bytes
+    }
+
+    fn wait_for_exit(child: &mut Child, log: &File) -> i32 {
         let until = Instant::now() + Duration::from_secs(5);
         let mut status = child.try_wait().unwrap();
         while status.is_none() {
             assert!(
                 Instant::now() < until,
                 "child did not exit: {}",
-                std::fs::read_to_string(dir.join("terminal.log")).unwrap()
+                String::from_utf8_lossy(&read_log(log))
             );
             thread::sleep(Duration::from_millis(10));
             status = child.try_wait().unwrap();
@@ -323,7 +335,6 @@ mod tests {
         fn drop(&mut self) {
             kill_if_running(&mut self.child);
             let _ = self.capture.finish();
-            let _ = std::fs::remove_dir_all(&self.root);
         }
     }
 

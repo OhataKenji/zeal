@@ -112,7 +112,7 @@ fn observation<T>(data: T, incomplete: bool, note: &str) -> Section<T> {
 pub fn invocation_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
     store::read_record(data, workspace, id)?;
     Ok({
-        match store::artifact(data, workspace, id, "profile.gz") {
+        match store::artifact(data, workspace, id, "profile.json.gz") {
             Err(e) => read_error(e),
             Ok(f) => match profile::parse_bounded(f, profile::IPC_LIMIT) {
                 Ok(data) => Section::Ok { data },
@@ -229,7 +229,7 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        fs::write(f.dir().join("profile.gz"), b"invalid gzip").unwrap();
+        fs::write(f.dir().join("profile.json.gz"), b"invalid gzip").unwrap();
         assert!(matches!(
             invocation_profile(&f.data, &f.ws, id).unwrap(),
             Section::ParseError { .. }

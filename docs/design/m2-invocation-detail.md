@@ -49,7 +49,7 @@ BEP や profile が欠損した場合は、利用できるセクションだけ�
 ```mermaid
 flowchart LR
     SEND["Send: build / test"] --> SPAWN["bazel + 観測 flag"]
-    SPAWN -->|"共通BES receiver"| FILES["ログ込みbep.binpb.gz / 任意profile.gz"]
+    SPAWN -->|"共通BES receiver"| FILES["ログ込みbep.binpb.gz / 任意profile.json.gz"]
     FILES -->|"詳細を開くたびに parse"| VIEW["結果 / timing / phase の帯"]
 ```
 
@@ -60,9 +60,8 @@ flowchart LR
 M2 では snapshot の query 中か invocation 中なら Send を disabled にし、実行待ちの queue を持たない。
 保存先とDBの規則は[M4](./m4-invocation-history.md)に従う。
 
-- `attempt/<number>/bep.binpb.gz`：receiverがgzip圧縮して保存するログ込みBuildEvent
-- `profile.gz`：Bazelが書く計時情報
-- `terminal.log`：PTYで取得する端末出力
+- `attempt/<number>/bep.binpb.gz`：receiverが保存するログ込みBuildEvent
+- `profile.json.gz`：Bazelが書く計時情報
 
 イベント送信には次のflagを付ける。
 
@@ -72,10 +71,13 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 
 計時とtoolの識別には次のflagを付ける。
 
-- `--profile=<dir>/profile.gz`
+- `--profile=<dir>/profile.json.gz`
 - `--experimental_profile_include_primary_output`
-- `--noslim_profile`
 - `--tool_tag=zeal`
+
+profile の詳細度は Bazel の設定に従う。Bazel の既定では、大量の短い event をまとめる slim profile を使う。
+細かい処理を調べるときは、引数欄で `--noslim_profile` を指定できる。
+既存の詳細な profile と slim profile は、同じ parser で読み込む。
 
 対象は Bazel 8.7 以上を目安とし、基準環境は spike を行った Bazel 8.7.0 とする。
 flag や出力形式の version 別の対応表、parser の field 名の読み替えは持たない。

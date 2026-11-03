@@ -131,6 +131,8 @@ impl ActiveInvocation {
 pub struct ConsoleSession {
     pub id: InvocationId,
     pub workspace: PathBuf,
+    /// The session's captured terminal output; an already-unlinked temp file.
+    pub log: std::fs::File,
     /// The capture worker has stopped writing, including its final drain.
     pub finished: bool,
 }
