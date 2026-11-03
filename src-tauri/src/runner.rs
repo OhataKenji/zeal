@@ -1,4 +1,4 @@
-//! Runs `bazel build|test|run <target>` and captures terminal.log.
+//! Runs `bazel build|test|run <target>` under a PTY and captures its output.
 //! All commands use a PTY; output is saved independently of the Console view.
 //! Build history is received by the app-owned BES, independently of process exit.
 //!
@@ -63,6 +63,7 @@ pub fn start(
     // and the slot below stay one atomic step, without a `starting` flag.
     // The record exists before bazel does; a failing store prevents the spawn.
     let id = uuid::Uuid::new_v4().to_string();
+    let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
     let dir = store::reserve_invocation(data, &id).map_err(|e| e.to_string())?;
     let rec = InvocationRecord {
         id,
@@ -78,7 +79,7 @@ pub fn start(
         Command::new(&bazel)
             .args(argv(cmd, pattern, &arguments, &dir, endpoint, &rec.id))
             .current_dir(&ws),
-        &dir,
+        &log,
     ) {
         Ok(c) => c,
         Err(e) => {
@@ -96,6 +97,7 @@ pub fn start(
     st.console = Some(ConsoleSession {
         id: rec.id.clone().into(),
         workspace: ws,
+        log,
         finished: false,
     });
     st.invocation_note = None;
@@ -446,6 +448,7 @@ mod tests {
         id: &str,
         terminal: crate::terminal::Control,
         pgid: i32,
+        log: std::fs::File,
     ) {
         let mut state = core.state.lock().unwrap();
         state.workspace = Some(ws.to_path_buf());
@@ -459,6 +462,7 @@ mod tests {
         state.console = Some(ConsoleSession {
             id: id.into(),
             workspace: ws.to_path_buf(),
+            log,
             finished: false,
         });
     }
@@ -473,7 +477,6 @@ mod tests {
             let path =
                 std::env::temp_dir().join(format!("zeal-invocation-log-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
-            fs::write(path.join("terminal.log"), b"").unwrap();
             Self(path)
         }
     }
@@ -484,14 +487,21 @@ mod tests {
         }
     }
 
+    fn log_bytes(log: &fs::File) -> Vec<u8> {
+        use std::os::unix::fs::FileExt;
+        let mut bytes = vec![0; log.metadata().unwrap().len() as usize];
+        log.read_exact_at(&mut bytes, 0).unwrap();
+        bytes
+    }
+
     #[test]
     fn terminal_saves_both_streams_and_non_utf8_bytes() {
-        let dir = LogDir::new();
+        let log = crate::terminal::session_log().unwrap();
         let (mut child, _terminal, mut capture) = crate::terminal::spawn(
             Command::new("sh")
                 .arg("-c")
                 .arg("printf 'out\\r\\n'; printf 'err\\n' >&2; printf '\\377tail'"),
-            &dir.0,
+            &log,
         )
         .unwrap();
         let _guard = GroupGuard(child.id() as i32);
@@ -499,24 +509,21 @@ mod tests {
         assert!(child.stderr.is_none());
         assert!(child.wait().unwrap().success());
         capture.finish().unwrap();
+        assert_eq!(log_bytes(&log), b"out\r\r\nerr\r\n\xfftail");
         assert_eq!(
-            fs::read(dir.0.join("terminal.log")).unwrap(),
-            b"out\r\r\nerr\r\n\xfftail"
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&fs::read(dir.0.join("terminal.log")).unwrap()),
+            String::from_utf8_lossy(&log_bytes(&log)),
             "out\r\r\nerr\r\n\u{fffd}tail"
         );
     }
 
     #[test]
     fn parent_exit_does_not_wait_for_a_descendant_holding_the_log_open() {
-        let dir = LogDir::new();
+        let log = crate::terminal::session_log().unwrap();
         let (mut child, _terminal, mut capture) = crate::terminal::spawn(
             Command::new("sh")
                 .arg("-c")
                 .arg("trap '' HUP; sleep 30 & printf 'done\\n'; exit 7"),
-            &dir.0,
+            &log,
         )
         .unwrap();
         let pgid = child.id() as i32;
@@ -533,20 +540,7 @@ mod tests {
             "descendant should still retain its output file"
         );
         capture.finish().unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&fs::read(dir.0.join("terminal.log")).unwrap()),
-            "done\r\n"
-        );
-    }
-
-    #[test]
-    fn missing_log_prevents_the_command_from_starting() {
-        let dir = LogDir::new();
-        fs::remove_file(dir.0.join("terminal.log")).unwrap();
-        let marker = dir.0.join("spawned");
-        let result = crate::terminal::spawn(Command::new("touch").arg(&marker), &dir.0);
-        assert!(result.is_err());
-        assert!(!marker.exists());
+        assert_eq!(String::from_utf8_lossy(&log_bytes(&log)), "done\r\n");
     }
 
     #[test]
@@ -600,14 +594,14 @@ mod tests {
         fs::create_dir(&ws).unwrap();
         let data = temp.0.join("data");
         let id = uuid::Uuid::new_v4().to_string();
-        let dir = store::reserve_invocation(&data, &id).unwrap();
+        let log = crate::terminal::session_log().unwrap();
         let (mut child, terminal, mut capture) = crate::terminal::spawn(
             Command::new("sh").args(["-c", "printf 'startup failed\\n' >&2; exit 7"]),
-            &dir,
+            &log,
         )
         .unwrap();
         let core = Core::new();
-        hold_invocation(&core, &ws, &id, terminal, child.id() as i32);
+        hold_invocation(&core, &ws, &id, terminal, child.id() as i32, log);
         let exit = Ok(child.wait().unwrap().code().unwrap());
         capture.finish().unwrap();
         {
@@ -620,7 +614,7 @@ mod tests {
         assert!(store::read_record(&data, &ws, &id).is_err());
         assert!(crate::terminal::resize(&core, &id, 80, 24).is_ok());
         assert_eq!(core.dto().console_invocation.as_deref(), Some(id.as_str()));
-        assert_saved_console(&data, &core, &id, "startup failed\r\n");
+        assert_saved_console(&core, &id, "startup failed\r\n");
     }
 
     #[test]
@@ -630,6 +624,7 @@ mod tests {
         state.console = Some(ConsoleSession {
             id: "new".into(),
             workspace: Path::new("/workspace").into(),
+            log: crate::terminal::session_log().unwrap(),
             finished: false,
         });
         finish_console(&mut state, "old");
@@ -716,10 +711,12 @@ mod tests {
     async fn check_gui_run(fixture: &GuiBazelFixture, cmd: &'static str, pattern: &str) {
         let id = uuid::Uuid::new_v4().to_string();
         let dir = store::reserve_invocation(&fixture.data, &id).unwrap();
+        let log = crate::terminal::session_log().unwrap();
+        let read_log = log.try_clone().unwrap();
         let mut command = fixture.command(cmd, pattern, &dir, &id);
-        let (child, terminal, capture) = crate::terminal::spawn(&mut command, &dir).unwrap();
+        let (child, terminal, capture) = crate::terminal::spawn(&mut command, &log).unwrap();
         let core = Arc::new(Core::new());
-        hold_invocation(&core, &fixture.ws, &id, terminal, child.id() as i32);
+        hold_invocation(&core, &fixture.ws, &id, terminal, child.id() as i32, log);
         let (release, input) = mpsc::sync_channel(1);
         let owner_core = core.clone();
         let owner_id = id.clone();
@@ -735,7 +732,7 @@ mod tests {
         // A `run` child blocks on stdin: feed it only once the build's BEP
         // record exists, the order the GUI observes.
         if cmd == "run" {
-            wait_for_gui_build(fixture, &id, &dir, &process).await;
+            wait_for_gui_build(fixture, &id, &read_log, &process).await;
             crate::terminal::resize(&core, &id, 100, 30).unwrap();
             release.send(()).unwrap();
         }
@@ -743,11 +740,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let output = fs::read_to_string(dir.join("terminal.log")).unwrap();
+        let output = String::from_utf8(log_bytes(&read_log)).unwrap();
         assert_eq!(code, if cmd == "run" { 23 } else { 0 }, "{cmd}: {output}");
         assert_gui_record(fixture, cmd, pattern, &id);
         assert!(core.state.lock().unwrap().active_invocation.is_none());
-        assert_saved_console(&fixture.data, &core, &id, &output);
+        assert_saved_console(&core, &id, &output);
     }
 
     /// The BES-recorded invocation: the build's own command, pattern and
@@ -766,18 +763,16 @@ mod tests {
         assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.gz").is_ok());
     }
 
-    /// Completed consoles expose durable bytes even when reopened, but reject new input.
-    fn assert_saved_console(data: &Path, core: &Core, id: &str, output: &str) {
-        let console =
-            serde_json::to_value(crate::console::read(data, core, id, 0).unwrap()).unwrap();
+    /// Completed consoles expose captured bytes even when reopened, but reject new input.
+    fn assert_saved_console(core: &Core, id: &str, output: &str) {
+        let console = serde_json::to_value(crate::console::read(core, id, 0).unwrap()).unwrap();
         assert_eq!(
             console["done"], true,
             "final terminal bytes must already be saved"
         );
         let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
         assert_eq!(String::from_utf8(bytes).unwrap(), output);
-        let reopened =
-            serde_json::to_value(crate::console::read(data, core, id, 0).unwrap()).unwrap();
+        let reopened = serde_json::to_value(crate::console::read(core, id, 0).unwrap()).unwrap();
         assert_eq!(reopened, console);
         assert!(crate::terminal::write(core, id, b"late input").is_err());
     }
@@ -819,18 +814,18 @@ mod tests {
     async fn wait_for_gui_build(
         fixture: &GuiBazelFixture,
         id: &str,
-        dir: &Path,
+        log: &fs::File,
         process: &tokio::task::JoinHandle<i32>,
     ) {
         tokio::time::timeout(
             Duration::from_secs(25),
-            wait_for_gui_build_receipt(fixture, id, dir, process),
+            wait_for_gui_build_receipt(fixture, id, log, process),
         )
         .await
         .unwrap_or_else(|error| {
             panic!(
                 "BES did not finalize before stdin: {error}; {}",
-                fs::read_to_string(dir.join("terminal.log")).unwrap()
+                String::from_utf8_lossy(&log_bytes(log))
             )
         });
     }
@@ -838,7 +833,7 @@ mod tests {
     async fn wait_for_gui_build_receipt(
         fixture: &GuiBazelFixture,
         id: &str,
-        dir: &Path,
+        log: &fs::File,
         process: &tokio::task::JoinHandle<i32>,
     ) {
         while !store::read_record(&fixture.data, &fixture.ws, id)
@@ -847,7 +842,7 @@ mod tests {
             assert!(
                 !process.is_finished(),
                 "Bazel ended before recording the build: {}",
-                fs::read_to_string(dir.join("terminal.log")).unwrap()
+                String::from_utf8_lossy(&log_bytes(log))
             );
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
