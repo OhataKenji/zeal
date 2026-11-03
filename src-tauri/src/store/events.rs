@@ -476,12 +476,6 @@ mod tests {
             .read_to_end(&mut decoded)
             .unwrap();
         assert_eq!(decoded, expected);
-        assert_eq!(
-            artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb")
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::NotFound,
-        );
     }
 
     #[test]

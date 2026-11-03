@@ -10,7 +10,8 @@ use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
 use crate::store::{self, InvocationRecord};
 use serde::Serialize;
-use std::io::{self, BufReader};
+use std::fs::File;
+use std::io;
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
@@ -46,7 +47,7 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
                 event_failure(true, error.to_string())
             }
         }
-        Ok(artifact) => event_sections(artifact)?,
+        Ok((file, complete)) => event_sections(file, complete)?,
     };
     Ok(InvocationDetail { record, log, bep })
 }
@@ -54,18 +55,9 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
 /// Log and build-result views of the open event artifact. A stream that fails
 /// before its first usable event fails both sections alike; afterwards each
 /// reports its own completeness.
-fn event_sections(artifact: store::EventArtifact) -> io::Result<(Section<String>, Section<Bep>)> {
-    let store::EventArtifact {
-        file,
-        complete,
-        gzip,
-    } = artifact;
+fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Section<Bep>)> {
     let length = file.metadata()?.len();
-    let parsed = if gzip {
-        bep::parse_gzip(file, length)
-    } else {
-        bep::parse_detail(BufReader::new(file), length)
-    };
+    let parsed = bep::parse_gzip(file, length);
     if parsed.input_limit_exceeded {
         let note =
             "BEP exceeded its compressed or expanded input limit; showing the accepted prefix";
@@ -176,36 +168,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_raw_artifact_preserves_the_same_detail() {
-        use std::io::Read;
-
-        let f = Fixture::new();
-        f.complete();
-        let id = &f.stream.invocation_id;
-        let before = invocation_detail(&f.data, &f.ws, id).unwrap();
-        let path = f.dir().join("attempt/1/bep.binpb.gz");
-        let mut raw = Vec::new();
-        flate2::read::MultiGzDecoder::new(fs::File::open(&path).unwrap())
-            .read_to_end(&mut raw)
-            .unwrap();
-        fs::write(f.dir().join("attempt/1/bep.binpb"), raw).unwrap();
-        fs::remove_file(path).unwrap();
-        let after = invocation_detail(&f.data, &f.ws, id).unwrap();
-        assert_eq!(
-            serde_json::to_value(before).unwrap(),
-            serde_json::to_value(after).unwrap()
-        );
-    }
-
-    #[test]
-    fn unsafe_gzip_never_falls_back_to_raw() {
+    fn unsafe_gzip_artifact_reports_read_error() {
         use std::os::unix::fs::symlink;
 
         let f = Fixture::new();
         f.complete();
         let path = f.dir().join("attempt/1/bep.binpb.gz");
         fs::remove_file(&path).unwrap();
-        fs::write(f.dir().join("attempt/1/bep.binpb"), b"").unwrap();
         symlink(f.data.join("zeal.db"), path).unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::ReadError { .. }));
@@ -236,11 +205,18 @@ mod tests {
     }
     #[test]
     fn malformed_event_artifact_marks_both_sections_parse_error() {
+        use std::io::Write;
+
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        fs::remove_file(f.dir().join("attempt/1/bep.binpb.gz")).unwrap();
-        fs::write(f.dir().join("attempt/1/bep.binpb"), b"\xff").unwrap();
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(b"\xff").unwrap();
+        fs::write(
+            f.dir().join("attempt/1/bep.binpb.gz"),
+            gzip.finish().unwrap(),
+        )
+        .unwrap();
         let detail = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(detail.record.exit_code, Some(0));
         assert!(matches!(detail.log, Section::ParseError { .. }));
@@ -248,11 +224,10 @@ mod tests {
     }
 
     #[test]
-    fn malformed_gzip_is_a_parse_error_without_legacy_fallback() {
+    fn malformed_gzip_is_a_parse_error() {
         let f = Fixture::new();
         f.complete();
         fs::write(f.dir().join("attempt/1/bep.binpb.gz"), b"invalid gzip").unwrap();
-        fs::write(f.dir().join("attempt/1/bep.binpb"), b"").unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::ParseError { .. }));
         assert!(matches!(detail.bep, Section::ParseError { .. }));

@@ -74,9 +74,6 @@ Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻�
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
 length-delimited protobuf のバイト列を受信中に gzip 圧縮する。
 gzip の終端とバッファの書き込みが成功した後に、受信状態を保存して ACK を返す。
-既存の未圧縮 `bep.binpb` も読み込む。
-詳細表示は gzip を優先し、そのファイルが存在しない場合だけ未圧縮ファイルを読む。
-公開 artifact API は指定されたファイル名の保存形式をそのまま返す。
 gzip の読み込みは保存ファイルのスナップショットに限定し、圧縮入力 32 MiB、展開入力 64 MiB を上限とする。
 上限に達した場合は、受理した先頭部分を incomplete として表示する。ログはその先頭部分の末尾になる。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
