@@ -72,6 +72,31 @@ test("overlapping spans stack and reuse rows only after the previous span ends",
   assert.equal(result.lanes[0].spanRows, 2);
 });
 
+test("lane marks keep only timed non-span events excluded from counter series", () => {
+  const lane = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "",
+        events: [
+          { ph: "X", ts: 0, dur: 10 },
+          { ph: "i", ts: 50 },
+          { ph: "i", ts: 20 },
+          { ph: "C", ts: 30, name: "cpu", args: { usage: 1 } },
+          { ph: "C", ts: 40, name: "status", args: { text: "busy" } },
+          { ph: "C", name: "untimed", args: { usage: 2 } },
+        ],
+      },
+    ],
+  }).lanes[0];
+  assert.deepEqual(
+    lane.marks.map((mark) => mark.index),
+    [2, 4, 1],
+  );
+  assert.ok(lane.marks.every((mark, i) => i === 0 || lane.marks[i - 1].start <= mark.start));
+});
+
 test("instant and unknown events are marks and missing timestamps remain inspectable", () => {
   const result = layoutProfile({
     phases: [],
@@ -115,6 +140,40 @@ test("nested spans reuse the shallowest row and equal starts place the outer spa
     events,
   );
   assert.equal(lane.spanRows, 3);
+});
+
+test("deep random stacking still gives every span the shallowest free row", () => {
+  let seed = 42;
+  const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const events = Array.from({ length: 3000 }, () => ({
+    ph: "X",
+    ts: Math.floor(rand() * 10_000),
+    dur: Math.floor(rand() * 200),
+  }));
+  const lane = layoutProfile({ phases: [], lanes: [{ tid: 1, name: "", events }] }).lanes[0];
+  const spans = lane.events
+    .filter((event) => event.kind === "span")
+    .sort((a, b) => a.start! - b.start! || b.end! - a.end! || a.index - b.index);
+  // Oracle: the straightforward rowEnds scan this replaced.
+  const rowEnds: number[] = [];
+  const expected = spans.map((span) => {
+    const free = rowEnds.findIndex((end) => end <= span.start!);
+    const row = free < 0 ? rowEnds.length : free;
+    rowEnds[row] = span.end!;
+    return row;
+  });
+  assert.deepEqual(
+    spans.map((span) => span.row),
+    expected,
+  );
+  // The grouped rows match the assigned row and stay start-sorted.
+  for (const [row, spansInRow] of lane.rows.entries()) {
+    for (const span of spansInRow) {
+      assert.equal(span.row, row);
+    }
+    assert.ok(spansInRow.every((span, i) => i === 0 || spansInRow[i - 1].end! <= span.start!));
+  }
+  assert.equal(lane.spanRows, lane.rows.length);
 });
 
 test("zoom keeps the pointer time fixed and pan respects the full negative-time domain", () => {
@@ -327,6 +386,27 @@ test("constant positive counters plot above zero instead of on the baseline", ()
   }).lanes[0].counters[0];
   assert.deepEqual([counter.min, counter.max], [0, 2]);
   assert.equal(counterPointY(counter, 2), 7);
+});
+
+test("counter points come out time-sorted even when events arrive out of order", () => {
+  const lane = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "",
+        events: [
+          { ph: "C", ts: 50, name: "cpu", args: { usage: 2 } },
+          { ph: "C", ts: 10, name: "cpu", args: { usage: 1 } },
+          { ph: "C", ts: 30, name: "cpu", args: { usage: 3 } },
+        ],
+      },
+    ],
+  }).lanes[0];
+  assert.deepEqual(
+    lane.counters[0].points.map((point) => point.time),
+    [10, 30, 50],
+  );
 });
 
 test("zero and negative counters retain finite geometry and their original values", () => {
