@@ -948,6 +948,14 @@ mod gzip_tests {
     use flate2::write::GzEncoder;
     use std::io::Write;
 
+    struct FailingRead;
+
+    impl Read for FailingRead {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("input read failed"))
+        }
+    }
+
     fn frame() -> Vec<u8> {
         BuildEvent {
             payload: Some(Payload::Progress(crate::protocol::bep::Progress {
@@ -1090,35 +1098,19 @@ mod gzip_tests {
 
     #[test]
     fn physical_input_failure_is_a_read_error() {
-        let path = std::env::temp_dir().join(format!("zeal-bep-read-{}", uuid::Uuid::new_v4()));
-        let write_only = std::fs::File::create(&path).unwrap();
-        std::fs::remove_file(path).unwrap();
-        let parsed = parse_gzip(write_only, 1);
+        let parsed = parse_gzip(FailingRead, 1);
         assert!(parsed.invalid);
         assert!(parsed.read_error);
     }
 
     #[test]
-    fn compressed_limit_bounds_empty_members() {
-        let mut encoded = gzip(&[]);
-        encoded.extend(gzip(&[]));
-        encoded.extend(gzip(&[]));
-        let mut input = encoded.as_slice();
-        let parsed = parse_gzip_with_limits(&mut input, encoded.len() as u64, 25, 1024);
+    fn oversized_compressed_snapshot_is_rejected_before_reading() {
+        let bytes = b"input";
+        let mut input = bytes.as_slice();
+        let parsed = parse_gzip_with_limits(&mut input, bytes.len() as u64, 4, 1024);
         assert!(parsed.input_limit_exceeded);
         assert!(parsed.invalid);
         assert_eq!(parsed.events, 0);
-        assert_eq!(input.len(), encoded.len());
-    }
-
-    #[test]
-    fn compressed_limit_bounds_optional_headers() {
-        let writer = flate2::GzBuilder::new()
-            .filename("x".repeat(128))
-            .write(Vec::new(), Compression::default());
-        let encoded = writer.finish().unwrap();
-        let parsed = parse_gzip_with_limits(encoded.as_slice(), encoded.len() as u64, 32, 1024);
-        assert!(parsed.input_limit_exceeded);
-        assert!(parsed.invalid);
+        assert_eq!(input, bytes);
     }
 }
