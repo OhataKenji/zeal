@@ -18,7 +18,9 @@
 
 ### Find and Run Targets
 
-Search target labels. Run `build`, `test`, or `run`.
+Find targets with fuzzy search. Run `build`, `test`, or `run`.
+
+![Fuzzy search for Bazel targets](docs/screenshots/fuzzy-search.jpg)
 
 ### Invocation Page
 
