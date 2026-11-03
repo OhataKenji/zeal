@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- macOS Dock Drop Shadow (Apple HIG Standard) -->
+    <filter id="dock-shadow" x="-10%" y="-10%" width="120%" height="130%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.38" />
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.18" />
+    </filter>
+
+    <!-- Subtle Bevel Rim Light -->
+    <linearGradient id="rim-stroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.04" />
+    </linearGradient>
+
+    <!-- Deep Graphite Base Surface -->
+    <linearGradient id="tile-surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#18181b" />
+      <stop offset="100%" stop-color="#121215" />
+    </linearGradient>
+  </defs>
+
+  <!-- 1. Apple macOS HIG Squircle Tile: 824x824 at (100, 100), rx=185 -->
+  <rect
+    x="100"
+    y="100"
+    width="824"
+    height="824"
+    rx="185"
+    fill="url(#tile-surface)"
+    filter="url(#dock-shadow)"
+  />
+
+  <!-- 2. Subtle Outer Rim Stroke -->
+  <rect
+    x="101"
+    y="101"
+    width="822"
+    height="822"
+    rx="184"
+    fill="none"
+    stroke="url(#rim-stroke)"
+    stroke-width="2"
+  />
+
+  <!-- 3. Interlocking Z-Cut Symbol (Centered within the 824x824 tile, scale=1.65) -->
+  <g transform="translate(512, 512) scale(1.65) translate(-256, -256)">
+    <!-- Upper Wing: Mint Emerald -->
+    <polygon points="84,104 428,104 428,216 276,216 164,304 84,304" fill="#34d399" />
+    <!-- Lower Wing: Deep Teal -->
+    <polygon points="428,208 348,208 236,296 84,296 84,408 428,408" fill="#0891b2" />
+  </g>
+</svg>
