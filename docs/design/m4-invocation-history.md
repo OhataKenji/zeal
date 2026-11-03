@@ -62,12 +62,13 @@ invocationの入力と時刻はBEPで観測するまでNULLとする。
 成功表示や所要時間、画面へ返すデータ(**DTO**)、イベント本体はSQLへ保存しない。
 indexは `invocation(workspace_id, started_at_ms DESC, id)` とする。
 
-#### 起動時の予約
+#### 起動と履歴の作成
 
-Bazelを起動するときはinvocation IDだけを予約してcommitし、そのIDを渡す。
-既存IDとの衝突はspawn前に拒否する。
+Bazelを起動するときはランダムなinvocation IDを生成して渡す。
+Zeal実行もCLI実行も、BES受信時に履歴と保存先を作る。
+runnerはDBや保存先を予約せず、起動失敗時の取り消しも行わない。
 Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻や入力へ代入しない。
-起動失敗時は未受信の予約と既知の一時fileだけを取り消す。
+ストレージ障害は起動前の検査ではなく、BES受信時に検出する。
 
 ### event fileと受信
 
@@ -149,7 +150,7 @@ Consoleを表示中のprocessが終了すると、そのinvocationの詳細へ�
 詳細画面から戻って端末出力を確認できる。
 終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
 
-workspace未判明の予約が一覧に出ない間も、live processからConsoleを開ける。
+履歴がまだ一覧に出ない間も、live processからConsoleを開ける。
 再起動後の以前のprocessへのsignal送信は行わない。
 
 ### DB障害

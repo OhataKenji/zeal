@@ -146,11 +146,9 @@ fn start_invocation(
     pattern: String,
     arguments: Option<String>,
 ) -> Result<InvocationRecord, String> {
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     runner::start(
         app,
         core.inner().clone(),
-        &data,
         &cmd,
         &pattern,
         arguments.as_deref().unwrap_or_default(),

@@ -8,14 +8,13 @@
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
 use crate::state::{ActiveInvocation, ConsoleSession, Core, CoreState};
-use crate::store::{self, InvocationRecord};
+use crate::store::InvocationRecord;
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
 use std::io;
 #[cfg(test)]
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::Command;
 #[cfg(test)]
 use std::process::Stdio;
@@ -43,7 +42,6 @@ const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 pub fn start(
     app: AppHandle,
     core: Arc<Core>,
-    data: &Path,
     cmd: &str,
     pattern: &str,
     arguments: &str,
@@ -59,12 +57,9 @@ pub fn start(
         return Err("bazel is busy".to_string());
     }
     let endpoint = receiver_endpoint(&st)?;
-    // Held across the record write and the spawn, so that the busy check above
-    // and the slot below stay one atomic step, without a `starting` flag.
-    // The record exists before bazel does; a failing store prevents the spawn.
+    // Held across the spawn so the busy check and slot stay one atomic step.
     let id = uuid::Uuid::new_v4().to_string();
     let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
-    store::reserve_invocation(data, &id).map_err(|e| e.to_string())?;
     let rec = InvocationRecord {
         id,
         workspace: None,
@@ -75,18 +70,13 @@ pub fn start(
         exit_code: None,
     };
     // Its own process group: a stop reaches bazel and whatever it started.
-    let (mut child, terminal, capture) = match crate::terminal::spawn(
+    let (mut child, terminal, capture) = crate::terminal::spawn(
         Command::new(&bazel)
             .args(argv(cmd, pattern, &arguments, endpoint, &rec.id))
             .current_dir(&ws),
         &log,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = store::abort_reservation(data, &rec.id);
-            return Err(format!("failed to spawn {}: {e}", bazel.display()));
-        }
-    };
+    )
+    .map_err(|e| format!("failed to spawn {}: {e}", bazel.display()))?;
     st.active_invocation = Some(ActiveInvocation {
         id: rec.id.clone().into(),
         terminal,
@@ -421,6 +411,8 @@ fn signal_invocation(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store;
+    use std::path::Path;
 
     fn held_id(st: &CoreState) -> Option<&str> {
         st.active_invocation
@@ -706,7 +698,6 @@ mod tests {
 
     async fn check_gui_run(fixture: &GuiBazelFixture, cmd: &'static str, pattern: &str) {
         let id = uuid::Uuid::new_v4().to_string();
-        store::reserve_invocation(&fixture.data, &id).unwrap();
         let log = crate::terminal::session_log().unwrap();
         let read_log = log.try_clone().unwrap();
         let mut command = fixture.command(cmd, pattern, &id);

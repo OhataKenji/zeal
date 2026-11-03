@@ -798,7 +798,7 @@ test("stop is offered only while an invocation is live and not already stopping"
   await stopping;
 });
 
-test("an unobserved reservation keeps composer input in the live Console only", async () => {
+test("an unobserved invocation keeps composer input in the live Console only", async () => {
   const h = harness();
   await h.session.init();
   const started = h.session.start("run", "//:app");

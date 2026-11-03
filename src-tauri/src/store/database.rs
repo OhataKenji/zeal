@@ -203,19 +203,6 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub fn reserve_invocation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
-    let invocation_id = id(invocation_id)?;
-    let mut store = Store::open(data)?;
-    let tx = store
-        .conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    tx.execute("INSERT INTO invocation(id) VALUES(?1)", [&invocation_id])?;
-    let root = Dir::root(data)?.child("invocations", true)?;
-    root.create_child(&invocation_id)?;
-    tx.commit()?;
-    Ok(())
-}
-
 const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code FROM invocation r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
 /// [`list`] returns at most this many records, newest first.
 pub const LIST_LIMIT: usize = 100;
@@ -303,31 +290,6 @@ fn attempt_artifact(
         .artifact(name)?;
     Ok((file, complete))
 }
-pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
-    let invocation_id = id(invocation_id)?;
-    let mut store = Store::open(data)?;
-    let tx = store
-        .conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let attempt: i64 = tx.query_row(
-        "SELECT attempt FROM invocation WHERE id=?1",
-        [&invocation_id],
-        |r| r.get(0),
-    )?;
-    if attempt != 0 {
-        return Err(fail(ErrorKind::Conflict));
-    }
-    let invocations = Dir::root(data)?.child("invocations", false)?;
-    invocations.child(&invocation_id, false)?;
-    invocations.remove_dir(&invocation_id)?;
-    tx.execute(
-        "DELETE FROM invocation WHERE id=?1 AND attempt=0",
-        [invocation_id],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,43 +421,6 @@ mod tests {
             invocations
                 .iter()
                 .all(|invocation| invocation.id != f.stream.invocation_id)
-        );
-    }
-    #[test]
-    fn a_reservation_is_usable_before_any_workspace_observes_it() {
-        let f = Fixture::new();
-        let invocation_id = &f.stream.invocation_id;
-        reserve_invocation(&f.data, invocation_id).unwrap();
-        assert_eq!(
-            reserve_invocation(&f.data, invocation_id).unwrap_err().kind,
-            ErrorKind::Conflict
-        );
-        assert!(list(&f.data, &f.ws).unwrap().is_empty());
-        assert!(!f.dir().join("terminal.log").exists());
-    }
-    #[test]
-    fn aborting_a_reservation_preserves_foreign_files_and_frees_the_invocation() {
-        let f = Fixture::new();
-        let invocation_id = &f.stream.invocation_id;
-        reserve_invocation(&f.data, invocation_id).unwrap();
-        let dir = f.dir();
-        fs::write(dir.join("unexpected"), b"keep").unwrap();
-        assert!(abort_reservation(&f.data, invocation_id).is_err());
-        assert!(dir.join("unexpected").exists());
-        fs::remove_file(dir.join("unexpected")).unwrap();
-        abort_reservation(&f.data, invocation_id).unwrap();
-        assert!(!dir.exists());
-        reserve_invocation(&f.data, invocation_id).unwrap();
-    }
-    #[test]
-    fn a_completed_invocation_cannot_be_aborted() {
-        let f = Fixture::new();
-        f.complete();
-        assert_eq!(
-            abort_reservation(&f.data, &f.stream.invocation_id)
-                .unwrap_err()
-                .kind,
-            ErrorKind::Conflict
         );
     }
     #[test]
