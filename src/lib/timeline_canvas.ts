@@ -181,21 +181,6 @@ function lowerBound<T>(items: T[], target: number, key: (item: T) => number): nu
   return lo;
 }
 
-/** First index whose key is > target. */
-function upperBound<T>(items: T[], target: number, key: (item: T) => number): number {
-  let lo = 0;
-  let hi = items.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (key(items[mid]) <= target) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  return lo;
-}
-
 // Rows and marks are pre-sorted by start, so binary search limits each frame
 // to the events overlapping the viewport instead of scanning the lane.
 function drawEvents(
@@ -294,7 +279,8 @@ function drawCounterSeries(
   // Time-sorted points allow windowing; edge neighbors keep the polyline
   // entering and exiting the viewport exactly as a full pass would.
   const lo = lowerBound(points, range.start, (point) => point.time);
-  const hi = upperBound(points, range.end, (point) => point.time);
+  let hi = lo;
+  while (hi < points.length && points[hi].time <= range.end) hi++;
   context.strokeStyle = theme.chartBar;
   context.lineWidth = 1.5;
   context.beginPath();
