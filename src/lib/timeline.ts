@@ -21,6 +21,7 @@ export interface EventGeometry {
 export interface CounterSeries {
   name: string;
   field: string;
+  /** Time-sorted samples; viewport windowing depends on the order. */
   points: Array<{ time: number; value: number; index: number }>;
   min: number;
   max: number;
@@ -32,6 +33,10 @@ export interface LaneGeometry {
   name: string;
   height: number;
   spanRows: number;
+  /** Non-overlapping spans grouped by stacked row, each sorted by start for viewport culling. */
+  rows: Array<EventGeometry & { start: number; end: number }>[];
+  /** Timed non-span events not plotted as counters, sorted by start. */
+  marks: Array<EventGeometry & { start: number; end: number }>;
   events: EventGeometry[];
   counters: CounterSeries[];
 }
@@ -120,17 +125,80 @@ function hasSpanTimes(
   return event.kind === "span" && event.start !== null && event.end !== null;
 }
 
-function stackSpans(events: EventGeometry[]): number {
-  const rowEnds: number[] = [];
+/** Binary min-heap ordered by `compare`; backs sweep-line bookkeeping. */
+class MinHeap<T> {
+  private items: T[] = [];
+  private compare: (a: T, b: T) => number;
+  constructor(compare: (a: T, b: T) => number) {
+    this.compare = compare;
+  }
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  peek(): T {
+    return this.items[0];
+  }
+
+  push(item: T): void {
+    const items = this.items;
+    items.push(item);
+    let i = items.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (this.compare(items[i], items[parent]) >= 0) break;
+      [items[i], items[parent]] = [items[parent], items[i]];
+      i = parent;
+    }
+  }
+
+  pop(): T {
+    const top = this.peek();
+    const last = this.items.pop();
+    if (this.items.length && last !== undefined) {
+      this.items[0] = last;
+      this.siftDown();
+    }
+    return top;
+  }
+
+  private siftDown(): void {
+    const items = this.items;
+    let i = 0;
+    for (;;) {
+      let child = i * 2 + 1;
+      if (child + 1 < items.length && this.compare(items[child + 1], items[child]) < 0) {
+        child++;
+      }
+      if (child >= items.length || this.compare(items[i], items[child]) <= 0) break;
+      [items[i], items[child]] = [items[child], items[i]];
+      i = child;
+    }
+  }
+}
+
+// Process spans in start order: once a row's last span ends it stays reusable,
+// so a min-heap of free rows finds the shallowest fit without scanning rows.
+function stackSpans(events: EventGeometry[]): {
+  spanRows: number;
+  rows: Array<EventGeometry & { start: number; end: number }>[];
+} {
+  const busy = new MinHeap<{ end: number; row: number }>((a, b) => a.end - b.end);
+  const free = new MinHeap<number>((a, b) => a - b);
+  const rows: Array<EventGeometry & { start: number; end: number }>[] = [];
   for (const span of events
     .filter(hasSpanTimes)
     .sort((a, b) => a.start - b.start || b.end - a.end || a.index - b.index)) {
-    const free = rowEnds.findIndex((end) => end <= span.start);
-    const row = free < 0 ? rowEnds.length : free;
+    while (busy.size && busy.peek().end <= span.start) {
+      free.push(busy.pop().row);
+    }
+    const row = free.size ? free.pop() : rows.length;
     span.row = row;
-    rowEnds[row] = span.end;
+    (rows[row] ??= []).push(span);
+    busy.push({ end: span.end, row });
   }
-  return Math.max(rowEnds.length, 1);
+  return { spanRows: Math.max(rows.length, 1), rows };
 }
 
 function eventGeometry(event: TraceEvent, index: number): EventGeometry {
@@ -166,17 +234,40 @@ function counterSeries(events: EventGeometry[]): CounterSeries[] {
       series.set(key, counter);
     }
   }
+  return sortCounterPoints(series);
+}
+
+// Viewport culling and a time-ordered polyline both want sorted samples.
+function sortCounterPoints(series: Map<string, CounterSeries>): CounterSeries[] {
+  for (const counter of series.values()) {
+    counter.points.sort((a, b) => a.time - b.time);
+  }
   return [...series.values()];
+}
+
+function isDrawableMark(
+  event: EventGeometry,
+  plotted: ReadonlySet<number>,
+): event is EventGeometry & { start: number; end: number } {
+  return (
+    event.kind !== "span" && event.start !== null && event.end !== null && !plotted.has(event.index)
+  );
 }
 
 /** Adds event timing and counter geometry while preserving each lane's event order. */
 export function layoutProfile(profile: Profile): Timeline {
   const lanes = profile.lanes.map((lane) => {
     const events = lane.events.map(eventGeometry);
-    const spanRows = stackSpans(events);
     const counters = counterSeries(events);
+    const plotted = new Set(
+      counters.flatMap((counter) => counter.points.map((point) => point.index)),
+    );
+    const { spanRows, rows } = stackSpans(events);
+    const marks = events
+      .filter((event) => isDrawableMark(event, plotted))
+      .sort((a, b) => a.start - b.start || a.index - b.index);
     const height = LANE_HEADER + spanRows * ROW_HEIGHT + 8;
-    return { tid: lane.tid, name: lane.name, height, spanRows, events, counters };
+    return { tid: lane.tid, name: lane.name, height, spanRows, rows, marks, events, counters };
   });
   const { start, end } = profileDomain(lanes, profile.phases);
   return { start, end, lanes };

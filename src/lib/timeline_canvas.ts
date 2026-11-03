@@ -166,6 +166,23 @@ function drawCounterTrack(
   context.fillRect(0, trackTop, gutter, trackBottom - trackTop);
 }
 
+/** First index whose key is >= target; a row's non-overlapping spans sort by end too. */
+function lowerBound<T>(items: T[], target: number, key: (item: T) => number): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (key(items[mid]) < target) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+// Rows and marks are pre-sorted by start, so binary search limits each frame
+// to the events overlapping the viewport instead of scanning the lane.
 function drawEvents(
   context: CanvasRenderingContext2D,
   track: Extract<TimelineTrack, { kind: "events" }>,
@@ -175,26 +192,16 @@ function drawEvents(
 ) {
   const { lane } = track;
   const { range } = frame;
-  const plottedCounters = new Set(
-    lane.counters.flatMap((counter) => counter.points.map((point) => point.index)),
-  );
-  for (const event of lane.events) {
-    if (!hasEventTimes(event)) {
-      continue;
+  for (const row of lane.rows) {
+    let i = lowerBound(row, range.start, (span) => span.end);
+    for (; i < row.length && row[i].start <= range.end; i++) {
+      hits.push(drawEvent(context, row[i], lane.tid, trackTop, frame));
     }
-    if (event.end < range.start || event.start > range.end) {
-      continue;
-    }
-    // Numeric counter events are drawn on their series; raw counters keep a mark.
-    if (event.kind === "counter" && plottedCounters.has(event.index)) continue;
-    hits.push(drawEvent(context, event, lane.tid, trackTop, frame));
   }
-}
-
-function hasEventTimes(
-  event: EventGeometry,
-): event is EventGeometry & { start: number; end: number } {
-  return event.start !== null && event.end !== null;
+  const from = lowerBound(lane.marks, range.start, (mark) => mark.start);
+  for (let i = from; i < lane.marks.length && lane.marks[i].start <= range.end; i++) {
+    hits.push(drawEvent(context, lane.marks[i], lane.tid, trackTop, frame));
+  }
 }
 
 function drawEvent(
@@ -266,21 +273,30 @@ function drawCounterSeries(
 ) {
   const { width, gutter, range, theme } = frame;
   const { counter } = track;
+  const { points } = counter;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
   const valueY = (value: number) => trackTop + counterPointY(counter, value);
+  // Time-sorted points allow windowing; edge neighbors keep the polyline
+  // entering and exiting the viewport exactly as a full pass would.
+  const lo = lowerBound(points, range.start, (point) => point.time);
+  let hi = lo;
+  while (hi < points.length && points[hi].time <= range.end) hi++;
   context.strokeStyle = theme.chartBar;
   context.lineWidth = 1.5;
   context.beginPath();
-  for (const [pointIndex, point] of counter.points.entries()) {
-    if (pointIndex === 0) {
+  const pathFrom = Math.max(0, lo - 1);
+  const pathTo = Math.min(points.length, hi + 1);
+  for (let i = pathFrom; i < pathTo; i++) {
+    const point = points[i];
+    if (i === pathFrom) {
       context.moveTo(timeX(point.time), valueY(point.value));
     } else {
       context.lineTo(timeX(point.time), valueY(point.value));
     }
   }
   context.stroke();
-  for (const point of counter.points) {
-    drawCounterPoint(context, track, point, timeX, valueY, frame, hits);
+  for (let i = lo; i < hi; i++) {
+    drawCounterPoint(context, track, points[i], timeX, valueY, frame, hits);
   }
   context.lineWidth = 1;
 }

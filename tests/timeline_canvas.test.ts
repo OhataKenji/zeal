@@ -158,6 +158,48 @@ test("an instant event retains a usable hit area", () => {
   assert.deepEqual(hits, [{ x: 168, y: 20, width: 6, height: 18, tid: 7, index: 0 }]);
 });
 
+test("events touching the range edges stay drawable at both bounds", () => {
+  const { hits } = render([
+    {
+      tid: 7,
+      name: "worker",
+      events: [
+        { ph: "X", ts: -20, dur: 20 },
+        { ph: "X", ts: 100, dur: 20 },
+        { ph: "X", ts: 101, dur: 5 },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(
+    hits.map(({ index }) => index),
+    [0, 1],
+  );
+});
+
+test("a counter segment crossing the window still paints with no points inside", () => {
+  const { strokedLines } = render(
+    [
+      {
+        tid: 7,
+        name: "metrics",
+        events: [
+          { ph: "C", ts: 0, name: "cpu", args: { usage: 1 } },
+          { ph: "C", ts: 100, name: "cpu", args: { usage: 3 } },
+        ],
+      },
+    ],
+    { range: { start: 30, end: 70 } },
+  );
+
+  // The diagonal entering and exiting the viewport is the counter segment;
+  // horizontal lines in the recording are track borders.
+  assert.deepEqual(
+    strokedLines.find(([, startY, , endY]) => startY !== endY),
+    [25, 73, 275, 53],
+  );
+});
+
 test("events without a visible timestamp do not expose hit areas", () => {
   const { hits } = render([
     {
