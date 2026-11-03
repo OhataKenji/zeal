@@ -2,20 +2,20 @@
   <defs>
     <!-- macOS Dock Drop Shadow (Apple HIG Standard) -->
     <filter id="dock-shadow" x="-10%" y="-10%" width="120%" height="130%" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.38" />
-      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.18" />
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.22" />
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.10" />
     </filter>
 
-    <!-- Subtle Bevel Rim Light -->
-    <linearGradient id="rim-stroke" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18" />
-      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.04" />
+    <!-- Clean White Tile Surface with Subtle Top-to-Bottom Apple Depth -->
+    <linearGradient id="tile-surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f5f5f7" />
     </linearGradient>
 
-    <!-- Deep Graphite Base Surface -->
-    <linearGradient id="tile-surface" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#18181b" />
-      <stop offset="100%" stop-color="#121215" />
+    <!-- Apple HIG Subtle Tile Border for White Icons -->
+    <linearGradient id="rim-stroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.14" />
     </linearGradient>
   </defs>
 
@@ -30,16 +30,16 @@
     filter="url(#dock-shadow)"
   />
 
-  <!-- 2. Subtle Outer Rim Stroke -->
+  <!-- 2. Subtle Outer Rim Stroke (Boundary definition against light wallpapers) -->
   <rect
-    x="101"
-    y="101"
-    width="822"
-    height="822"
-    rx="184"
+    x="100.5"
+    y="100.5"
+    width="823"
+    height="823"
+    rx="184.5"
     fill="none"
     stroke="url(#rim-stroke)"
-    stroke-width="2"
+    stroke-width="1.5"
   />
 
   <!-- 3. Interlocking Z-Cut Symbol (Centered within the 824x824 tile, scale=1.65) -->
