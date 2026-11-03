@@ -278,7 +278,7 @@ fn open_artifact(
     let store = Store::open(data)?;
     let dir = store.invocation_dir(invocation_id, false)?;
     let file = match name {
-        "profile.gz" => dir.artifact(name)?,
+        "profile.json.gz" => dir.artifact(name)?,
         _ => return Err(fail(ErrorKind::Invalid)),
     };
     Ok(file)
@@ -323,8 +323,8 @@ pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreEr
     }
     let invocations = Dir::root(data)?.child("invocations", false)?;
     let dir = invocations.child(&invocation_id, false)?;
-    if dir.exists("profile.gz")? {
-        dir.remove_file("profile.gz")?;
+    if dir.exists("profile.json.gz")? {
+        dir.remove_file("profile.json.gz")?;
     }
     invocations.remove_dir(&invocation_id)?;
     tx.execute(

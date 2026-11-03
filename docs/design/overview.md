@@ -122,7 +122,7 @@ invocationの入力と結果は、共通BES receiverが受け取ったBEPの事�
 
 M4 の DB はアプリ全体で一つの `<app data dir>/zeal.db` とする。
 workspaceは可能ならcanonicalizeしたpathの完全一致で識別してUUIDを割り当てる。
-ログ込みeventは `invocations/<invocation_id>/attempt/<number>/bep.binpb`、任意の `profile.gz` は `invocations/<invocation_id>/` に置く。
+ログ込みeventは `invocations/<invocation_id>/attempt/<number>/bep.binpb`、任意の `profile.json.gz` は `invocations/<invocation_id>/` に置く。
 `terminal.log` はConsole表示用の一時fileで永続化しない。
 一覧と詳細はDB上のworkspace所属を確認してから読む。
 core 自身の動作ログは app data dir 配下に置き、UUID、処理種別、エラー分類だけを記録する。

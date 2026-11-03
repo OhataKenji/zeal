@@ -331,7 +331,7 @@ mod tests {
 
     fn fixture_path(case: &str) -> String {
         format!(
-            "{}/tests/fixtures/invocation/{case}/profile.gz",
+            "{}/tests/fixtures/invocation/{case}/profile.json.gz",
             env!("CARGO_MANIFEST_DIR")
         )
     }

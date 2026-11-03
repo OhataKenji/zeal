@@ -556,7 +556,7 @@ mod tests {
                     "--bes_backend=grpc://127.0.0.1:12345",
                     "--bes_proxy=",
                     "--bes_upload_mode=wait_for_upload_complete",
-                    "--profile=/data/invocations/abc/profile.gz",
+                    "--profile=/data/invocations/abc/profile.json.gz",
                     "--experimental_profile_include_primary_output",
                     "--tool_tag=zeal",
                     "--color=yes",
@@ -759,7 +759,7 @@ mod tests {
         );
         assert!(record.finished_at.is_some());
         assert!(store::artifact(&fixture.data, &fixture.ws, id, "bep.binpb").is_ok());
-        assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.gz").is_ok());
+        assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.json.gz").is_ok());
     }
 
     /// Completed consoles expose captured bytes even when reopened, but reject new input.

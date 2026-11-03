@@ -35,7 +35,7 @@ pub fn argv(
         format!("--bes_backend={endpoint}"),
         "--bes_proxy=".to_string(),
         "--bes_upload_mode=wait_for_upload_complete".to_string(),
-        format!("--profile={}", dir.join("profile.gz").display()),
+        format!("--profile={}", dir.join("profile.json.gz").display()),
         "--experimental_profile_include_primary_output".to_string(),
         "--tool_tag=zeal".to_string(),
         "--color=yes".to_string(),
@@ -156,7 +156,9 @@ mod tests {
         );
         let target = args.iter().position(|arg| arg == "//:app").unwrap();
         assert!(args[..target].contains(&"--invocation_id=id".to_string()));
-        assert!(args[..target].contains(&"--profile=/data/invocations/app/profile.gz".to_string()));
+        assert!(
+            args[..target].contains(&"--profile=/data/invocations/app/profile.json.gz".to_string())
+        );
         assert_eq!(&args[target + 1..], arguments);
     }
 
