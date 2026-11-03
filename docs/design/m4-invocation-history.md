@@ -74,7 +74,9 @@ Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻�
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
-任意の `profile.json.gz` は計時情報として `invocations/<invocation_id>/` に置き、その有無を起動元の判定に使わない。
+任意の `profile.json.gz` はBEPと同じ `attempt/<number>/` に置き、その有無を起動元の判定に使わない。
+Zeal実行もCLI実行も、receiverが `BuildToolLogs` のローカル参照からprofileをコピーする。
+DBが選ぶ現在のattemptだけを読み、古い接続や完了後の再送でprofileを上書きしない。
 端末出力はConsole表示用の一時file `terminal.log` へ書き、永続化しない。履歴のログ表示はevent内のProgressから復元する。
 
 ### 正常受信

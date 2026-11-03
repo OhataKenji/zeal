@@ -229,7 +229,7 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        fs::write(f.dir().join("profile.json.gz"), b"invalid gzip").unwrap();
+        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"invalid gzip").unwrap();
         assert!(matches!(
             invocation_profile(&f.data, &f.ws, id).unwrap(),
             Section::ParseError { .. }

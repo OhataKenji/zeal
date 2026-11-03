@@ -203,7 +203,7 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub fn reserve_invocation(data: &Path, invocation_id: &str) -> Result<PathBuf, StoreError> {
+pub fn reserve_invocation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
     let invocation_id = id(invocation_id)?;
     let mut store = Store::open(data)?;
     let tx = store
@@ -211,9 +211,9 @@ pub fn reserve_invocation(data: &Path, invocation_id: &str) -> Result<PathBuf, S
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("INSERT INTO invocation(id) VALUES(?1)", [&invocation_id])?;
     let root = Dir::root(data)?.child("invocations", true)?;
-    let dir = root.create_child(&invocation_id)?;
+    root.create_child(&invocation_id)?;
     tx.commit()?;
-    Ok(dir.path().to_owned())
+    Ok(())
 }
 
 const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code FROM invocation r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
@@ -263,33 +263,29 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<InvocationRecord>, StoreError>
         .collect::<Result<_, _>>()?)
 }
 pub fn artifact(data: &Path, ws: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
-    open_artifact(data, ws, invocation_id, name).map_err(Into::into)
-}
-fn open_artifact(
-    data: &Path,
-    ws: &Path,
-    invocation_id: &str,
-    name: &str,
-) -> Result<File, StoreError> {
-    if name == "bep.binpb.gz" {
-        return event_artifact(data, ws, invocation_id).map(|(file, _)| file);
-    }
-    read_record(data, ws, invocation_id)?;
-    let store = Store::open(data)?;
-    let dir = store.invocation_dir(invocation_id, false)?;
-    let file = match name {
-        "profile.json.gz" => dir.artifact(name)?,
-        _ => return Err(fail(ErrorKind::Invalid)),
-    };
-    Ok(file)
+    attempt_artifact(data, ws, invocation_id, name)
+        .map(|(file, _)| file)
+        .map_err(Into::into)
 }
 
-/// Snapshot the current receipt and its checked FD before doing any parsing.
 pub(crate) fn event_artifact(
     data: &Path,
     ws: &Path,
     invocation_id: &str,
 ) -> Result<(File, bool), StoreError> {
+    attempt_artifact(data, ws, invocation_id, "bep.binpb.gz")
+}
+
+/// Snapshot the current receipt and its checked FD before doing any parsing.
+fn attempt_artifact(
+    data: &Path,
+    ws: &Path,
+    invocation_id: &str,
+    name: &str,
+) -> Result<(File, bool), StoreError> {
+    if !matches!(name, "bep.binpb.gz" | "profile.json.gz") {
+        return Err(fail(ErrorKind::Invalid));
+    }
     read_record(data, ws, invocation_id)?;
     let store = Store::open(data)?;
     let (attempt, complete): (i64, bool) = store.conn.query_row(
@@ -304,7 +300,7 @@ pub(crate) fn event_artifact(
         .invocation_dir(invocation_id, false)?
         .child("attempt", false)?
         .child(&attempt.to_string(), false)?
-        .artifact("bep.binpb.gz")?;
+        .artifact(name)?;
     Ok((file, complete))
 }
 pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreError> {
@@ -322,10 +318,7 @@ pub fn abort_reservation(data: &Path, invocation_id: &str) -> Result<(), StoreEr
         return Err(fail(ErrorKind::Conflict));
     }
     let invocations = Dir::root(data)?.child("invocations", false)?;
-    let dir = invocations.child(&invocation_id, false)?;
-    if dir.exists("profile.json.gz")? {
-        dir.remove_file("profile.json.gz")?;
-    }
+    invocations.child(&invocation_id, false)?;
     invocations.remove_dir(&invocation_id)?;
     tx.execute(
         "DELETE FROM invocation WHERE id=?1 AND attempt=0",
@@ -340,6 +333,7 @@ mod tests {
     use super::*;
     use crate::store::events::test_support::Fixture;
     use std::fs;
+    use std::io::Read;
     use std::os::unix::fs::{PermissionsExt, symlink};
     #[test]
     fn schema_is_two_tables_and_old_schema_is_refused_without_modification() {
@@ -431,6 +425,56 @@ mod tests {
         );
     }
     #[test]
+    fn profile_uses_the_current_attempt() {
+        let f = Fixture::new();
+        f.complete();
+        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"current").unwrap();
+
+        let mut profile = String::new();
+        artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
+            .unwrap()
+            .read_to_string(&mut profile)
+            .unwrap();
+
+        assert_eq!(profile, "current");
+    }
+    #[test]
+    fn unsafe_attempt_profile_is_rejected() {
+        let f = Fixture::new();
+        f.complete();
+        symlink(
+            f.data.join("zeal.db"),
+            f.dir().join("attempt/1/profile.json.gz"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+    #[test]
+    fn profile_from_an_obsolete_attempt_is_not_used() {
+        use crate::store::events::Receipt;
+
+        let f = Fixture::new();
+        let mut first = Receipt::begin(&f.data, &f.stream).unwrap();
+        first.append(&f.ordered(1, f.started())).unwrap();
+        first.partial().unwrap();
+        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"obsolete").unwrap();
+        let second = Receipt::begin(&f.data, &f.stream).unwrap();
+        second.partial().unwrap();
+
+        assert_eq!(
+            artifact(&f.data, &f.ws, &f.stream.invocation_id, "profile.json.gz")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+    #[test]
     fn invocation_records_survive_when_invocation_details_disappear() {
         let f = Fixture::new();
         f.complete();
@@ -472,19 +516,20 @@ mod tests {
     fn a_reservation_is_usable_before_any_workspace_observes_it() {
         let f = Fixture::new();
         let invocation_id = &f.stream.invocation_id;
-        let dir = reserve_invocation(&f.data, invocation_id).unwrap();
+        reserve_invocation(&f.data, invocation_id).unwrap();
         assert_eq!(
             reserve_invocation(&f.data, invocation_id).unwrap_err().kind,
             ErrorKind::Conflict
         );
         assert!(list(&f.data, &f.ws).unwrap().is_empty());
-        assert!(!dir.join("terminal.log").exists());
+        assert!(!f.dir().join("terminal.log").exists());
     }
     #[test]
     fn aborting_a_reservation_preserves_foreign_files_and_frees_the_invocation() {
         let f = Fixture::new();
         let invocation_id = &f.stream.invocation_id;
-        let dir = reserve_invocation(&f.data, invocation_id).unwrap();
+        reserve_invocation(&f.data, invocation_id).unwrap();
+        let dir = f.dir();
         fs::write(dir.join("unexpected"), b"keep").unwrap();
         assert!(abort_reservation(&f.data, invocation_id).is_err());
         assert!(dir.join("unexpected").exists());

@@ -3,6 +3,7 @@
 pub mod analytics;
 mod database;
 pub mod events;
+mod profile;
 #[path = "securefs.rs"]
 mod securefs;
 

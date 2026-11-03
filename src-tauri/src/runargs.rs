@@ -5,8 +5,6 @@
 //! The request rules are deliberately tiny and pure so they can mirror the
 //! UI's `targetError` exactly — the two validations must stay in lockstep.
 
-use std::path::Path;
-
 /// Commands the composer offers. Arguments cannot change the command.
 const COMMANDS: [&str; 3] = ["build", "test", "run"];
 
@@ -26,7 +24,6 @@ pub fn argv(
     cmd: &str,
     pattern: &str,
     arguments: &[String],
-    dir: &Path,
     endpoint: &str,
     id: &str,
 ) -> Vec<String> {
@@ -35,8 +32,6 @@ pub fn argv(
         format!("--bes_backend={endpoint}"),
         "--bes_proxy=".to_string(),
         "--bes_upload_mode=wait_for_upload_complete".to_string(),
-        format!("--profile={}", dir.join("profile.json.gz").display()),
-        "--experimental_profile_include_primary_output".to_string(),
         "--tool_tag=zeal".to_string(),
         "--color=yes".to_string(),
         "--curses=no".to_string(),
@@ -83,7 +78,6 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
 mod tests {
     use super::argv;
     use super::parse_arguments;
-    use std::path::Path;
 
     #[test]
     fn shell_words_preserve_quotes_empty_values_and_escapes() {
@@ -146,46 +140,22 @@ mod tests {
     fn app_defaults_and_target_precede_user_options_and_program_arguments() {
         let arguments =
             parse_arguments("--config dev -- 'two words' --profile=program-value").unwrap();
-        let args = argv(
-            "run",
-            "//:app",
-            &arguments,
-            Path::new("/data/invocations/app"),
-            "grpc://127.0.0.1:12345",
-            "id",
-        );
+        let args = argv("run", "//:app", &arguments, "grpc://127.0.0.1:12345", "id");
         let target = args.iter().position(|arg| arg == "//:app").unwrap();
         assert!(args[..target].contains(&"--invocation_id=id".to_string()));
-        assert!(
-            args[..target].contains(&"--profile=/data/invocations/app/profile.json.gz".to_string())
-        );
         assert_eq!(&args[target + 1..], arguments);
     }
 
     #[test]
-    fn profiling_detail_follows_bazel_configuration() {
-        let args = argv(
-            "build",
-            "//:app",
-            &[],
-            Path::new("/data/invocations/app"),
-            "grpc://127.0.0.1:12345",
-            "id",
-        );
-        assert!(!args.iter().any(|arg| arg.contains("slim_profile")));
+    fn profiling_follows_bazel_configuration() {
+        let args = argv("build", "//:app", &[], "grpc://127.0.0.1:12345", "id");
+        assert!(!args.iter().any(|arg| arg.contains("profile")));
     }
 
     #[test]
     fn explicit_full_profile_precedes_program_arguments() {
         let arguments = parse_arguments("--noslim_profile -- --slim_profile").unwrap();
-        let args = argv(
-            "run",
-            "//:app",
-            &arguments,
-            Path::new("/data/invocations/app"),
-            "grpc://127.0.0.1:12345",
-            "id",
-        );
+        let args = argv("run", "//:app", &arguments, "grpc://127.0.0.1:12345", "id");
         let target = args.iter().position(|arg| arg == "//:app").unwrap();
         assert_eq!(
             &args[target + 1..],
@@ -200,7 +170,6 @@ mod tests {
             "test",
             "//:test",
             &arguments,
-            Path::new("/data/invocations/test"),
             "grpc://127.0.0.1:12345",
             "id",
         );

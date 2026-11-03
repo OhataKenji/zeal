@@ -64,10 +64,17 @@ Add to `.bazelrc`:
 
 ```bazelrc
 build --bes_backend=grpc://127.0.0.1:4718
+build --bes_upload_mode=wait_for_upload_complete
 build --bes_timeout=5s
 ```
 
 While Zeal is open, run `bazel build //...`.
+
+Zeal and terminal runs use the same receiver to save build events and timing
+profiles. Zeal copies the local profile referenced by Bazel's build events, so
+Bazel must run on the same machine. Both gzip and plain JSON profiles are supported.
+Profile generation and detail follow your Bazel configuration. Disabled profiles
+and remote profile URLs leave timing unavailable; build history is still saved.
 
 ## Development
 

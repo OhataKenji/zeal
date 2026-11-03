@@ -38,7 +38,7 @@ Bazel server、解析済みの情報、既存出力の維持も速度に関わ�
 ## Overview
 
 SendでBazelを起動し、共通BES receiverがログを含むBEPをinvocation IDのディレクトリに残す。
-profileは任意の計時fileとして保存する。
+Zeal実行もCLI実行も、receiverがBEPの参照するprofileを任意の計時fileとして取り込む。
 
 入力と結果はSQLiteの元事実から表示し、詳細を開くたびに保存したfileをparseする。
 計算済みの表示データを永続化しないことで、取り込み結果と生 file の整合を管理する状態を増やさない。
@@ -61,7 +61,7 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 保存先とDBの規則は[M4](./m4-invocation-history.md)に従う。
 
 - `attempt/<number>/bep.binpb.gz`：receiverが保存するログ込みBuildEvent
-- `profile.json.gz`：Bazelが書く計時情報
+- `attempt/<number>/profile.json.gz`：receiverが取り込む計時情報
 
 イベント送信には次のflagを付ける。
 
@@ -69,11 +69,15 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 - `--bes_upload_mode=wait_for_upload_complete`
 - `--bes_proxy=`
 
-計時とtoolの識別には次のflagを付ける。
+toolの識別には `--tool_tag=zeal` を付ける。
+profileの保存先と補助flagは上書きせず、Zeal実行もCLI実行もBazelの設定に従う。
 
-- `--profile=<dir>/profile.json.gz`
-- `--experimental_profile_include_primary_output`
-- `--tool_tag=zeal`
+receiverは `BuildToolLogs` の `command.profile.gz` または `command.profile.json` が参照するローカルfileを取り込む。
+gzipと未圧縮JSONの両方を受け付け、保存形式をgzipに揃える。
+取り込み時にJSONの完結とinvocation IDの一致を確認し、受信attemptの一時fileからrenameして公開する。
+入力の上限はgzipが32 MiB、未圧縮JSONが64 MiBで、展開後も64 MiBを上限とする。
+保存するgzipは32 MiB以内とする。
+取り込み失敗やremote URIはprofile欠損として扱い、BEPの保存とACKを妨げない。
 
 profile の詳細度は Bazel の設定に従う。Bazel の既定では、大量の短い event をまとめる slim profile を使う。
 細かい処理を調べるときは、引数欄で `--noslim_profile` を指定できる。

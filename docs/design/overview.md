@@ -32,8 +32,8 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 - **invocation**: 一回のBazelコマンド呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
 - **BEP**: Build Event Protocol。Bazelが報告する呼び出し単位のイベント列。送信先のBuild Event Service(BES)をZeal内のreceiverが受け付ける
-- **profile**: `--profile` で出力される、phase 内訳と時系列を持つ chrome trace 形式の計測結果
-- **観測 flag**: invocation 時に bazel へ付けて成果物を得る flag 群(BEP・profile の出力指定と profile 用補助 flag。[m2](./m2-invocation-detail.md)参照)
+- **profile**: Bazel が出力する、phase 内訳と時系列を持つ chrome trace 形式の計測結果
+- **観測 flag**: invocation 時に bazel へ付ける、BESへの送信とtool識別のflag群([m2](./m2-invocation-detail.md)参照)
 - **invocation record**: BEPから観測した入力、時刻、build exitをapplicationが表示用に組み立てた値([m4](./m4-invocation-history.md))
 
 ## Overview
@@ -122,7 +122,8 @@ invocationの入力と結果は、共通BES receiverが受け取ったBEPの事�
 
 M4 の DB はアプリ全体で一つの `<app data dir>/zeal.db` とする。
 workspaceは可能ならcanonicalizeしたpathの完全一致で識別してUUIDを割り当てる。
-ログ込みeventは `invocations/<invocation_id>/attempt/<number>/bep.binpb.gz`、任意の `profile.json.gz` は `invocations/<invocation_id>/` に置く。
+ログ込みeventと任意のprofileは `invocations/<invocation_id>/attempt/<number>/` に `bep.binpb.gz` と `profile.json.gz` として置く。
+どちらの起動元でも、共通BES receiverがeventを保存し、eventが参照するローカルprofileをコピーする。
 `terminal.log` はConsole表示用の一時fileで永続化しない。
 一覧と詳細はDB上のworkspace所属を確認してから読む。
 core 自身の動作ログは app data dir 配下に置き、UUID、処理種別、エラー分類だけを記録する。

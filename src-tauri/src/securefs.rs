@@ -179,6 +179,12 @@ impl Dir {
     pub(super) fn remove_file(&self, child: &str) -> io::Result<()> {
         self.remove(child, AtFlags::empty())
     }
+    pub(super) fn rename_file(&self, from: &str, to: &str) -> io::Result<()> {
+        let from = name(OsStr::new(from))?;
+        let to = name(OsStr::new(to))?;
+        rustix_fs::renameat(&self.fd, &from, &self.fd, &to)?;
+        self.sync()
+    }
     pub(super) fn remove_dir(&self, child: &str) -> io::Result<()> {
         self.remove(child, AtFlags::REMOVEDIR)
     }
