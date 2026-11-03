@@ -558,7 +558,6 @@ mod tests {
                     "--bes_upload_mode=wait_for_upload_complete",
                     "--profile=/data/invocations/abc/profile.gz",
                     "--experimental_profile_include_primary_output",
-                    "--noslim_profile",
                     "--tool_tag=zeal",
                     "--color=yes",
                     "--curses=no",

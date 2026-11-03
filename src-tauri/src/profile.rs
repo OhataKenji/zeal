@@ -567,6 +567,26 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn full_and_slim_events_keep_their_original_fields() {
+        let full = json!({
+            "cat": "action processing", "name": "Writing output.txt",
+            "ph": "X", "tid": 1, "ts": 1, "dur": 2,
+            "out": "bazel-out/output.txt", "args": { "mnemonic": "FileWrite" },
+        });
+        let slim = json!({
+            "cat": "general information", "name": "12x various events",
+            "ph": "X", "tid": 1, "ts": 3, "dur": 4,
+        });
+        let p = parse_events(json!([
+            full, slim, { "name": "Finishing", "ph": "X", "ts": 10 },
+        ]))
+        .unwrap();
+        assert_eq!(find_event(&p, "action processing"), &full);
+        assert_eq!(find_event(&p, "general information"), &slim);
+    }
+
     fn gzip(bytes: &[u8]) -> Vec<u8> {
         let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
         std::io::Write::write_all(&mut gz, bytes).unwrap();
