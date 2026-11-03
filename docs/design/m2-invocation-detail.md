@@ -62,7 +62,6 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 
 - `attempt/<number>/bep.binpb`：receiverが保存するログ込みBuildEvent
 - `profile.gz`：Bazelが書く計時情報
-- `terminal.log`：PTYで取得する端末出力
 
 イベント送信には次のflagを付ける。
 

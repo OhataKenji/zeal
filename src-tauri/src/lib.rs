@@ -209,15 +209,13 @@ fn resize_console(core: State<Arc<Core>>, id: String, cols: u16, rows: u16) -> R
 
 #[tauri::command]
 async fn read_console(
-    app: AppHandle,
     core: State<'_, Arc<Core>>,
     id: String,
     offset: u64,
 ) -> Result<console::Output, String> {
     let core = core.inner().clone();
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        console::read(&data, &core, &id, offset).map_err(|e| e.to_string())
+        console::read(&core, &id, offset).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "terminal read worker failed".to_string())?
