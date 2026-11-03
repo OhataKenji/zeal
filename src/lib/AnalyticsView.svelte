@@ -12,6 +12,10 @@
   } from "./analytics";
   import type { InvocationRecord } from "./types";
 
+  const OUTCOMES = ["ok", "failed", "interrupted", "unknown"] satisfies readonly NonNullable<
+    AnalyticsFilter["outcome"]
+  >[];
+
   let { workspace, invocations }: {
     workspace: string;
     invocations: InvocationRecord[];
@@ -43,10 +47,36 @@
     Math.max(640, (data?.days.length ?? 0) * 24 + 60, chartWidth),
   );
   const step = $derived((width - 70) / Math.max(1, data?.days.length ?? 1));
+  const dayBars = $derived(
+    (data?.days ?? []).map((day, index) => {
+      let top = PLOT.baseline;
+      const rects = OUTCOMES.flatMap((kind) => {
+        const height = (day[kind] / max) * PLOT.height;
+        if (height <= 0) return [];
+        top -= height;
+        return [{ kind, x: PLOT.left + index * step, y: top, height }];
+      });
+      return { day, rects };
+    }),
+  );
+  const edgeDays = $derived.by(() => {
+    const days = data?.days ?? [];
+    return [...new Set([0, days.length - 1])].flatMap((index) =>
+      days[index] ? [{ index, day: days[index].day }] : [],
+    );
+  });
   function filter(patch: Partial<AnalyticsFilter>) {
     void controller?.load({ ...view.filter, ...patch });
   }
 </script>
+
+{#snippet edgeLabels()}
+  {#each edgeDays as { index, day }}
+    <text x={PLOT.left + index * step} y="218" text-anchor={index === 0 ? "start" : "end"}
+      >{day}</text
+    >
+  {/each}
+{/snippet}
 
 <section class="analytics">
   <h1>Analytics</h1>
@@ -98,9 +128,7 @@
               (e.currentTarget.value as AnalyticsFilter["outcome"]) || null,
           })}
       >
-        <option value="">All</option><option>ok</option><option
-          >failed</option
-        ><option>interrupted</option><option>unknown</option>
+        <option value="">All</option>{#each OUTCOMES as kind}<option>{kind}</option>{/each}
       </select></label
     >
     <label
@@ -149,66 +177,27 @@
             y={PLOT.baseline}>0</text
           >
           <text x={width - 45} y="236">Date</text>
-          {#each data.days as day, index}
-            {@const h = (day.count / max) * PLOT.height}
-            {@const okH = day.count ? (day.ok / day.count) * h : 0}
-            {@const failedH = day.count ? (day.failed / day.count) * h : 0}
-            {@const interruptedH = day.count ? (day.interrupted / day.count) * h : 0}
-            {@const unknownH = day.count ? (day.unknown / day.count) * h : 0}
+          {#each dayBars as { day, rects }}
             <g>
-              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted}, unknown ${day.unknown})${day.day === data.today ? " (in progress)" : ""}`}</title>
-              {#if okH > 0}
+              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (${OUTCOMES.map((kind) => `${kind} ${day[kind]}`).join(", ")})${day.day === data.today ? " (in progress)" : ""}`}</title>
+              {#each rects as rect}
                 <rect
-                  class="bar-ok"
-                  x={PLOT.left + index * step}
-                  y={PLOT.baseline - okH}
+                  class="bar-{rect.kind}"
+                  x={rect.x}
+                  y={rect.y}
                   width={Math.max(1, step - 3)}
-                  height={okH}
+                  height={rect.height}
                 />
-              {/if}
-              {#if failedH > 0}
-                <rect
-                  class="bar-failed"
-                  x={PLOT.left + index * step}
-                  y={PLOT.baseline - okH - failedH}
-                  width={Math.max(1, step - 3)}
-                  height={failedH}
-                />
-              {/if}
-              {#if interruptedH > 0}
-                <rect
-                  class="bar-interrupted"
-                  x={PLOT.left + index * step}
-                  y={PLOT.baseline - okH - failedH - interruptedH}
-                  width={Math.max(1, step - 3)}
-                  height={interruptedH}
-                />
-              {/if}
-              {#if unknownH > 0}
-                <rect
-                  class="bar-unknown"
-                  x={PLOT.left + index * step}
-                  y={PLOT.baseline - h}
-                  width={Math.max(1, step - 3)}
-                  height={unknownH}
-                />
-              {/if}
+              {/each}
             </g>
-            {#if index === 0 || index === data.days.length - 1}
-              <text
-                x={PLOT.left + index * step}
-                y="218"
-                text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
-              >
-            {/if}
           {/each}
+          {@render edgeLabels()}
         </svg>
       </div>
       <p class="legend">
-        <span><i class="sw bar-ok"></i>ok</span>
-        <span><i class="sw bar-failed"></i>failed</span>
-        <span><i class="sw bar-interrupted"></i>interrupted</span>
-        <span><i class="sw bar-unknown"></i>unknown</span>
+        {#each OUTCOMES as kind}
+          <span><i class="sw bar-{kind}"></i>{kind}</span>
+        {/each}
       </p>
     </section>
     <section class="analytics-card">
@@ -237,14 +226,8 @@
             >
               <title>{`${day.day}: ${fmtMs(day.totalMs)}${day.day === data.today ? " (in progress)" : ""}`}</title>
             </rect>
-            {#if index === 0 || index === data.days.length - 1}
-              <text
-                x={PLOT.left + index * step}
-                y="218"
-                text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
-              >
-            {/if}
           {/each}
+          {@render edgeLabels()}
         </svg>
       </div>
     </section>
@@ -296,14 +279,8 @@
                 <title>{`${day.day}: p50 ${fmtMs(day.p50Ms)}, p95 ${fmtMs(day.p95Ms)}`}</title>
               </circle>
             {/if}
-            {#if index === 0 || index === data.days.length - 1}
-              <text
-                x={PLOT.left + index * step}
-                y="218"
-                text-anchor={index === 0 ? "start" : "end"}>{day.day}</text
-              >
-            {/if}
           {/each}
+          {@render edgeLabels()}
         </svg>
       </div>
       <p class="legend">
