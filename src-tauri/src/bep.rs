@@ -11,6 +11,7 @@ use crate::protocol::generated::command_line::command_line_section::SectionType;
 use crate::protocol::generated::command_line::{
     CommandLine, CommandLineSection, Option as CommandLineOption,
 };
+use flate2::read::MultiGzDecoder;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -123,6 +124,8 @@ pub struct TestSummary {
 
 pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
 pub const LOG_LIMIT: usize = 512 * 1024;
+const COMPRESSED_LIMIT: u64 = 32 * 1024 * 1024;
+const EXPANDED_LIMIT: u64 = 64 * 1024 * 1024;
 
 pub struct Parsed {
     pub bep: Bep,
@@ -130,6 +133,75 @@ pub struct Parsed {
     pub invalid: bool,
     pub read_error: bool,
     pub events: usize,
+    pub input_limit_exceeded: bool,
+}
+
+/// Decode only the saved snapshot, bounding gzip headers and expanded events.
+pub fn parse_gzip<R: Read>(input: R, length: u64) -> Parsed {
+    parse_gzip_with_limits(input, length, COMPRESSED_LIMIT, EXPANDED_LIMIT)
+}
+
+fn parse_gzip_with_limits<R: Read>(
+    input: R,
+    length: u64,
+    compressed_limit: u64,
+    expanded_limit: u64,
+) -> Parsed {
+    let mut compressed = Limited::new(input.take(length), compressed_limit);
+    let mut expanded = Limited::new(MultiGzDecoder::new(&mut compressed), expanded_limit);
+    let mut parsed = parse_detail(&mut expanded, u64::MAX);
+    let expanded_exceeded = expanded.exceeded;
+    drop(expanded);
+    parsed.input_limit_exceeded = compressed.exceeded || expanded_exceeded;
+    // A gzip checksum/header failure is invalid data, not a disk read failure.
+    parsed.read_error &= compressed.failed;
+    parsed
+}
+
+struct Limited<R> {
+    inner: R,
+    remaining: u64,
+    exceeded: bool,
+    failed: bool,
+}
+
+impl<R> Limited<R> {
+    fn new(inner: R, remaining: u64) -> Self {
+        Self {
+            inner,
+            remaining,
+            exceeded: false,
+            failed: false,
+        }
+    }
+}
+
+impl<R: Read> Read for Limited<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining > 0 {
+            let size = self.remaining.min(bytes.len() as u64) as usize;
+            let count = self
+                .inner
+                .read(&mut bytes[..size])
+                .inspect_err(|_| self.failed = true)?;
+            self.remaining -= count as u64;
+            return Ok(count);
+        }
+        // Probe after an exact bound so a valid trailer/EOF is still checked.
+        if self
+            .inner
+            .read(&mut [0])
+            .inspect_err(|_| self.failed = true)?
+            == 0
+        {
+            return Ok(0);
+        }
+        self.exceeded = true;
+        Err(io::Error::other("BEP input limit exceeded"))
+    }
 }
 
 /// One bounded pass builds both display sections. No event collection survives
@@ -142,6 +214,7 @@ pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
         invalid: false,
         read_error: false,
         events: 0,
+        input_limit_exceeded: false,
     };
     let mut display_size = json_size(&parsed.bep);
     while let Some(event) = next_event(&mut input, &mut remaining, &mut parsed) {
@@ -890,5 +963,132 @@ mod tests {
                 "TOOL_HALTED_BEFORE_TESTING",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod gzip_tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    fn frame() -> Vec<u8> {
+        BuildEvent {
+            payload: Some(Payload::Progress(crate::protocol::bep::Progress {
+                stdout: "output".into(),
+                stderr: String::new(),
+            })),
+            ..Default::default()
+        }
+        .encode_length_delimited_to_vec()
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut writer = GzEncoder::new(Vec::new(), Compression::default());
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap()
+    }
+
+    #[test]
+    fn gzip_retains_event_bytes_and_projection() {
+        let bytes = frame();
+        let encoded = gzip(&bytes);
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        let raw = parse_detail(bytes.as_slice(), bytes.len() as u64);
+        assert_eq!(parsed.log, raw.log);
+        assert_eq!(parsed.bep, raw.bep);
+        assert_eq!(parsed.events, 1);
+        assert!(!parsed.invalid);
+    }
+
+    #[test]
+    fn all_members_are_read() {
+        let mut encoded = gzip(&frame());
+        encoded.extend(gzip(&frame()));
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        assert_eq!(parsed.events, 2);
+        assert_eq!(parsed.log, "outputoutput");
+        assert!(!parsed.invalid);
+    }
+
+    #[test]
+    fn snapshot_excludes_later_appends() {
+        let mut encoded = gzip(&frame());
+        let length = encoded.len() as u64;
+        encoded.extend(b"later invalid gzip");
+        let parsed = parse_gzip(encoded.as_slice(), length);
+        assert_eq!(parsed.log, "output");
+        assert!(!parsed.invalid);
+    }
+
+    #[test]
+    fn truncated_trailer_preserves_prefix_as_invalid() {
+        let mut encoded = gzip(&frame());
+        encoded.truncate(encoded.len() - 1);
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        assert_eq!(parsed.log, "output");
+        assert!(parsed.invalid);
+    }
+
+    #[test]
+    fn exact_limits_still_validate_crc() {
+        let frame = frame();
+        let mut encoded = gzip(&frame);
+        let crc = encoded.len() - 8;
+        encoded[crc] ^= 1;
+        let parsed = parse_gzip_with_limits(
+            encoded.as_slice(),
+            encoded.len() as u64,
+            encoded.len() as u64,
+            frame.len() as u64,
+        );
+        assert_eq!(parsed.log, "output");
+        assert!(parsed.invalid);
+        assert!(!parsed.input_limit_exceeded);
+    }
+
+    #[test]
+    fn valid_exact_limits_are_complete() {
+        let frame = frame();
+        let encoded = gzip(&frame);
+        let parsed = parse_gzip_with_limits(
+            encoded.as_slice(),
+            encoded.len() as u64,
+            encoded.len() as u64,
+            frame.len() as u64,
+        );
+        assert_eq!(parsed.log, "output");
+        assert!(!parsed.invalid);
+        assert!(!parsed.input_limit_exceeded);
+    }
+
+    #[test]
+    fn expanded_limit_stops_highly_compressible_events() {
+        let encoded = gzip(&frame());
+        let parsed = parse_gzip_with_limits(encoded.as_slice(), encoded.len() as u64, 1024, 2);
+        assert!(parsed.input_limit_exceeded);
+        assert!(parsed.invalid);
+    }
+
+    #[test]
+    fn compressed_limit_bounds_empty_members() {
+        let mut encoded = gzip(&[]);
+        encoded.extend(gzip(&[]));
+        encoded.extend(gzip(&[]));
+        let parsed = parse_gzip_with_limits(encoded.as_slice(), encoded.len() as u64, 25, 1024);
+        assert!(parsed.input_limit_exceeded);
+        assert!(parsed.invalid);
+    }
+
+    #[test]
+    fn compressed_limit_bounds_optional_headers() {
+        let writer = flate2::GzBuilder::new()
+            .filename("x".repeat(128))
+            .write(Vec::new(), Compression::default());
+        let encoded = writer.finish().unwrap();
+        let parsed = parse_gzip_with_limits(encoded.as_slice(), encoded.len() as u64, 32, 1024);
+        assert!(parsed.input_limit_exceeded);
+        assert!(parsed.invalid);
     }
 }

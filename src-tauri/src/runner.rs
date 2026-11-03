@@ -762,7 +762,7 @@ mod tests {
             "program exit must not replace build exit"
         );
         assert!(record.finished_at.is_some());
-        assert!(store::artifact(&fixture.data, &fixture.ws, id, "bep.binpb").is_ok());
+        assert!(store::artifact(&fixture.data, &fixture.ws, id, "bep.binpb.gz").is_ok());
         assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.gz").is_ok());
     }
 

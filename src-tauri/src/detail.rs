@@ -10,7 +10,6 @@ use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
 use crate::store::{self, InvocationRecord};
 use serde::Serialize;
-use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::Path;
 
@@ -47,7 +46,7 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
                 event_failure(true, error.to_string())
             }
         }
-        Ok((file, complete)) => event_sections(file, complete)?,
+        Ok(artifact) => event_sections(artifact)?,
     };
     Ok(InvocationDetail { record, log, bep })
 }
@@ -55,9 +54,26 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
 /// Log and build-result views of the open event artifact. A stream that fails
 /// before its first usable event fails both sections alike; afterwards each
 /// reports its own completeness.
-fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Section<Bep>)> {
+fn event_sections(artifact: store::EventArtifact) -> io::Result<(Section<String>, Section<Bep>)> {
+    let store::EventArtifact {
+        file,
+        complete,
+        gzip,
+    } = artifact;
     let length = file.metadata()?.len();
-    let parsed = bep::parse_detail(BufReader::new(file), length);
+    let parsed = if gzip {
+        bep::parse_gzip(file, length)
+    } else {
+        bep::parse_detail(BufReader::new(file), length)
+    };
+    if parsed.input_limit_exceeded {
+        let note =
+            "BEP exceeded its compressed or expanded input limit; showing the accepted prefix";
+        return Ok((
+            observation(parsed.log, true, note),
+            observation(parsed.bep, true, note),
+        ));
+    }
     if parsed.invalid && parsed.events == 0 {
         let note = "BEP contains an invalid or incomplete event".to_string();
         return Ok(event_failure(parsed.read_error, note));
@@ -158,13 +174,61 @@ mod tests {
             Section::Missing
         ));
     }
+
+    #[test]
+    fn legacy_raw_artifact_preserves_the_same_detail() {
+        use std::io::Read;
+
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
+        let before = invocation_detail(&f.data, &f.ws, id).unwrap();
+        let path = f.dir().join("attempt/1/bep.binpb.gz");
+        let mut raw = Vec::new();
+        flate2::read::MultiGzDecoder::new(fs::File::open(&path).unwrap())
+            .read_to_end(&mut raw)
+            .unwrap();
+        fs::write(f.dir().join("attempt/1/bep.binpb"), raw).unwrap();
+        fs::remove_file(path).unwrap();
+        let after = invocation_detail(&f.data, &f.ws, id).unwrap();
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
+    }
+
+    #[test]
+    fn unsafe_gzip_never_falls_back_to_raw() {
+        use std::os::unix::fs::symlink;
+
+        let f = Fixture::new();
+        f.complete();
+        let path = f.dir().join("attempt/1/bep.binpb.gz");
+        fs::remove_file(&path).unwrap();
+        fs::write(f.dir().join("attempt/1/bep.binpb"), b"").unwrap();
+        symlink(f.data.join("zeal.db"), path).unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert!(matches!(detail.log, Section::ReadError { .. }));
+        assert!(matches!(detail.bep, Section::ReadError { .. }));
+    }
+
+    #[test]
+    fn live_gzip_never_reports_a_complete_observation() {
+        let f = Fixture::new();
+        let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert!(!matches!(detail.log, Section::Ok { .. }));
+        assert!(!matches!(detail.bep, Section::Ok { .. }));
+        receipt.partial().unwrap();
+    }
     #[test]
     fn missing_event_artifact_still_yields_the_record() {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
         let record = invocation_detail(&f.data, &f.ws, id).unwrap().record;
-        fs::remove_file(f.dir().join("attempt/1/bep.binpb")).unwrap();
+        fs::remove_file(f.dir().join("attempt/1/bep.binpb.gz")).unwrap();
         let missing = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(missing.record, record);
         assert!(matches!(missing.log, Section::Missing));
@@ -175,9 +239,21 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
+        fs::remove_file(f.dir().join("attempt/1/bep.binpb.gz")).unwrap();
         fs::write(f.dir().join("attempt/1/bep.binpb"), b"\xff").unwrap();
         let detail = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(detail.record.exit_code, Some(0));
+        assert!(matches!(detail.log, Section::ParseError { .. }));
+        assert!(matches!(detail.bep, Section::ParseError { .. }));
+    }
+
+    #[test]
+    fn malformed_gzip_is_a_parse_error_without_legacy_fallback() {
+        let f = Fixture::new();
+        f.complete();
+        fs::write(f.dir().join("attempt/1/bep.binpb.gz"), b"invalid gzip").unwrap();
+        fs::write(f.dir().join("attempt/1/bep.binpb"), b"").unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::ParseError { .. }));
         assert!(matches!(detail.bep, Section::ParseError { .. }));
     }

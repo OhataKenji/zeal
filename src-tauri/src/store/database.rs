@@ -272,8 +272,11 @@ fn open_artifact(
     invocation_id: &str,
     name: &str,
 ) -> Result<File, StoreError> {
-    if name == "bep.binpb" {
-        return event_artifact(data, ws, invocation_id).map(|(file, _)| file);
+    if matches!(name, "bep.binpb" | "bep.binpb.gz") {
+        return event_dir(data, ws, invocation_id)?
+            .0
+            .artifact(name)
+            .map_err(Into::into);
     }
     read_record(data, ws, invocation_id)?;
     let store = Store::open(data)?;
@@ -285,12 +288,34 @@ fn open_artifact(
     Ok(file)
 }
 
+pub(crate) struct EventArtifact {
+    pub file: File,
+    pub complete: bool,
+    pub gzip: bool,
+}
+
 /// Snapshot the current receipt and its checked FD before doing any parsing.
-pub fn event_artifact(
+pub(crate) fn event_artifact(
     data: &Path,
     ws: &Path,
     invocation_id: &str,
-) -> Result<(File, bool), StoreError> {
+) -> Result<EventArtifact, StoreError> {
+    let (dir, complete) = event_dir(data, ws, invocation_id)?;
+    let (file, gzip) = match dir.artifact("bep.binpb.gz") {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            (dir.artifact("bep.binpb")?, false)
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(EventArtifact {
+        file,
+        complete,
+        gzip,
+    })
+}
+
+fn event_dir(data: &Path, ws: &Path, invocation_id: &str) -> Result<(Dir, bool), StoreError> {
     read_record(data, ws, invocation_id)?;
     let store = Store::open(data)?;
     let (attempt, complete): (i64, bool) = store.conn.query_row(
@@ -301,12 +326,11 @@ pub fn event_artifact(
     if attempt == 0 {
         return Err(fail(ErrorKind::Missing));
     }
-    let file = store
+    let dir = store
         .invocation_dir(invocation_id, false)?
         .child("attempt", false)?
-        .child(&attempt.to_string(), false)?
-        .artifact("bep.binpb")?;
-    Ok((file, complete))
+        .child(&attempt.to_string(), false)?;
+    Ok((dir, complete))
 }
 pub fn live_artifact(data: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
     if name != "terminal.log" {
@@ -418,7 +442,7 @@ mod tests {
                 .kind,
             ErrorKind::Missing
         );
-        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb").is_err());
+        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb.gz").is_err());
     }
     #[test]
     fn workspace_aliases_list_the_same_invocations() {
@@ -436,13 +460,13 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let invocation_id = &f.stream.invocation_id;
-        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb").is_err());
+        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb.gz").is_err());
         assert!(artifact(&f.data, &f.ws, invocation_id, "../zeal.db").is_err());
-        let path = f.dir().join("attempt/1/bep.binpb");
+        let path = f.dir().join("attempt/1/bep.binpb.gz");
         fs::remove_file(&path).unwrap();
         symlink(f.data.join("zeal.db"), &path).unwrap();
         assert_eq!(
-            artifact(&f.data, &f.ws, invocation_id, "bep.binpb")
+            artifact(&f.data, &f.ws, invocation_id, "bep.binpb.gz")
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied

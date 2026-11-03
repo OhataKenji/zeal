@@ -4,6 +4,8 @@ use super::{ErrorKind, Store, StoreError, database, fail, id};
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use prost::Message;
 use rusqlite::{OptionalExtension, params};
 use std::fs::File;
@@ -33,7 +35,7 @@ pub struct Receipt {
     data: PathBuf,
     stream: bes::StreamId,
     attempt: Option<i64>,
-    writer: Option<BufWriter<File>>,
+    writer: Option<GzEncoder<BufWriter<File>>>,
     first: Option<i64>,
     last: i64,
     last_message: bool,
@@ -59,9 +61,9 @@ impl Receipt {
                 .child(&invocation_id, true)?
                 .child("attempt", true)?
                 .create_child(&attempt.to_string())?;
-            Some(BufWriter::with_capacity(
-                64 * 1024,
-                dir.file("bep.binpb", true)?,
+            Some(GzEncoder::new(
+                BufWriter::with_capacity(64 * 1024, dir.file("bep.binpb.gz", true)?),
+                Compression::default(),
             ))
         } else {
             None
@@ -253,9 +255,7 @@ impl Receipt {
     }
 
     pub fn finish(mut self) -> Result<AckRange, StoreError> {
-        if let Some(writer) = &mut self.writer {
-            writer.flush()?;
-        }
+        self.finish_writer()?;
         self.save(self.last_message)?;
         Ok(AckRange {
             first: self.first.ok_or_else(|| fail(ErrorKind::Invalid))?,
@@ -263,10 +263,15 @@ impl Receipt {
         })
     }
     pub fn partial(mut self) -> Result<(), StoreError> {
-        if let Some(writer) = &mut self.writer {
-            writer.flush()?;
-        }
+        self.finish_writer()?;
         self.save(false)
+    }
+
+    fn finish_writer(&mut self) -> Result<(), StoreError> {
+        if let Some(writer) = self.writer.take() {
+            writer.finish()?.flush()?;
+        }
+        Ok(())
     }
 }
 
@@ -453,6 +458,32 @@ mod tests {
     use super::test_support::Fixture;
     use super::*;
     use crate::store::{artifact, list, read_record};
+
+    #[test]
+    fn gzip_preserves_every_length_delimited_event_byte() {
+        use std::io::Read;
+
+        let f = Fixture::new();
+        let expected = [
+            f.started().encode_length_delimited_to_vec(),
+            f.finished().encode_length_delimited_to_vec(),
+        ]
+        .concat();
+        f.complete();
+        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.gz").unwrap();
+        let mut decoded = Vec::new();
+        flate2::read::MultiGzDecoder::new(file)
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(
+            artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound,
+        );
+    }
+
     #[test]
     fn progress_before_started_is_saved_without_workspace_and_completion_is_a_separate_fact() {
         let f = Fixture::new();
@@ -476,9 +507,9 @@ mod tests {
             (record.started_at, record.finished_at, record.exit_code),
             (Some(1000), Some(2000), Some(0))
         );
-        let file = artifact(&f.data, &f.ws, &record.id, "bep.binpb").unwrap();
+        let file = artifact(&f.data, &f.ws, &record.id, "bep.binpb.gz").unwrap();
         let len = file.metadata().unwrap().len();
-        let parsed = crate::bep::parse_detail(file, len);
+        let parsed = crate::bep::parse_gzip(file, len);
         assert_eq!(parsed.log, "errout");
         assert!(!f.dir().join("log.txt").exists());
         assert!(!f.dir().join("bep.json").exists());
@@ -487,7 +518,7 @@ mod tests {
     fn completed_retry_is_noop_and_accepts_contiguous_suffix_without_rewriting_files() {
         let f = Fixture::new();
         f.complete();
-        let path = f.dir().join("attempt/1/bep.binpb");
+        let path = f.dir().join("attempt/1/bep.binpb.gz");
         let bytes = std::fs::read(&path).unwrap();
         let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
         retry.append(&f.ordered(2, f.finished())).unwrap();
@@ -668,9 +699,12 @@ mod tests {
     fn flush_failure_and_database_failure_never_return_ack_or_mark_complete() {
         let f = Fixture::new();
         let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        let path = f.dir().join("attempt/1/bep.binpb");
+        let path = f.dir().join("attempt/1/bep.binpb.gz");
         // A read-only FD deterministically fails when the buffer is flushed.
-        receipt.writer = Some(BufWriter::new(File::open(path).unwrap()));
+        receipt.writer = Some(GzEncoder::new(
+            BufWriter::new(File::open(path).unwrap()),
+            Compression::default(),
+        ));
         receipt.append(&f.ordered(1, f.started())).unwrap();
         receipt.append(&f.ordered(2, f.finished())).unwrap();
         assert!(receipt.finish().is_err());
@@ -691,7 +725,7 @@ mod tests {
             .unwrap();
         assert_eq!(retry.finish().unwrap_err().kind, ErrorKind::NewerSchema);
         assert!(
-            !std::fs::read(f.dir().join("attempt/2/bep.binpb"))
+            !std::fs::read(f.dir().join("attempt/2/bep.binpb.gz"))
                 .unwrap()
                 .is_empty()
         );
@@ -724,10 +758,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(receipt.finish().unwrap().last, 4);
-        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb").unwrap();
+        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.gz").unwrap();
         let length = file.metadata().unwrap().len();
-        assert!(length > crate::bep::DISPLAY_LIMIT as u64);
-        let parsed = crate::bep::parse_detail(file, length);
+        assert!(length < crate::bep::DISPLAY_LIMIT as u64);
+        let parsed = crate::bep::parse_gzip(file, length);
         assert!(parsed.bep.truncated);
         assert!(parsed.bep.options.is_none());
         assert!(!parsed.invalid);
