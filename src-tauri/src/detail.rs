@@ -58,14 +58,6 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
 fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Section<Bep>)> {
     let length = file.metadata()?.len();
     let parsed = bep::parse_gzip(file, length);
-    if parsed.input_limit_exceeded {
-        let note =
-            "BEP exceeded its compressed or expanded input limit; showing the accepted prefix";
-        return Ok((
-            observation(parsed.log, true, note),
-            observation(parsed.bep, true, note),
-        ));
-    }
     if parsed.invalid && parsed.events == 0 {
         let note = "BEP contains an invalid or incomplete event".to_string();
         return Ok(event_failure(parsed.read_error, note));

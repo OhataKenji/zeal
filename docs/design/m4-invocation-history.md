@@ -74,9 +74,8 @@ Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻�
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
 length-delimited protobuf のバイト列を受信中に gzip 圧縮する。
 gzip の終端とバッファの書き込みが成功した後に、受信状態を保存して ACK を返す。
-gzip の読み込みは保存ファイルのスナップショットに限定し、圧縮入力 32 MiB、展開入力 64 MiB を上限とする。
-圧縮入力が 32 MiB を超える場合は、展開せずに incomplete として表示する。
-展開入力が 64 MiB を超える場合は、受理した先頭部分を incomplete として表示する。ログはその先頭部分の末尾になる。
+gzip の読み込みは保存ファイルのスナップショットに限定する。
+1 event を 16 MiB、表示する BEP を 8 MiB、ログ末尾を 512 KiB に制限する。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
 任意の `terminal.log` は擬似端末(**PTY**)の出力、`profile.gz` は計時情報として `invocations/<invocation_id>/` に置く。

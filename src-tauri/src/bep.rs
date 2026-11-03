@@ -124,8 +124,6 @@ pub struct TestSummary {
 
 pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
 pub const LOG_LIMIT: usize = 512 * 1024;
-const COMPRESSED_LIMIT: u64 = 32 * 1024 * 1024;
-const EXPANDED_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct Parsed {
@@ -134,55 +132,18 @@ pub struct Parsed {
     pub invalid: bool,
     pub read_error: bool,
     pub events: usize,
-    pub input_limit_exceeded: bool,
 }
 
-/// Decode only the saved snapshot, bounding gzip headers and expanded events.
+/// Decode only the saved snapshot into the bounded BEP display.
 pub fn parse_gzip<R: Read>(input: R, length: u64) -> Parsed {
-    parse_gzip_with_limits(input, length, COMPRESSED_LIMIT, EXPANDED_LIMIT)
-}
-
-fn parse_gzip_with_limits<R: Read>(
-    input: R,
-    length: u64,
-    compressed_limit: u64,
-    expanded_limit: u64,
-) -> Parsed {
-    if length > compressed_limit {
-        let mut parsed = Parsed {
-            input_limit_exceeded: true,
-            invalid: true,
-            ..Default::default()
-        };
-        parsed.bep.truncated = true;
-        return parsed;
-    }
     let mut compressed = CountingRead {
         inner: input.take(length),
         count: 0,
         failed: false,
     };
-    let mut expanded = MultiGzDecoder::new(&mut compressed).take(expanded_limit);
-    let mut parsed = parse_detail(&mut expanded, u64::MAX);
-    if expanded.limit() == 0 {
-        // Take reports EOF at its limit; validate the gzip trailer or detect overflow.
-        // copy retries Interrupted and keeps decoder errors distinct from clean EOF.
-        match io::copy(&mut expanded.get_mut().take(1), &mut io::sink()) {
-            Ok(0) => {}
-            Ok(_) => {
-                parsed.input_limit_exceeded = true;
-                parsed.invalid = true;
-            }
-            Err(_) => {
-                parsed.invalid = true;
-                parsed.read_error = true;
-            }
-        }
-    }
-    drop(expanded);
+    let mut parsed = parse_detail(MultiGzDecoder::new(&mut compressed), u64::MAX);
     // A gzip checksum/header failure is invalid data, not a disk read failure.
     parsed.read_error &= compressed.failed;
-    parsed.bep.truncated |= parsed.invalid;
     parsed
 }
 
@@ -1006,94 +967,24 @@ mod gzip_tests {
     }
 
     #[test]
-    fn truncated_trailer_at_exact_limit_preserves_prefix_as_invalid() {
+    fn truncated_trailer_preserves_prefix_as_invalid() {
         let frame = frame();
         let mut encoded = gzip(&frame);
         encoded.truncate(encoded.len() - 1);
-        let parsed = parse_gzip_with_limits(
-            encoded.as_slice(),
-            encoded.len() as u64,
-            1024,
-            frame.len() as u64,
-        );
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
         assert_eq!(parsed.log, "output");
         assert!(parsed.invalid);
     }
 
     #[test]
-    fn exact_limits_still_validate_crc() {
+    fn corrupt_crc_preserves_prefix_as_invalid() {
         let frame = frame();
         let mut encoded = gzip(&frame);
         let crc = encoded.len() - 8;
         encoded[crc] ^= 1;
-        let parsed = parse_gzip_with_limits(
-            encoded.as_slice(),
-            encoded.len() as u64,
-            encoded.len() as u64,
-            frame.len() as u64,
-        );
+        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
         assert_eq!(parsed.log, "output");
         assert!(parsed.invalid);
-        assert!(!parsed.input_limit_exceeded);
-    }
-
-    #[test]
-    fn valid_exact_limits_are_complete() {
-        let frame = frame();
-        let encoded = gzip(&frame);
-        let parsed = parse_gzip_with_limits(
-            encoded.as_slice(),
-            encoded.len() as u64,
-            encoded.len() as u64,
-            frame.len() as u64,
-        );
-        assert_eq!(parsed.log, "output");
-        assert!(!parsed.invalid);
-        assert!(!parsed.input_limit_exceeded);
-    }
-
-    #[test]
-    fn expanded_limit_stops_highly_compressible_events() {
-        let encoded = gzip(&frame());
-        let parsed = parse_gzip_with_limits(encoded.as_slice(), encoded.len() as u64, 1024, 2);
-        assert!(parsed.input_limit_exceeded);
-        assert!(parsed.invalid);
-    }
-
-    #[test]
-    fn expanded_limit_at_frame_boundary_keeps_only_the_accepted_prefix() {
-        let frame = frame();
-        // The one-byte empty frame must not reach the projection through the probe.
-        let encoded = gzip(&[frame.as_slice(), &[0]].concat());
-        let parsed = parse_gzip_with_limits(
-            encoded.as_slice(),
-            encoded.len() as u64,
-            1024,
-            frame.len() as u64,
-        );
-        assert_eq!(parsed.log, "output");
-        assert_eq!(parsed.events, 1);
-        assert!(parsed.input_limit_exceeded);
-        assert!(parsed.invalid);
-        assert!(parsed.bep.truncated);
-    }
-
-    #[test]
-    fn member_after_exact_expanded_limit_is_overflow() {
-        let frame = frame();
-        let mut encoded = gzip(&frame);
-        encoded.extend(gzip(&frame));
-        let parsed = parse_gzip_with_limits(
-            encoded.as_slice(),
-            encoded.len() as u64,
-            1024,
-            frame.len() as u64,
-        );
-        assert_eq!(parsed.log, "output");
-        assert_eq!(parsed.events, 1);
-        assert!(parsed.input_limit_exceeded);
-        assert!(parsed.invalid);
-        assert!(parsed.bep.truncated);
     }
 
     #[test]
@@ -1101,16 +992,5 @@ mod gzip_tests {
         let parsed = parse_gzip(FailingRead, 1);
         assert!(parsed.invalid);
         assert!(parsed.read_error);
-    }
-
-    #[test]
-    fn oversized_compressed_snapshot_is_rejected_before_reading() {
-        let bytes = b"input";
-        let mut input = bytes.as_slice();
-        let parsed = parse_gzip_with_limits(&mut input, bytes.len() as u64, 4, 1024);
-        assert!(parsed.input_limit_exceeded);
-        assert!(parsed.invalid);
-        assert_eq!(parsed.events, 0);
-        assert_eq!(input, bytes);
     }
 }
