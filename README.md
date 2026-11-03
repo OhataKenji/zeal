@@ -70,10 +70,6 @@ While Zeal is open, run `bazel build --config=zeal //...`.
 ## Development
 
 - [Setup and checks](docs/development.md)
-- [macOS releases](docs/release-guide.md)
-- [PRD](docs/prd.md) and [design documents](docs/design/)
-
-Maintained by the authors. External issues and pull requests are not accepted at this time.
 
 ## License
 
