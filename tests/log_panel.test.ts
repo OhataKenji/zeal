@@ -60,6 +60,15 @@ test("LogPanel displays the available log and its section status", async (t) => 
       assert.doesNotMatch(html, /class="notice|aria-label="Invocation output"/);
     });
 
+    await t.test("a long log renders only the first window of lines", () => {
+      const data = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n");
+      const html = output({ status: "ok", data });
+      assert.match(html, /line 0</);
+      assert.match(html, /line 10</);
+      assert.doesNotMatch(html, /line 4999/);
+      assert.match(html, /Copy/);
+    });
+
     await t.test("an unreadable log shows its error without inventing log content", () => {
       const html = output({ status: "read_error", note: "permission denied" });
       assert.match(html, /read error — permission denied/);

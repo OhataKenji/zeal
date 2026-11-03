@@ -24,6 +24,24 @@ function color(name: string, truecolor: string): string | undefined {
   }
 }
 
+/** One display line of styled log text, ready for row-at-a-time rendering. */
+export type LogLine = Array<{ text: string; style: string }>;
+
+/** Splits parsed log spans into display lines; `\r` and `\n` both break lines. */
+export function logLines(log: string): LogLine[] {
+  const lines: LogLine[] = [[]];
+  const append = (text: string, style: string) => {
+    if (text) lines[lines.length - 1].push({ text, style });
+  };
+  for (const span of logSpans(log)) {
+    for (const [index, text] of span.text.split(/\r\n|\r|\n/).entries()) {
+      if (index > 0) lines.push([]);
+      append(text, span.style);
+    }
+  }
+  return lines;
+}
+
 /** Parse styles only. Content stays text so log output can never become HTML. */
 export function logSpans(log: string): Array<{ text: string; style: string }> {
   return Anser.ansiToJson(log, { remove_empty: true, use_classes: true }).map((entry) => {

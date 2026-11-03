@@ -2,24 +2,83 @@
   import type { Section } from "../types";
   import { sectionData, sectionMessage, sectionNoticeTone } from "../invocation";
   import Notice from "../Notice.svelte";
-  import { logSpans } from "../log";
-  import { TERMINAL_TEXT_STYLE } from "../terminal_style";
+  import { logLines } from "../log";
+  import { LOG_LINE_HEIGHT, TERMINAL_TEXT_STYLE } from "../terminal_style";
 
   let { section, loading }: {
     section: Section<string> | undefined;
     loading: boolean;
   } = $props();
   const log = $derived(sectionData(section));
-  const spans = $derived(logSpans(log ?? ""));
+  const lines = $derived(log === null ? [] : logLines(log));
+
+  // Rows have a fixed height, so only the viewport plus an overscan skirt needs
+  // to exist in the DOM. Spacers preserve the full scroll range, matching how
+  // Perfetto's logs panel virtualizes long output.
+  const OVERSCAN = 8;
+  let scrollTop = $state(0);
+  let viewHeight = $state(240);
+  // Clamp first to the line count so a shrinking log cannot strand the viewport
+  // behind an oversized top spacer.
+  const first = $derived(
+    Math.min(Math.max(0, Math.floor(scrollTop / LOG_LINE_HEIGHT) - OVERSCAN), lines.length),
+  );
+  const last = $derived(
+    Math.min(
+      lines.length,
+      first + Math.ceil(viewHeight / LOG_LINE_HEIGHT) + 2 * OVERSCAN + 1,
+    ),
+  );
+  const visible = $derived(lines.slice(first, last));
+  // Copy the rendered text: the raw string keeps ANSI/OSC escapes and control
+  // bytes that a terminal would interpret when pasted.
+  const displayText = $derived(
+    lines.map((line) => line.map((span) => span.text).join("")).join("\n"),
+  );
+
+  let copied = $state<"done" | "failed" | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  async function copyLog() {
+    try {
+      await navigator.clipboard.writeText(displayText);
+      copied = "done";
+    } catch {
+      copied = "failed";
+    }
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => (copied = null), 1500);
+  }
 </script>
 
-<h2 class="panel-heading">Logs</h2>
+<h2 class="panel-heading">Logs{#if log !== null && log.length > 0}<button
+    type="button"
+    class="button button-ghost log-copy"
+    title="Copy the full log to the clipboard"
+    onclick={copyLog}>{copied === "done" ? "Copied ✓" : copied === "failed" ? "Copy failed" : "Copy"}</button
+  >{/if}</h2>
 {#if section && section.status !== "ok"}
   <Notice tone={sectionNoticeTone(section)}>{sectionMessage(section)}</Notice>
 {/if}
 {#if log !== null}
   <div class="log-panel">
-    <div class="invocation-log" style={TERMINAL_TEXT_STYLE} aria-label="Invocation output" role="textbox" aria-readonly="true" aria-multiline="true" tabindex="0"
-    >{#each spans as span}<span style={span.style}>{span.text}</span>{/each}</div>
+    <div
+      class="invocation-log"
+      style={TERMINAL_TEXT_STYLE}
+      aria-label="Invocation output"
+      role="textbox"
+      aria-readonly="true"
+      aria-multiline="true"
+      tabindex="0"
+      bind:clientHeight={viewHeight}
+      onscroll={(event) => (scrollTop = event.currentTarget.scrollTop)}
+    >
+      <div style="height:{first * LOG_LINE_HEIGHT}px"></div>
+      {#each visible as line}
+        <div class="log-line" style="height:{LOG_LINE_HEIGHT}px"
+          >{#each line as span}<span style={span.style}>{span.text}</span>{/each}</div
+        >
+      {/each}
+      <div style="height:{(lines.length - last) * LOG_LINE_HEIGHT}px"></div>
+    </div>
   </div>
 {:else if loading}<p class="panel-empty">Loading invocation output…</p>{/if}
