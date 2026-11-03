@@ -12,7 +12,9 @@
   } from "./analytics";
   import type { InvocationRecord } from "./types";
 
-  const OUTCOMES = ["ok", "failed", "interrupted", "unknown"] as const;
+  const OUTCOMES = ["ok", "failed", "interrupted", "unknown"] satisfies readonly NonNullable<
+    AnalyticsFilter["outcome"]
+  >[];
 
   let { workspace, invocations }: {
     workspace: string;
@@ -177,7 +179,7 @@
           <text x={width - 45} y="236">Date</text>
           {#each dayBars as { day, rects }}
             <g>
-              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (ok ${day.ok}, failed ${day.failed}, interrupted ${day.interrupted}, unknown ${day.unknown})${day.day === data.today ? " (in progress)" : ""}`}</title>
+              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (${OUTCOMES.map((kind) => `${kind} ${day[kind]}`).join(", ")})${day.day === data.today ? " (in progress)" : ""}`}</title>
               {#each rects as rect}
                 <rect
                   class="bar-{rect.kind}"

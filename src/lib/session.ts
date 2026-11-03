@@ -73,11 +73,11 @@ export function emptyView(): SessionView {
   };
 }
 
-/** The Bazel operations the core serializes; at most one runs at a time. */
+/** Serialized Bazel slots; the core emits each as a binary "idle" | "running" flag. */
 const RUNNING_SLOTS = ["ingest", "query", "detailQuery"] as const;
 
-/** Whether a serialized Bazel operation occupies the workspace. */
-function operationInFlight(state: AppState | null | undefined): boolean {
+/** Whether a serialized Bazel operation occupies the workspace. Matches the core's bazel_busy. */
+function bazelBusy(state: AppState | null): boolean {
   return !!(state?.activeInvocation || RUNNING_SLOTS.some((slot) => state?.[slot] === "running"));
 }
 
@@ -86,8 +86,13 @@ function lifecycleBusy(view: SessionView): boolean {
   return !view.ready || view.opening || view.starting;
 }
 
-/** Composer prerequisites: the core knows a workspace and its Bazel binary. */
-function composerReady(view: SessionView): boolean {
+/** Whether a lifecycle transition or a serialized Bazel operation is in flight. */
+export function sessionBusy(view: SessionView): boolean {
+  return lifecycleBusy(view) || bazelBusy(view.state);
+}
+
+/** Whether the core knows the workspace and its Bazel binary. */
+function workspaceReady(view: SessionView): boolean {
   return !!(view.state?.workspace && view.state.bazel);
 }
 
@@ -96,12 +101,7 @@ function composerReady(view: SessionView): boolean {
  * required, so the composer remains usable after ingestion errors settle.
  */
 export function canSend(view: SessionView, target: string): boolean {
-  return !!(
-    !lifecycleBusy(view) &&
-    composerReady(view) &&
-    !operationInFlight(view.state) &&
-    targetError(target) === null
-  );
+  return !!(!sessionBusy(view) && workspaceReady(view) && targetError(target) === null);
 }
 
 /**
@@ -149,11 +149,15 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     ++profileGeneration;
     return { profile: null, profileLoading: false, profileError: null };
   }
+  function clearInvocations() {
+    ++listGeneration;
+    return { invocations: [], invocationsError: null };
+  }
   function clearTargetDetail() {
     ++targetGeneration;
     return { targetDetail: null, targetDetailError: null };
   }
-  function clearTargetData() {
+  function clearTargets() {
     ++snapshotGeneration;
     snapshotRequested = null;
     return {
@@ -247,7 +251,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function targetBusy(): boolean {
-    return lifecycleBusy(view) || !composerReady(view) || operationInFlight(view.state);
+    return sessionBusy(view) || !workspaceReady(view);
   }
 
   function requestTargetDetail() {
@@ -401,17 +405,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       console: null,
       consoleOpen: false,
-      invocations: [],
-      invocationsError: null,
       selectedInvocation: null,
+      ...clearInvocations(),
       ...clearDetail(),
       ...clearProfile(),
-      ...clearTargetData(),
+      ...clearTargets(),
     });
   }
 
   function resetTargetData() {
-    update(clearTargetData());
+    update(clearTargets());
   }
 
   function acceptState(state: AppState) {
@@ -424,7 +427,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const contextChanged = workspaceChanged || scopeChanged;
     ++stateRevision;
     if (workspaceChanged) {
-      ++listGeneration;
       resetWorkspaceData();
     } else if (scopeChanged) {
       resetTargetData();
@@ -620,7 +622,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function openWorkspace(path: string, scope: TargetScope) {
-    if (lifecycleBusy(view) || operationInFlight(view.state)) {
+    if (sessionBusy(view)) {
       throw new Error(
         "Wait for the current Bazel operation to finish before changing the workspace",
       );
@@ -637,7 +639,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function refresh() {
-    if (lifecycleBusy(view) || operationInFlight(view.state)) {
+    if (sessionBusy(view)) {
       return;
     }
     try {
