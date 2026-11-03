@@ -45,6 +45,8 @@ Run Zeal from source: [Development guide](docs/development.md#getting-started).
 
 **Requires:** Bazelisk or Bazel on your `PATH`.
 
+On macOS and Linux, Zeal loads your login shell's `PATH`.
+
 Open only trusted repositories.
 
 1. Enter the path to your Bazel workspace root in **Workspace**.
@@ -54,13 +56,9 @@ Open only trusted repositories.
 
 ![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
 
-## Usage
+## Record terminal invocations
 
-On macOS and Linux, Zeal loads your login shell's `PATH`.
-
-### Record terminal invocations
-
-Add to `.bazelrc`:
+Zeal records commands run in the app. To also record terminal commands, add to `.bazelrc`:
 
 ```bazelrc
 build --bes_backend=grpc://127.0.0.1:4718
