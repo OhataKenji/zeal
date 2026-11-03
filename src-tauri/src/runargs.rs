@@ -37,7 +37,6 @@ pub fn argv(
         "--bes_upload_mode=wait_for_upload_complete".to_string(),
         format!("--profile={}", dir.join("profile.gz").display()),
         "--experimental_profile_include_primary_output".to_string(),
-        "--noslim_profile".to_string(),
         "--tool_tag=zeal".to_string(),
         "--color=yes".to_string(),
         "--curses=no".to_string(),
@@ -159,6 +158,37 @@ mod tests {
         assert!(args[..target].contains(&"--invocation_id=id".to_string()));
         assert!(args[..target].contains(&"--profile=/data/invocations/app/profile.gz".to_string()));
         assert_eq!(&args[target + 1..], arguments);
+    }
+
+    #[test]
+    fn profiling_detail_follows_bazel_configuration() {
+        let args = argv(
+            "build",
+            "//:app",
+            &[],
+            Path::new("/data/invocations/app"),
+            "grpc://127.0.0.1:12345",
+            "id",
+        );
+        assert!(!args.iter().any(|arg| arg.contains("slim_profile")));
+    }
+
+    #[test]
+    fn explicit_full_profile_precedes_program_arguments() {
+        let arguments = parse_arguments("--noslim_profile -- --slim_profile").unwrap();
+        let args = argv(
+            "run",
+            "//:app",
+            &arguments,
+            Path::new("/data/invocations/app"),
+            "grpc://127.0.0.1:12345",
+            "id",
+        );
+        let target = args.iter().position(|arg| arg == "//:app").unwrap();
+        assert_eq!(
+            &args[target + 1..],
+            ["--noslim_profile", "--", "--slim_profile"]
+        );
     }
 
     #[test]
