@@ -44,17 +44,16 @@ export function logLines(log: string): LogLine[] {
 
 /** Conservative width in monospace columns: tabs use 8, non-ASCII UTF-16 units use 2. */
 export function logColumns(lines: LogLine[]): number {
-  let widest = 0;
-  for (const line of lines) {
-    let columns = 0;
-    for (const span of line) {
-      for (const char of span.text) {
-        columns += char === "\t" ? 8 : char.charCodeAt(0) > 0x7f ? char.length * 2 : 1;
-      }
-    }
-    widest = Math.max(widest, columns);
-  }
-  return widest;
+  return lines
+    .map(
+      (line) =>
+        line
+          .map((span) => span.text)
+          .join("")
+          .replace(/\t/g, "        ")
+          .replace(/[\u0080-\uffff]/g, "xx").length,
+    )
+    .reduce((max, width) => Math.max(max, width), 0);
 }
 
 /** Extra lines mounted above and below the viewport to hide scroll popping. */
