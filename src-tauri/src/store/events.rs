@@ -1,6 +1,8 @@
 //! Connection-local event writer. SQL holds only invocation facts and the
 //! current receiving attempt; acknowledgements follow EOF, flush and SQL.
+use super::securefs::Dir;
 use super::{ErrorKind, Store, StoreError, database, fail, id};
+use crate::profile::COMPRESSED_LIMIT;
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
@@ -8,10 +10,13 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use prost::Message;
 use rusqlite::{OptionalExtension, params};
+use rustix::fs::{Mode, OFlags};
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use url::Url;
 
 pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -35,7 +40,7 @@ pub struct Receipt {
     data: PathBuf,
     stream: bes::StreamId,
     attempt: Option<i64>,
-    writer: Option<GzEncoder<BufWriter<File>>>,
+    writer: Option<(Dir, GzEncoder<BufWriter<File>>)>,
     first: Option<i64>,
     last: i64,
     last_message: bool,
@@ -55,16 +60,17 @@ impl Receipt {
         let attempt = reserve_attempt(data, &invocation_id)?;
         // No Store or SQL transaction survives into file writes.
         let writer = if let Some(attempt) = attempt {
-            let root = super::securefs::Dir::root(data)?;
+            let root = Dir::root(data)?;
             let dir = root
                 .child("invocations", true)?
                 .child(&invocation_id, true)?
                 .child("attempt", true)?
                 .create_child(&attempt.to_string())?;
-            Some(GzEncoder::new(
+            let writer = GzEncoder::new(
                 BufWriter::with_capacity(64 * 1024, dir.file("bep.binpb.gz", true)?),
                 Compression::default(),
-            ))
+            );
+            Some((dir, writer))
         } else {
             None
         };
@@ -117,12 +123,23 @@ impl Receipt {
         let event =
             bep::BuildEvent::decode(any.value.as_slice()).map_err(|_| fail(ErrorKind::Invalid))?;
         self.observe(&event)?;
-        if let Some(writer) = &mut self.writer {
+        let profile_uri = match &event.payload {
+            Some(Payload::BuildToolLogs(logs)) => logs.log.iter().find_map(|log| match &log.file {
+                Some(bep::file::File::Uri(uri)) if log.name == "command.profile.gz" => Some(uri),
+                _ => None,
+            }),
+            _ => None,
+        };
+        if let Some((dir, writer)) = &mut self.writer {
             // Keep the decoded BuildEvent, including Progress stdout/stderr.
             let mut bytes = Vec::with_capacity(10);
             prost::encoding::encode_varint(any.value.len() as u64, &mut bytes);
             writer.write_all(&bytes)?;
             writer.write_all(&any.value)?;
+            // An unavailable profile must not fail the build receipt.
+            profile_uri
+                .map_or(Ok(()), |uri| copy_profile(uri, dir))
+                .unwrap_or_else(|_| log::warn!("Could not copy invocation profile"));
         }
         let changed = matches!(event.payload, Some(Payload::Started(_)));
         if changed {
@@ -143,27 +160,6 @@ impl Receipt {
             }
             _ => {}
         }
-        if let Some(Payload::BuildToolLogs(logs)) = &event.payload
-            && self.import_profile(logs).is_err()
-        {
-            // An unavailable profile must not fail the build receipt.
-            log::warn!("Could not import invocation profile");
-        }
-        Ok(())
-    }
-
-    fn import_profile(&self, logs: &bep::BuildToolLogs) -> Result<(), StoreError> {
-        // Completed replay is read-only. Each receiving attempt owns its files,
-        // so a superseded stream cannot overwrite the current profile.
-        let Some(attempt) = self.attempt else {
-            return Ok(());
-        };
-        let dir = super::securefs::Dir::root(&self.data)?
-            .child("invocations", false)?
-            .child(&id(&self.stream.invocation_id)?, false)?
-            .child("attempt", false)?
-            .child(&attempt.to_string(), false)?;
-        super::profile::import(logs, &dir)?;
         Ok(())
     }
 
@@ -289,11 +285,36 @@ impl Receipt {
     }
 
     fn finish_writer(&mut self) -> Result<(), StoreError> {
-        if let Some(writer) = self.writer.take() {
+        if let Some((_, writer)) = self.writer.take() {
             writer.finish()?.flush()?;
         }
         Ok(())
     }
+}
+
+/// Copy the local gzip referenced by BEP; readers wait for receipt completion.
+fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
+    let path = Url::parse(uri)
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .ok_or_else(|| io::Error::other("profile must reference a local file"))?;
+    // Follow Bazel's latest-profile symlink, then check and read the same FD.
+    // NONBLOCK prevents a FIFO source from hanging on open.
+    let source = File::from(rustix::fs::open(
+        &path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?);
+    let metadata = source.metadata()?;
+    if !metadata.is_file() || metadata.uid() != rustix::process::geteuid().as_raw() {
+        return Err(io::Error::other("profile must be an owned regular file"));
+    }
+    let mut copy = dir.file("profile.json.gz", true)?;
+    let size = io::copy(&mut source.take(COMPRESSED_LIMIT as u64 + 1), &mut copy)?;
+    if size > COMPRESSED_LIMIT as u64 {
+        return Err(io::Error::other("profile exceeds byte limit"));
+    }
+    Ok(())
 }
 
 /// Reserve a new attempt before opening its files. Completed receipts are replayed read-only.
@@ -479,6 +500,49 @@ mod tests {
     use super::test_support::Fixture;
     use super::*;
     use crate::store::{artifact, list, read_record};
+
+    #[test]
+    fn refuses_nonlocal_profile_uris() {
+        let fixture = Fixture::new();
+        let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
+        assert!(copy_profile("https://example.com/profile.gz", &dir).is_err());
+        assert!(copy_profile("file://example.com/profile.gz", &dir).is_err());
+    }
+
+    #[test]
+    fn refuses_profile_fifo_without_waiting_for_writer() {
+        let fixture = Fixture::new();
+        let path = fixture.root.join("pipe");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
+        assert!(copy_profile(Url::from_file_path(path).unwrap().as_str(), &dir).is_err());
+    }
+
+    #[test]
+    fn oversized_profile_copy_stops_at_the_limit_probe() {
+        let fixture = Fixture::new();
+        let source = fixture.root.join("source");
+        File::create(&source)
+            .unwrap()
+            .set_len(COMPRESSED_LIMIT as u64 + 2)
+            .unwrap();
+        let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
+        assert!(copy_profile(Url::from_file_path(source).unwrap().as_str(), &dir).is_err());
+        assert_eq!(
+            dir.artifact("profile.json.gz")
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .len(),
+            COMPRESSED_LIMIT as u64 + 1
+        );
+    }
 
     fn profile_event(path: &Path) -> bep::BuildEvent {
         bep::BuildEvent {
@@ -786,10 +850,10 @@ mod tests {
         let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
         let path = f.dir().join("attempt/1/bep.binpb.gz");
         // A read-only FD deterministically fails when the buffer is flushed.
-        receipt.writer = Some(GzEncoder::new(
+        receipt.writer.as_mut().unwrap().1 = GzEncoder::new(
             BufWriter::new(File::open(path).unwrap()),
             Compression::default(),
-        ));
+        );
         receipt.append(&f.ordered(1, f.started())).unwrap();
         receipt.append(&f.ordered(2, f.finished())).unwrap();
         assert!(receipt.finish().is_err());
