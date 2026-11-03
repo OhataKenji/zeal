@@ -6,6 +6,8 @@
 
 <p align="center">A local-first Bazel GUI client.</p>
 
+<p align="center">Explore targets and dependencies, run builds and tests, and analyze build history.</p>
+
 <p align="center">
   <a href="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml"><img src="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
@@ -14,44 +16,64 @@
 
 ## Features
 
-### Find a Target and Invoke It
+### Find and Run Targets
 
-Find Bazel targets by fuzzy-searching their full labels, then choose `build`, `test`, or `run`.
+Search target labels. Run `build`, `test`, or `run`.
 
 ### Invocation Page
 
-Inspect an invocation's logs, target results, details, and per-thread timing trace from the history.
+View logs, results, details, and available timing data.
 
 ![Invocation Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
 
 ### Analytics Page
 
-Filter local build and test history from the GUI and recorded terminal invocations to compare invocation counts, outcomes, total invocation time, and p50/p95 durations.
+Filter build and test history from Zeal and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
 
 ![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
 
 ## Getting Started
 
-To run Zeal from source, follow the [development guide](docs/development.md#getting-started).
+> [!WARNING]
+> Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
+
+Run Zeal from source: [Development guide](docs/development.md#getting-started).
+
+### Open a repository
+
+**Requires:** Bazelisk or Bazel on your `PATH`.
+
+Open only trusted repositories.
+
+1. Enter the path to your Bazel workspace root in **Workspace**.
+2. Keep **target patterns** as `//...` for all packages in the main repository. To narrow the scope, use a pattern such as `//app/...`.
+3. Select **open**.
+4. Select a target and run `build`, `test`, or `run`.
+
+![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
 
 ## Usage
 
-On macOS and Linux, Zeal loads your login shell's `PATH` at startup.
+On macOS and Linux, Zeal loads your login shell's `PATH`.
 
 ### Record terminal invocations
 
-Add to `.bazelrc` and use `bazel build --config=zeal //...` while Zeal is open:
+Add to `.bazelrc`:
 
 ```bazelrc
 build:zeal --bes_backend=grpc://127.0.0.1:4718
 build:zeal --bes_timeout=5s
 ```
 
+While Zeal is open, run `bazel build --config=zeal //...`.
+
 ## Development
 
-See the [development guide](docs/development.md) for setup and checks, the [release guide](docs/release-guide.md) for macOS releases, and [the PRD](docs/prd.md) and [design documents](docs/design/) for more details.
+- [Setup and checks](docs/development.md)
+- [macOS releases](docs/release-guide.md)
+- [PRD](docs/prd.md) and [design documents](docs/design/)
 
-This project is currently maintained by its authors. We are not accepting external issues or pull requests at this time.
+Maintained by the authors. External issues and pull requests are not accepted at this time.
 
 ## License
 
