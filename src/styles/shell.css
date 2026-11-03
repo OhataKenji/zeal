@@ -142,7 +142,6 @@
 }
 
 .brand-icon {
-  color: var(--foreground);
   flex-shrink: 0;
 }
 
