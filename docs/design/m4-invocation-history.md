@@ -5,7 +5,7 @@ _Last update: 2026/10/31_
 _Status: Approved_
 
 履歴の入力とビルド結果はDBから表示し、詳細は保存したイベントから読む。
-受取確認の順序は[正常受信](#正常受信)、表示上限は[詳細の読込](#詳細の読込)を参照する。
+受信の扱いは[正常受信](#正常受信)、詳細表示は[詳細の読込](#詳細の読込)を参照する。
 
 ## Goal
 
@@ -72,10 +72,7 @@ Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻�
 ### event fileと受信
 
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
-length-delimited protobuf のバイト列を受信中に gzip 圧縮する。
-gzip の終端とバッファの書き込みが成功した後に、受信状態を保存して ACK を返す。
-gzip の読み込みは保存ファイルのスナップショットに限定する。
-1 event を 16 MiB、表示する BEP を 8 MiB、ログ末尾を 512 KiB に制限する。
+保存に失敗したデータには、受取確認（**ACK**）を返さない。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
 任意の `terminal.log` は擬似端末(**PTY**)の出力、`profile.gz` は計時情報として `invocations/<invocation_id>/` に置く。
@@ -84,12 +81,6 @@ BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderr
 ### 正常受信
 
 **EOF**は、この接続での送信終了を示す。
-受取確認を**ACK**、buffer内のデータをfileへ書き出す処理を**flush**と呼ぶ。
-
-1. イベントを順にbufferへ書く。この時点ではACKしない。
-2. 正常EOFを受け取る。
-3. fileをflushし、現在のattemptを条件にDBを更新する。
-4. 受信番号を順にACKする。
 
 `received_complete=1` にするには、最後のBEPイベントを示す `last_message` も必要である。
 last_messageがなければ、正常EOFをACKしても `received_complete=0` とする。
@@ -101,16 +92,15 @@ last_messageがなければ、正常EOFをACKしても `received_complete=0` と
 | EOF           | この接続での送信終了  |
 
 BuildFinishedがなければビルド結果は不明である。
-flushは電源断後のfile保持を保証しない。
 
 ### 失敗と再送
 
-| 状態                         | 受信動作                                                         |
-| ---------------------------- | ---------------------------------------------------------------- |
-| 未確定invocationの再送       | 新しいattemptへ番号1から全部送る                                 |
-| 受信確定済みinvocationの再送 | 保存を繰り返さず、正常EOF後にACKする。末尾だけの再送も受け付ける |
-| fileやDBの失敗               | ACKしない                                                        |
-| 切断やidle期限切れ           | 可能な範囲を保存するがACKしない。次の接続の全送に委ねる          |
+| 状態                         | 受信動作                                                |
+| ---------------------------- | ------------------------------------------------------- |
+| 未確定invocationの再送       | 新しいattemptへ番号1から全部送る                        |
+| 受信確定済みinvocationの再送 | 保存を繰り返さずACKする。末尾だけの再送も受け付ける     |
+| fileやDBの失敗               | ACKしない                                               |
+| 切断やidle期限切れ           | 可能な範囲を保存するがACKしない。次の接続の全送に委ねる |
 
 古いattemptからの更新が拒否された場合もACKしない。
 接続内の受信番号は連続昇順とする。
@@ -126,19 +116,11 @@ lifecycle unaryはBEPとは別の通知APIであり、保存せず成功応答�
 Progressのログはstderr、stdoutの順に取り込む。
 任意のprofileは `get_invocation_profile` で別途読む。
 
-#### 上限とメモリ
+#### 解析処理
 
 一つのイベントを長さ付きで格納した単位を**frame**と呼ぶ。
 
-| 対象          | 上限と動作                                     |
-| ------------- | ---------------------------------------------- |
-| ログ          | 末尾512 KiB。Unicode文字を分断しない           |
-| BEP表示データ | serialize後8 MiB。項目を省略したら不完全と示す |
-| 一つのframe   | 16 MiB。長さとfile残量をbuffer確保前に確認する |
-| 解析worker    | 同時1件。処理中の追加要求は待たせず拒否する    |
-
-表示上限後も走査を続け、後続ログの末尾を取り込む。
-8 MiBは表示用の上限であり、受信できるイベントの保存条件には使わない。
+解析workerは同時1件とし、処理中の追加要求は待たせず拒否する。
 解析結果のfile、永続cache、offset表は作らない。
 
 #### 読めない場合
@@ -193,11 +175,11 @@ Bazelの通信設定とアプリ起動時のBES上書きは[overview](./overview
 
 - 同じBEPから同じDB事実、詳細、DTO、Analyticsが得られること。
 - ログ込みeventだけを保存し、一度の走査でBEPとUnicode末尾ログを返すこと。
-- 表示上限後の後続ログ、巨大frame、欠損、不完全なfileが一覧と集計を変えないこと。
+- データの省略、巨大frame、欠損、不完全なfileが一覧と集計を変えないこと。
 - BEP結果確定後もプログラムのstdinとstopが動き、process終了だけでは結果を補完しないこと。
 
 ### 失敗と安全性
 
-- EOF前ACKなし、全送retry、確定済み再送を確認する。
+- 全送retry、確定済み再送を確認する。
 - 並行attemptで古い接続が更新できず、file/DB失敗時にACKしないこと。
 - 保存先の権限、symlink、特殊file、非対応schemaの非破壊拒否を確認する。

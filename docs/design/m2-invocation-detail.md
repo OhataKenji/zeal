@@ -84,7 +84,7 @@ flag や出力形式の version 別の対応表、parser の field 名の読み�
 ### ログの表示
 
 実行中はPTYのConsoleを表示する。
-保存済みのログは、詳細要求時にBEPのProgressをstderr、stdoutの順で取り込み、末尾512 KiBを表示する。
+保存済みのログは、詳細要求時にBEPのProgressをstderr、stdoutの順で取り込んで表示する。
 BEP表示データとログを一度の逐次parseで組み立て、別のログfileへ保存しない。
 実行中の timing は `not available` とする。
 
@@ -94,12 +94,11 @@ BEP表示データとログを一度の逐次parseで組み立て、別のログ
 `get_invocation_profile` ではprofileを別途読み、いずれも解析結果を保存しない。
 
 BEP は length-delimited protobuf event として parse し、末尾の frame が欠けた場合も受理できた結果を使う。
-frame は 16 MiB まで読み、長さ prefix の overflow や不正 protobuf も incomplete とする。
+長さ prefix の overflow や不正 protobuf も incomplete とする。
 profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error とする。
 
 各成果物の状態(ok / incomplete / missing / parse error)は parse 時に決める。
-BEP表示は8 MiBまでとし、項目の省略や部分的なBEPはincompleteとして理由を示す。
-表示上限に達しても後続ログのために走査を続ける。
+BEPの項目を省略した場合や、BEPが部分的な場合はincompleteとして理由を示す。
 
 ### timing と phase の帯
 
