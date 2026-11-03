@@ -66,7 +66,6 @@ test("LogPanel displays the available log and its section status", async (t) => 
       assert.match(html, /line 0</);
       assert.match(html, /line 10</);
       assert.doesNotMatch(html, /line 4999/);
-      assert.match(html, /Copy/);
     });
 
     await t.test("an unreadable log shows its error without inventing log content", () => {

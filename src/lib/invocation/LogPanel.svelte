@@ -30,32 +30,9 @@
     ),
   );
   const visible = $derived(lines.slice(first, last));
-  // Copy the rendered text: the raw string keeps ANSI/OSC escapes and control
-  // bytes that a terminal would interpret when pasted.
-  const displayText = $derived(
-    lines.map((line) => line.map((span) => span.text).join("")).join("\n"),
-  );
-
-  let copied = $state<"done" | "failed" | null>(null);
-  let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  async function copyLog() {
-    try {
-      await navigator.clipboard.writeText(displayText);
-      copied = "done";
-    } catch {
-      copied = "failed";
-    }
-    clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => (copied = null), 1500);
-  }
 </script>
 
-<h2 class="panel-heading">Logs{#if log !== null && log.length > 0}<button
-    type="button"
-    class="button button-ghost log-copy"
-    title="Copy the full log to the clipboard"
-    onclick={copyLog}>{copied === "done" ? "Copied ✓" : copied === "failed" ? "Copy failed" : "Copy"}</button
-  >{/if}</h2>
+<h2 class="panel-heading">Logs</h2>
 {#if section && section.status !== "ok"}
   <Notice tone={sectionNoticeTone(section)}>{sectionMessage(section)}</Notice>
 {/if}
