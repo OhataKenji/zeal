@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { logLines, logSpans, logWindow } from "../src/lib/log.ts";
+import { logColumns, logLines, logSpans, logWindow } from "../src/lib/log.ts";
 import { TERMINAL_COLORS } from "../src/lib/terminal_style.ts";
 
 test("Bazel color labels keep their text, color and reset across lines", () => {
@@ -55,6 +55,16 @@ test("logLines keeps blank lines and a trailing newline's empty row", () => {
     ["a", "", "b", ""],
   );
   assert.deepEqual(logLines(""), [[]]);
+});
+
+test("logColumns reserves the widest line across ANSI style boundaries", () => {
+  assert.equal(logColumns(logLines("short\n\x1b[31mlong \x1b[0mline\nend")), 9);
+  assert.equal(logColumns(logLines("")), 0);
+  assert.equal(logColumns([]), 0);
+});
+
+test("logColumns leaves conservative room for tabs and non-ASCII text", () => {
+  assert.equal(logColumns(logLines("a\t界é🙂")), 17);
 });
 
 test("logWindow mounts only the viewport plus an overscan skirt", () => {

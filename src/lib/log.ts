@@ -42,6 +42,20 @@ export function logLines(log: string): LogLine[] {
   return lines;
 }
 
+/** Conservative width in monospace columns: tabs use 8, non-ASCII UTF-16 units use 2. */
+export function logColumns(lines: LogLine[]): number {
+  return lines
+    .map(
+      (line) =>
+        line
+          .map((span) => span.text)
+          .join("")
+          .replace(/\t/g, "        ")
+          .replace(/[\u0080-\uffff]/g, "xx").length,
+    )
+    .reduce((max, width) => Math.max(max, width), 0);
+}
+
 /** Extra lines mounted above and below the viewport to hide scroll popping. */
 const OVERSCAN = 8;
 
