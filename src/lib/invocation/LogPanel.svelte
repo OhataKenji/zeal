@@ -11,6 +11,7 @@
   } = $props();
   const log = $derived(sectionData(section));
   const lines = $derived(log === null ? [] : logLines(log));
+  const plainLog = $derived(lines.map((line) => line.map((span) => span.text).join("")).join("\n"));
 
   // Rows have a fixed height, so only the viewport plus an overscan skirt needs
   // to exist in the DOM. Spacers preserve the full scroll range, matching how
@@ -38,6 +39,7 @@
       bind:clientHeight={viewHeight}
       onscroll={(event) => (scrollTop = event.currentTarget.scrollTop)}
     >
+      <div class="log-width-sizer" aria-hidden="true">{plainLog}</div>
       <div style="height:{win.first * LOG_LINE_HEIGHT}px"></div>
       {#each visible as line}
         <div class="log-line" style="height:{LOG_LINE_HEIGHT}px"

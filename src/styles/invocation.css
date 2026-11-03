@@ -200,6 +200,15 @@
   white-space: pre;
 }
 
+/* Keep the full log's width even when its widest line is outside the window. */
+.log-width-sizer {
+  width: max-content;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: pre;
+}
+
 .invocation-log::selection,
 .invocation-log ::selection {
   background: var(--terminal-selection);
