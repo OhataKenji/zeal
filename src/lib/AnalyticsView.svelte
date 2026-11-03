@@ -18,6 +18,7 @@
   } = $props();
   let view = $state.raw(emptyAnalytics());
   let controller = $state<ReturnType<typeof createAnalytics> | null>(null);
+  let chartWidth = $state(0);
   $effect(() => {
     // A workspace change discards both the filters and pending responses.
     void workspace;
@@ -38,7 +39,9 @@
   const maxP95 = $derived(
     Math.max(1, ...(data?.days.map((d) => d.p95Ms) ?? [])),
   );
-  const width = $derived(Math.max(640, (data?.days.length ?? 0) * 24 + 60));
+  const width = $derived(
+    Math.max(640, (data?.days.length ?? 0) * 24 + 60, chartWidth),
+  );
   const step = $derived((width - 70) / Math.max(1, data?.days.length ?? 1));
   function filter(patch: Partial<AnalyticsFilter>) {
     void controller?.load({ ...view.filter, ...patch });
@@ -104,14 +107,12 @@
       >Target patterns <input
         type="text"
         aria-label="Target patterns"
-        aria-describedby="analytics-pattern-help"
         placeholder="//app:server"
         value={view.filter.pattern ?? ""}
         onchange={(e) =>
           filter({ pattern: e.currentTarget.value || null })}
       /></label
     >
-    <p id="analytics-pattern-help" class="dim">Match the complete pattern list exactly.</p>
     <button type="button" class="button" onclick={() => controller?.load()}
       >Refresh</button
     >
@@ -124,7 +125,7 @@
     <section class="analytics-card">
       <h2>Invocations</h2>
       <p class="dim">{data.filter.start} to {data.filter.end} · Invocations without a recorded start time are excluded.</p>
-      <div class="chart-scroll">
+      <div class="chart-scroll" bind:clientWidth={chartWidth}>
         <svg
           viewBox="0 0 {width} 240"
           style:width="{width}px"
@@ -213,7 +214,7 @@
     <section class="analytics-card">
       <h2>Total duration</h2>
       <p class="dim">Total duration per day</p>
-      <div class="chart-scroll">
+      <div class="chart-scroll" bind:clientWidth={chartWidth}>
         <svg
           viewBox="0 0 {width} 240"
           style:width="{width}px"
@@ -250,7 +251,7 @@
     <section class="analytics-card">
       <h2>Duration</h2>
       <p class="dim">Per-day invocation duration percentiles</p>
-      <div class="chart-scroll">
+      <div class="chart-scroll" bind:clientWidth={chartWidth}>
         <svg
           viewBox="0 0 {width} 240"
           style:width="{width}px"
@@ -382,9 +383,10 @@
 
   .filters input,
   .filters select {
+    height: 32px;
     background: var(--muted);
     border: 1px solid var(--border);
-    padding: 8px;
+    padding: 0 8px;
     border-radius: 8px;
     color: var(--foreground);
     font: inherit;
@@ -394,7 +396,7 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    align-items: flex-start;
+    align-items: center;
   }
 
   .date-filters {
