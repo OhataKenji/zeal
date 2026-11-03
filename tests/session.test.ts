@@ -7,6 +7,7 @@ import type {
   InvocationRecord,
   Profile,
   Section,
+  TargetIndex,
 } from "../src/lib/types.ts";
 
 const IDLE: AppState = {
@@ -148,8 +149,37 @@ function lastPendingRequest(h: ReturnType<typeof harness>, command: string) {
   return request;
 }
 
+function pendingRequests(h: ReturnType<typeof harness>, command: string) {
+  return h.pending.filter((call) => call.command === command);
+}
+
 function requestCount(h: ReturnType<typeof harness>, command: string) {
-  return h.pending.filter((call) => call.command === command).length;
+  return pendingRequests(h, command).length;
+}
+
+function noPending(h: ReturnType<typeof harness>, ...commands: string[]) {
+  assert.deepEqual(
+    h.pending.filter((call) => commands.includes(call.command)).map((call) => call.command),
+    [],
+  );
+}
+
+// The common arrange: an index-ready event, then resolve its fetch.
+async function emitSnapshot(
+  h: ReturnType<typeof harness>,
+  snapshot: TargetIndex,
+  state: Partial<AppState> = {},
+) {
+  h.emit("app-state", { ...IDLE, ...state, snapshotFetchedAt: snapshot.meta.fetchedAt });
+  lastPendingRequest(h, "get_snapshot").reply.resolve(snapshot);
+  await settle();
+}
+
+// The common arrange: list a record, then select it.
+async function selectRecord(h: ReturnType<typeof harness>, records: InvocationRecord[] = [RECORD]) {
+  pendingRequest(h, "list_invocations").reply.resolve(records);
+  await settle();
+  h.session.selectInvocation(RECORD.id);
 }
 
 // Drain promise reactions only; no timers or arbitrary sleeps in race tests.
@@ -180,9 +210,7 @@ test("logs and results arrive while profile parsing is still pending", async () 
 test("history notification refreshes a selected terminal invocation after completion", async () => {
   const h = harness();
   await h.session.init();
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
-  await settle();
-  h.session.selectInvocation(RECORD.id);
+  await selectRecord(h);
   const earlier = { ...COMPLETED, record: RECORD };
   pendingRequest(h, "get_invocation").reply.resolve(earlier);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
@@ -233,9 +261,7 @@ test("a history notification still refreshes after an in-flight read fails", asy
 test("the next unchanged list refresh recovers completion during a detail read", async () => {
   const h = harness();
   await h.session.init();
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
-  await settle();
-  h.session.selectInvocation(RECORD.id);
+  await selectRecord(h);
   const first = h.session.loadInvocations();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
   await first;
@@ -258,9 +284,7 @@ test("the next unchanged list refresh recovers completion during a detail read",
 test("a failed automatic detail refresh waits for explicit Retry", async () => {
   const h = harness();
   await h.session.init();
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
-  await settle();
-  h.session.selectInvocation(RECORD.id);
+  await selectRecord(h);
   const earlier = { ...COMPLETED, record: RECORD };
   pendingRequest(h, "get_invocation").reply.resolve(earlier);
   await settle();
@@ -284,9 +308,7 @@ test("a failed automatic detail refresh waits for explicit Retry", async () => {
 test("another invocation changing or completing does not reload the viewed invocation or profile", async () => {
   const h = harness();
   await h.session.init();
-  pendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await settle();
-  h.session.selectInvocation(RECORD.id);
+  await selectRecord(h, [COMPLETED.record]);
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
@@ -305,9 +327,7 @@ test("another invocation changing or completing does not reload the viewed invoc
 test("a list response after disposal cannot start a detail refresh", async () => {
   const h = harness();
   await h.session.init();
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
-  await settle();
-  h.session.selectInvocation(RECORD.id);
+  await selectRecord(h);
   pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
   await settle();
   const poll = h.session.loadInvocations();
@@ -372,7 +392,7 @@ test("a late profile response or error cannot replace a newer selection", async 
   h.session.selectInvocation("run-a");
   h.session.selectInvocation("run-b");
   h.session.selectInvocation("run-c");
-  const requests = h.pending.filter((call) => call.command === "get_invocation_profile");
+  const requests = pendingRequests(h, "get_invocation_profile");
   requests[2].reply.resolve(PROFILE);
   await settle();
   requests[0].reply.resolve({ status: "missing" });
@@ -433,23 +453,16 @@ test("ingestion completing never starts an invocation", async () => {
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, ingest: "running" });
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
-  await settle();
+  await emitSnapshot(h, SNAPSHOT);
   assert.deepEqual(h.view.snapshot, SNAPSHOT);
-  assert.equal(
-    h.pending.some((call) => call.command === "start_invocation"),
-    false,
-  );
+  noPending(h, "start_invocation");
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
 test("snapshot data is fetched once per snapshotFetchedAt change, not per state event", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
-  await settle();
+  await emitSnapshot(h, SNAPSHOT);
   h.emit("app-state", {
     ...IDLE,
     snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
@@ -487,7 +500,7 @@ test("a stale snapshot fetch cannot replace the current snapshot", async () => {
   };
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: newer.meta.fetchedAt });
-  const requests = h.pending.filter((call) => call.command === "get_snapshot");
+  const requests = pendingRequests(h, "get_snapshot");
   assert.equal(requests.length, 2);
   requests[1].reply.resolve(newer);
   await settle();
@@ -512,9 +525,7 @@ test("workspace switch drops the snapshot and its in-flight fetch", async () => 
 test("an event without snapshotFetchedAt clears a stale snapshot", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
-  await settle();
+  await emitSnapshot(h, SNAPSHOT);
   assert.deepEqual(h.view.snapshot, SNAPSHOT);
   // Re-opening the same workspace clears the core snapshot without a
   // workspace change, so only this field dropping to null can clear the view.
@@ -563,9 +574,7 @@ test("a failed snapshot fetch is surfaced and retried by the next event", async 
 test("target details load only after selection and use the current index generation", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS);
   assert.equal(requestCount(h, "get_target_detail"), 0);
   assert.equal(h.view.selectedTarget, null);
 
@@ -584,9 +593,7 @@ test("target details load only after selection and use the current index generat
 test("rapid target clicks keep only the latest result", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS);
   h.session.selectTarget("//app:first");
   h.session.selectTarget("//app:second");
   assert.equal(requestCount(h, "get_target_detail"), 1);
@@ -608,13 +615,7 @@ test("rapid target clicks keep only the latest result", async () => {
 test("target detail waits for the Bazel slot and resumes on the idle event", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", {
-    ...IDLE,
-    snapshotFetchedAt: TARGETS.meta.fetchedAt,
-    activeInvocation: RECORD.id,
-  });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS, { activeInvocation: RECORD.id });
   h.session.selectTarget("//app:first");
   assert.equal(requestCount(h, "get_target_detail"), 0);
   assert.equal(h.view.targetDetailError, null);
@@ -628,9 +629,7 @@ test("target detail waits for the Bazel slot and resumes on the idle event", asy
 test("scope and index changes discard an old target detail", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS);
   h.session.selectTarget("//app:first");
   const old = pendingRequest(h, "get_target_detail");
   h.emit("app-state", {
@@ -643,30 +642,18 @@ test("scope and index changes discard an old target detail", async () => {
   assert.equal(h.view.selectedTarget, null);
   assert.equal(h.view.targetDetail, null);
 
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
-  lastPendingRequest(h, "get_snapshot").reply.resolve({
-    ...TARGETS,
-    meta: { ...TARGETS.meta, fetchedAt: 2 },
-  });
-  await settle();
+  await emitSnapshot(h, { ...TARGETS, meta: { ...TARGETS.meta, fetchedAt: 2 } });
   assert.equal(requestCount(h, "get_target_detail"), 1);
 });
 
 test("a refreshed index replaces an in-flight detail with the new generation", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS);
   h.session.selectTarget("//app:first");
   const old = pendingRequest(h, "get_target_detail");
 
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
-  lastPendingRequest(h, "get_snapshot").reply.resolve({
-    ...TARGETS,
-    meta: { ...TARGETS.meta, fetchedAt: 2 },
-  });
-  await settle();
+  await emitSnapshot(h, { ...TARGETS, meta: { ...TARGETS.meta, fetchedAt: 2 } });
   assert.equal(h.view.targetDetail, null);
   assert.equal(requestCount(h, "get_target_detail"), 1);
 
@@ -685,9 +672,7 @@ test("a refreshed index replaces an in-flight detail with the new generation", a
 test("a target detail failure has an explicit retry", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS);
   h.session.selectTarget("//app:first");
   pendingRequest(h, "get_target_detail").reply.reject(new Error("query failed"));
   await settle();
@@ -701,9 +686,7 @@ test("a target detail failure has an explicit retry", async () => {
 test("a successful target-list retry resumes the selected detail", async () => {
   const h = harness();
   await h.session.init();
-  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
-  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
-  await settle();
+  await emitSnapshot(h, TARGETS);
   h.session.selectTarget("//app:first");
   pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
   await settle();
@@ -725,9 +708,7 @@ test("a successful target-list retry resumes the selected detail", async () => {
 test("changing Scope preserves the selected invocation", async () => {
   const h = harness();
   await h.session.init();
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
-  await settle();
-  h.session.selectInvocation(RECORD.id);
+  await selectRecord(h);
   h.emit("app-state", { ...IDLE, scope: { include: ["//other/..."] } });
   assert.equal(h.view.selectedInvocation, RECORD.id);
   assert.deepEqual(h.view.invocations, [RECORD]);
@@ -737,15 +718,15 @@ test("Send passes the pattern through unchanged and ignores whitespace and dupli
   const h = harness();
   await h.session.init();
   void h.session.start("build", " //:app ");
-  assert.equal(
-    h.pending.some((call) => call.command === "start_invocation"),
-    false,
-  );
+  noPending(h, "start_invocation");
   void h.session.start("build", "//:app");
   void h.session.start("build", "//:app");
-  const starts = h.pending.filter((call) => call.command === "start_invocation");
-  assert.equal(starts.length, 1);
-  assert.deepEqual(starts[0].args, { cmd: "build", pattern: "//:app", arguments: "" });
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.deepEqual(pendingRequest(h, "start_invocation").args, {
+    cmd: "build",
+    pattern: "//:app",
+    arguments: "",
+  });
 });
 
 test("start records the selected cmd and the pattern string unchanged", async () => {
@@ -782,7 +763,7 @@ test("an argument parse failure is visible and allows a corrected start", async 
   assert.match(h.view.error ?? "", /Unclosed quote/);
   assert.equal(canSend(h.view, "//:app"), true);
   const retried = h.session.start("run", "//:app", '"complete"');
-  assert.equal(h.pending.filter((call) => call.command === "start_invocation").length, 2);
+  assert.equal(requestCount(h, "start_invocation"), 2);
   assert.deepEqual(lastPendingRequest(h, "start_invocation").args, {
     cmd: "run",
     pattern: "//:app",
@@ -799,21 +780,18 @@ test("stop is offered only while an invocation is live and not already stopping"
   await h.session.init();
   assert.equal(canStop(h.view), false);
   await h.session.stop();
-  assert.equal(
-    h.pending.some((call) => call.command === "stop_invocation"),
-    false,
-  );
+  noPending(h, "stop_invocation");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   assert.equal(canStop(h.view), true);
   const stopping = h.session.stop();
   // No optimistic local flag: the core reports stopping through app-state.
   assert.equal(h.view.state?.stopping, false);
   assert.equal(canStop(h.view), true);
-  assert.equal(h.pending.filter((call) => call.command === "stop_invocation").length, 1);
+  assert.equal(requestCount(h, "stop_invocation"), 1);
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, stopping: true });
   assert.equal(canStop(h.view), false);
   await h.session.stop();
-  assert.equal(h.pending.filter((call) => call.command === "stop_invocation").length, 1);
+  assert.equal(requestCount(h, "stop_invocation"), 1);
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
   await stopping;
 });
@@ -847,10 +825,7 @@ test("a confirmed build result leaves the live program and Console controls acti
   assert.equal(h.view.consoleOpen, true);
   assert.equal(canStop(h.view), true);
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_invocation"),
-    false,
-  );
+  noPending(h, "get_invocation");
   const stopping = h.session.stop();
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
   await stopping;
@@ -878,12 +853,7 @@ test("full artifacts are read only after the invocation finishes", async () => {
   assert.equal(h.view.selectedInvocation, null);
   assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(h.view.consoleOpen, true);
-  assert.equal(
-    h.pending.some(
-      (call) => call.command === "get_invocation" || call.command === "get_invocation_profile",
-    ),
-    false,
-  );
+  noPending(h, "get_invocation", "get_invocation_profile");
   h.emit("app-state", IDLE);
   assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedInvocation, RECORD.id);
@@ -962,10 +932,7 @@ test("start response before the running event reconciles state without reading a
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await started;
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_invocation"),
-    false,
-  );
+  noPending(h, "get_invocation");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
 });
 
@@ -1002,10 +969,7 @@ test("failed state reconciliation waits for a later state event before opening c
   assert.match(h.view.error ?? "", /invocation started/);
   assert.equal(canSend(h.view, "//:app"), false);
   assert.equal(h.view.console?.id, RECORD.id);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_invocation"),
-    false,
-  );
+  noPending(h, "get_invocation");
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedInvocation, RECORD.id);
@@ -1033,10 +997,7 @@ test("state recovery keeps a previous Console reopened while reconciliation was 
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.console?.id, "old-run");
   assert.equal(h.view.selectedInvocation, null);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_invocation"),
-    false,
-  );
+  noPending(h, "get_invocation");
 });
 
 test("late bootstrap state cannot overwrite a newer workspace event", async () => {
@@ -1055,7 +1016,7 @@ test("a slow previous invocation detail cannot replace the selected invocation",
   await h.session.init();
   h.session.selectInvocation("run-a");
   h.session.selectInvocation("run-b");
-  const requests = h.pending.filter((call) => call.command === "get_invocation");
+  const requests = pendingRequests(h, "get_invocation");
   requests[1].reply.resolve({ ...COMPLETED, record: { ...COMPLETED.record, id: "run-b" } });
   await settle();
   requests[0].reply.resolve(COMPLETED);
@@ -1124,10 +1085,7 @@ test("failed spawn leaves a previously completed Console open", async () => {
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(h.view.selectedInvocation, null);
-  assert.equal(
-    h.pending.some((call) => call.command === "get_invocation"),
-    false,
-  );
+  noPending(h, "get_invocation");
 });
 
 test("failed spawn resumes a saved invocation detail selected while start was pending", async () => {
@@ -1135,10 +1093,7 @@ test("failed spawn resumes a saved invocation detail selected while start was pe
   await h.session.init();
   const started = h.session.start("build", "//:app");
   h.session.selectInvocation("saved-run");
-  assert.equal(
-    h.pending.some((call) => call.command === "get_invocation"),
-    false,
-  );
+  noPending(h, "get_invocation");
   pendingRequest(h, "start_invocation").reply.reject(new Error("failed to spawn"));
   await started;
   assert.equal(h.view.detailLoading, true);
@@ -1176,12 +1131,7 @@ test("dispose during start reconciliation ignores completion without reading art
   await started;
   assert.equal(h.view, before);
   assert.deepEqual(h.removed, ["app-state", "invocations-changed"]);
-  assert.equal(
-    h.pending.some(
-      (call) => call.command === "get_invocation" || call.command === "get_invocation_profile",
-    ),
-    false,
-  );
+  noPending(h, "get_invocation", "get_invocation_profile");
 });
 
 test("unmount during listener registration immediately cleans the late subscription", async () => {
@@ -1286,10 +1236,7 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
   await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
   h.emit("app-state", { ...IDLE, query: "running" });
   await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
-  assert.equal(
-    h.pending.some((call) => call.command === "open_workspace"),
-    false,
-  );
+  noPending(h, "open_workspace");
 });
 
 test("refresh is rejected while busy and is never queued", async () => {
@@ -1302,10 +1249,7 @@ test("refresh is rejected while busy and is never queued", async () => {
   h.emit("app-state", { ...IDLE, query: "running" });
   await h.session.refresh();
   h.emit("app-state", IDLE);
-  assert.equal(
-    h.pending.some((call) => call.command === "refresh"),
-    false,
-  );
+  noPending(h, "refresh");
   const refreshing = h.session.refresh();
   pendingRequest(h, "refresh").reply.resolve(undefined);
   await refreshing;
@@ -1321,10 +1265,7 @@ test("an unconfirmed exit stays unknown and is not retried automatically", async
   await settle();
   assert.equal(h.view.detail?.record.exitCode, undefined);
   assert.equal(h.view.state?.invocationNote, "Could not confirm the stop");
-  assert.equal(
-    h.pending.some((call) => call.command === "start_invocation" || call.command === "refresh"),
-    false,
-  );
+  noPending(h, "start_invocation", "refresh");
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
@@ -1337,10 +1278,7 @@ test("leaving Console keeps the process and prevents automatic navigation", asyn
   await started;
   h.session.selectInvocation(null);
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
-  assert.equal(
-    h.pending.some((call) => call.command === "stop_invocation"),
-    false,
-  );
+  noPending(h, "stop_invocation");
   h.emit("app-state", IDLE);
   assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedInvocation, null);
@@ -1459,12 +1397,7 @@ test("openConsole returns to a Console left while its invocation is in flight", 
   assert.equal(h.view.consoleOpen, true);
   assert.equal(h.view.selectedInvocation, null);
   assert.equal(h.view.console?.id, RECORD.id);
-  assert.equal(
-    h.pending.some(
-      (call) => call.command === "stop_invocation" || call.command === "get_invocation",
-    ),
-    false,
-  );
+  noPending(h, "stop_invocation", "get_invocation");
 });
 
 test("openConsole restores the Console for an invocation already in flight at connect", async () => {
