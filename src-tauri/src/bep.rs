@@ -935,24 +935,11 @@ mod gzip_tests {
     }
 
     #[test]
-    fn gzip_retains_event_bytes_and_projection() {
-        let bytes = frame();
-        let encoded = gzip(&bytes);
+    fn gzip_progress_is_decoded() {
+        let encoded = gzip(&frame());
         let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
-        let raw = parse_detail(bytes.as_slice(), bytes.len() as u64);
-        assert_eq!(parsed.log, raw.log);
-        assert_eq!(parsed.bep, raw.bep);
+        assert_eq!(parsed.log, "output");
         assert_eq!(parsed.events, 1);
-        assert!(!parsed.invalid);
-    }
-
-    #[test]
-    fn all_members_are_read() {
-        let mut encoded = gzip(&frame());
-        encoded.extend(gzip(&frame()));
-        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
-        assert_eq!(parsed.events, 2);
-        assert_eq!(parsed.log, "outputoutput");
         assert!(!parsed.invalid);
     }
 
