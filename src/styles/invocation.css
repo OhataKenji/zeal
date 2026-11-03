@@ -191,6 +191,8 @@
   padding: 0;
   margin: 0;
   overflow: auto;
+  /* Spacer resizes must not trigger scroll anchoring, which rewrites scrollTop. */
+  overflow-anchor: none;
 }
 
 /* `pre` lives on the line, not the scroller, so virtual-row whitespace stays inert. */

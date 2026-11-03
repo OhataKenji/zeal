@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { logLines, logSpans } from "../src/lib/log.ts";
+import { logLines, logSpans, logWindow } from "../src/lib/log.ts";
 import { TERMINAL_COLORS } from "../src/lib/terminal_style.ts";
 
 test("Bazel color labels keep their text, color and reset across lines", () => {
@@ -55,6 +55,19 @@ test("logLines keeps blank lines and a trailing newline's empty row", () => {
     ["a", "", "b", ""],
   );
   assert.deepEqual(logLines(""), [[]]);
+});
+
+test("logWindow mounts only the viewport plus an overscan skirt", () => {
+  // A 150px viewport shows 10 rows at 15px each.
+  assert.deepEqual(logWindow(1000, 0, 150), { first: 0, last: 27 });
+  assert.deepEqual(logWindow(1000, 15 * 500, 150), { first: 492, last: 519 });
+  assert.equal(logWindow(1000, 15 * 999, 150).last, 1000);
+});
+
+test("logWindow clamps a stale scroll offset when the log shrinks", () => {
+  assert.deepEqual(logWindow(10, 15 * 999, 150), { first: 10, last: 10 });
+  assert.deepEqual(logWindow(0, 0, 150), { first: 0, last: 0 });
+  assert.deepEqual(logWindow(5, 0, 150), { first: 0, last: 5 });
 });
 
 test("HTML-looking output stays literal text without generated markup", () => {
