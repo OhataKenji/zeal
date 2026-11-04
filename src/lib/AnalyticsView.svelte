@@ -414,27 +414,27 @@
   /* Shares the timeline trace palette (timeline.ts eventColors). */
 
   rect {
-    fill: #99d4c6;
+    fill: var(--chart-bar, #0891b2);
   }
 
   .bar-ok {
-    fill: #a7d6a9;
-    background: #a7d6a9;
+    fill: var(--success);
+    background: var(--success);
   }
 
   .bar-failed {
-    fill: #ffdda6;
-    background: #ffdda6;
+    fill: var(--destructive);
+    background: var(--destructive);
   }
 
   .bar-interrupted {
-    fill: #c5afd4;
-    background: #c5afd4;
+    fill: var(--warning);
+    background: var(--warning);
   }
 
   .bar-unknown {
-    fill: #b2b2b2;
-    background: #b2b2b2;
+    fill: var(--muted-foreground);
+    background: var(--muted-foreground);
   }
 
   .legend {
@@ -460,31 +460,31 @@
 
   .line-p50 {
     fill: none;
-    stroke: #80c784;
+    stroke: var(--success);
     stroke-width: 2;
   }
 
   .line-p95 {
     fill: none;
-    stroke: #c5afd4;
+    stroke: var(--warning);
     stroke-width: 1.5;
     stroke-dasharray: 4 3;
   }
 
   .dot-p50 {
-    fill: #80c784;
+    fill: var(--success);
   }
 
   .dot-p95 {
-    fill: #c5afd4;
+    fill: var(--warning);
   }
 
   .sw-p50 {
-    background: #80c784;
+    background: var(--success);
   }
 
   .sw-p95 {
-    background: #c5afd4;
+    background: var(--warning);
   }
 
   .patterns {

@@ -1,23 +1,39 @@
 :root {
   --font-sans: -apple-system, "BlinkMacSystemFont", "Segoe UI", sans-serif;
   --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
-  --background: #fff;
-  --foreground: #222;
-  --border: #dedede;
-  --muted: #f4f4f4;
-  --muted-foreground: #666;
-  --accent: #ededed;
-  --primary: #222;
-  --input: #d5d5d5;
-  --ring: #737373;
-  --sidebar: #fafafa;
-  --chart-bar: #666;
-  --success: #28734d;
-  --success-muted: #e8f4e9;
-  --destructive: #b83737;
-  --destructive-muted: #fff2f2;
-  --warning: #856522;
-  --warning-muted: #fff8e9;
+
+  /* Surfaces & Canvas (Dark Zinc) */
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  --border: #27272a;
+  --muted: #141416;
+  --muted-foreground: #a1a1aa;
+  --accent: #1e293b;
+  --sidebar: #101012;
+  --input: #27272a;
+
+  /* Brand Action Controls (Deep Teal: distinct from semantic success green) */
+  --brand-mint: #34d399;
+  --brand-teal: #0891b2;
+  --primary: #0891b2;
+  --primary-foreground: var(--foreground);
+  --primary-hover: #0e7490;
+  --ring: #00c3df;
+  --chart-bar: #00c3df;
+
+  /* Perceptually Calibrated Semantic Status Tokens (Equi-Luminance L=0.74, Equi-Chroma C=0.15 in OKLCH) */
+  --success: #38c789;
+  --success-muted: rgba(56, 199, 137, 0.15);
+
+  --destructive: #fb817a;
+  --destructive-muted: rgba(251, 129, 122, 0.15);
+
+  --warning: #e19b1b;
+  --warning-muted: rgba(225, 155, 27, 0.15);
+
+  --info: #00c3df;
+  --info-muted: rgba(0, 195, 223, 0.15);
+
   --radius-md: 6px;
   --radius-lg: 10px;
 }
@@ -82,12 +98,14 @@ button:disabled {
 
 .button-primary {
   background: var(--primary);
-  color: var(--background);
+  color: var(--primary-foreground, #ffffff);
   border-color: var(--primary);
+  font-weight: 600;
 }
 
 .button-primary:hover:not(:disabled) {
-  background: #444;
+  background: var(--primary-hover, #0e7490);
+  border-color: var(--primary-hover, #0e7490);
 }
 
 .button-ghost {
@@ -125,8 +143,9 @@ button:disabled {
 
 .tab-button[aria-selected="true"] {
   background: var(--background);
+  color: var(--foreground);
   font-weight: 600;
-  box-shadow: 0 1px 3px #00000014;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .dim {

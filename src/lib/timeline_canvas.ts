@@ -250,7 +250,7 @@ function drawSpanBar(
 ) {
   context.fillRect(left, top, width, ROW_HEIGHT - 1);
   if (width <= 28) return;
-  context.fillStyle = selected ? theme.background : theme.foreground;
+  context.fillStyle = theme.background;
   drawClippedLabel(context, name, left + 3, top + 12, width - 5);
 }
 

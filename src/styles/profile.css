@@ -43,7 +43,8 @@
   padding-left: 3px;
   border-right: 1px solid var(--background);
   font: 11px/19px var(--font-sans);
-  color: var(--foreground);
+  color: var(--background);
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
 }

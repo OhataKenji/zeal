@@ -26,7 +26,14 @@
   import { drawRuler, drawTimeline, type EventHit } from "./timeline_canvas";
   import { pinchZoom } from "./timeline_gestures";
 
-  const phaseColors = ["#dce5df", "#b2dfdb", "#81c5b7", "#81bd86", "#c3e2c3"];
+  const phaseColors = ["#60b0ff", "#00c3d5", "#b298f9", "#34d399", "#10b981"];
+
+  function phaseColor(name: string, index: number): string {
+    const lower = name.toLowerCase();
+    if (lower === "execution") return "#34d399";
+    if (lower === "analysis") return "#b298f9";
+    return phaseColors[index % phaseColors.length];
+  }
 
   let { profile }: { profile: Profile } = $props();
   const layout = $derived(layoutProfile(profile));
@@ -382,7 +389,7 @@
                 x(Math.min(range.end, phase.endUs)) -
                   x(Math.max(range.start, phase.startUs)),
               )}px"
-              style:background={phaseColors[index % phaseColors.length]}
+              style:background={phaseColor(phase.name, index)}
               title={`${phase.name}: ${formatTime(phase.startUs)} — ${formatTime(phase.endUs)}`}
             >
               {phase.name}

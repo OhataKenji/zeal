@@ -69,6 +69,10 @@
     background: color-mix(in oklch, var(--destructive) 10%, var(--background));
   }
 
+  .running {
+    color: var(--ring);
+  }
+
   .compact {
     width: 12px;
     height: 12px;

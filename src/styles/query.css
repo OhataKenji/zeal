@@ -131,7 +131,7 @@
   background: var(--background);
   color: var(--foreground);
   font-weight: 600;
-  box-shadow: 0 1px 3px #00000014;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .query-view code,
@@ -561,7 +561,7 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s;
-  box-shadow: 0 4px 12px #0000001f;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   z-index: 30;
 }
 

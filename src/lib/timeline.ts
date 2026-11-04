@@ -95,17 +95,17 @@ export function eventName(event: TraceEvent): string {
   return typeof event.name === "string" ? event.name : "(unnamed event)";
 }
 
-// Keep trace-provided color groups without reproducing another viewer's palette.
-// AnalyticsView.svelte copies these hexes; terminal_style.ts derives ANSI hues.
+// Categorical trace palette rotated through 8 hues at L=0.74, C=0.14 in OKLCH
+// matching the bright, luminous tone of the analytics bar chart.
 const EVENT_COLORS = [
-  "#a7d6a9",
-  "#b2dfdb",
-  "#80c784",
-  "#a5d5b0",
-  "#ffdda6",
-  "#c5afd4",
-  "#99d4c6",
-  "#b5dca8",
+  "#47c58c", // 160° (Mint / Success)
+  "#00c3d5", // 205° (Cyan / Sky)
+  "#60b0ff", // 250° (Blue)
+  "#b298f9", // 295° (Purple / Violet)
+  "#e486c6", // 340° (Rose)
+  "#f7857d", // 25°  (Coral / Destructive)
+  "#e29936", // 70°  (Amber / Warning)
+  "#a8b540", // 115° (Lime / Chartreuse)
 ];
 
 /** Assigns a stable palette color from the trace's color group or event name. */
