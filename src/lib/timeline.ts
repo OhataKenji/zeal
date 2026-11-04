@@ -21,6 +21,8 @@ export interface EventGeometry {
 export interface CounterSeries {
   name: string;
   field: string;
+  /** Stable palette color distinguishing this series from its neighbors. */
+  color: string;
   /** Time-sorted samples; viewport windowing depends on the order. */
   points: Array<{ time: number; value: number; index: number }>;
   min: number;
@@ -227,7 +229,14 @@ function counterSeries(events: EventGeometry[]): CounterSeries[] {
       const key = JSON.stringify([name, field]);
       // Include zero so resource usage and constant positive values keep their
       // magnitude, matching BuildBuddy's baseline. Retain negative samples too.
-      const counter = series.get(key) ?? { name, field, points: [], min: 0, max: 0 };
+      const counter = series.get(key) ?? {
+        name,
+        field,
+        color: eventColor({ name: `${name}·${field}` }),
+        points: [],
+        min: 0,
+        max: 0,
+      };
       counter.points.push({ time: start, value, index });
       counter.min = Math.min(counter.min, value);
       counter.max = Math.max(counter.max, value);

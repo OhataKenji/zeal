@@ -11,7 +11,6 @@ const THEME: TimelineTheme = {
   mutedForeground: "#666",
   border: "#dedede",
   sidebar: "#fafafa",
-  chartBar: "#666",
 };
 
 // This boundary supports only the canvas operations the renderer uses. Unknown

@@ -356,6 +356,35 @@ test("counter names and numeric fields form separate series without losing raw a
   assert.deepEqual(result.lanes[0].events[0].event.args, { used: 10, free: 20, unit: "MB" });
 });
 
+test("counter series keep a stable color per name and field across lanes", () => {
+  const layout = layoutProfile({
+    phases: [],
+    lanes: [
+      {
+        tid: 1,
+        name: "a",
+        events: [{ ph: "C", ts: 0, name: "cpu", args: { usage: 1 } }],
+      },
+      {
+        tid: 2,
+        name: "b",
+        events: [
+          { ph: "C", ts: 0, name: "cpu", args: { usage: 2 } },
+          { ph: "C", ts: 0, name: "alpha", args: { a: 1, z: 2 } },
+        ],
+      },
+    ],
+  });
+  const [first, second, alphaA, alphaZ] = [
+    layout.lanes[0].counters[0],
+    layout.lanes[1].counters[0],
+    layout.lanes[1].counters[1],
+    layout.lanes[1].counters[2],
+  ];
+  assert.equal(first.color, second.color);
+  assert.notEqual(alphaA.color, alphaZ.color);
+});
+
 test("positive resource counters use a zero baseline like BuildBuddy", () => {
   const lane = layoutProfile({
     phases: [],
