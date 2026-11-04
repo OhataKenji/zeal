@@ -44,8 +44,14 @@
     else refresh();
   }
 
-  let analyticsOpen = $state(false);
-  let queryOpen = $state(false);
+  let analyticsOpen = $state(
+    typeof location !== "undefined" &&
+      new URLSearchParams(location.search).get("view") === "analytics",
+  );
+  let queryOpen = $state(
+    typeof location !== "undefined" &&
+      new URLSearchParams(location.search).get("view") === "query",
+  );
   let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<BazelCommand>("build");

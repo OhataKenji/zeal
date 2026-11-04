@@ -59,7 +59,7 @@
 <script lang="ts">
   import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { Check, Copy } from "phosphor-svelte";
+  import { Bookmarks, CaretDown, Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
   import { createIndex } from "./search";
@@ -112,10 +112,18 @@
   let controller = $state<ReturnType<typeof createQuery> | null>(null);
   let graphUrl = $state<string | null>(null);
   let graphError = $state<string | null>(null);
+  const EXAMPLE_GROUPS = [
+    { title: "Dependencies", ids: ["deps", "rdeps", "siblings", "buildfiles"] },
+    { title: "Paths", ids: ["somepath", "allpaths"] },
+    { title: "Filter & Attributes", ids: ["kindConstraint", "attrLabels"] },
+    { title: "Set Operations", ids: ["osExceptKind", "depsIntersectKind"] },
+  ] as const;
+
   let graphZoom = $state(1);
   let graphDialog = $state<HTMLDialogElement>();
   let graphCanvas = $state<HTMLDivElement>();
   let viewEl = $state<HTMLElement>();
+  let detailsEl = $state<HTMLDetailsElement>();
 
   $effect(() => {
     const next = createQuery({ invoke }, (s) => (qstate = s));
@@ -325,6 +333,7 @@
     codeError = null;
     noImplicit = DEFAULT_FLAGS.noImplicit;
     noTool = DEFAULT_FLAGS.noTool;
+    if (detailsEl) detailsEl.open = false;
   }
 
   function revertToBuilder() {
@@ -369,21 +378,6 @@
 <svelte:window onkeydown={onKey} />
 
 <section class="query-view" bind:this={viewEl}>
-  <aside class="query-rail">
-    <h2 class="query-rail-heading">Example</h2>
-    <div class="query-examples">
-      {#each EXAMPLES as example (example.id)}
-        <button
-          type="button"
-          class="query-example"
-          onclick={() => loadExample(example.id)}
-        >
-          <code>{example.name}</code>
-          <span class="query-ex-desc">{example.desc}</span>
-        </button>
-      {/each}
-    </div>
-  </aside>
   <div class="query-main">
     <div class="query-content">
       <header class="query-page-header">
@@ -391,7 +385,53 @@
       </header>
       <section class="query-panel" aria-labelledby="query-heading">
         <div class="query-panel-head">
-          <h2 id="query-heading">Bazel query</h2>
+          <div class="query-panel-title-group">
+            <h2 id="query-heading">Bazel query</h2>
+            <details
+              class="query-examples-wrap"
+              bind:this={detailsEl}
+              open={typeof location !== "undefined" &&
+                new URLSearchParams(location.search).has("examples")}
+            >
+              <summary class="query-examples-trigger">
+                <Bookmarks size={14} />
+                <span>Examples</span>
+                <span class="query-caret">
+                  <CaretDown size={12} />
+                </span>
+              </summary>
+              <button
+                type="button"
+                class="query-examples-backdrop"
+                tabindex="-1"
+                aria-label="Close examples menu"
+                onclick={() => {
+                  if (detailsEl) detailsEl.open = false;
+                }}
+              ></button>
+              <div class="query-examples-dropdown" role="menu" aria-label="Query examples">
+                {#each EXAMPLE_GROUPS as group}
+                  <div class="query-examples-group">
+                    <div class="query-examples-group-title">{group.title}</div>
+                    {#each group.ids as itemId}
+                      {@const example = EXAMPLES.find((e) => e.id === itemId)}
+                      {#if example}
+                        <button
+                          type="button"
+                          class="query-example-item"
+                          role="menuitem"
+                          onclick={() => loadExample(example.id)}
+                        >
+                          <code>{example.name}</code>
+                          <span class="query-ex-desc">{example.desc}</span>
+                        </button>
+                      {/if}
+                    {/each}
+                  </div>
+                {/each}
+              </div>
+            </details>
+          </div>
           <div class="query-tabs" role="tablist" aria-label="Query mode">
             <button
               type="button"
