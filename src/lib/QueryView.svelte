@@ -62,7 +62,7 @@
   import { Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
-  import { createIndex } from "./search";
+  import { createIndex, uniqueLabels } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
@@ -76,19 +76,21 @@
     EXAMPLES,
     kindCandidates,
     parse,
+    resultCandidates,
     serialize,
     validate,
     type CommandFlags,
     type Expr,
     type QueryState,
   } from "./query";
-  import type { TargetIndex } from "./types";
+  import type { Target, TargetIndex } from "./types";
 
   let { snap }: { snap: TargetIndex | null } = $props();
 
-  const searchIndex = $derived(
-    snap ? createIndex(snap.targets) : null,
-  );
+  const searchIndex = $derived.by(() => {
+    if (!snap) return null;
+    return createIndex(uniqueLabels([...snap.targets, ...resultHints]));
+  });
   // Attribute names come from a static hint list: the label_kind snapshot
   // carries no attributes, and completion only assists.
   const attrIndex = createIndex(attrCandidates());
@@ -186,6 +188,15 @@
 
   // Editing the query clears the result rather than marking it stale.
   const stored = $derived(qstate.result);
+  // Result labels feed completion too. Unlike `stored` they persist across
+  // edits — clearing the display must not erase the candidates the user is
+  // about to type from — until the next Raw result replaces them.
+  let resultHints = $state<Target[]>([]);
+  $effect(() => {
+    if (resultView === "raw" && stored) {
+      resultHints = resultCandidates(stored.stdout);
+    }
+  });
   // Only one invocation is ever in flight; which view started it does not matter —
   // either pane may as well show the spinner.
   const runningThisView = $derived(qstate.running);

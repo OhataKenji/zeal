@@ -707,6 +707,29 @@ export function attrCandidates(): Target[] {
   return ATTR_NAMES.map((label) => labelTarget(label, "attribute"));
 }
 
+/**
+ * Candidates recovered from one Raw result: every label the run printed,
+ * plus an `@repo//...` subtree pattern for each external repository those
+ * labels name. Results are the only place external labels reach the editor —
+ * the snapshot spans the main repository — so this is what makes queries like
+ * `deps(//x) intersect @pypi//...` completable without a repo listing call.
+ */
+export function resultCandidates(stdout: string): Target[] {
+  const labels = new Set<string>();
+  const repos = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    const label = line.trim();
+    if (!label) continue;
+    labels.add(label);
+    const repo = /^@+[^/]+/.exec(label);
+    if (repo) repos.add(repo[0]);
+  }
+  return [
+    ...[...labels].map((label) => labelTarget(label, "result")),
+    ...[...repos].map((repo) => labelTarget(`${repo}//...`, "external repo")),
+  ];
+}
+
 // Ordered like the bazel query guide: single-function queries first (what X
 // needs, how it connects, who needs X), then existence enumeration, then the
 // composite idioms (diffs) and plumbing.

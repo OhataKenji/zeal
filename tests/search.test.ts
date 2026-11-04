@@ -7,8 +7,9 @@ import {
   optionId,
   search,
   segments,
+  uniqueLabels,
 } from "../src/lib/search.ts";
-import type { TargetIndex } from "../src/lib/types.ts";
+import type { Target, TargetIndex } from "../src/lib/types.ts";
 
 const SNAPSHOT: TargetIndex = {
   meta: { fetchedAt: 1, status: "ok" },
@@ -307,4 +308,22 @@ test("segments merge ranges and cover the whole string", () => {
     { text: "def", hit: false },
   ]);
   assert.equal(runs.map((run) => run.text).join(""), "abcdef");
+});
+
+test("uniqueLabels keeps the first candidate per label", () => {
+  const t = (label: string, ruleClass: string): Target => ({
+    label,
+    pkg: "",
+    name: "",
+    ruleClass,
+    location: null,
+  });
+  const deduped = uniqueLabels([t("//a:b", "target"), t("//a:b", "result"), t("//a:c", "target")]);
+  assert.deepEqual(
+    deduped.map((c) => [c.label, c.ruleClass]),
+    [
+      ["//a:b", "target"],
+      ["//a:c", "target"],
+    ],
+  );
 });

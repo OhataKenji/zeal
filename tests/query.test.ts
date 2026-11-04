@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyExample,
+  attrCandidates,
   codeDiverged,
   commandLine,
   createQuery,
@@ -10,12 +11,12 @@ import {
   emptyQueryState,
   EXAMPLES,
   KIND_GROUPS,
-  attrCandidates,
   kindCandidates,
   kindOf,
   makeCall,
   parse,
   queryArgv,
+  resultCandidates,
   serialize,
   switchKind,
   target,
@@ -499,6 +500,18 @@ test("attrCandidates stays sorted and covers label-typed and scalar attrs", () =
   assert.deepEqual(labels, [...labels].sort());
   for (const name of ["deps", "srcs", "tags", "timeout", "visibility"])
     assert.ok(labels.includes(name), `missing ${name}`);
+});
+
+test("resultCandidates recovers result labels and external repo patterns", () => {
+  const stdout = "//app:lib\n@@pypi+//requests\n@npm//lodash:x\n\n//app:lib\n";
+  const labels = resultCandidates(stdout).map((t) => t.label);
+  assert.deepEqual(labels, [
+    "//app:lib",
+    "@@pypi+//requests",
+    "@npm//lodash:x",
+    "@@pypi+//...",
+    "@npm//...",
+  ]);
 });
 
 const FLAGS: CommandFlags = { noImplicit: true, noTool: false };

@@ -24,6 +24,20 @@ export function labelTarget(label: string, ruleClass: string): Target {
 }
 
 /**
+ * Dedupes candidates by label, keeping the first occurrence. Merged indexes
+ * (snapshot targets, synthetic patterns, query results) can carry the same
+ * label from two sources, and the dropdown keys rows by label.
+ */
+export function uniqueLabels(targets: Target[]): Target[] {
+  const seen = new Set<string>();
+  return targets.filter((t) => {
+    if (seen.has(t.label)) return false;
+    seen.add(t.label);
+    return true;
+  });
+}
+
+/**
  * fuzzysort decides matching, scoring and matched positions. Queries match
  * subsequences and space-separated terms; the matches drive the highlight.
  */
