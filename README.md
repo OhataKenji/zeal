@@ -22,6 +22,12 @@ Find targets with fuzzy search. Run `build`, `test`, or `run`.
 
 ![Fuzzy search for Bazel targets](docs/screenshots/fuzzy-search.jpg)
 
+### Query Builder
+
+Build Bazel queries visually from preset examples or from scratch. View results as target lists or dependency graphs.
+
+![Query Builder with visual expression blocks and a dependency graph](docs/screenshots/query-builder.jpg)
+
 ### Invocation Page
 
 View logs, results, details, and available timing data.
