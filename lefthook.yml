@@ -14,3 +14,17 @@ pre-commit:
       # Scans staged changes for secrets; requires gitleaks on PATH
       # (brew install gitleaks). --redact hides matched values in output.
       run: gitleaks git --staged --redact
+pre-push:
+  jobs:
+    - name: gitleaks
+      use_stdin: true
+      # Staged scanning misses commits created without the pre-commit hook.
+      # Scan the full history of each pushed ref, including merge changes.
+      run: |
+        while read -r local_ref local_sha remote_ref remote_sha; do
+          [ "$local_ref" = "(delete)" ] && continue
+          opts="--diff-merges=first-parent $local_sha"
+          # gitleaks can exit 0 when git log fails, silently skipping the scan.
+          git log --format=%H $opts > /dev/null || exit 1
+          gitleaks git --redact --log-opts="$opts" . || exit 1
+        done
