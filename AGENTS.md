@@ -15,3 +15,6 @@ See [README.md](README.md) for the project overview and
 ## Policy
 
 - This repository is PUBLIC. Do not commit or push private or sensitive data.
+- Store temporary files outside the repository, for example in `/tmp`.
+  Set browser profile directories, including Chrome's `--user-data-dir`,
+  outside the repository as well.
