@@ -162,10 +162,10 @@
   );
 
   $effect.pre(() => {
-    void exprText;
-    void resultView;
-    void flags;
-    untrack(() => controller?.clear());
+    const expr = exprText;
+    const view = resultView;
+    const options = flags;
+    untrack(() => controller?.select(expr, view, options));
   });
 
   // Queries serialize with other Bazel commands and ingest in the core; the reason
@@ -192,7 +192,7 @@
           : null)),
   );
 
-  // Editing the query clears the result rather than marking it stale.
+  // Input changes restore a cached result, or leave the result empty.
   const stored = $derived(qstate.result);
   // Only one invocation is ever in flight; which view started it does not matter —
   // either pane may as well show the spinner.

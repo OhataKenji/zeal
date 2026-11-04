@@ -818,8 +818,8 @@ export interface Transport {
 }
 
 /**
- * Execution state pushed to the view on every change. Only the latest result
- * is retained. The controller tracks its own in-flight run; the view combines
+ * Execution state pushed to the view on every change. The selected result
+ * is shown. The controller tracks its own in-flight run; the view combines
  * it with the global busy state.
  */
 export interface QueryState {
@@ -834,25 +834,20 @@ export function emptyQueryState(): QueryState {
 }
 
 /**
- * Creates a query runner scoped to one editor. `run` invokes `run_query` with
- * the `queryArgv` arguments and keeps only the latest result; a second `run`
- * while one is in flight is ignored — the core serializes bazel work, and the
- * view decides when to call again. Errors thrown by `invoke` (busy/spawn
- * class) land in `error`; a non-zero exitCode is data, not an error. Starting
- * a run clears the previous result and error. `clear` drops the stored result
- * and error and invalidates the in-flight response — an edited query never
- * shows a reply fetched for older inputs — without releasing the running
- * slot. Responses arriving after `dispose()` are dropped entirely; a run
- * still in flight finishes on its own — there is no stop in v1.
+ * One editor retains the ten most recently used successful query results.
+ * Selecting inputs restores a result without executing; run always refreshes it.
+ * Editing invalidates an in-flight reply without releasing its slot.
+ * The workspace-keyed editor owns this controller, so results never cross workspaces.
  */
 export function createQuery(
   t: Transport,
   changed: (s: QueryState) => void,
 ): {
+  select(expr: string, view: "raw" | "graph", flags: CommandFlags): void;
   run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void>;
-  clear(): void;
   dispose(): void;
 } {
+  const cache = new Map<string, QueryOutput>();
   let state = emptyQueryState();
   let disposed = false;
   let acceptResult = false;
@@ -861,23 +856,42 @@ export function createQuery(
     state = { ...state, ...patch };
     changed(state);
   }
+  function select(expr: string, view: "raw" | "graph", flags: CommandFlags) {
+    if (disposed) return;
+    acceptResult = false;
+    const key = JSON.stringify(queryArgv(expr, view, flags));
+    const result = cache.get(key) ?? null;
+    if (result) {
+      cache.delete(key);
+      cache.set(key, result);
+    }
+    update({ result, error: null });
+  }
   async function run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void> {
     if (disposed || state.running) return;
+    const args = queryArgv(expr, view, flags);
+    const key = JSON.stringify(args);
+    cache.delete(key);
     acceptResult = true;
     update({ running: true, error: null, result: null });
+    let result: QueryOutput;
     try {
-      const result = await t.invoke<QueryOutput>(COMMANDS.runQuery, queryArgv(expr, view, flags));
-      update({ running: false, result: acceptResult ? result : null });
+      result = await t.invoke<QueryOutput>(COMMANDS.runQuery, args);
     } catch (error) {
       update({ running: false, error: acceptResult ? String(error) : null });
+      return;
     }
+    update({ running: false });
+    if (!acceptResult) return;
+    update({ result });
+    if (result.exitCode !== 0 || result.timedOut) return;
+    cache.set(key, result);
+    if (cache.size > 10) cache.delete(cache.keys().next().value!);
   }
-  function clear() {
-    acceptResult = false;
-    update({ result: null, error: null });
-  }
+
   function dispose() {
+    acceptResult = false;
     disposed = true;
   }
-  return { run, clear, dispose };
+  return { select, run, dispose };
 }
