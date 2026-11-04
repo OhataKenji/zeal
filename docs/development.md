@@ -29,8 +29,7 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
-Run the opt-in tests against an installed Bazel 8.x binary to check GUI and
-terminal invocations, including saved profiles:
+Check GUI and terminal profiles with Bazel 8.x (opt-in, outside CI):
 
 ```sh
 cd src-tauri

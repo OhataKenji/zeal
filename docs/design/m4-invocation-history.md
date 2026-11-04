@@ -64,22 +64,17 @@ indexは `invocation(workspace_id, started_at_ms DESC, id)` とする。
 
 #### 起動と履歴の作成
 
-Bazelを起動するときはランダムなinvocation IDを生成して渡す。
-Zeal実行もCLI実行も、BES受信時に履歴と保存先を作る。
-runnerはDBや保存先を予約せず、起動失敗時の取り消しも行わない。
-Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻や入力へ代入しない。
-ストレージ障害は起動前の検査ではなく、BES受信時に検出する。
-BESへの保存に失敗すると、upload完了を待つBazelも非ゼロで終了する場合がある。
+起動時はランダムなinvocation IDをBazelへ渡す。
+履歴と保存先はBESが作り、Consoleの入力はメモリだけに保持する。
+保存障害はBES受信時に検出し、Bazelも非ゼロで終了する場合がある。
 
 ### event fileと受信
 
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
-任意の `profile.json.gz` はBEPと同じ `attempt/<number>/` に置き、その有無を起動元の判定に使わない。
-Zeal実行もCLI実行も、receiverが `BuildToolLogs` のローカル参照からgzip profileをコピーする。
-DBが選ぶ現在のattemptだけを読み、古い接続や完了後の再送でprofileを上書きしない。
-profileは `received_complete=1` になってから読み、途中の受信では欠損として扱う。
+任意の `profile.json.gz` も同じattemptに保存し、DBが選ぶ現在のattemptの受信完了後だけ読む。
+完了済みの再送では成果物を書き換えない。取り込み条件は[M2](./m2-invocation-detail.md)に従う。
 端末出力はConsole表示用の一時file `terminal.log` へ書き、永続化しない。履歴のログ表示はevent内のProgressから復元する。
 
 ### 正常受信
