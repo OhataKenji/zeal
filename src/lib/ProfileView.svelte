@@ -5,6 +5,7 @@
     COUNTER_HEIGHT,
     LANE_HEADER,
     ROW_HEIGHT,
+    eventFields,
     eventName,
     formatCounter,
     formatTime,
@@ -337,24 +338,14 @@
     <h4 class="trace-event-title" id="trace-event-title">
       {eventName(selected.event)}
     </h4>
-    <dl class="invocation-details">
-      <dt>Thread</dt>
-      <dd>{lane.name || "thread"} · tid {lane.tid}</dd>
-      <dt>Start</dt>
-      <dd>
-        {selected.start === null ? "Unknown" : formatTime(selected.start)}
-      </dd>
-      {#if selected.kind === "span"}<dt>Duration</dt>
-        <dd>
-          {formatTime((selected.end ?? 0) - (selected.start ?? 0))}
-        </dd>{/if}
-      {#if typeof selected.event.cat === "string"}<dt>Category</dt>
-        <dd>{selected.event.cat}</dd>{/if}
-    </dl>
-    <details class="trace-raw" open>
-      <summary onkeydown={keydown}>Raw event fields</summary>
-      <pre>{JSON.stringify(selected.event, null, 2)}</pre>
-    </details>
+    <table class="trace-fields">
+      <tbody>
+        <tr><th>Thread</th><td>{lane.name || "thread"} · tid {lane.tid}</td></tr>
+        {#each eventFields(selected.event) as [field, value] (field)}
+          <tr><th>{field}</th><td>{value}</td></tr>
+        {/each}
+      </tbody>
+    </table>
   </section>
 {/snippet}
 
@@ -446,7 +437,7 @@
     {#if selected && selectedLane}
       {@render eventDetails(selected, selectedLane)}
     {:else}<p class="dim">
-        Select an event to inspect its timing and raw fields.
+        Select an event to inspect its timing and fields.
       </p>{/if}
   </section>
 </div>
