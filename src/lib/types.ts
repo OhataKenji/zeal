@@ -1,3 +1,9 @@
+/** The one item currently selected in the target explorer. */
+export type ExplorerSelection =
+  | { kind: "target"; label: string }
+  | { kind: "package"; path: string }
+  | null;
+
 /** Location attached to a build target when the core has source metadata. */
 export interface TargetLocation {
   file: string;
