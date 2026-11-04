@@ -6,11 +6,15 @@
   let {
     root,
     selected,
+    selectedPackage,
+    onselectpackage,
     revealRequest = 0,
     onselect,
   }: {
     root: DirNode;
     selected: string | null;
+    selectedPackage: string | null;
+    onselectpackage: (pkg: string) => void;
     revealRequest?: number;
     onselect: (label: string) => void;
   } = $props();
@@ -44,8 +48,15 @@
       <button
         class="row dir"
         style:padding-left="{r.depth * 12}px"
+        class:selected={r.dirPath === selectedPackage}
+        aria-current={r.dirPath === selectedPackage ? "true" : undefined}
         aria-expanded={r.expanded}
-        onclick={() => r.dirPath && toggle(r.dirPath)}
+        onclick={() => {
+          if (r.dirPath !== undefined) {
+            toggle(r.dirPath);
+            if (r.hasTargets) onselectpackage(r.dirPath);
+          }
+        }}
       >
         {#if r.expanded}<CaretDown size={10} />{:else}<CaretRight
             size={10}

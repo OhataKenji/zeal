@@ -17,6 +17,7 @@
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
+  import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import InvocationStatus from "./lib/InvocationStatus.svelte";
@@ -149,6 +150,12 @@
     getSession().selectTarget(label);
     if (label) targetField = label;
   }
+  function selectPackage(pkg: string) {
+    analyticsOpen = false;
+    queryOpen = false;
+    getSession().selectInvocation(null);
+    getSession().selectPackage(pkg);
+  }
 </script>
 
 {#snippet targetPane(state: AppState)}
@@ -183,7 +190,7 @@
     {#if !collapsed.targets}
       <div class="pane-body">
         {#if snap && tree}
-          <Tree root={tree} {selected} {revealRequest} onselect={select} />
+          <Tree root={tree} {selected} selectedPackage={app.view.selectedPackage} {revealRequest} onselect={select} onselectpackage={selectPackage} />
         {:else if state.ingest === "running" || app.view.snapshotLoading}
           <p class="dim">Loading targets…</p>
         {:else if app.view.snapshotError || state.lastError}
@@ -315,6 +322,8 @@
       {#key workspace}
         <QueryView {snap} />
       {/key}
+    {:else if snap && app.view.selectedPackage !== null}
+      <PackageView index={snap} pkg={app.view.selectedPackage} onselect={select} />
     {:else if snap && selected}
       {#if app.view.targetDetail?.target.label === selected}
         {#if app.view.targetDetail.status === "partial"}

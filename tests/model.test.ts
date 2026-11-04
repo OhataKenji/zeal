@@ -88,3 +88,19 @@ test("forward attributes retain target and file inputs under their original name
     ["app/generated.txt"],
   );
 });
+
+test("tree distinguishes selectable packages from grouping directories", () => {
+  const index: TargetIndex = {
+    meta: { fetchedAt: 0, status: "ok" },
+    targets: ["//app/lib:parser", "//apple:server"].map((label) => ({
+      label,
+      ...splitLabel(label),
+      ruleClass: "cc_library",
+      location: null,
+    })),
+  };
+  const rows = flatten(buildTree(index), new Set(["app"]));
+  assert.equal(rows.find((row) => row.dirPath === "app")?.hasTargets, false);
+  assert.equal(rows.find((row) => row.dirPath === "app/lib")?.hasTargets, true);
+  assert.equal(rows.find((row) => row.dirPath === "apple")?.hasTargets, true);
+});
