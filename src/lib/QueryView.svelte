@@ -540,12 +540,6 @@
             >
           </div>
           <span class="query-results-count">{resultCount}</span>
-          <button
-            type="button"
-            class="button"
-            disabled={qstate.running}
-            onclick={() => controller?.clear()}>Clear cache</button
-          >
         </div>
         {#if qstate.error}
           <Notice tone="error">{qstate.error}</Notice>

@@ -836,7 +836,7 @@ export function emptyQueryState(): QueryState {
 /**
  * One editor retains the ten most recently used successful query results.
  * Selecting inputs restores a result without executing; run always refreshes it.
- * Editing or clearing invalidates an in-flight reply without releasing its slot.
+ * Editing invalidates an in-flight reply without releasing its slot.
  * The workspace-keyed editor owns this controller, so results never cross workspaces.
  */
 export function createQuery(
@@ -845,7 +845,6 @@ export function createQuery(
 ): {
   select(expr: string, view: "raw" | "graph", flags: CommandFlags): void;
   run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void>;
-  clear(): void;
   dispose(): void;
 } {
   const cache = new Map<string, QueryOutput>();
@@ -890,14 +889,9 @@ export function createQuery(
     if (cache.size > 10) cache.delete(cache.keys().next().value!);
   }
 
-  function clear() {
-    cache.clear();
-    acceptResult = false;
-    update({ result: null, error: null });
-  }
   function dispose() {
     acceptResult = false;
     disposed = true;
   }
-  return { select, run, clear, dispose };
+  return { select, run, dispose };
 }

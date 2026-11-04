@@ -658,8 +658,9 @@ test("a new invocation drops the old result even when it fails", async () => {
   await next;
   assert.equal(h.state.result, null);
   assert.match(h.state.error ?? "", /busy/);
-  h.runner.clear();
+  h.runner.select("deps(//a)", "raw", FLAGS);
   assert.equal(h.state.error, null);
+  assert.equal(h.state.result, null);
   assert.equal(h.calls.length, 2);
 });
 
@@ -705,7 +706,7 @@ test("cache keys include the expression and dependency flags", async () => {
   assert.deepEqual(h.state.result, OUTPUT);
 });
 
-test("explicit run replaces a cached result and clear removes all cached results", async () => {
+test("explicit run replaces a cached result", async () => {
   const h = harness();
   const first = h.runner.run("//a", "raw", FLAGS);
   h.calls[0].resolve(OUTPUT);
@@ -717,15 +718,7 @@ test("explicit run replaces a cached result and clear removes all cached results
   await refresh;
   h.runner.select("//a", "raw", FLAGS);
   assert.deepEqual(h.state.result, fresh);
-  const second = h.runner.run("//b", "raw", FLAGS);
-  h.calls[2].resolve(OUTPUT);
-  await second;
-  h.runner.clear();
-  h.runner.select("//a", "raw", FLAGS);
-  assert.equal(h.state.result, null);
-  h.runner.select("//b", "raw", FLAGS);
-  assert.equal(h.state.result, null);
-  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls.length, 2);
 });
 
 test("cache evicts the least recently selected result after ten entries", async () => {
@@ -776,15 +769,5 @@ test("selecting cached output during a run preserves it when the old reply arriv
   assert.deepEqual(h.state.result, OUTPUT);
   assert.equal(h.state.running, false);
   h.runner.select("//b", "graph", FLAGS);
-  assert.equal(h.state.result, null);
-});
-
-test("clearing during a run prevents the late result from repopulating cache", async () => {
-  const h = harness();
-  const pending = h.runner.run("//a", "raw", FLAGS);
-  h.runner.clear();
-  h.calls[0].resolve(OUTPUT);
-  await pending;
-  h.runner.select("//a", "raw", FLAGS);
   assert.equal(h.state.result, null);
 });
