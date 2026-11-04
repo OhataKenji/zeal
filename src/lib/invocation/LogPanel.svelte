@@ -22,7 +22,6 @@
   const visible = $derived(lines.slice(win.first, win.last));
 </script>
 
-<h2 class="panel-heading">Logs</h2>
 {#if section && section.status !== "ok"}
   <Notice tone={sectionNoticeTone(section)}>{sectionMessage(section)}</Notice>
 {/if}

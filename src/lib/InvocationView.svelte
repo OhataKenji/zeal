@@ -106,7 +106,8 @@
   >
     {#each sections as section}
       {#if active === "All" || active === section}
-        <section class="invocation-section" aria-label={section}>
+        <section class="invocation-section" aria-labelledby="invocation-heading-{section}">
+          <h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>
           {#if section === "Targets"}
             <TargetsPanel section={view.detail?.bep} />
           {:else if section === "Logs"}
@@ -117,7 +118,6 @@
             />
             {/key}
           {:else if section === "Details"}
-            <h2 class="panel-heading">Invocation details</h2>
             {#if record}
               <dl class="invocation-details">
                 <dt>Command</dt>
@@ -143,7 +143,7 @@
                     {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
                   </dd>{/if}
               </dl>
-              <h3 class="command-arguments-heading">Command lines</h3>
+              <h3 class="panel-subheading">Command lines</h3>
               <details class="invocation-collapsible">
                 <summary>Original command line</summary>
                 {#if bep?.originalCommandLine !== undefined}
@@ -160,7 +160,7 @@
                   <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
                 {/if}
               </details>
-              <h3 class="command-arguments-heading">Options</h3>
+              <h3 class="panel-subheading">Options</h3>
               {#if bep?.options}
                 <div class="invocation-command-options">
                   <section class="invocation-command-block">
@@ -198,7 +198,6 @@
               {/if}
             {/if}
           {:else}
-            <h2 class="panel-heading">Timing</h2>
             {#if running}<p class="panel-empty">
                 Timing is available after the invocation finishes.
               </p>
