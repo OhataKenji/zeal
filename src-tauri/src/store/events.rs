@@ -296,9 +296,10 @@ impl Receipt {
 fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
     let path = Url::parse(uri)
         .ok()
+        .filter(|url| url.scheme() == "file")
         .and_then(|url| url.to_file_path().ok())
         .ok_or_else(|| io::Error::other("profile must reference a local file"))?;
-    // Follow Bazel's latest-profile symlink, then check and read the same FD.
+    // Allow profile symlinks, then check and read the same FD.
     // NONBLOCK prevents a FIFO source from hanging on open.
     let source = File::from(rustix::fs::open(
         &path,
@@ -506,7 +507,17 @@ mod tests {
         let fixture = Fixture::new();
         let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
         assert!(copy_profile("https://example.com/profile.gz", &dir).is_err());
+        assert!(copy_profile("bytestream://example.com/instance/blobs/hash/123", &dir).is_err());
         assert!(copy_profile("file://example.com/profile.gz", &dir).is_err());
+
+        let source = fixture.root.join("profile.gz");
+        std::fs::write(&source, b"profile").unwrap();
+        let file_uri = Url::from_file_path(source).unwrap();
+        let bytestream_uri = file_uri.as_str().replacen("file:", "bytestream:", 1);
+        assert!(copy_profile(&bytestream_uri, &dir).is_err());
+        let https_uri = format!("https://localhost{}", file_uri.path());
+        assert!(copy_profile(&https_uri, &dir).is_err());
+        assert!(!dir.exists("profile.json.gz").unwrap());
     }
 
     #[test]

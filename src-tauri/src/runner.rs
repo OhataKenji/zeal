@@ -36,7 +36,7 @@ const EXIT_POLL: Duration = Duration::from_millis(25);
 /// Shown when the group was killed but no exit was confirmed.
 const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
-/// Start an invocation in the open workspace and return its record. The
+/// Start an invocation and return its ID without observed build facts. The
 /// invocation finishes in the background; target data is refreshed only on
 /// request.
 pub fn start(

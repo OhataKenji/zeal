@@ -65,6 +65,7 @@ Add to `.bazelrc`:
 ```bazelrc
 build --bes_backend=grpc://127.0.0.1:4718
 build --bes_upload_mode=wait_for_upload_complete
+build --experimental_build_event_upload_strategy=local
 build --bes_timeout=5s
 ```
 
@@ -72,7 +73,10 @@ While Zeal is open, run `bazel build //...`.
 
 Zeal and terminal runs save profiles through the same receiver. It copies Bazel's
 standard gzip profile from the same machine. Profiling follows your Bazel
-configuration. Unavailable profiles do not prevent build history from being saved.
+configuration. The local upload strategy keeps BEP file references local when
+using a remote cache. Plain JSON profiles, disabled profiling, and remote profile
+URIs are not imported. Unavailable profiles do not prevent build history from
+being saved.
 
 ## Development
 

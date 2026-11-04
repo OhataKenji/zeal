@@ -73,6 +73,7 @@ toolの識別には `--tool_tag=zeal` を付ける。
 profileの保存先と補助flagは上書きせず、Zeal実行もCLI実行もBazelの設定に従う。
 
 receiverは `BuildToolLogs` の `command.profile.gz` が参照するローカルfileを、32 MiBを上限にコピーする。
+remote cache利用時もローカル参照を得るには、共通の `.bazelrc` に `build --experimental_build_event_upload_strategy=local` を設定する。
 内容は表示時に既存のprofile parserで読む。
 コピーできなくてもBEPの保存とACKは続ける。
 

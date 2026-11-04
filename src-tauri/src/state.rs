@@ -97,7 +97,7 @@ impl Deref for InvocationId {
 /// so a group id can never outlive the invocation it belongs to. `pgid` is
 /// revoked at reap so a racing stop can never signal a recycled process group.
 pub struct ActiveInvocation {
-    /// Persisted identifier of the invocation in flight.
+    /// Identifier passed to Bazel for the invocation in flight.
     pub id: InvocationId,
     /// The PTY the invocation's process writes through.
     pub terminal: crate::terminal::Control,

@@ -127,6 +127,7 @@ impl BazelFixture {
             .unwrap();
         let profile: serde_json::Value =
             serde_json::from_reader(flate2::read::GzDecoder::new(file)).unwrap();
+        assert_eq!(profile["otherData"]["build_id"], id);
         assert!(!profile["traceEvents"].as_array().unwrap().is_empty());
     }
 

@@ -144,7 +144,7 @@ workspace の判定は `MODULE.bazel` / `WORKSPACE`(`WORKSPACE.bazel`)の存在�
 
 保存と詳細読込の規則は[M4](./m4-invocation-history.md)に従う。
 DB は `journal_mode=WAL` で開き、schema は `PRAGMA user_version` で管理する。
-起動時の全件 check は行わず、破損系エラーは履歴利用不能として表示し、新規 invocation を抑止する。
+起動時の全件 check は行わず、破損系エラーは履歴利用不能として表示する。保存障害はBES受信時に検出する。
 DB と sidecar の自動削除や再作成、復元用 manifest、backup は設けない。
 対応するschemaと一致しないDBは変更せず拒否する。
 permission、disk full、新しすぎる schema は別のエラーとして扱い、DB 初期化を勧めない。

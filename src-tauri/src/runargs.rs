@@ -9,7 +9,7 @@
 const COMMANDS: [&str; 3] = ["build", "test", "run"];
 
 /// Parse shell-style words, without executing expansions or operators.
-/// Reject malformed input before reserving an invocation or starting Bazel.
+/// Reject malformed input before starting Bazel.
 pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
     if input.contains('\0') {
         return Err("Arguments must not contain NUL characters".to_string());
