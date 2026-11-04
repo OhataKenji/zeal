@@ -13,6 +13,7 @@ import {
   attrCandidates,
   kindCandidates,
   kindOf,
+  packagePatterns,
   makeCall,
   parse,
   queryArgv,
@@ -499,6 +500,25 @@ test("attrCandidates stays sorted and covers label-typed and scalar attrs", () =
   assert.deepEqual(labels, [...labels].sort());
   for (const name of ["deps", "srcs", "tags", "timeout", "visibility"])
     assert.ok(labels.includes(name), `missing ${name}`);
+});
+
+test("packagePatterns offers subtree and wildcard forms per package", () => {
+  const t = (pkg: string): Target => ({
+    label: `//${pkg}:x`,
+    pkg,
+    name: "x",
+    ruleClass: "r",
+    location: null,
+  });
+  const labels = packagePatterns([t("app/lib"), t("app"), t(""), t("app")]).map((c) => c.label);
+  assert.deepEqual(labels, [
+    "//...",
+    "//:all",
+    "//app/...",
+    "//app:all",
+    "//app/lib/...",
+    "//app/lib:all",
+  ]);
 });
 
 const FLAGS: CommandFlags = { noImplicit: true, noTool: false };

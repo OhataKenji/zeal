@@ -707,6 +707,27 @@ export function attrCandidates(): Target[] {
   return ATTR_NAMES.map((label) => labelTarget(label, "attribute"));
 }
 
+/**
+ * Synthetic pattern candidates for target inputs: the workspace-wide `//...`,
+ * plus `//pkg/...` and `//pkg:all` for every package the index lists. Queries
+ * often take a package or subtree rather than one target (`tests(//app/...)`,
+ * the rdeps universe), and these patterns are not labels the index has.
+ */
+export function packagePatterns(targets: Target[]): Target[] {
+  const out: Target[] = [labelTarget("//...", "package pattern")];
+  for (const pkg of [...new Set(targets.map((t) => t.pkg))].sort()) {
+    if (pkg === "") {
+      out.push(labelTarget("//:all", "package pattern"));
+      continue;
+    }
+    out.push(
+      labelTarget(`//${pkg}/...`, "package pattern"),
+      labelTarget(`//${pkg}:all`, "package pattern"),
+    );
+  }
+  return out;
+}
+
 // Ordered like the bazel query guide: single-function queries first (what X
 // needs, how it connects, who needs X), then existence enumeration, then the
 // composite idioms (diffs) and plumbing.

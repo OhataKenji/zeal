@@ -193,7 +193,7 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 `tests()` の例は無い。どのリポジトリにも存在が保証される test_suite は存在しないためである。
 Code に未適用の編集があっても確認せず捨てる。再入力コストが低く、確認 UI の実装が重いため(worse is better)。
 target pattern の入力は実行時の target 選択と同じ fuzzy find(`SearchInput` + `search.ts`)で補完する。
-候補はツリー用一覧の `targets` とする。
+候補はツリー用一覧の `targets` に、`//...` と各 package の `//pkg/...`・`//pkg:all` を合成したものを使う。
 外部 repo label は一覧に載らないため手入力する。
 手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
 `kind` の pattern も同じ fuzzy find で、候補は `.*_test rule`、snapshot の rule class、rule では表れない `source file`・`generated file` を加えたものを使う。

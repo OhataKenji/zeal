@@ -75,6 +75,7 @@
     emptyQueryState,
     EXAMPLES,
     kindCandidates,
+    packagePatterns,
     parse,
     serialize,
     validate,
@@ -87,7 +88,9 @@
   let { snap }: { snap: TargetIndex | null } = $props();
 
   const searchIndex = $derived(
-    snap ? createIndex(snap.targets) : null,
+    snap
+      ? createIndex([...snap.targets, ...packagePatterns(snap.targets)])
+      : null,
   );
   // Attribute names come from a static hint list: the label_kind snapshot
   // carries no attributes, and completion only assists.
