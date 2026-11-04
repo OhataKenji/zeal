@@ -124,7 +124,6 @@
       mutedForeground: token("muted-foreground"),
       border: token("border"),
       sidebar: token("sidebar"),
-      chartBar: token("chart-bar"),
     };
     context.fillStyle = theme.background;
     context.fillRect(0, 0, width, canvasHeight);

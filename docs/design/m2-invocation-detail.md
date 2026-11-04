@@ -115,7 +115,7 @@ lane のキーは `tid` とし、ラベルには `thread_name` metadata を使�
 同じ lane の重なる span は段に積み、`ph: "i"` は mark、`ph: "C"` の counter は name と数値 field ごとの系列として描く。
 counter は全スレッドの上へまとめ、name、field の順の系列名ソートで表示し、同名でも異なる `tid` の系列はまとめない。
 span と mark の色は `cname`、なければ name をキーにした hash で決める。Chrome 固有の色表は再現しない。
-counter は線の下を塗る面グラフとして描き、線と塗りは同じ色に統一する。
+counter 系列は name と field をキーにした hash で色を決め、線の下を同じ色で塗る面グラフとして描く。
 event を選ぶと、チャートの下に通常の HTML で元の field を表示する。
 floating panel や外枠で囲む表示は使わず、action ごとの所要時間を別の一覧へ複製しない。
 

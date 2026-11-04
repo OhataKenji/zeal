@@ -31,7 +31,11 @@ export interface TimelineTheme {
   mutedForeground: string;
   border: string;
   sidebar: string;
-  chartBar: string;
+}
+
+/** Stable color distinguishing one counter series from another. */
+function counterColor(counter: CounterSeries): string {
+  return eventColor({ name: `${counter.name}·${counter.field}` });
 }
 
 interface TimelineAxis {
@@ -272,7 +276,7 @@ function drawCounterSeries(
   frame: TimelineFrame,
   hits: EventHit[],
 ) {
-  const { width, gutter, range, theme } = frame;
+  const { width, gutter, range } = frame;
   const { counter } = track;
   const { points } = counter;
   const timeX = (time: number) => timeToX(time, range, width, gutter);
@@ -299,14 +303,14 @@ function drawCounterSeries(
   const baseline = trackTop + COUNTER_HEIGHT - 1;
   context.save();
   context.globalAlpha = 0.4;
-  context.fillStyle = theme.chartBar;
+  context.fillStyle = counterColor(counter);
   traceLine();
   context.lineTo(timeX(points[pathTo - 1].time), baseline);
   context.lineTo(timeX(points[pathFrom].time), baseline);
   context.closePath();
   context.fill();
   context.restore();
-  context.strokeStyle = theme.chartBar;
+  context.strokeStyle = counterColor(counter);
   context.lineWidth = 1.5;
   traceLine();
   context.stroke();
@@ -333,7 +337,7 @@ function drawCounterPoint(
   // Cached builds can record only one sample. A moveTo-only path has no
   // stroke, so paint that sample even when it has not been selected.
   if (counter.points.length === 1) {
-    context.fillStyle = theme.chartBar;
+    context.fillStyle = counterColor(counter);
     context.beginPath();
     context.arc(pointX, pointY, 2, 0, Math.PI * 2);
     context.fill();

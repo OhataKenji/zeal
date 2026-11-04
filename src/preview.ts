@@ -183,6 +183,14 @@ function span(name: string, ts: number, dur: number) {
     cat: "action processing",
   };
 }
+function counter(name: string, field: string, values: number[]) {
+  return values.map((value, i) => ({
+    name,
+    ts: i * 942000,
+    ph: "C",
+    args: { [field]: value },
+  }));
+}
 const PROFILE: Profile = {
   phases: [
     { name: "Init", startUs: 0, endUs: 300000 },
@@ -236,13 +244,20 @@ const PROFILE: Profile = {
     { tid: 54, name: "grpc-nio-worker-0", events: [span("Remote cache", 0.2, 8.6)] },
     {
       tid: 60,
-      name: "local action count",
-      events: [0, 1, 5, 6, 7, 8, 7.8, 7.5, 6, 3, 0].map((value, i) => ({
-        name: "local action count",
-        ts: i * 942000,
-        ph: "C",
-        args: { actions: value },
-      })),
+      name: "system metrics",
+      events: [
+        ...counter(
+          "CPU usage (Bazel)",
+          "CPU cores",
+          [1.1, 2.6, 3.8, 3.2, 2.5, 1.9, 2.7, 4.1, 3.5, 2.1, 1.4],
+        ),
+        ...counter("local action count", "actions", [0, 1, 5, 6, 7, 8, 7.8, 7.5, 6, 3, 0]),
+        ...counter(
+          "Memory usage (Bazel)",
+          "memory",
+          [620, 840, 1180, 1520, 1960, 2240, 2380, 2310, 2450, 2520, 2600],
+        ),
+      ],
     },
   ],
 };
