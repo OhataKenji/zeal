@@ -123,7 +123,7 @@ pub struct TestSummary {
 }
 
 pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
-pub const LOG_LIMIT: usize = 512 * 1024;
+pub const LOG_LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct Parsed {
