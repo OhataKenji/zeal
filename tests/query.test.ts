@@ -10,6 +10,7 @@ import {
   emptyQueryState,
   EXAMPLES,
   KIND_GROUPS,
+  kindCandidates,
   kindOf,
   makeCall,
   parse,
@@ -23,6 +24,7 @@ import {
   type QueryOutput,
   type QueryState,
 } from "../src/lib/query.ts";
+import type { Target } from "../src/lib/types.ts";
 
 function parseOk(text: string): Expr {
   const r = parse(text);
@@ -473,6 +475,22 @@ test("codeDiverged mirrors the mock's editor state check", () => {
   const broken = target(`a'b"c`);
   assert.equal(codeDiverged(broken, ""), false);
   assert.equal(codeDiverged(broken, "deps(//a)"), true);
+});
+
+test("kindCandidates offers non-rule kinds alongside snapshot rule classes", () => {
+  const targets: Target[] = [
+    { label: "//a:t", pkg: "a", name: "t", ruleClass: "sh_test", location: null },
+    { label: "//a:x", pkg: "a", name: "x", ruleClass: "cc_library", location: null },
+    { label: "//a:y", pkg: "a", name: "y", ruleClass: "cc_library", location: null },
+  ];
+  const labels = kindCandidates(targets).map((t) => t.label);
+  assert.deepEqual(labels, [
+    ".*_test rule",
+    "source file",
+    "generated file",
+    "cc_library rule",
+    "sh_test rule",
+  ]);
 });
 
 const FLAGS: CommandFlags = { noImplicit: true, noTool: false };

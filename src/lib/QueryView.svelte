@@ -62,7 +62,7 @@
   import { Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
-  import { createIndex, labelTarget } from "./search";
+  import { createIndex } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
@@ -73,6 +73,7 @@
     defaultNodeFor,
     emptyQueryState,
     EXAMPLES,
+    kindCandidates,
     parse,
     serialize,
     validate,
@@ -89,19 +90,10 @@
   );
   // Attribute names remain free text; the tree index carries no attributes.
   const attrIndex = null;
-  // kind()'s pattern arg searches a wildcard-test hint plus every rule class
-  // in the snapshot.
+  // kind()'s pattern arg searches a wildcard-test hint, the non-rule kinds,
+  // and every rule class in the snapshot.
   const kindIndex = $derived(
-    snap
-      ? createIndex(
-          [
-            ".*_test rule",
-            ...[...new Set(snap.targets.map((t) => t.ruleClass))]
-              .sort()
-              .map((rc) => (rc.endsWith("file") ? rc : `${rc} rule`)),
-          ].map((label) => labelTarget(label, "kind")),
-        )
-      : null,
+    snap ? createIndex(kindCandidates(snap.targets)) : null,
   );
   let root = $state<Expr>(
     EXAMPLES[0]?.build() ?? defaultNodeFor("target"),
