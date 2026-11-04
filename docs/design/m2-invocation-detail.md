@@ -113,10 +113,9 @@ lane のキーは `tid` とし、ラベルには `thread_name` metadata を使�
 
 表示は trace viewer の作法に従う。
 同じ lane の重なる span は段に積み、`ph: "i"` は mark、`ph: "C"` の counter は name と数値 field ごとの系列として描く。
-counter は全スレッドの下へまとめ、アクション数、Bazel の CPU・メモリ、システムの CPU・メモリ・負荷、送受信の順に表示する。
-未知の系列はその後へ name と field の順に並べ、同名でも異なる `tid` の系列はまとめない。
+counter は全スレッドの上へまとめ、name、field の順の系列名ソートで表示し、同名でも異なる `tid` の系列はまとめない。
 span と mark の色は `cname`、なければ name をキーにした hash で決める。Chrome 固有の色表は再現しない。
-counter の線は読みやすい濃い灰色に統一する。
+counter は線の下を塗る面グラフとして描き、線と塗りは同じ色に統一する。
 event を選ぶと、チャートの下に通常の HTML で元の field を表示する。
 floating panel や外枠で囲む表示は使わず、action ごとの所要時間を別の一覧へ複製しない。
 

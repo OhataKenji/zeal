@@ -1,4 +1,5 @@
 import {
+  COUNTER_HEIGHT,
   LANE_HEADER,
   ROW_HEIGHT,
   eventColor,
@@ -281,19 +282,33 @@ function drawCounterSeries(
   const lo = lowerBound(points, range.start, (point) => point.time);
   let hi = lo;
   while (hi < points.length && points[hi].time <= range.end) hi++;
-  context.strokeStyle = theme.chartBar;
-  context.lineWidth = 1.5;
-  context.beginPath();
   const pathFrom = Math.max(0, lo - 1);
   const pathTo = Math.min(points.length, hi + 1);
-  for (let i = pathFrom; i < pathTo; i++) {
-    const point = points[i];
-    if (i === pathFrom) {
-      context.moveTo(timeX(point.time), valueY(point.value));
-    } else {
-      context.lineTo(timeX(point.time), valueY(point.value));
+  const traceLine = () => {
+    context.beginPath();
+    for (let i = pathFrom; i < pathTo; i++) {
+      const point = points[i];
+      if (i === pathFrom) {
+        context.moveTo(timeX(point.time), valueY(point.value));
+      } else {
+        context.lineTo(timeX(point.time), valueY(point.value));
+      }
     }
-  }
+  };
+  // Shade the area under the line down to the row bottom like Perfetto.
+  const baseline = trackTop + COUNTER_HEIGHT - 1;
+  context.save();
+  context.globalAlpha = 0.4;
+  context.fillStyle = theme.chartBar;
+  traceLine();
+  context.lineTo(timeX(points[pathTo - 1].time), baseline);
+  context.lineTo(timeX(points[pathFrom].time), baseline);
+  context.closePath();
+  context.fill();
+  context.restore();
+  context.strokeStyle = theme.chartBar;
+  context.lineWidth = 1.5;
+  traceLine();
   context.stroke();
   for (let i = lo; i < hi; i++) {
     drawCounterPoint(context, track, points[i], timeX, valueY, frame, hits);

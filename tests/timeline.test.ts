@@ -432,7 +432,7 @@ test("zero and negative counters retain finite geometry and their original value
   assert.equal(negative.points[0].value, -2);
 });
 
-test("all counter series follow every event track without changing raw geometry", () => {
+test("all counter series precede every event track without changing raw geometry", () => {
   const layout = layoutProfile({
     phases: [],
     lanes: [
@@ -448,10 +448,10 @@ test("all counter series follow every event track without changing raw geometry"
   assert.deepEqual(
     tracks.map((track) => [track.kind, track.lane.tid, track.top, track.height]),
     [
-      ["events", 1, 0, 46],
-      ["events", 2, 46, 46],
-      ["counter", 1, 92, COUNTER_HEIGHT],
-      ["counter", 1, 134, COUNTER_HEIGHT],
+      ["counter", 1, 0, COUNTER_HEIGHT],
+      ["counter", 1, COUNTER_HEIGHT, COUNTER_HEIGHT],
+      ["events", 1, 2 * COUNTER_HEIGHT, 46],
+      ["events", 2, 2 * COUNTER_HEIGHT + 46, 46],
     ],
   );
   assert.equal(tracks[2].lane.events, layout.lanes[0].events);
@@ -468,13 +468,13 @@ test("collapsing threads keeps every counter series visible", () => {
   assert.deepEqual(
     tracks.map((track) => [track.kind, track.top, track.height]),
     [
-      ["events", 0, LANE_HEADER],
-      ["counter", LANE_HEADER, COUNTER_HEIGHT],
+      ["counter", 0, COUNTER_HEIGHT],
+      ["events", COUNTER_HEIGHT, LANE_HEADER],
     ],
   );
 });
 
-test("known Bazel counters follow resource order across source threads", () => {
+test("Bazel counters list alphabetically across source threads", () => {
   const layout = layoutProfile({
     phases: [],
     lanes: [
@@ -514,17 +514,17 @@ test("known Bazel counters follow resource order across source threads", () => {
       ["action count", "local action cache"],
       ["action count (local)", "value"],
       ["CPU usage (Bazel)", "value"],
-      ["Memory usage (Bazel)", "value"],
       ["CPU usage (total)", "value"],
+      ["Memory usage (Bazel)", "value"],
       ["Memory usage (total)", "value"],
-      ["System load average", "value"],
-      ["Network Up usage (total)", "value"],
       ["Network Down usage (total)", "value"],
+      ["Network Up usage (total)", "value"],
+      ["System load average", "value"],
     ],
   );
 });
 
-test("unknown counter names and fields sort after known metrics without merging tids", () => {
+test("counter tracks order by name, then field, without merging tids", () => {
   const layout = layoutProfile({
     phases: [],
     lanes: [
@@ -555,10 +555,10 @@ test("unknown counter names and fields sort after known metrics without merging 
       return [counter.name, counter.field, track.lane.tid];
     }),
     [
-      ["CPU usage (Bazel)", "value", 1],
       ["alpha", "a", 1],
       ["alpha", "a", 2],
       ["alpha", "z", 2],
+      ["CPU usage (Bazel)", "value", 1],
       ["zeta", "value", 2],
     ],
   );
@@ -582,8 +582,8 @@ test("revealing a numeric counter resolves its displayed series and original eve
   const position = eventPosition(tracks, 1, 1);
   assert.ok(position);
   const counter = layout.lanes[0].counters[1];
-  assert.equal(position.track, tracks[1]);
-  assert.equal(position.y, tracks[1].top + counterPointY(counter, 2));
+  assert.equal(position.track, tracks[0]);
+  assert.equal(position.y, tracks[0].top + counterPointY(counter, 2));
   assert.equal(position.track.lane.events[1].index, 1);
 });
 

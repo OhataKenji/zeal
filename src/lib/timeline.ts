@@ -401,33 +401,15 @@ export function timeTicks(range: TimeRange, width: number): number[] {
   return ticks;
 }
 
-// Bazel counter names in the reference viewer's information order. The labels
-// and original fields remain unchanged; unlisted metrics follow by name/field.
-const COUNTER_ORDER = [
-  "action count",
-  "action count (local)",
-  "CPU usage (Bazel)",
-  "Memory usage (Bazel)",
-  "CPU usage (total)",
-  "Memory usage (total)",
-  "System load average",
-  "Network Up usage (total)",
-  "Network Down usage (total)",
-];
-
+// Reference viewers list counters alphabetically by series name, then field.
+// The source thread breaks ties so same-named series stay stable per lane.
 function compareCounterTracks(
   a: Extract<TimelineTrack, { kind: "counter" }>,
   b: Extract<TimelineTrack, { kind: "counter" }>,
 ): number {
-  const left = a.counter;
-  const right = b.counter;
-  const leftOrder = COUNTER_ORDER.indexOf(left.name);
-  const rightOrder = COUNTER_ORDER.indexOf(right.name);
   return (
-    (leftOrder < 0 ? COUNTER_ORDER.length : leftOrder) -
-      (rightOrder < 0 ? COUNTER_ORDER.length : rightOrder) ||
-    left.name.localeCompare(right.name) ||
-    left.field.localeCompare(right.field) ||
+    a.counter.name.localeCompare(b.counter.name) ||
+    a.counter.field.localeCompare(b.counter.field) ||
     a.lane.tid - b.lane.tid
   );
 }
@@ -461,8 +443,9 @@ export function visibleTracks(
     )
     .sort(compareCounterTracks);
   let top = 0;
-  // Display order is independent of the profile's original lane and event order.
-  return [...events, ...counters].map((track) => {
+  // Counters head the chart like the reference viewers. Display order stays
+  // independent of the profile's original lane and event order.
+  return [...counters, ...events].map((track) => {
     const positioned = { ...track, top };
     top += track.height;
     return positioned;
