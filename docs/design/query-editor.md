@@ -196,7 +196,7 @@ target pattern の入力は実行時の target 選択と同じ fuzzy find(`Searc
 候補はツリー用一覧の `targets` とする。
 外部 repo label は一覧に載らないため手入力する。
 手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
-`kind` の pattern も同じ fuzzy find で、候補は `.*_test rule` に snapshot の rule class を加えたものを使う。
+`kind` の pattern も同じ fuzzy find で、候補は `.*_test rule`、snapshot の rule class、rule では表れない `source file`・`generated file` を加えたものを使う。
 attribute 名は手入力する。
 
 ## Alternatives Considered

@@ -1,4 +1,6 @@
 import { COMMANDS } from "./commands.ts";
+import { labelTarget } from "./search.ts";
+import type { Target } from "./types.ts";
 
 /**
  * Builder model and runner for the Bazel query editor.
@@ -628,6 +630,24 @@ export function switchKind(node: Expr, kind: string): Expr {
 export function codeDiverged(root: Expr, draft: string): boolean {
   const s = serialize(root);
   return draft.trim() !== (s.ok ? s.text.trim() : "");
+}
+
+/**
+ * Candidate list for kind()'s pattern argument: the wildcard-test hint, then
+ * the non-rule kinds (`source file`, `generated file`) the snapshot cannot
+ * list because it only indexes rules, then every rule class in the snapshot.
+ * Rule classes take the ` rule` suffix kind patterns expect, except classes
+ * already ending in "file".
+ */
+export function kindCandidates(targets: Target[]): Target[] {
+  return [
+    ".*_test rule",
+    "source file",
+    "generated file",
+    ...[...new Set(targets.map((t) => t.ruleClass))]
+      .sort()
+      .map((rc) => (rc.endsWith("file") ? rc : `${rc} rule`)),
+  ].map((label) => labelTarget(label, "kind"));
 }
 
 // Ordered like the bazel query guide: single-function queries first (what X
