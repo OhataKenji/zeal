@@ -143,35 +143,26 @@
                     {((record.finishedAt - record.startedAt) / 1000).toFixed(3)}s
                   </dd>{/if}
               </dl>
-              <h3 class="command-arguments-heading">Command lines</h3>
-              <details class="invocation-collapsible">
-                <summary>Original command line</summary>
-                {#if bep?.originalCommandLine !== undefined}
-                  <code class="invocation-command-code">{bep.originalCommandLine || "No command-line arguments."}</code>
-                {:else}
-                  <p class="panel-empty">Original command line was not recorded in the build events.</p>
-                {/if}
-              </details>
-              <details class="invocation-collapsible">
-                <summary>Canonical command line</summary>
-                {#if bep?.canonicalCommandLine !== undefined}
-                  <code class="invocation-command-code">{bep.canonicalCommandLine || "No command-line arguments."}</code>
-                {:else}
-                  <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
-                {/if}
-              </details>
               <h3 class="command-arguments-heading">Options</h3>
-              {#if bep?.options}
+              {#if bep?.options || bep?.residual?.length}
                 <div class="invocation-command-options">
-                  <section class="invocation-command-block">
-                    <h4>Explicit command options</h4>
-                    <code class="invocation-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
-                  </section>
-                  <section class="invocation-command-block">
-                    <h4>Effective command options</h4>
-                    <code class="invocation-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
-                  </section>
-                  {#if bep.options.explicitStartupOptions.length || bep.options.startupOptions.length}
+                  {#if bep?.options}
+                    <section class="invocation-command-block">
+                      <h4>Explicit command options</h4>
+                      <code class="invocation-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
+                    </section>
+                    <section class="invocation-command-block">
+                      <h4>Effective command options</h4>
+                      <code class="invocation-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
+                    </section>
+                  {/if}
+                  {#if bep?.residual?.length}
+                    <section class="invocation-command-block">
+                      <h4>Residual</h4>
+                      <code class="invocation-command-code">{formatOptions(bep.residual)}</code>
+                    </section>
+                  {/if}
+                  {#if bep?.options && (bep.options.explicitStartupOptions.length || bep.options.startupOptions.length)}
                     <details class="invocation-collapsible">
                       <summary>Startup options</summary>
                       {#if bep.options.explicitStartupOptions.length}
@@ -196,6 +187,23 @@
                   >{sectionMessage(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)}</Notice
                 >
               {/if}
+              <h3 class="command-arguments-heading">Command lines</h3>
+              <details class="invocation-collapsible">
+                <summary>Canonical command line</summary>
+                {#if bep?.canonicalCommandLine !== undefined}
+                  <code class="invocation-command-code">{bep.canonicalCommandLine || "No command-line arguments."}</code>
+                {:else}
+                  <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
+                {/if}
+              </details>
+              <details class="invocation-collapsible">
+                <summary>Original command line</summary>
+                {#if bep?.originalCommandLine !== undefined}
+                  <code class="invocation-command-code">{bep.originalCommandLine || "No command-line arguments."}</code>
+                {:else}
+                  <p class="panel-empty">Original command line was not recorded in the build events.</p>
+                {/if}
+              </details>
             {/if}
           {:else}
             <h2 class="panel-heading">Timing</h2>

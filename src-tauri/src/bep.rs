@@ -29,6 +29,8 @@ pub struct Bep {
     pub original_command_line: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_command_line: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residual: Option<Vec<String>>,
     pub truncated: bool,
 }
 
@@ -40,8 +42,17 @@ pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
         _ => return,
     };
     let mut parts = Vec::new();
+    let mut residual = None;
     for section in &command_line.sections {
+        if section.section_label == "residual" {
+            if let Some(SectionType::ChunkList(chunks)) = &section.section_type {
+                residual = Some(chunks.chunk.clone());
+            }
+        }
         append_command_line_section(section, &mut parts);
+    }
+    if let Some(residual) = residual {
+        bep.residual = Some(residual);
     }
     *destination = Some(parts.join(" "));
 }
@@ -322,6 +333,7 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
         24,
         size,
     );
+    bep.truncated |= !replace(&mut bep.residual, delta.residual, 12, size);
 }
 fn append_tail(log: &mut String, value: &str) {
     if value.len() >= LOG_LIMIT {
@@ -618,8 +630,13 @@ mod tests {
             parsed.canonical_command_line.as_deref(),
             Some("bazel test //pkg:test")
         );
+        assert_eq!(
+            parsed.residual,
+            Some(vec!["//pkg:test".to_string(), String::new()])
+        );
         let json = serde_json::to_value(&parsed).unwrap();
         assert_eq!(json["canonicalCommandLine"], "bazel test //pkg:test");
+        assert_eq!(json["residual"], serde_json::json!(["//pkg:test", ""]));
         assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
     }
 
@@ -688,6 +705,10 @@ mod tests {
             parsed.original_command_line.as_deref(),
             Some("run -- //pkg:tool --help")
         );
+        assert_eq!(
+            parsed.residual,
+            Some(vec!["//pkg:tool".to_string(), "--help".to_string()])
+        );
         let explicit = parse(
             event(command_line(
                 "original",
@@ -696,6 +717,10 @@ mod tests {
             .as_slice(),
         );
         assert_eq!(explicit.original_command_line.as_deref(), Some("-- --help"));
+        assert_eq!(
+            explicit.residual,
+            Some(vec!["--".to_string(), "--help".to_string()])
+        );
     }
 
     #[test]
