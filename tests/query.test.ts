@@ -599,30 +599,29 @@ test("a second invocation while one is in flight is ignored", async () => {
   assert.deepEqual(h.state.result, OUTPUT);
 });
 
-test("changing output clears the only result and does not run a query", async () => {
+test("switching raw and graph restores each cached result without executing", async () => {
   const h = harness();
   const raw = h.runner.run("deps(//a)", "raw", FLAGS);
   h.calls[0].resolve(OUTPUT);
   await raw;
-  assert.deepEqual(h.state.result, OUTPUT);
-  h.runner.clear();
+  h.runner.select("deps(//a)", "graph", FLAGS);
   assert.equal(h.state.result, null);
-  assert.equal(h.calls.length, 1);
   const graph = h.runner.run("deps(//a)", "graph", FLAGS);
   const graphOutput = { ...OUTPUT, stdout: "digraph {}" };
   h.calls[1].resolve(graphOutput);
   await graph;
+  h.runner.select("deps(//a)", "raw", FLAGS);
+  assert.deepEqual(h.state.result, OUTPUT);
+  h.runner.select("deps(//a)", "graph", FLAGS);
   assert.deepEqual(h.state.result, graphOutput);
-  h.runner.clear();
-  assert.equal(h.state.result, null);
   assert.equal(h.calls.length, 2);
 });
 
 test("editing during an invocation discards its reply without releasing the busy slot", async () => {
   const h = harness();
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
-  h.runner.clear();
-  h.runner.clear();
+  h.runner.select("deps(//b)", "graph", FLAGS);
+  h.runner.select("deps(//c)", "raw", FLAGS);
   assert.equal(h.state.running, true);
   await h.runner.run("deps(//b)", "graph", FLAGS);
   assert.equal(h.calls.length, 1);
@@ -640,7 +639,7 @@ test("editing during an invocation discards its reply without releasing the busy
 test("editing during an invocation discards its late error", async () => {
   const h = harness();
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
-  h.runner.clear();
+  h.runner.select("deps(//b)", "raw", FLAGS);
   h.calls[0].reject(new Error("old query failed"));
   await pending;
   assert.equal(h.state.running, false);
@@ -669,7 +668,7 @@ test("dispose ignores a late failure and all further changes", async () => {
   const pending = h.runner.run("deps(//a)", "raw", FLAGS);
   h.runner.dispose();
   const disposedState = h.state;
-  h.runner.clear();
+  h.runner.select("deps(//b)", "raw", FLAGS);
   h.calls[0].reject(new Error("late failure"));
   await pending;
   await h.runner.run("deps(//b)", "graph", FLAGS);
@@ -689,4 +688,103 @@ test("dispose drops a late reply and ignores further calls", async () => {
   const after = h.runner.run("deps(//a)", "raw", FLAGS);
   await after;
   assert.equal(h.calls.length, 1);
+});
+
+test("cache keys include the expression and dependency flags", async () => {
+  const h = harness();
+  const pending = h.runner.run("deps(//a)", "raw", FLAGS);
+  h.calls[0].resolve(OUTPUT);
+  await pending;
+  h.runner.select("deps(//b)", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  h.runner.select("deps(//a)", "raw", { ...FLAGS, noImplicit: !FLAGS.noImplicit });
+  assert.equal(h.state.result, null);
+  h.runner.select("deps(//a)", "raw", { ...FLAGS, noTool: !FLAGS.noTool });
+  assert.equal(h.state.result, null);
+  h.runner.select("deps(//a)", "raw", FLAGS);
+  assert.deepEqual(h.state.result, OUTPUT);
+});
+
+test("explicit run replaces a cached result and clear removes all cached results", async () => {
+  const h = harness();
+  const first = h.runner.run("//a", "raw", FLAGS);
+  h.calls[0].resolve(OUTPUT);
+  await first;
+  const refresh = h.runner.run("//a", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  const fresh = { ...OUTPUT, stdout: "//a:fresh\n" };
+  h.calls[1].resolve(fresh);
+  await refresh;
+  h.runner.select("//a", "raw", FLAGS);
+  assert.deepEqual(h.state.result, fresh);
+  const second = h.runner.run("//b", "raw", FLAGS);
+  h.calls[2].resolve(OUTPUT);
+  await second;
+  h.runner.clear();
+  h.runner.select("//a", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  h.runner.select("//b", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  assert.equal(h.calls.length, 3);
+});
+
+test("cache evicts the least recently selected result after ten entries", async () => {
+  const h = harness();
+  for (let i = 0; i < 10; i++) {
+    const pending = h.runner.run(`//p${i}`, "raw", FLAGS);
+    h.calls[i].resolve({ ...OUTPUT, stdout: `//p${i}:target` });
+    await pending;
+  }
+  h.runner.select("//p0", "raw", FLAGS);
+  const next = h.runner.run("//p10", "raw", FLAGS);
+  h.calls[10].resolve(OUTPUT);
+  await next;
+  h.runner.select("//p1", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  h.runner.select("//p0", "raw", FLAGS);
+  assert.equal(h.state.result?.stdout, "//p0:target");
+  h.runner.select("//p10", "raw", FLAGS);
+  assert.deepEqual(h.state.result, OUTPUT);
+});
+
+test("failed and timed out outputs are displayed but not cached", async () => {
+  const h = harness();
+  const failed = h.runner.run("//a", "raw", FLAGS);
+  h.calls[0].resolve({ ...OUTPUT, exitCode: 1 });
+  await failed;
+  assert.equal(h.state.result?.exitCode, 1);
+  h.runner.select("//a", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+  const timeout = h.runner.run("//a", "raw", FLAGS);
+  h.calls[1].resolve({ ...OUTPUT, timedOut: true });
+  await timeout;
+  assert.equal(h.state.result?.timedOut, true);
+  h.runner.select("//a", "raw", FLAGS);
+  assert.equal(h.state.result, null);
+});
+
+test("selecting cached output during a run preserves it when the old reply arrives", async () => {
+  const h = harness();
+  const first = h.runner.run("//a", "raw", FLAGS);
+  h.calls[0].resolve(OUTPUT);
+  await first;
+  const pending = h.runner.run("//b", "graph", FLAGS);
+  h.runner.select("//a", "raw", FLAGS);
+  assert.deepEqual(h.state.result, OUTPUT);
+  h.calls[1].resolve({ ...OUTPUT, stdout: "digraph {}" });
+  await pending;
+  assert.deepEqual(h.state.result, OUTPUT);
+  assert.equal(h.state.running, false);
+  h.runner.select("//b", "graph", FLAGS);
+  assert.equal(h.state.result, null);
+});
+
+test("clearing during a run prevents the late result from repopulating cache", async () => {
+  const h = harness();
+  const pending = h.runner.run("//a", "raw", FLAGS);
+  h.runner.clear();
+  h.calls[0].resolve(OUTPUT);
+  await pending;
+  h.runner.select("//a", "raw", FLAGS);
+  assert.equal(h.state.result, null);
 });
