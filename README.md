@@ -32,7 +32,8 @@ Open only trusted repositories.
 
 ![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
 
-To include terminal builds in history, [connect Bazel to Zeal](docs/terminal-builds.md).
+Zeal records commands run in the app. To also record terminal builds,
+[connect Bazel to Zeal](docs/terminal-builds.md).
 
 ## Features
 
