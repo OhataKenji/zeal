@@ -689,8 +689,8 @@ test("event fields flatten nested objects and serialize remaining values", () =>
   assert.deepEqual(rows, [
     ["name", "action"],
     ["ph", "X"],
-    ["ts", "10"],
-    ["dur", "5"],
+    ["ts", "10µs"],
+    ["dur", "5µs"],
     ["tid", "3"],
     ["args.target", "//:app"],
     ["args.mnemonic", "CppCompile"],

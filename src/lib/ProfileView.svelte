@@ -338,22 +338,9 @@
     <h4 class="trace-event-title" id="trace-event-title">
       {eventName(selected.event)}
     </h4>
-    <dl class="invocation-details">
-      <dt>Thread</dt>
-      <dd>{lane.name || "thread"} · tid {lane.tid}</dd>
-      <dt>Start</dt>
-      <dd>
-        {selected.start === null ? "Unknown" : formatTime(selected.start)}
-      </dd>
-      {#if selected.kind === "span"}<dt>Duration</dt>
-        <dd>
-          {formatTime((selected.end ?? 0) - (selected.start ?? 0))}
-        </dd>{/if}
-      {#if typeof selected.event.cat === "string"}<dt>Category</dt>
-        <dd>{selected.event.cat}</dd>{/if}
-    </dl>
     <table class="trace-fields">
       <tbody>
+        <tr><th>Thread</th><td>{lane.name || "thread"} · tid {lane.tid}</td></tr>
         {#each eventFields(selected.event) as [field, value] (field)}
           <tr><th>{field}</th><td>{value}</td></tr>
         {/each}
