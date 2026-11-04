@@ -8,9 +8,11 @@
 }
 
 .panel-subheading {
-  margin: 20px 0 12px;
-  font-size: 12px;
+  margin: 24px 0 12px;
+  font-size: 14px;
   font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.01em;
 }
 
 .invocation-command-code {
@@ -167,7 +169,9 @@
 
 .invocation-section > .panel-heading {
   margin: 0 0 16px;
-  font-size: 14px;
+  font-size: 18px;
+  line-height: 28px;
+  letter-spacing: -0.025em;
 }
 
 .invocation-section > .panel-heading + .panel-subheading {
