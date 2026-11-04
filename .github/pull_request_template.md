@@ -26,9 +26,10 @@ https://github.com/google/eng-practices/blob/master/review/developer/cl-descript
 
 ## Quality Assurance
 
-<!-- Evidence the change works: commands run, test results, screenshots,
-     manual verification steps. Do not repeat checks that CI already
-     guarantees (e.g. build, lint, automated tests). -->
+<!-- Evidence the change works: manual verification steps, edge cases tested.
+     - Do not mention checks guaranteed by CI (e.g. formatting, lint, build,
+       automated tests). A speculative "CI is green" is sufficient.
+     - For UI changes, show before and after with screenshots or videos. -->
 
 ## References
 
