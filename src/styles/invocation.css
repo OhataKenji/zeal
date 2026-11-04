@@ -185,6 +185,7 @@
 }
 
 .invocation-log {
+  color-scheme: dark;
   flex: 1;
   min-height: 100px;
   width: 100%;
