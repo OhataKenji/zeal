@@ -139,7 +139,7 @@ impl Receipt {
             // An unavailable profile must not fail the build receipt.
             profile_uri
                 .map_or(Ok(()), |uri| copy_profile(uri, dir))
-                .unwrap_or_else(|_| log::warn!("Could not copy invocation profile"));
+                .unwrap_or_else(|e| log::warn!("Could not copy invocation profile: {e}"));
         }
         let changed = matches!(event.payload, Some(Payload::Started(_)));
         if changed {
