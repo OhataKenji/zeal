@@ -29,13 +29,6 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
-Check GUI and terminal profiles with Bazel 8.x (opt-in, outside CI):
-
-```sh
-cd src-tauri
-ZEAL_TEST_BAZEL=/path/to/bazel cargo test --locked real_bazel -- --ignored
-```
-
 ## Development traces
 
 Start [Jaeger](https://www.jaegertracing.io/docs/2.22/getting-started/) with OTLP/HTTP on port 4318, then run:
