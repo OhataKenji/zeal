@@ -53,6 +53,12 @@
     typeof location !== "undefined" &&
       new URLSearchParams(location.search).get("view") === "query",
   );
+  let selectedPackage = $state<string | null>(null);
+  $effect(() => {
+    // Package selection belongs to this snapshot; reload closes the overview.
+    void snap;
+    selectedPackage = null;
+  });
   let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<BazelCommand>("build");
@@ -144,6 +150,7 @@
   // Every selection — tree, relation line — also lands in the composer target
   // field, which is the single source of truth for "the current target".
   function select(label: string | null) {
+    selectedPackage = null;
     analyticsOpen = false;
     queryOpen = false;
     getSession().selectInvocation(null);
@@ -151,10 +158,8 @@
     if (label) targetField = label;
   }
   function selectPackage(pkg: string) {
-    analyticsOpen = false;
-    queryOpen = false;
-    getSession().selectInvocation(null);
-    getSession().selectPackage(pkg);
+    select(null);
+    selectedPackage = pkg;
   }
 </script>
 
@@ -190,7 +195,7 @@
     {#if !collapsed.targets}
       <div class="pane-body">
         {#if snap && tree}
-          <Tree root={tree} {selected} selectedPackage={app.view.selectedPackage} {revealRequest} onselect={select} onselectpackage={selectPackage} />
+          <Tree root={tree} {selected} {selectedPackage} {revealRequest} onselect={select} onselectpackage={selectPackage} />
         {:else if state.ingest === "running" || app.view.snapshotLoading}
           <p class="dim">Loading targets…</p>
         {:else if app.view.snapshotError || state.lastError}
@@ -322,8 +327,8 @@
       {#key workspace}
         <QueryView {snap} />
       {/key}
-    {:else if snap && app.view.selectedPackage !== null}
-      <PackageView index={snap} pkg={app.view.selectedPackage} onselect={select} />
+    {:else if snap && selectedPackage !== null}
+      <PackageView index={snap} pkg={selectedPackage} onselect={select} />
     {:else if snap && selected}
       {#if app.view.targetDetail?.target.label === selected}
         {#if app.view.targetDetail.status === "partial"}

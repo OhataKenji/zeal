@@ -1488,32 +1488,15 @@ test("workspace opening sends all target patterns to the core", async () => {
   assert.deepEqual(h.view.state?.scope, scope);
 });
 
-test("package selection needs no query and rejects an older target detail", async () => {
+test("clearing the target selection rejects an older target detail", async () => {
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS);
   h.session.selectTarget("//app:first");
-  h.session.selectPackage("app");
-  assert.equal(h.view.selectedTarget, null);
-  assert.equal(h.view.selectedPackage, "app");
+  h.session.selectTarget(null);
   pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
   await settle();
+  assert.equal(h.view.selectedTarget, null);
   assert.equal(h.view.targetDetail, null);
   assert.equal(requestCount(h, "get_target_detail"), 1);
-  h.session.selectTarget("//app:second");
-  assert.equal(h.view.selectedPackage, null);
-  assert.equal(h.view.selectedTarget, "//app:second");
-});
-
-test("package selection resets when its workspace or loaded scope changes", async () => {
-  const h = harness();
-  await h.session.init();
-  await emitSnapshot(h, TARGETS);
-  h.session.selectPackage("app");
-  await emitSnapshot(h, { ...SNAPSHOT, meta: { ...SNAPSHOT.meta, fetchedAt: 2 } });
-  assert.equal(h.view.selectedPackage, null);
-  await emitSnapshot(h, TARGETS);
-  h.session.selectPackage("app");
-  h.emit("app-state", { ...IDLE, workspace: "/other", snapshotFetchedAt: null });
-  assert.equal(h.view.selectedPackage, null);
 });

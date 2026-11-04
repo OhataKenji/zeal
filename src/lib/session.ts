@@ -28,7 +28,6 @@ export interface SessionView {
   snapshotLoading: boolean;
   snapshotError: string | null;
   selectedTarget: string | null;
-  selectedPackage: string | null;
   targetDetail: TargetDetail | null;
   targetDetailError: string | null;
   ready: boolean;
@@ -56,7 +55,6 @@ export function emptyView(): SessionView {
     snapshotLoading: false,
     snapshotError: null,
     selectedTarget: null,
-    selectedPackage: null,
     targetDetail: null,
     targetDetailError: null,
     ready: false,
@@ -167,7 +165,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       snapshotLoading: false,
       snapshotError: null,
       selectedTarget: null,
-      selectedPackage: null,
       ...clearTargetDetail(),
     };
   }
@@ -223,12 +220,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (view.selectedTarget && !snapshot?.targets.some((t) => t.label === view.selectedTarget)) {
       selectTarget(null);
       return;
-    }
-    if (
-      view.selectedPackage !== null &&
-      !snapshot?.targets.some((target) => target.pkg === view.selectedPackage)
-    ) {
-      selectTarget(null);
     }
     requestTargetDetail();
   }
@@ -306,14 +297,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function selectTarget(label: string | null) {
-    if (label === view.selectedTarget && view.selectedPackage === null && !view.targetDetailError)
-      return;
-    update({ selectedTarget: label, selectedPackage: null, ...clearTargetDetail() });
+    if (label === view.selectedTarget && !view.targetDetailError) return;
+    update({ selectedTarget: label, ...clearTargetDetail() });
     requestTargetDetail();
-  }
-
-  function selectPackage(pkg: string) {
-    update({ selectedPackage: pkg, selectedTarget: null, ...clearTargetDetail() });
   }
 
   async function loadDetail() {
@@ -493,7 +479,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const wantFetchedAt = state.snapshotFetchedAt;
     if (wantFetchedAt === null) {
       clearSnapshot();
-      if (view.selectedTarget || view.selectedPackage !== null) selectTarget(null);
+      if (view.selectedTarget) selectTarget(null);
     } else if (
       // A fetch for this snapshot may already be in flight; re-issuing would
       // duplicate the transfer this split exists to avoid.
@@ -677,6 +663,5 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadInvocations,
     loadSnapshot,
     selectTarget,
-    selectPackage,
   };
 }
