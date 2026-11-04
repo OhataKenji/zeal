@@ -7,7 +7,7 @@
   const bep = $derived(sectionData(section));
 </script>
 
-<h2 class="panel-heading">Targets {#if bep}<span>{bep.targets.length}</span>{/if}</h2>
+<h3 class="panel-subheading">Build results {#if bep}<span>{bep.targets.length}</span>{/if}</h3>
 {#if section && section.status !== "ok"}<Notice tone={sectionNoticeTone(section)}
     >{sectionMessage(section)}</Notice
   >{/if}
@@ -21,7 +21,7 @@
   {/if}
 {/if}
 
-<h2 class="panel-heading">Tests {#if bep}<span>{bep.tests.length}</span>{/if}</h2>
+<h3 class="panel-subheading">Tests {#if bep}<span>{bep.tests.length}</span>{/if}</h3>
 {#if bep}
   {#if bep.tests.length}
     <ul class="result-list">
