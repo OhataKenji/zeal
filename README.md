@@ -64,6 +64,7 @@ Zeal records commands run in the app. To also record terminal commands, add to `
 build --bes_backend=grpc://127.0.0.1:4718
 build --experimental_build_event_upload_strategy=local
 build --bes_timeout=5s
+build --experimental_collect_system_network_usage
 ```
 
 While Zeal is open, run `bazel build //...`.
