@@ -650,6 +650,63 @@ export function kindCandidates(targets: Target[]): Target[] {
   ].map((label) => labelTarget(label, "kind"));
 }
 
+/**
+ * Candidate list for attr()'s `name` and labels()'s `attr_name` arguments.
+ * The fast label_kind snapshot carries no attributes, so — like the function
+ * catalog — this is a hand-maintained hint list of common Bazel attribute
+ * names, label-typed and scalar alike. Completion only assists; any name the
+ * list lacks can still be typed.
+ */
+export const ATTR_NAMES: readonly string[] = [
+  "actual",
+  "alwayslink",
+  "args",
+  "cmd",
+  "compatible_with",
+  "constraints",
+  "copts",
+  "data",
+  "deps",
+  "env",
+  "exec_compatible_with",
+  "exec_properties",
+  "exec_tools",
+  "exports",
+  "features",
+  "flaky",
+  "hdrs",
+  "includes",
+  "instrumented_files",
+  "javacopts",
+  "jvm_flags",
+  "licenses",
+  "linkopts",
+  "linkstatic",
+  "main_class",
+  "outs",
+  "plugins",
+  "resources",
+  "runtime_deps",
+  "shard_count",
+  "size",
+  "srcs",
+  "stamp",
+  "suites",
+  "tags",
+  "target_compatible_with",
+  "testonly",
+  "tests",
+  "timeout",
+  "toolchains",
+  "tools",
+  "visibility",
+];
+
+/** ATTR_NAMES as search candidates, labeled "attribute" in the dropdown. */
+export function attrCandidates(): Target[] {
+  return ATTR_NAMES.map((label) => labelTarget(label, "attribute"));
+}
+
 // Ordered like the bazel query guide: single-function queries first (what X
 // needs, how it connects, who needs X), then existence enumeration, then the
 // composite idioms (diffs) and plumbing.

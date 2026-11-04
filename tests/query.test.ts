@@ -10,6 +10,7 @@ import {
   emptyQueryState,
   EXAMPLES,
   KIND_GROUPS,
+  attrCandidates,
   kindCandidates,
   kindOf,
   makeCall,
@@ -491,6 +492,13 @@ test("kindCandidates offers non-rule kinds alongside snapshot rule classes", () 
     "cc_library rule",
     "sh_test rule",
   ]);
+});
+
+test("attrCandidates stays sorted and covers label-typed and scalar attrs", () => {
+  const labels = attrCandidates().map((t) => t.label);
+  assert.deepEqual(labels, [...labels].sort());
+  for (const name of ["deps", "srcs", "tags", "timeout", "visibility"])
+    assert.ok(labels.includes(name), `missing ${name}`);
 });
 
 const FLAGS: CommandFlags = { noImplicit: true, noTool: false };
