@@ -62,19 +62,19 @@ invocationの入力と時刻はBEPで観測するまでNULLとする。
 成功表示や所要時間、画面へ返すデータ(**DTO**)、イベント本体はSQLへ保存しない。
 indexは `invocation(workspace_id, started_at_ms DESC, id)` とする。
 
-#### 起動時の予約
+#### 起動と履歴の作成
 
-Bazelを起動するときはinvocation IDだけを予約してcommitし、そのIDを渡す。
-既存IDとの衝突はspawn前に拒否する。
-Consoleのコマンド表示にはメモリの入力を使い、DBのBEP時刻や入力へ代入しない。
-起動失敗時は未受信の予約と既知の一時fileだけを取り消す。
+起動時はランダムなinvocation IDをBazelへ渡す。
+履歴と保存先はBESが作り、Consoleの入力はメモリだけに保持する。
+保存障害はBES受信時に検出し、Bazelも非ゼロで終了する場合がある。
 
 ### event fileと受信
 
 保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
-任意の `profile.json.gz` は計時情報として `invocations/<invocation_id>/` に置き、その有無を起動元の判定に使わない。
+任意の `profile.json.gz` も同じattemptに保存し、DBが選ぶ現在のattemptの受信完了後だけ読む。
+完了済みの再送では成果物を書き換えない。取り込み条件は[M2](./m2-invocation-detail.md)に従う。
 端末出力はConsole表示用の一時file `terminal.log` へ書き、永続化しない。履歴のログ表示はevent内のProgressから復元する。
 
 ### 正常受信
@@ -146,7 +146,7 @@ Consoleを表示中のprocessが終了すると、そのinvocationの詳細へ�
 詳細画面から戻って端末出力を確認できる。
 終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
 
-workspace未判明の予約が一覧に出ない間も、live processからConsoleを開ける。
+履歴がまだ一覧に出ない間も、live processからConsoleを開ける。
 再起動後の以前のprocessへのsignal送信は行わない。
 
 ### DB障害

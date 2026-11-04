@@ -176,17 +176,6 @@ impl Dir {
             Err(error) => Err(io::Error::from(error)),
         }
     }
-    pub(super) fn remove_file(&self, child: &str) -> io::Result<()> {
-        self.remove(child, AtFlags::empty())
-    }
-    pub(super) fn remove_dir(&self, child: &str) -> io::Result<()> {
-        self.remove(child, AtFlags::REMOVEDIR)
-    }
-    fn remove(&self, child: &str, flags: AtFlags) -> io::Result<()> {
-        let child = name(OsStr::new(child))?;
-        rustix_fs::unlinkat(&self.fd, &child, flags)?;
-        self.sync()
-    }
 }
 
 #[cfg(test)]
@@ -251,18 +240,5 @@ mod tests {
                 .success()
         );
         assert!(fixture.dir.file("pipe", false).is_err());
-    }
-
-    #[test]
-    fn removes_file_and_directory_entries() {
-        let fixture = Fixture::new();
-        let child_dir = fixture.dir.create_child("child").unwrap();
-        drop(child_dir);
-        fixture.dir.remove_dir("child").unwrap();
-
-        drop(fixture.dir.file("file", true).unwrap());
-        fixture.dir.remove_file("file").unwrap();
-        assert!(!fixture.dir.exists("child").unwrap());
-        assert!(!fixture.dir.exists("file").unwrap());
     }
 }

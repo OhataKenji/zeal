@@ -25,7 +25,7 @@ tree と dropdown は target 欄を置き換え、cmd は利用者が `build` / 
 ```mermaid
 flowchart LR
     pick["検索 / tree / pattern"] --> input["target 欄"]
-    input --> send["入力を検証しinvocation IDを予約"]
+    input --> send["入力を検証しinvocation IDを生成"]
     send --> bazel["Bazel を起動"]
     bazel -->|"共通BES receiver"| result["BEP事実とログ込みeventを保存"]
     result --> view["保存したログと結果を表示"]
@@ -57,7 +57,7 @@ cmdは `build` / `test` / `run` を受け付ける。
 
 workspace と bazel が利用可能で、取り込みと実行のどちらも動いていなければ Send を受け付ける。
 snapshot がなくても手入力で実行できる。
-invocation ID予約、擬似端末(**PTY**)、Bazelイベントを受けるreceiverの準備に失敗したらspawnしない。
+擬似端末(**PTY**)、Bazelイベントを受けるreceiverの準備に失敗したらspawnしない。
 cwdはworkspace root、stdinはPTYで扱い、観測flagはZealが組み立てる([M2](./m2-invocation-detail.md))。
 
 ### ログと更新

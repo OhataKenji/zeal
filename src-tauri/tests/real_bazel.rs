@@ -100,6 +100,7 @@ impl BazelFixture {
         assert_success(&output, cmd);
         let record = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&record, cmd, pattern);
+        self.assert_profile_saved(&id);
     }
 
     async fn accepts_standard_input(&self) {
@@ -118,6 +119,16 @@ impl BazelFixture {
         let observed = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&observed, "run", "//:double");
         assert!(observed.finished_at.is_some());
+        self.assert_profile_saved(&id);
+    }
+
+    fn assert_profile_saved(&self, id: &str) {
+        let file = zeal_lib::open_invocation_artifact(&self.data, &self.ws, id, "profile.json.gz")
+            .unwrap();
+        let profile: serde_json::Value =
+            serde_json::from_reader(flate2::read::GzDecoder::new(file)).unwrap();
+        assert_eq!(profile["otherData"]["build_id"], id);
+        assert!(!profile["traceEvents"].as_array().unwrap().is_empty());
     }
 
     async fn wait_for_build(

@@ -4,7 +4,7 @@
 //! in [`Section`] so a missing or unreadable artifact never hides the record
 //! or another observation.
 //!
-//! Writing these artifacts is `runner`'s job; this module only reads.
+//! The BES receiver writes these artifacts; this module only reads.
 
 use crate::bep::{self, Bep};
 use crate::profile::{self, Profile};
@@ -229,7 +229,7 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        fs::write(f.dir().join("profile.json.gz"), b"invalid gzip").unwrap();
+        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"invalid gzip").unwrap();
         assert!(matches!(
             invocation_profile(&f.data, &f.ws, id).unwrap(),
             Section::ParseError { .. }
