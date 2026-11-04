@@ -5,32 +5,32 @@ export const TERMINAL_FONT = {
   lineHeight: 1,
 };
 
-/** ANSI colors tuned for readable text on the terminal's white background. */
+/** ANSI colors tuned for readable text on the dark terminal background (Equi-luminance & chroma). */
 export const TERMINAL_COLORS = {
-  black: "#222222",
-  red: "#ac3e15",
-  green: "#307e3d",
-  yellow: "#967008",
-  blue: "#5c58bb",
-  magenta: "#8049a2",
-  cyan: "#257e6a",
-  white: "#d4d4d4",
-  brightBlack: "#666666",
-  brightRed: "#ca4616",
-  brightGreen: "#359742",
-  brightYellow: "#ab8007",
-  brightBlue: "#6e6bc7",
-  brightMagenta: "#9558bb",
-  brightCyan: "#2c967d",
-  brightWhite: "#eeeeee",
+  black: "#27272a",
+  red: "#fb817a",
+  green: "#38c789",
+  yellow: "#e19b1b",
+  blue: "#58b0ff",
+  magenta: "#c190f6",
+  cyan: "#00c3df",
+  white: "#d4d4d8",
+  brightBlack: "#52525b",
+  brightRed: "#fb9d97",
+  brightGreen: "#5fe0a6",
+  brightYellow: "#f5b746",
+  brightBlue: "#8ac7ff",
+  brightMagenta: "#d7b0fb",
+  brightCyan: "#45dcf3",
+  brightWhite: "#f4f4f5",
 };
 
 /** Complete xterm theme, including the shared ANSI palette. */
 export const TERMINAL_THEME = {
-  background: "#ffffff",
-  foreground: "#222222",
-  cursor: "#222222",
-  selectionBackground: "#cce0ff",
+  background: "#09090b",
+  foreground: "#f4f4f5",
+  cursor: "#0891b2",
+  selectionBackground: "rgba(8, 145, 178, 0.35)",
   ...TERMINAL_COLORS,
 };
 
