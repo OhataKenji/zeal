@@ -18,27 +18,13 @@ pre-push:
   jobs:
     - name: gitleaks
       use_stdin: true
-      # Scans the commits being pushed. Staged scanning alone misses commits
-      # created without the pre-commit hook, e.g. snapshot commits from
-      # worktree tooling. The pushed ref tips arrive on stdin (githooks(5)),
-      # so pushing a branch other than HEAD scans that branch. The remote's
-      # ref tips and tracking refs bound the scan to what the push adds.
+      # Staged scanning misses commits created without the pre-commit hook.
+      # Scan the full history of each pushed ref, including merge changes.
       run: |
-        shas=""
-        excludes=""
         while read -r local_ref local_sha remote_ref remote_sha; do
           [ "$local_ref" = "(delete)" ] && continue
-          shas="$shas $local_sha"
-          [ "$remote_sha" = "0000000000000000000000000000000000000000" ] \
-            || excludes="$excludes ^$remote_sha"
-        done
-        for ref in $(git for-each-ref --format='%(refname)' refs/remotes); do
-          excludes="$excludes ^$ref"
-        done
-        if [ -n "$shas" ]; then
-          opts="${shas# }${excludes}"
-          # gitleaks exits 0 even when `git log` rejects the opts, which would
-          # silently skip the scan. Fail the push on log errors instead.
+          opts="--diff-merges=first-parent $local_sha"
+          # gitleaks can exit 0 when git log fails, silently skipping the scan.
           git log --format=%H $opts > /dev/null || exit 1
-          gitleaks git --redact --log-opts="$opts" .
-        fi
+          gitleaks git --redact --log-opts="$opts" . || exit 1
+        done
