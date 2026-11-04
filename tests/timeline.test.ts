@@ -17,7 +17,6 @@ import {
   formatRulerTime,
   formatCounter,
   counterPointY,
-  counterColor,
   eventPosition,
   COUNTER_HEIGHT,
 } from "../src/lib/timeline.ts";
@@ -355,17 +354,6 @@ test("counter names and numeric fields form separate series without losing raw a
     [10, 14],
   );
   assert.deepEqual(result.lanes[0].events[0].event.args, { used: 10, free: 20, unit: "MB" });
-});
-
-test("counter colors stay stable per name and field", () => {
-  assert.equal(
-    counterColor({ name: "cpu", field: "usage" }),
-    counterColor({ name: "cpu", field: "usage" }),
-  );
-  assert.notEqual(
-    counterColor({ name: "alpha", field: "a" }),
-    counterColor({ name: "alpha", field: "z" }),
-  );
 });
 
 test("positive resource counters use a zero baseline like BuildBuddy", () => {

@@ -118,11 +118,6 @@ export function eventColor(event: TraceEvent): string {
   return EVENT_COLORS[(hash >>> 0) % EVENT_COLORS.length];
 }
 
-/** Assigns a stable palette color distinguishing one counter series from another. */
-export function counterColor(counter: { name: string; field: string }): string {
-  return eventColor({ name: `${counter.name}·${counter.field}` });
-}
-
 // Use the shallowest free row. Sorting only the geometry keeps raw file order.
 function hasSpanTimes(
   event: EventGeometry,

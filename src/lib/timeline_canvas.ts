@@ -4,7 +4,6 @@ import {
   ROW_HEIGHT,
   eventColor,
   eventName,
-  counterColor,
   timeToX,
   counterPointY,
   formatRulerTime,
@@ -32,6 +31,11 @@ export interface TimelineTheme {
   mutedForeground: string;
   border: string;
   sidebar: string;
+}
+
+/** Stable color distinguishing one counter series from another. */
+function counterColor(counter: CounterSeries): string {
+  return eventColor({ name: `${counter.name}·${counter.field}` });
 }
 
 interface TimelineAxis {
