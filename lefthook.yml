@@ -14,3 +14,31 @@ pre-commit:
       # Scans staged changes for secrets; requires gitleaks on PATH
       # (brew install gitleaks). --redact hides matched values in output.
       run: gitleaks git --staged --redact
+pre-push:
+  jobs:
+    - name: gitleaks
+      use_stdin: true
+      # Scans the commits being pushed. Staged scanning alone misses commits
+      # created without the pre-commit hook, e.g. snapshot commits from
+      # worktree tooling. The pushed ref tips arrive on stdin (githooks(5)),
+      # so pushing a branch other than HEAD scans that branch. The remote's
+      # ref tips and tracking refs bound the scan to what the push adds.
+      run: |
+        shas=""
+        excludes=""
+        while read -r local_ref local_sha remote_ref remote_sha; do
+          [ "$local_ref" = "(delete)" ] && continue
+          shas="$shas $local_sha"
+          [ "$remote_sha" = "0000000000000000000000000000000000000000" ] \
+            || excludes="$excludes ^$remote_sha"
+        done
+        for ref in $(git for-each-ref --format='%(refname)' refs/remotes); do
+          excludes="$excludes ^$ref"
+        done
+        if [ -n "$shas" ]; then
+          opts="${shas# }${excludes}"
+          # gitleaks exits 0 even when `git log` rejects the opts, which would
+          # silently skip the scan. Fail the push on log errors instead.
+          git log --format=%H $opts > /dev/null || exit 1
+          gitleaks git --redact --log-opts="$opts" .
+        fi
