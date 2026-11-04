@@ -194,7 +194,7 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 Code に未適用の編集があっても確認せず捨てる。再入力コストが低く、確認 UI の実装が重いため(worse is better)。
 target pattern の入力は実行時の target 選択と同じ fuzzy find(`SearchInput` + `search.ts`)で補完する。
 候補はツリー用一覧の `targets` とする。
-外部 repo label は一覧に載らないため、直前の Raw 結果に現れた label と、その label から抽出した `@repo//...` pattern を候補に加える。結果の表示は式の編集で消えるが、候補は次の Raw 結果まで保持する。それでも不足する分は手入力する。
+外部 repo label は一覧に載らない。代わりに直前の Raw 結果から label と `@repo//...` pattern を候補に拾う(結果表示を消しても候補は次の実行まで残る)。初回実行前など、結果に現れない repo は手入力する。
 手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
 `kind` の pattern も同じ fuzzy find で、候補は `.*_test rule`、snapshot の rule class、rule では表れない `source file`・`generated file` を加えたものを使う。
 attribute 名(`attr` の `name`、`labels` の `attr_name`)は静的な候補リストを fuzzy find に乗せる。snapshot は attribute を持たないため、関数 catalog と同じく手作業で管理する hint list とする。リストに無い名前も手入力で送れる。
