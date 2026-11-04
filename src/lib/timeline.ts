@@ -451,3 +451,28 @@ export function visibleTracks(
     return positioned;
   });
 }
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function fieldValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value) ?? String(value);
+}
+
+/** Flattens a trace event into `[field, value]` rows for the inspector table. */
+export function eventFields(event: TraceEvent): Array<[string, string]> {
+  const rows: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(event)) {
+    if (isPlainObject(value)) {
+      for (const [field, inner] of Object.entries(value)) {
+        rows.push([`${key}.${field}`, fieldValue(inner)]);
+      }
+    } else {
+      rows.push([key, fieldValue(value)]);
+    }
+  }
+  return rows;
+}

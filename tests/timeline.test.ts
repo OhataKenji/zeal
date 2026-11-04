@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   eventColor,
+  eventFields,
   layoutProfile,
   clampRange,
   zoomRange,
@@ -671,4 +672,32 @@ test("deep zoom keeps native scroll geometry bounded and the trace end reachable
   const range = { start: 999_999_999, end: 1_000_000_000 };
   assert.deepEqual(scrollbarGeometry(range, domain, 500), { width: 1_000_000, left: 999_500 });
   assert.deepEqual(scrollRange(range, domain, 1), range);
+});
+
+test("event fields flatten nested objects and serialize remaining values", () => {
+  const rows = eventFields({
+    name: "action",
+    ph: "X",
+    ts: 10,
+    dur: 5,
+    tid: 3,
+    args: { target: "//:app", mnemonic: "CppCompile", extra: { a: 1 }, list: [1, 2] },
+    id: "0x1",
+    done: true,
+    missing: null,
+  });
+  assert.deepEqual(rows, [
+    ["name", "action"],
+    ["ph", "X"],
+    ["ts", "10"],
+    ["dur", "5"],
+    ["tid", "3"],
+    ["args.target", "//:app"],
+    ["args.mnemonic", "CppCompile"],
+    ["args.extra", '{"a":1}'],
+    ["args.list", "[1,2]"],
+    ["id", "0x1"],
+    ["done", "true"],
+    ["missing", "null"],
+  ]);
 });

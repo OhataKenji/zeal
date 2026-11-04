@@ -147,18 +147,32 @@
   margin-left: 6px;
 }
 
-.trace-raw {
-  font-size: 12px;
-  color: var(--muted-foreground);
+.trace-fields {
+  width: 100%;
   margin-top: 8px;
+  border-collapse: collapse;
+  font: 12px var(--mono);
 }
 
-.trace-raw pre {
-  font: 12px/1.6 var(--mono);
-  color: var(--foreground);
-  white-space: pre-wrap;
+.trace-fields th,
+.trace-fields td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.trace-fields th {
+  width: 132px;
+  padding-right: 20px;
+  color: var(--muted-foreground);
+  font-weight: 400;
   overflow-wrap: anywhere;
-  margin: 8px 0 0;
+}
+
+.trace-fields td {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .profile-view {

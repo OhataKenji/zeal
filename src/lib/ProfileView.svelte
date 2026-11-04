@@ -5,6 +5,7 @@
     COUNTER_HEIGHT,
     LANE_HEADER,
     ROW_HEIGHT,
+    eventFields,
     eventName,
     formatCounter,
     formatTime,
@@ -351,10 +352,13 @@
       {#if typeof selected.event.cat === "string"}<dt>Category</dt>
         <dd>{selected.event.cat}</dd>{/if}
     </dl>
-    <details class="trace-raw" open>
-      <summary onkeydown={keydown}>Raw event fields</summary>
-      <pre>{JSON.stringify(selected.event, null, 2)}</pre>
-    </details>
+    <table class="trace-fields">
+      <tbody>
+        {#each eventFields(selected.event) as [field, value] (field)}
+          <tr><th>{field}</th><td>{value}</td></tr>
+        {/each}
+      </tbody>
+    </table>
   </section>
 {/snippet}
 
@@ -446,7 +450,7 @@
     {#if selected && selectedLane}
       {@render eventDetails(selected, selectedLane)}
     {:else}<p class="dim">
-        Select an event to inspect its timing and raw fields.
+        Select an event to inspect its timing and fields.
       </p>{/if}
   </section>
 </div>
