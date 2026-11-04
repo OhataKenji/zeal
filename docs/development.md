@@ -13,8 +13,6 @@ pnpm tauri dev    # run the app in dev mode
 pnpm tauri build -- --locked  # build a release bundle
 ```
 
-On macOS and Linux, Zeal loads your login shell's `PATH`.
-
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 

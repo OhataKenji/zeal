@@ -14,27 +14,6 @@
 
 ![Zeal target explorer showing source files, dependencies, and invocation history](docs/screenshots/overview.jpg)
 
-## Getting Started
-
-> [!WARNING]
-> Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
-
-Run Zeal from source: [Development guide](docs/development.md#getting-started).
-
-### Open a repository
-
-**Requires:** Bazelisk or Bazel on your `PATH`.
-
-Open only trusted repositories.
-
-1. Enter your Bazel workspace path in **Workspace** and select **open**.
-2. Find a target and run `build`, `test`, or `run`.
-
-![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
-
-Zeal records commands run in the app. To also record terminal builds,
-[connect Bazel to Zeal](docs/terminal-builds.md).
-
 ## Features
 
 ### Find and Run Targets
@@ -51,9 +30,43 @@ View logs, results, details, and available timing data.
 
 ### Analytics Page
 
-See build trends and compare durations.
+Filter build and test history from Zeal and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
 
 ![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
+
+## Getting Started
+
+> [!WARNING]
+> Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
+
+Run Zeal from source: [Development guide](docs/development.md#getting-started).
+
+### Open a repository
+
+**Requires:** Bazelisk or Bazel on your `PATH`.
+
+On macOS and Linux, Zeal loads your login shell's `PATH`.
+
+Open only trusted repositories.
+
+1. Enter the path to your Bazel workspace root in **Workspace**.
+2. Keep **target patterns** as `//...` for all packages in the main repository. To narrow the scope, use a pattern such as `//app/...`.
+3. Select **open**.
+4. Select a target and run `build`, `test`, or `run`.
+
+![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
+
+## Record terminal invocations
+
+Zeal records commands run in the app. To also record terminal commands, add to `.bazelrc`:
+
+```bazelrc
+build --bes_backend=grpc://127.0.0.1:4718
+build --experimental_build_event_upload_strategy=local
+build --bes_timeout=5s
+```
+
+While Zeal is open, run `bazel build //...`.
 
 ## Development
 

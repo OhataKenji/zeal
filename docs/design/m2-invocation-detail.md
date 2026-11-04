@@ -74,11 +74,12 @@ profileの保存先と補助flagは上書きせず、Zeal実行もCLI実行もBa
 
 receiverは `BuildToolLogs` の `command.profile.gz` が参照するローカルfileを32 MiBまでコピーし、表示時にparseする。
 コピー失敗でもBEPの保存とACKは続ける。
-remote cache利用時の共通設定は[CLI記録手順](../terminal-builds.md)に従う。
+remote cache利用時の共通設定は[README](../../README.md#record-terminal-invocations)に従う。
 profiling無効、plain JSON、remote URIでは計時情報を保存しない。
 
-Bazelの既定は短いeventをまとめるslim profileで、詳細が必要なら引数欄で `--noslim_profile` を指定する。
-両形式を同じparserで読む。
+profile の詳細度は Bazel の設定に従う。Bazel の既定では、大量の短い event をまとめる slim profile を使う。
+細かい処理を調べるときは、引数欄で `--noslim_profile` を指定できる。
+既存の詳細な profile と slim profile は、同じ parser で読み込む。
 
 対象は Bazel 8.7 以上を目安とし、基準環境は spike を行った Bazel 8.7.0 とする。
 flag や出力形式の version 別の対応表、parser の field 名の読み替えは持たない。
