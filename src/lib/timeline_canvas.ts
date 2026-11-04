@@ -4,6 +4,7 @@ import {
   ROW_HEIGHT,
   eventColor,
   eventName,
+  counterColor,
   timeToX,
   counterPointY,
   formatRulerTime,
@@ -298,14 +299,14 @@ function drawCounterSeries(
   const baseline = trackTop + COUNTER_HEIGHT - 1;
   context.save();
   context.globalAlpha = 0.4;
-  context.fillStyle = counter.color;
+  context.fillStyle = counterColor(counter);
   traceLine();
   context.lineTo(timeX(points[pathTo - 1].time), baseline);
   context.lineTo(timeX(points[pathFrom].time), baseline);
   context.closePath();
   context.fill();
   context.restore();
-  context.strokeStyle = counter.color;
+  context.strokeStyle = counterColor(counter);
   context.lineWidth = 1.5;
   traceLine();
   context.stroke();
@@ -332,7 +333,7 @@ function drawCounterPoint(
   // Cached builds can record only one sample. A moveTo-only path has no
   // stroke, so paint that sample even when it has not been selected.
   if (counter.points.length === 1) {
-    context.fillStyle = counter.color;
+    context.fillStyle = counterColor(counter);
     context.beginPath();
     context.arc(pointX, pointY, 2, 0, Math.PI * 2);
     context.fill();

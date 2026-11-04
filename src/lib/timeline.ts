@@ -21,8 +21,6 @@ export interface EventGeometry {
 export interface CounterSeries {
   name: string;
   field: string;
-  /** Stable palette color distinguishing this series from its neighbors. */
-  color: string;
   /** Time-sorted samples; viewport windowing depends on the order. */
   points: Array<{ time: number; value: number; index: number }>;
   min: number;
@@ -118,6 +116,11 @@ export function eventColor(event: TraceEvent): string {
     hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
   }
   return EVENT_COLORS[(hash >>> 0) % EVENT_COLORS.length];
+}
+
+/** Assigns a stable palette color distinguishing one counter series from another. */
+export function counterColor(counter: { name: string; field: string }): string {
+  return eventColor({ name: `${counter.name}·${counter.field}` });
 }
 
 // Use the shallowest free row. Sorting only the geometry keeps raw file order.
@@ -229,14 +232,7 @@ function counterSeries(events: EventGeometry[]): CounterSeries[] {
       const key = JSON.stringify([name, field]);
       // Include zero so resource usage and constant positive values keep their
       // magnitude, matching BuildBuddy's baseline. Retain negative samples too.
-      const counter = series.get(key) ?? {
-        name,
-        field,
-        color: eventColor({ name: `${name}·${field}` }),
-        points: [],
-        min: 0,
-        max: 0,
-      };
+      const counter = series.get(key) ?? { name, field, points: [], min: 0, max: 0 };
       counter.points.push({ time: start, value, index });
       counter.min = Math.min(counter.min, value);
       counter.max = Math.max(counter.max, value);
