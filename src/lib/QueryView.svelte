@@ -66,6 +66,7 @@
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
+    attrCandidates,
     codeDiverged,
     commandLine,
     createQuery,
@@ -88,8 +89,9 @@
   const searchIndex = $derived(
     snap ? createIndex(snap.targets) : null,
   );
-  // Attribute names remain free text; the tree index carries no attributes.
-  const attrIndex = null;
+  // Attribute names come from a static hint list: the label_kind snapshot
+  // carries no attributes, and completion only assists.
+  const attrIndex = createIndex(attrCandidates());
   // kind()'s pattern arg searches a wildcard-test hint, the non-rule kinds,
   // and every rule class in the snapshot.
   const kindIndex = $derived(

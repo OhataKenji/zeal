@@ -197,7 +197,7 @@ target pattern の入力は実行時の target 選択と同じ fuzzy find(`Searc
 外部 repo label は一覧に載らないため手入力する。
 手入力は常に受理し、候補に無い pattern(`//...`、`:all` 等)もそのまま送れる。
 `kind` の pattern も同じ fuzzy find で、候補は `.*_test rule`、snapshot の rule class、rule では表れない `source file`・`generated file` を加えたものを使う。
-attribute 名は手入力する。
+attribute 名(`attr` の `name`、`labels` の `attr_name`)は静的な候補リストを fuzzy find に乗せる。snapshot は attribute を持たないため、関数 catalog と同じく手作業で管理する hint list とする。リストに無い名前も手入力で送れる。
 
 ## Alternatives Considered
 
