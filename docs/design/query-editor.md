@@ -186,7 +186,7 @@ Graph は `--nograph:factored` を付けて target とノードを1対1に保つ
 
 ### 例と補完
 
-左側に Examples として代表的な query をプリセットで並べる。
+エディタヘッダーの Examples ドロップダウンに代表的な query を目的別（Dependencies、Paths、Filter & Attributes、Set Operations）に並べる。
 初期の利用はここから編集に入ることを想定する。
 プリセット選択は flag を既定に戻すが、実行はしない。クリックはエディタを埋める操作であり、実行の判断は利用者が行うためである。
 例は `@@platforms` の constraint graph だけを対象にする。canonical 名は `use_repo` 宣言なしで常に解決されるためどのリポジトリでもそのまま実行でき、60件程度の小さい universe で巨大リポジトリでも軽い。
