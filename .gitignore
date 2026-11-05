@@ -1,31 +1,103 @@
-# Logs
-logs
+# Node / Vite
+node_modules/
+.pnpm-store/
+.npm/
+/dist/
+/dist-ssr/
+.vite/
+*.tsbuildinfo
+
+# Test output
+/coverage/
+/.nyc_output/
+
+# Browser QA
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.auth/
+.playwright-mcp/
+.playwright-cli/
+.chrome-profile/
+.chromium-profile/
+.browser-profile/
+
+# Logs / diagnostics
+/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-node_modules
-dist
-dist-ssr
-*.local
+# Local environment
+.env
+.env.*
+!.env.example
+!.env.*.example
+mise.local.toml
+mise.*.local.toml
+.mise.local.toml
+.mise.*.local.toml
 
-# Editor directories and files
+# Editor state
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
-*.ntvs*
-*.njsproj
-*.sln
 *.sw?
+*~
+
+# OS metadata
+.DS_Store
+._*
+Thumbs.db
+[Dd]esktop.ini
 
 # Rust
-/src-tauri/target/
+*.rs.bk
+rustc-ice-*.txt
 
-.pnpm-store/
+# Agent local data
+AGENTS.local.md
+**/.devin/config.local.json
+**/.devin/mcp_config.local.json
+**/.pi/npm/
+**/.pi/git/
 
-.audit-scratch/
+# Codex
+**/.codex/auth.json
+**/.codex/history.jsonl
+**/.codex/session_index.jsonl
+**/.codex/transcription-history.jsonl
+**/.codex/*.sqlite*
+**/.codex/sessions/
+**/.codex/archived_sessions/
+**/.codex/memories/
+**/.codex/shell_snapshots/
+**/.codex/log/
+**/.codex/cache/
+**/.codex/tmp/
+**/.codex/sqlite/
+**/.codex/models_cache.json
+**/.codex/version.json
+**/.codex/worktrees/
+**/.codex/browser/
+**/.codex/computer-use/
+**/.codex/attachments/
+**/.codex/generated_images/
+**/.codex/visualizations/
+
+# DeepSeek Harness
+**/.dsh/.credentials.yaml
+**/.dsh/.anonymous-user-id
+**/.dsh/sessions/
+**/.dsh/storages/
+**/.dsh/logs/
+**/.dsh/cache/
+**/.dsh/attachments/
+
+# Scratch
+/.audit-scratch/
