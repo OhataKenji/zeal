@@ -176,6 +176,7 @@
     if (app.view.starting) return "an invocation is starting";
     if (st?.activeInvocation) return "a Bazel invocation is in progress";
     if (st?.ingest === "running") return "targets are loading";
+    if (st?.detailQuery === "running") return "target details are loading";
     if (st?.query === "running" && !qstate.running)
       return "a query is already running";
     return null;
