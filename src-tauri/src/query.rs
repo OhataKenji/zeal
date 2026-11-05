@@ -378,9 +378,7 @@ fn capture_tail(pipe: &mut impl Read, cap: usize) -> io::Result<Vec<u8>> {
             Err(error) => return Err(error),
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > cap {
-                    buf.drain(..buf.len() - cap);
-                }
+                buf.drain(..buf.len().saturating_sub(cap));
             }
         }
     }
@@ -689,16 +687,14 @@ mod tests {
 
     struct InterruptOnce<R> {
         inner: R,
-        interrupted: bool,
+        interruption: Option<io::Error>,
     }
 
     impl<R: Read> Read for InterruptOnce<R> {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            if !self.interrupted {
-                self.interrupted = true;
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
-            }
-            self.inner.read(buf)
+            self.interruption
+                .take()
+                .map_or_else(|| self.inner.read(buf), Err)
         }
     }
 
@@ -731,7 +727,7 @@ mod tests {
         let data = "0123456789".repeat(2000);
         let mut head = InterruptOnce {
             inner: data.as_bytes(),
-            interrupted: false,
+            interruption: Some(io::ErrorKind::Interrupted.into()),
         };
         let (bytes, truncated) = capture_head(&mut head, 4096).unwrap();
         assert_eq!(bytes, data.as_bytes()[..4096]);
@@ -739,7 +735,7 @@ mod tests {
 
         let mut tail = InterruptOnce {
             inner: data.as_bytes(),
-            interrupted: false,
+            interruption: Some(io::ErrorKind::Interrupted.into()),
         };
         assert_eq!(
             capture_tail(&mut tail, 100).unwrap(),
