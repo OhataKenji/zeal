@@ -1,6 +1,13 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { canSend, canStop, createSession, emptyView, type Transport } from "../src/lib/session.ts";
+import {
+  bazelBusyReason,
+  canSend,
+  canStop,
+  createSession,
+  emptyView,
+  type Transport,
+} from "../src/lib/session.ts";
 import type {
   AppState,
   InvocationDetail,
@@ -404,6 +411,20 @@ test("a late profile response or error cannot replace a newer selection", async 
   assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
   assert.equal(h.view.profileLoading, false);
+});
+
+test("bazelBusyReason reports the active Bazel slot and ignores readiness", () => {
+  assert.equal(bazelBusyReason(null), null);
+  assert.equal(bazelBusyReason(IDLE), null);
+  const cases: Array<[Partial<AppState>, string]> = [
+    [{ activeInvocation: "run-a" }, "a Bazel invocation is in progress"],
+    [{ ingest: "running" }, "targets are loading"],
+    [{ query: "running" }, "a query is already running"],
+    [{ detailQuery: "running" }, "target details are loading"],
+  ];
+  for (const [patch, reason] of cases) {
+    assert.equal(bazelBusyReason({ ...IDLE, ...patch }), reason);
+  }
 });
 
 test("Send waits for listeners and rejects every active Bazel operation", async () => {

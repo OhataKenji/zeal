@@ -62,6 +62,7 @@
   import { Bookmarks, CaretDown, Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
+  import { bazelBusyReason } from "./session";
   import { createIndex } from "./search";
   import QueryExpr from "./QueryExpr.svelte";
   import {
@@ -174,11 +175,7 @@
     if (!app.view.ready) return "not connected to Bazel";
     if (app.view.opening) return "the workspace is changing";
     if (app.view.starting) return "an invocation is starting";
-    if (st?.activeInvocation) return "a Bazel invocation is in progress";
-    if (st?.ingest === "running") return "targets are loading";
-    if (st?.query === "running" && !qstate.running)
-      return "a query is already running";
-    return null;
+    return bazelBusyReason(st);
   });
   const canRun = $derived(valid && !busyReason && !qstate.running);
   const runBlockReason = $derived(
