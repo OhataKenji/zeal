@@ -15,7 +15,7 @@ use crate::runner::signal_group;
 use crate::state::{Core, CoreState};
 use rustix::process::Signal;
 use serde::Serialize;
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -190,11 +190,16 @@ pub fn run(
     // A starved reader must not fake an empty result: dropped stdout is
     // reported as truncated and a missing stderr capture gets the same note
     // an unconfirmed exit does.
-    let (stdout, truncated) = match drain(&out_rx, observed.unconfirmed) {
+    let (stdout, truncated) = match drain(&out_rx, observed.unconfirmed)
+        .transpose()
+        .map_err(|error| format!("failed to read query stdout: {error}"))?
+    {
         Some((bytes, dropped)) => (bytes, dropped),
         None => (Vec::new(), true),
     };
-    let stderr = drain(&err_rx, observed.unconfirmed);
+    let stderr = drain(&err_rx, observed.unconfirmed)
+        .transpose()
+        .map_err(|error| format!("failed to read query stderr: {error}"))?;
     let mut stderr_tail =
         String::from_utf8_lossy(stderr.as_deref().unwrap_or_default()).into_owned();
     if observed.unconfirmed || stderr.is_none() {
@@ -343,13 +348,15 @@ impl<F: Fn()> Drop for QuerySlot<'_, F> {
 /// Keep the first `cap` bytes of the stream and drain the rest: the child
 /// must never block on a full pipe. Returns the bytes and whether any were
 /// dropped.
-fn capture_head(pipe: &mut impl Read, cap: usize) -> (Vec<u8>, bool) {
+fn capture_head(pipe: &mut impl Read, cap: usize) -> io::Result<(Vec<u8>, bool)> {
     let mut buf = Vec::new();
     let mut truncated = false;
     let mut chunk = [0u8; 8192];
     loop {
         match pipe.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
             Ok(n) => {
                 let kept = n.min(cap - buf.len());
                 buf.extend_from_slice(&chunk[..kept]);
@@ -357,23 +364,27 @@ fn capture_head(pipe: &mut impl Read, cap: usize) -> (Vec<u8>, bool) {
             }
         }
     }
-    (buf, truncated)
+    Ok((buf, truncated))
 }
 
 /// Keep the last `cap` bytes of the stream.
-fn capture_tail(pipe: &mut impl Read, cap: usize) -> Vec<u8> {
+fn capture_tail(pipe: &mut impl Read, cap: usize) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
-    while let Ok(n) = pipe.read(&mut chunk) {
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.len() > cap {
-            buf.drain(..buf.len() - cap);
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > cap {
+                    buf.drain(..buf.len() - cap);
+                }
+            }
         }
     }
-    buf
+    Ok(buf)
 }
 
 /// Receive a reader's capture. Even a confirmed exit is bounded: a descendant
@@ -676,19 +687,71 @@ mod tests {
         assert!(json.get("stderr_tail").is_none());
     }
 
+    struct InterruptOnce<R> {
+        inner: R,
+        interrupted: bool,
+    }
+
+    impl<R: Read> Read for InterruptOnce<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    struct BrokenPipe;
+
+    impl Read for BrokenPipe {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+    }
+
     #[test]
     fn captures_keep_the_stdout_head_and_the_stderr_tail() {
         let data = "0123456789".repeat(2000); // 20_000 bytes
-        let (head, truncated) = capture_head(&mut data.as_bytes(), 4096);
+        let (head, truncated) = capture_head(&mut data.as_bytes(), 4096).unwrap();
         assert_eq!(head, data.as_bytes()[..4096]);
         assert!(truncated);
 
-        let tail = capture_tail(&mut data.as_bytes(), 100);
+        let tail = capture_tail(&mut data.as_bytes(), 100).unwrap();
         assert_eq!(tail, data.as_bytes()[data.len() - 100..]);
 
         let small = "short";
-        let (head, truncated) = capture_head(&mut small.as_bytes(), 4096);
+        let (head, truncated) = capture_head(&mut small.as_bytes(), 4096).unwrap();
         assert_eq!(head, b"short");
         assert!(!truncated);
+    }
+
+    #[test]
+    fn interrupted_reads_retry_and_keep_the_capture() {
+        let data = "0123456789".repeat(2000);
+        let mut head = InterruptOnce {
+            inner: data.as_bytes(),
+            interrupted: false,
+        };
+        let (bytes, truncated) = capture_head(&mut head, 4096).unwrap();
+        assert_eq!(bytes, data.as_bytes()[..4096]);
+        assert!(truncated);
+
+        let mut tail = InterruptOnce {
+            inner: data.as_bytes(),
+            interrupted: false,
+        };
+        assert_eq!(
+            capture_tail(&mut tail, 100).unwrap(),
+            data.as_bytes()[data.len() - 100..]
+        );
+    }
+
+    #[test]
+    fn read_errors_surface_instead_of_a_fabricated_capture() {
+        let head = capture_head(&mut BrokenPipe, 4096).unwrap_err();
+        assert_eq!(head.kind(), io::ErrorKind::BrokenPipe);
+        let tail = capture_tail(&mut BrokenPipe, 100).unwrap_err();
+        assert_eq!(tail.kind(), io::ErrorKind::BrokenPipe);
     }
 }
