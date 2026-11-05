@@ -2,6 +2,7 @@ import { COMMANDS } from "./commands.ts";
 import { targetError } from "./target.ts";
 import type {
   AppState,
+  ExplorerSelection,
   BazelCommand,
   InvocationDetail,
   InvocationRecord,
@@ -27,7 +28,7 @@ export interface SessionView {
   snapshot: TargetIndex | null;
   snapshotLoading: boolean;
   snapshotError: string | null;
-  selectedTarget: string | null;
+  selection: ExplorerSelection;
   targetDetail: TargetDetail | null;
   targetDetailError: string | null;
   ready: boolean;
@@ -54,7 +55,7 @@ export function emptyView(): SessionView {
     snapshot: null,
     snapshotLoading: false,
     snapshotError: null,
-    selectedTarget: null,
+    selection: null,
     targetDetail: null,
     targetDetailError: null,
     ready: false,
@@ -164,7 +165,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       snapshot: null,
       snapshotLoading: false,
       snapshotError: null,
-      selectedTarget: null,
+      selection: null,
       ...clearTargetDetail(),
     };
   }
@@ -217,8 +218,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   function acceptLoadedSnapshot(snapshot: TargetIndex | null) {
     snapshotRequested = null;
     update({ snapshot, snapshotLoading: false, snapshotError: null, targetDetailError: null });
-    if (view.selectedTarget && !snapshot?.targets.some((t) => t.label === view.selectedTarget)) {
-      selectTarget(null);
+    const selection = view.selection;
+    if (
+      selection?.kind === "package" ||
+      (selection?.kind === "target" && !snapshot?.targets.some((t) => t.label === selection.label))
+    ) {
+      select(null);
       return;
     }
     requestTargetDetail();
@@ -246,7 +251,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     update({
       snapshotLoading: false,
       snapshotError: `Could not load the workspace snapshot: ${String(error)}`,
-      ...(view.selectedTarget ? { targetDetailError: "Could not load the target list" } : {}),
+      ...(view.selection?.kind === "target"
+        ? { targetDetailError: "Could not load the target list" }
+        : {}),
     });
   }
 
@@ -255,7 +262,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   function requestTargetDetail() {
-    const label = view.selectedTarget;
+    const label = view.selection?.kind === "target" ? view.selection.label : null;
     const snapshot = view.snapshot;
     const state = view.state;
     if (
@@ -296,9 +303,21 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     })();
   }
 
-  function selectTarget(label: string | null) {
-    if (label === view.selectedTarget && !view.targetDetailError) return;
-    update({ selectedTarget: label, ...clearTargetDetail() });
+  function select(selection: ExplorerSelection) {
+    if (
+      selection?.kind === "package" &&
+      view.selection?.kind === "package" &&
+      selection.path === view.selection.path
+    )
+      return;
+    if (
+      selection?.kind === "target" &&
+      view.selection?.kind === "target" &&
+      selection.label === view.selection.label &&
+      !view.targetDetailError
+    )
+      return;
+    update({ selection, ...clearTargetDetail() });
     requestTargetDetail();
   }
 
@@ -479,7 +498,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const wantFetchedAt = state.snapshotFetchedAt;
     if (wantFetchedAt === null) {
       clearSnapshot();
-      if (view.selectedTarget) selectTarget(null);
+      if (view.selection) select(null);
     } else if (
       // A fetch for this snapshot may already be in flight; re-issuing would
       // duplicate the transfer this split exists to avoid.
@@ -662,6 +681,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadProfile,
     loadInvocations,
     loadSnapshot,
-    selectTarget,
+    select,
   };
 }

@@ -83,6 +83,7 @@ export interface Row {
   /** For dir rows: the directory path that expand/collapse toggles. */
   dirPath?: string;
   expanded?: boolean;
+  hasTargets?: boolean;
   /** For target rows: the label selecting this row navigates to. */
   label?: string;
   ruleClass?: string;
@@ -101,6 +102,7 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
         text: `${d.name}/`,
         dirPath: d.path,
         expanded: ex,
+        hasTargets: d.targets.length > 0,
       });
       if (ex) walk(d, depth + 1);
     }

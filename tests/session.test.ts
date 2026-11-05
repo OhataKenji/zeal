@@ -578,9 +578,9 @@ test("target details load only after selection and use the current index generat
   await h.session.init();
   await emitSnapshot(h, TARGETS);
   assert.equal(requestCount(h, "get_target_detail"), 0);
-  assert.equal(h.view.selectedTarget, null);
+  assert.equal(h.view.selection, null);
 
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   assert.deepEqual(pendingRequest(h, "get_target_detail").args, {
     label: "//app:first",
     fetchedAt: TARGETS.meta.fetchedAt,
@@ -596,8 +596,8 @@ test("rapid target clicks keep only the latest result", async () => {
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS);
-  h.session.selectTarget("//app:first");
-  h.session.selectTarget("//app:second");
+  h.session.select({ kind: "target", label: "//app:first" });
+  h.session.select({ kind: "target", label: "//app:second" });
   assert.equal(requestCount(h, "get_target_detail"), 1);
   pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
   await settle();
@@ -618,7 +618,7 @@ test("target detail waits for the Bazel slot and resumes on the idle event", asy
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS, { activeInvocation: RECORD.id });
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   assert.equal(requestCount(h, "get_target_detail"), 0);
   assert.equal(h.view.targetDetailError, null);
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
@@ -632,7 +632,7 @@ test("scope and index changes discard an old target detail", async () => {
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS);
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   const old = pendingRequest(h, "get_target_detail");
   h.emit("app-state", {
     ...IDLE,
@@ -641,7 +641,7 @@ test("scope and index changes discard an old target detail", async () => {
   });
   old.reply.resolve(TARGET_DETAIL);
   await settle();
-  assert.equal(h.view.selectedTarget, null);
+  assert.equal(h.view.selection, null);
   assert.equal(h.view.targetDetail, null);
 
   await emitSnapshot(h, { ...TARGETS, meta: { ...TARGETS.meta, fetchedAt: 2 } });
@@ -652,7 +652,7 @@ test("a refreshed index replaces an in-flight detail with the new generation", a
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS);
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   const old = pendingRequest(h, "get_target_detail");
 
   await emitSnapshot(h, { ...TARGETS, meta: { ...TARGETS.meta, fetchedAt: 2 } });
@@ -675,13 +675,13 @@ test("a target detail failure has an explicit retry", async () => {
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS);
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   pendingRequest(h, "get_target_detail").reply.reject(new Error("query failed"));
   await settle();
   assert.match(h.view.targetDetailError ?? "", /query failed/);
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
   assert.equal(requestCount(h, "get_target_detail"), 1);
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   assert.equal(requestCount(h, "get_target_detail"), 2);
 });
 
@@ -689,7 +689,7 @@ test("a successful target-list retry resumes the selected detail", async () => {
   const h = harness();
   await h.session.init();
   await emitSnapshot(h, TARGETS);
-  h.session.selectTarget("//app:first");
+  h.session.select({ kind: "target", label: "//app:first" });
   pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
   await settle();
 
@@ -1486,4 +1486,72 @@ test("workspace opening sends all target patterns to the core", async () => {
   request.reply.resolve({ ...IDLE, workspace: "/other", scope });
   await opened;
   assert.deepEqual(h.view.state?.scope, scope);
+});
+
+test("clearing the target selection rejects an older target detail", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  h.session.select(null);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(h.view.selection, null);
+  assert.equal(h.view.targetDetail, null);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+});
+
+test("package selection makes no request and keeps late target details out", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  h.session.select({ kind: "package", path: "app" });
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.deepEqual(h.view.selection, { kind: "package", path: "app" });
+  assert.equal(h.view.targetDetail, null);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+});
+
+test("returning from a package to the same target rejects its earlier reply", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  h.session.select({ kind: "package", path: "app" });
+  h.session.select({ kind: "target", label: "//app:first" });
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(h.view.targetDetail, null);
+  assert.equal(requestCount(h, "get_target_detail"), 2);
+  lastPendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.deepEqual(h.view.selection, { kind: "target", label: "//app:first" });
+  assert.deepEqual(h.view.targetDetail, TARGET_DETAIL);
+});
+
+test("snapshot reload and workspace changes close package selection", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "package", path: "app" });
+  await emitSnapshot(h, { ...TARGETS, meta: { ...TARGETS.meta, fetchedAt: 2 } });
+  assert.equal(h.view.selection, null);
+  h.session.select({ kind: "package", path: "app" });
+  h.emit("app-state", { ...IDLE, workspace: "/other", snapshotFetchedAt: null });
+  assert.equal(h.view.selection, null);
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+});
+
+test("selecting the same package does not publish another view or query", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "package", path: "app" });
+  const selectedView = h.view;
+  h.session.select({ kind: "package", path: "app" });
+  assert.equal(h.view, selectedView);
+  assert.equal(requestCount(h, "get_target_detail"), 0);
 });

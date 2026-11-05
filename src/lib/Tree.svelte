@@ -1,18 +1,19 @@
 <script lang="ts">
   import { CaretDown, CaretRight } from "phosphor-svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import type { ExplorerSelection } from "./types";
   import { ancestorsOf, flatten, splitLabel, type DirNode } from "./model";
 
   let {
     root,
-    selected,
+    selection,
     revealRequest = 0,
     onselect,
   }: {
     root: DirNode;
-    selected: string | null;
+    selection: ExplorerSelection;
     revealRequest?: number;
-    onselect: (label: string) => void;
+    onselect: (selection: ExplorerSelection) => void;
   } = $props();
 
   const expanded = new SvelteSet<string>();
@@ -30,8 +31,8 @@
   $effect(() => {
     // Re-picking the same target must reveal it after a manual collapse.
     void revealRequest;
-    if (selected) {
-      for (const p of ancestorsOf(splitLabel(selected).pkg)) {
+    if (selection?.kind === "target") {
+      for (const p of ancestorsOf(splitLabel(selection.label).pkg)) {
         expanded.add(p);
       }
     }
@@ -44,8 +45,15 @@
       <button
         class="row dir"
         style:padding-left="{r.depth * 12}px"
+        class:selected={selection?.kind === "package" && r.dirPath === selection.path}
+        aria-current={selection?.kind === "package" && r.dirPath === selection.path ? "true" : undefined}
         aria-expanded={r.expanded}
-        onclick={() => r.dirPath && toggle(r.dirPath)}
+        onclick={() => {
+          if (r.dirPath !== undefined) {
+            toggle(r.dirPath);
+            if (r.hasTargets) onselect({ kind: "package", path: r.dirPath });
+          }
+        }}
       >
         {#if r.expanded}<CaretDown size={10} />{:else}<CaretRight
             size={10}
@@ -55,10 +63,10 @@
       <button
         title={r.label ?? r.text}
         class="row"
-        class:selected={r.label === selected}
-        aria-current={r.label === selected ? "true" : undefined}
+        class:selected={selection?.kind === "target" && r.label === selection.label}
+        aria-current={selection?.kind === "target" && r.label === selection.label ? "true" : undefined}
         style:padding-left="{r.depth * 12 + 2}px"
-        onclick={() => r.label && onselect(r.label)}
+        onclick={() => r.label && onselect({ kind: "target", label: r.label })}
       >
         <span>{r.text}</span>
         <small>{r.ruleClass}</small>

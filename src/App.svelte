@@ -17,6 +17,7 @@
   import { targetError } from "./lib/target";
   import { buildTree } from "./lib/model";
   import Tree from "./lib/Tree.svelte";
+  import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
   import InvocationStatus from "./lib/InvocationStatus.svelte";
@@ -25,7 +26,7 @@
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
   import SearchInput from "./lib/SearchInput.svelte";
-  import type { AppState, BazelCommand } from "./lib/types";
+  import type { AppState, BazelCommand, ExplorerSelection } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
   function loadConsole() {
@@ -37,7 +38,8 @@
   const st = $derived(app.state);
   const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
-  const selected = $derived(app.view.selectedTarget);
+  const selection = $derived(app.view.selection);
+  const selected = $derived(selection?.kind === "target" ? selection.label : null);
 
   function retryTargets() {
     if (app.view.snapshotError) void getSession().loadSnapshot();
@@ -77,7 +79,7 @@
   const index = $derived(snap ? createIndex(snap.targets) : null);
 
   function pickTarget(value: string) {
-    select(value);
+    select({ kind: "target", label: value });
     collapsed.targets = false;
     revealRequest += 1;
   }
@@ -140,14 +142,12 @@
     window.addEventListener("pointerup", up);
   }
 
-  // Every selection — tree, relation line — also lands in the composer target
-  // field, which is the single source of truth for "the current target".
-  function select(label: string | null) {
+  function select(selection: ExplorerSelection) {
     analyticsOpen = false;
     queryOpen = false;
     getSession().selectInvocation(null);
-    getSession().selectTarget(label);
-    if (label) targetField = label;
+    getSession().select(selection);
+    if (selection?.kind === "target") targetField = selection.label;
   }
 </script>
 
@@ -183,7 +183,7 @@
     {#if !collapsed.targets}
       <div class="pane-body">
         {#if snap && tree}
-          <Tree root={tree} {selected} {revealRequest} onselect={select} />
+          <Tree root={tree} {selection} {revealRequest} onselect={select} />
         {:else if state.ingest === "running" || app.view.snapshotLoading}
           <p class="dim">Loading targets…</p>
         {:else if app.view.snapshotError || state.lastError}
@@ -315,6 +315,8 @@
       {#key workspace}
         <QueryView {snap} />
       {/key}
+    {:else if snap && selection?.kind === "package"}
+      <PackageView index={snap} pkg={selection.path} onselect={(label) => select({ kind: "target", label })} />
     {:else if snap && selected}
       {#if app.view.targetDetail?.target.label === selected}
         {#if app.view.targetDetail.status === "partial"}
@@ -325,14 +327,14 @@
             index={snap}
             detail={app.view.targetDetail}
             wsRoot={workspace}
-            onselect={select}
+            onselect={(label) => select({ kind: "target", label })}
           />
         {/key}
       {:else if app.view.targetDetailError}
         <Notice tone="error" onaction={() =>
           app.view.snapshotError
             ? void getSession().loadSnapshot()
-            : getSession().selectTarget(selected)}>
+            : getSession().select(selection)}>
           Could not load target details: {app.view.targetDetailError}
         </Notice>
       {:else}
