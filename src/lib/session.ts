@@ -126,7 +126,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let listing = false;
   let listPending = false;
   let detailGeneration = 0;
+  let detailRequestInFlight = false;
   let profileGeneration = 0;
+  let profileRequestInFlight = false;
   let snapshotGeneration = 0;
   let snapshotRequested: number | null = null;
   let targetGeneration = 0;
@@ -326,14 +328,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     // Saved observations are read after the active invocation ends.
     if (
       !id ||
+      disposed ||
       !view.ready ||
       view.starting ||
-      view.detailLoading ||
+      detailRequestInFlight ||
       id === view.state?.activeInvocation
     ) {
       return;
     }
     const generation = ++detailGeneration;
+    detailRequestInFlight = true;
     update({ detailLoading: true, detailError: null });
     try {
       const detail = await transport.invoke<InvocationDetail>(COMMANDS.getInvocation, { id });
@@ -344,6 +348,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (generation === detailGeneration) {
         update({ detailError: String(error), detailLoading: false });
       }
+    } finally {
+      detailRequestInFlight = false;
+      if (generation !== detailGeneration) void loadDetail();
     }
   }
 
@@ -351,14 +358,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const id = view.selectedInvocation;
     if (
       !id ||
+      disposed ||
       !view.ready ||
       view.starting ||
-      view.profileLoading ||
+      profileRequestInFlight ||
       id === view.state?.activeInvocation
     ) {
       return;
     }
     const generation = ++profileGeneration;
+    profileRequestInFlight = true;
     update({ profileLoading: true, profileError: null });
     try {
       const profile = await transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
@@ -371,6 +380,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (generation === profileGeneration) {
         update({ profileError: String(error), profileLoading: false });
       }
+    } finally {
+      profileRequestInFlight = false;
+      if (generation !== profileGeneration) void loadProfile();
     }
   }
 
