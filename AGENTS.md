@@ -12,6 +12,14 @@ See [README.md](README.md) for the project overview and
   [.github/pull_request_template.md](.github/pull_request_template.md),
   including instructions in HTML comments.
 
+## Compatibility
+
+This project is still in development. Do not preserve backward
+compatibility unless explicitly requested. Implement changes as if the
+new design had been in place from the beginning: remove obsolete paths
+rather than adding compatibility layers or legacy fallbacks, and update
+affected callers, tests, and documentation together.
+
 ## Policy
 
 - This repository is PUBLIC. Do not commit or push private or sensitive data.
