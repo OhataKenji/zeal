@@ -87,6 +87,7 @@ function harness(initial = Promise.resolve(IDLE)) {
   }> = [];
   const removed: string[] = [];
   const stateRequested = deferred<void>();
+  const occupied = new Set<string>();
   const transport: Transport = {
     invoke: <T>(command: string, args?: Record<string, unknown>) => {
       if (command === "get_state") {
@@ -98,6 +99,21 @@ function harness(initial = Promise.resolve(IDLE)) {
         const response = nextState ?? Promise.resolve(coreState);
         nextState = undefined;
         return response as Promise<T>;
+      }
+      if (command === "get_invocation" || command === "get_invocation_profile") {
+        if (occupied.has(command)) {
+          return Promise.reject(
+            new Error(
+              command === "get_invocation"
+                ? "invocation detail worker busy"
+                : "profile worker busy",
+            ),
+          ) as Promise<T>;
+        }
+        occupied.add(command);
+        const reply = deferred<unknown>();
+        pending.push({ command, args, reply });
+        return reply.promise.finally(() => occupied.delete(command)) as Promise<T>;
       }
       const reply = deferred<unknown>();
       pending.push({ command, args, reply });
@@ -184,6 +200,8 @@ async function selectRecord(h: ReturnType<typeof harness>, records: InvocationRe
 
 // Drain promise reactions only; no timers or arbitrary sleeps in race tests.
 async function settle() {
+  await Promise.resolve();
+  await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
 }
@@ -394,11 +412,12 @@ test("a late profile response or error cannot replace a newer selection", async 
   h.session.selectInvocation("run-a");
   h.session.selectInvocation("run-b");
   h.session.selectInvocation("run-c");
-  const requests = pendingRequests(h, "get_invocation_profile");
-  requests[2].reply.resolve(PROFILE);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  pendingRequest(h, "get_invocation_profile").reply.reject(new Error("stale error"));
   await settle();
-  requests[0].reply.resolve({ status: "missing" });
-  requests[1].reply.reject(new Error("stale error"));
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.deepEqual(lastPendingRequest(h, "get_invocation_profile").args, { id: "run-c" });
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.selectedInvocation, "run-c");
   assert.deepEqual(h.view.profile, PROFILE);
@@ -1018,13 +1037,46 @@ test("a slow previous invocation detail cannot replace the selected invocation",
   await h.session.init();
   h.session.selectInvocation("run-a");
   h.session.selectInvocation("run-b");
-  const requests = pendingRequests(h, "get_invocation");
-  requests[1].reply.resolve({ ...COMPLETED, record: { ...COMPLETED.record, id: "run-b" } });
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
-  requests[0].reply.resolve(COMPLETED);
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.deepEqual(lastPendingRequest(h, "get_invocation").args, { id: "run-b" });
+  lastPendingRequest(h, "get_invocation").reply.resolve({
+    ...COMPLETED,
+    record: { ...COMPLETED.record, id: "run-b" },
+  });
   await settle();
   assert.equal(h.view.selectedInvocation, "run-b");
   assert.equal(h.view.detail?.record.id, "run-b");
+});
+
+test("selecting another invocation during a read loads only the latest selection", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.selectInvocation("run-a");
+  h.session.selectInvocation("run-b");
+  h.session.selectInvocation("run-c");
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  pendingRequest(h, "get_invocation").reply.reject(new Error("invocation detail worker busy"));
+  pendingRequest(h, "get_invocation_profile").reply.reject(new Error("profile worker busy"));
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.deepEqual(lastPendingRequest(h, "get_invocation").args, { id: "run-c" });
+  assert.deepEqual(lastPendingRequest(h, "get_invocation_profile").args, { id: "run-c" });
+  lastPendingRequest(h, "get_invocation").reply.resolve({
+    ...COMPLETED,
+    record: { ...COMPLETED.record, id: "run-c" },
+  });
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.view.selectedInvocation, "run-c");
+  assert.equal(h.view.detail?.record.id, "run-c");
+  assert.equal(h.view.detailError, null);
+  assert.deepEqual(h.view.profile, PROFILE);
+  assert.equal(h.view.profileError, null);
 });
 
 test("workspace switch rejects both stale invocation list and stale detail", async () => {
@@ -1060,6 +1112,8 @@ test("target selection cancels an in-flight detail without changing core running
   assert.equal(h.view.detailLoading, false);
   assert.equal(h.view.profile, null);
   assert.equal(h.view.profileLoading, false);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
 });
 
 test("failed spawn is visible and allows another Send", async () => {
@@ -1110,6 +1164,7 @@ test("dispose removes listeners and ignores late reads", async () => {
   const h = harness();
   await h.session.init();
   h.session.selectInvocation("run-a");
+  h.session.selectInvocation("run-b");
   h.session.dispose();
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
@@ -1117,6 +1172,8 @@ test("dispose removes listeners and ignores late reads", async () => {
   assert.deepEqual(h.removed, ["app-state", "invocations-changed"]);
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
 });
 
 test("dispose during start reconciliation ignores completion without reading artifacts", async () => {
@@ -1336,7 +1393,11 @@ test("successive invocations each open detail once after their own completion", 
   h.emit("app-state", { ...IDLE, consoleInvocation: secondRecord.id });
   assert.equal(h.view.consoleOpen, false);
   assert.equal(h.view.selectedInvocation, secondRecord.id);
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
   assert.deepEqual(lastPendingRequest(h, "get_invocation").args, { id: secondRecord.id });
+  assert.deepEqual(lastPendingRequest(h, "get_invocation_profile").args, { id: secondRecord.id });
   h.session.openConsole(secondRecord);
   h.emit("app-state", { ...IDLE, consoleInvocation: secondRecord.id });
   assert.equal(h.view.consoleOpen, true);
