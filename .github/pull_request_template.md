@@ -35,7 +35,9 @@ focused diagram with only the actors or nodes needed to explain the change.
 
 ## Why
 
-<!-- State the problem and why this approach fixes it. Retain important trade-offs. -->
+<!-- Why are these changes being made? What context did you have as the
+     author? Were there decisions you made that aren't reflected in the
+     source code? -->
 
 ## Quality Assurance
 
@@ -46,4 +48,6 @@ focused diagram with only the actors or nodes needed to explain the change.
 
 ## References
 
-<!-- Link relevant issues or designs only; omit this section when none are needed. -->
+<!-- Links to related issues, design docs, and prior discussions. Note that
+     external links may not be visible to future readers — include enough
+     context in the description itself. -->
