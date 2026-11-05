@@ -601,7 +601,8 @@ test("rapid target clicks keep only the latest result", async () => {
   assert.equal(requestCount(h, "get_target_detail"), 1);
   pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
   await settle();
-  assert.equal(h.view.targetDetail, null);
+  const detailAfterStaleReply = h.view.targetDetail;
+  assert.equal(detailAfterStaleReply, null);
   assert.deepEqual(lastPendingRequest(h, "get_target_detail").args, {
     label: "//app:second",
     fetchedAt: TARGETS.meta.fetchedAt,
@@ -656,7 +657,8 @@ test("a refreshed index replaces an in-flight detail with the new generation", a
   const old = pendingRequest(h, "get_target_detail");
 
   await emitSnapshot(h, { ...TARGETS, meta: { ...TARGETS.meta, fetchedAt: 2 } });
-  assert.equal(h.view.targetDetail, null);
+  const detailAfterRefresh = h.view.targetDetail;
+  assert.equal(detailAfterRefresh, null);
   assert.equal(requestCount(h, "get_target_detail"), 1);
 
   old.reply.resolve(TARGET_DETAIL);
@@ -665,7 +667,8 @@ test("a refreshed index replaces an in-flight detail with the new generation", a
     label: "//app:first",
     fetchedAt: 2,
   });
-  assert.equal(h.view.targetDetail, null);
+  const detailAfterStaleReply = h.view.targetDetail;
+  assert.equal(detailAfterStaleReply, null);
   lastPendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
   await settle();
   assert.equal(h.view.targetDetail?.target.label, "//app:first");
@@ -806,7 +809,8 @@ test("an unobserved invocation keeps composer input in the live Console only", a
   assert.equal(h.view.consoleOpen, false);
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
   await started;
-  assert.deepEqual(h.view.console, { id: RECORD.id, cmd: "run", pattern: "//:app" });
+  const liveConsole = h.view.console;
+  assert.deepEqual(liveConsole, { id: RECORD.id, cmd: "run", pattern: "//:app" });
   assert.equal(h.view.console?.startedAt, undefined);
   pendingRequest(h, "list_invocations").reply.resolve([]);
   await settle();
@@ -1406,7 +1410,8 @@ test("openConsole restores the Console for an invocation already in flight at co
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
-  assert.equal(h.view.console, null);
+  const consoleBeforeOpen = h.view.console;
+  assert.equal(consoleBeforeOpen, null);
   h.session.openConsole(RECORD);
   assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(h.view.consoleOpen, true);
