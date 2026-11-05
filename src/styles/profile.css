@@ -202,3 +202,29 @@
   font-size: 12px;
   line-height: 1.6;
 }
+
+.invocation-timing .profile-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.invocation-timing .trace-chart {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.invocation-timing .trace-viewport {
+  height: auto;
+  min-height: 0;
+}
+
+.invocation-timing .trace-inspector {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow: auto;
+}
