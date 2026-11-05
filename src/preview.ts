@@ -16,6 +16,7 @@ import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
+import { bazelBusyReason } from "./lib/session.ts";
 
 const WORKSPACE = "/demo/cool-mono";
 const NOW = Date.now();
@@ -426,11 +427,7 @@ export function installPreview() {
     start_invocation: (payload) => startInvocation(String(payload?.cmd), String(payload?.pattern)),
     stop_invocation: () => stopInvocation(),
     run_query: (payload) => {
-      if (
-        state.ingest === "running" ||
-        state.activeInvocation !== null ||
-        state.query === "running"
-      ) {
+      if (bazelBusyReason(state)) {
         throw new Error("bazel is busy");
       }
       const output = String(payload?.output ?? "label");

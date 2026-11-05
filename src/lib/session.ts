@@ -79,7 +79,18 @@ const RUNNING_SLOTS = ["ingest", "query", "detailQuery"] as const;
 
 /** Whether a serialized Bazel operation occupies the workspace. Matches the core's bazel_busy. */
 function bazelBusy(state: AppState | null): boolean {
-  return !!(state?.activeInvocation || RUNNING_SLOTS.some((slot) => state?.[slot] === "running"));
+  return bazelBusyReason(state) !== null;
+}
+
+export function bazelBusyReason(state: AppState | null): string | null {
+  if (state?.activeInvocation) return "a Bazel invocation is in progress";
+  const reasons = {
+    ingest: "targets are loading",
+    query: "a query is already running",
+    detailQuery: "target details are loading",
+  };
+  const slot = RUNNING_SLOTS.find((slot) => state?.[slot] === "running");
+  return slot ? reasons[slot] : null;
 }
 
 /** Whether the session is not ready or a lifecycle request is in flight. */
