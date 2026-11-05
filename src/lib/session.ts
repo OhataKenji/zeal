@@ -305,6 +305,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   function select(selection: ExplorerSelection) {
     if (
+      selection?.kind === "package" &&
+      view.selection?.kind === "package" &&
+      selection.path === view.selection.path
+    )
+      return;
+    if (
       selection?.kind === "target" &&
       view.selection?.kind === "target" &&
       selection.label === view.selection.label &&

@@ -1544,3 +1544,14 @@ test("snapshot reload and workspace changes close package selection", async () =
   assert.equal(h.view.selection, null);
   assert.equal(requestCount(h, "get_target_detail"), 0);
 });
+
+test("selecting the same package does not publish another view or query", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "package", path: "app" });
+  const selectedView = h.view;
+  h.session.select({ kind: "package", path: "app" });
+  assert.equal(h.view, selectedView);
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+});
