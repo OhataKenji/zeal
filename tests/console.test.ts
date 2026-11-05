@@ -143,7 +143,7 @@ test("closing a Console ignores late output without stopping the process", async
     {
       invoke: <T>(command: string) => {
         calls.push(command);
-        return new Promise((yes) => {
+        return new Promise<unknown>((yes) => {
           resolve = yes;
         }) as Promise<T>;
       },

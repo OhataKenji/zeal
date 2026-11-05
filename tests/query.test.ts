@@ -579,7 +579,8 @@ test("invoke failures land in error and leave results empty", async () => {
   await pending;
   assert.equal(h.state.running, false);
   assert.match(h.state.error ?? "", /busy/);
-  assert.equal(h.state.result, null);
+  const resultBeforeRetry = h.state.result;
+  assert.equal(resultBeforeRetry, null);
   // Retrying clears the error once the reply lands.
   const retry = h.runner.run("deps(//a)", "raw", FLAGS);
   assert.equal(h.state.error, null);
@@ -733,7 +734,8 @@ test("cache evicts the least recently selected result after ten entries", async 
   h.calls[10].resolve(OUTPUT);
   await next;
   h.runner.select("//p1", "raw", FLAGS);
-  assert.equal(h.state.result, null);
+  const resultAfterEviction = h.state.result;
+  assert.equal(resultAfterEviction, null);
   h.runner.select("//p0", "raw", FLAGS);
   assert.equal(h.state.result?.stdout, "//p0:target");
   h.runner.select("//p10", "raw", FLAGS);
@@ -747,7 +749,8 @@ test("failed and timed out outputs are displayed but not cached", async () => {
   await failed;
   assert.equal(h.state.result?.exitCode, 1);
   h.runner.select("//a", "raw", FLAGS);
-  assert.equal(h.state.result, null);
+  const resultAfterReselect = h.state.result;
+  assert.equal(resultAfterReselect, null);
   const timeout = h.runner.run("//a", "raw", FLAGS);
   h.calls[1].resolve({ ...OUTPUT, timedOut: true });
   await timeout;
