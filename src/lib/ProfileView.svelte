@@ -431,7 +431,11 @@
       <div style:width="{scrollbar.width}px"></div>
     </div>
   </div>
-  <section class="trace-inspector" aria-labelledby="selected-event-heading">
+  <section
+    class="trace-inspector"
+    aria-labelledby="selected-event-heading"
+    tabindex={selected ? 0 : -1}
+  >
     <h3 class="trace-inspector-heading" id="selected-event-heading">Selected event</h3>
     {#if selected && selectedLane}
       {@render eventDetails(selected, selectedLane)}

@@ -100,6 +100,7 @@
     class="invocation-panel"
     bind:this={panel}
     class:invocation-all={active === "All"}
+    class:invocation-timing={active === "Timing"}
     id="invocation-panel-{active}"
     role="tabpanel"
     aria-labelledby="invocation-tab-{active}"
