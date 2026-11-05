@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import type { Section } from "../src/lib/types.ts";
+import { LOG_LINE_HEIGHT } from "../src/lib/terminal_style.ts";
 
 test("LogPanel displays the available log and its section status", async (t) => {
   const cacheDir = await mkdtemp(join(tmpdir(), "zeal-log-panel-"));
@@ -64,14 +65,13 @@ test("LogPanel displays the available log and its section status", async (t) => 
       const lines = Array.from({ length: 5000 }, (_, i) => `line ${i}`);
       lines[4500] = "offscreen-widest-line".padEnd(200, "x");
       const html = output({ status: "ok", data: lines.join("\n") });
-      assert.match(html, /line 32</);
-      assert.doesNotMatch(html, /line 33|offscreen-widest-line/);
+      assert.match(html, /line 0</);
+      assert.doesNotMatch(html, /line 4999<|offscreen-widest-line/);
       assert.match(html, /width:\s*200ch/);
-      // 240px viewport / 15px rows = 16 rows + 16 overscan + 1 = 33 mounted lines.
-      assert.equal(html.match(/class="log-line"/g)?.length, 33);
-      // Spacers carry the unmounted rows: 0 above, (5000 - 33) * 15px below.
-      assert.match(html, /height:\s*0px/);
-      assert.match(html, /height:\s*74505px/);
+      const mounted = html.match(/class="log-line"/g)?.length ?? 0;
+      assert.ok(mounted > 0 && mounted < lines.length);
+      const unmountedHeight = (lines.length - mounted) * LOG_LINE_HEIGHT;
+      assert.match(html, new RegExp(`height:\\s*${unmountedHeight}px`));
     });
 
     await t.test("an unreadable log shows its error without inventing log content", () => {

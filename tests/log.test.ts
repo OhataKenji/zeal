@@ -80,6 +80,12 @@ test("logWindow clamps a stale scroll offset when the log shrinks", () => {
   assert.deepEqual(logWindow(5, 0, 150), { first: 0, last: 5 });
 });
 
+test("logWindow bounds the initial long-log viewport", () => {
+  // 240px viewport / 15px rows = 16 rows + 16 overscan + 1 = 33 mounted lines.
+  // Spacers carry the unmounted rows: 0 above, (5000 - 33) * 15px below.
+  assert.deepEqual(logWindow(5000, 0, 240), { first: 0, last: 33 });
+});
+
 test("HTML-looking output stays literal text without generated markup", () => {
   const text = '<img src=x onerror="alert(1)"> & <script>test</script>';
   assert.deepEqual(
