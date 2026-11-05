@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import type { Section } from "../src/lib/types.ts";
+import { LOG_LINE_HEIGHT } from "../src/lib/terminal_style.ts";
 
 test("LogPanel displays the available log and its section status", async (t) => {
   const cacheDir = await mkdtemp(join(tmpdir(), "zeal-log-panel-"));
@@ -69,6 +70,8 @@ test("LogPanel displays the available log and its section status", async (t) => 
       assert.match(html, /width:\s*200ch/);
       const mounted = html.match(/class="log-line"/g)?.length ?? 0;
       assert.ok(mounted > 0 && mounted < lines.length);
+      const unmountedHeight = (lines.length - mounted) * LOG_LINE_HEIGHT;
+      assert.match(html, new RegExp(`height:\\s*${unmountedHeight}px`));
     });
 
     await t.test("an unreadable log shows its error without inventing log content", () => {
