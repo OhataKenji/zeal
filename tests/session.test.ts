@@ -88,18 +88,19 @@ function harness(initial = Promise.resolve(IDLE)) {
   const removed: string[] = [];
   const stateRequested = deferred<void>();
   const occupied = new Set<string>();
+  function readState(): Promise<AppState> {
+    stateRequested.resolve();
+    if (!initialRequested) {
+      initialRequested = true;
+      return initial;
+    }
+    const response = nextState ?? Promise.resolve(coreState);
+    nextState = undefined;
+    return response;
+  }
   const transport: Transport = {
     invoke: <T>(command: string, args?: Record<string, unknown>) => {
-      if (command === "get_state") {
-        stateRequested.resolve();
-        if (!initialRequested) {
-          initialRequested = true;
-          return initial as Promise<T>;
-        }
-        const response = nextState ?? Promise.resolve(coreState);
-        nextState = undefined;
-        return response as Promise<T>;
-      }
+      if (command === "get_state") return readState() as Promise<T>;
       if (command === "get_invocation" || command === "get_invocation_profile") {
         if (occupied.has(command)) {
           return Promise.reject(
