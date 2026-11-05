@@ -919,7 +919,6 @@ mod tests {
 
         assert!(still_held(&st, "abc"));
         assert!(give_up(&mut st, "abc"));
-        assert!(st.active_invocation.is_none());
         assert!(
             st.active_invocation.is_none(),
             "the group is no longer ours to signal"
@@ -957,7 +956,6 @@ mod tests {
         st.invocation_note = Some("old".to_string());
 
         assert!(apply_reap(&mut st, "abc", &Ok(3)));
-        assert!(st.active_invocation.is_none());
         assert!(st.active_invocation.is_none());
         assert!(!is_stopping(&st));
         assert_eq!(st.invocation_note, None, "a recorded exit clears the note");
