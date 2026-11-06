@@ -113,6 +113,10 @@ pub struct BuildOptions {
 pub struct TargetResult {
     pub label: String,
     pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -402,12 +406,19 @@ fn project(event: BuildEvent, bep: &mut Bep) {
             bep.targets.push(TargetResult {
                 label: id.label,
                 ok: result.success,
+                aspect: (!id.aspect.is_empty()).then_some(id.aspect),
+                configuration: id
+                    .configuration
+                    .map(|configuration| configuration.id)
+                    .filter(|id| !id.is_empty()),
             });
         }
         (Id::TargetConfigured(id), Some(Payload::Aborted(_))) => {
             bep.targets.push(TargetResult {
                 label: id.label,
                 ok: false,
+                aspect: (!id.aspect.is_empty()).then_some(id.aspect),
+                configuration: None,
             });
         }
         (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
@@ -425,7 +436,7 @@ mod tests {
     use super::*;
     use crate::protocol::bep::build_event::Payload;
     use crate::protocol::bep::build_event_id::{
-        Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
+        ConfigurationId, Id, TargetCompletedId, TargetConfiguredId, TestSummaryId,
     };
     use crate::protocol::bep::{
         Aborted, BuildEventId, TargetComplete, TestSummary as ProtoTestSummary,
@@ -463,6 +474,70 @@ mod tests {
         }
     }
 
+    fn completed(label: &str, aspect: &str, configuration: &str, success: bool) -> BuildEvent {
+        BuildEvent {
+            id: Some(BuildEventId {
+                id: Some(Id::TargetCompleted(TargetCompletedId {
+                    label: label.into(),
+                    aspect: aspect.into(),
+                    configuration: Some(ConfigurationId {
+                        id: configuration.into(),
+                    }),
+                })),
+            }),
+            payload: Some(Payload::Completed(TargetComplete {
+                success,
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn same_label_results_keep_their_aspect_and_configuration_identity() {
+        let mut stream = event(completed("//pkg:lib", "", "cfg-a", true));
+        stream.extend(event(completed("//pkg:lib", "rustfmt", "cfg-a", true)));
+        stream.extend(event(completed("//pkg:lib", "clippy", "cfg-a", false)));
+        stream.extend(event(completed("//pkg:lib", "", "cfg-b", true)));
+        let parsed = parse(stream.as_slice());
+        assert_eq!(
+            parsed.targets,
+            [
+                TargetResult {
+                    label: "//pkg:lib".into(),
+                    ok: true,
+                    aspect: None,
+                    configuration: Some("cfg-a".into()),
+                },
+                TargetResult {
+                    label: "//pkg:lib".into(),
+                    ok: true,
+                    aspect: Some("rustfmt".into()),
+                    configuration: Some("cfg-a".into()),
+                },
+                TargetResult {
+                    label: "//pkg:lib".into(),
+                    ok: false,
+                    aspect: Some("clippy".into()),
+                    configuration: Some("cfg-a".into()),
+                },
+                TargetResult {
+                    label: "//pkg:lib".into(),
+                    ok: true,
+                    aspect: None,
+                    configuration: Some("cfg-b".into()),
+                },
+            ]
+        );
+        let json = serde_json::to_value(&parsed.targets).unwrap();
+        assert_eq!(json[0]["configuration"], "cfg-a");
+        assert!(json[0].get("aspect").is_none());
+        assert_eq!(json[1]["aspect"], "rustfmt");
+        assert_eq!(json[2]["aspect"], "clippy");
+        assert_eq!(json[3]["configuration"], "cfg-b");
+        assert!(!parsed.truncated);
+    }
+
     #[test]
     fn projects_target_results_and_test_statuses() {
         let mut stream = event(target("//pkg:ok", true));
@@ -486,11 +561,15 @@ mod tests {
             [
                 TargetResult {
                     label: "//pkg:ok".into(),
-                    ok: true
+                    ok: true,
+                    aspect: None,
+                    configuration: None,
                 },
                 TargetResult {
                     label: "//pkg:bad".into(),
-                    ok: false
+                    ok: false,
+                    aspect: None,
+                    configuration: None,
                 },
             ]
         );
@@ -714,6 +793,8 @@ mod tests {
             .map(|label| TargetResult {
                 label: label.into(),
                 ok: true,
+                aspect: None,
+                configuration: None,
             })
         );
         assert_eq!(
@@ -733,6 +814,8 @@ mod tests {
             [TargetResult {
                 label: "//fail:x".into(),
                 ok: false,
+                aspect: None,
+                configuration: None,
             }]
         );
         assert_eq!(
@@ -740,6 +823,8 @@ mod tests {
             [TargetResult {
                 label: "//dep:x".into(),
                 ok: false,
+                aspect: None,
+                configuration: None,
             }]
         );
     }
@@ -752,6 +837,8 @@ mod tests {
             [TargetResult {
                 label: "//pkg:cached".into(),
                 ok: true,
+                aspect: None,
+                configuration: None,
             }]
         );
     }
@@ -772,7 +859,7 @@ mod tests {
                 id: Some(BuildEventId {
                     id: Some(Id::TargetConfigured(TargetConfiguredId {
                         label: "//dep:x".into(),
-                        ..Default::default()
+                        aspect: "ObjcProtoAspect".into(),
                     })),
                 }),
                 payload: Some(Payload::Aborted(Aborted::default())),
@@ -784,9 +871,14 @@ mod tests {
             parsed.targets,
             [TargetResult {
                 label: "//dep:x".into(),
-                ok: false
+                ok: false,
+                aspect: Some("ObjcProtoAspect".into()),
+                configuration: None,
             }]
         );
+        let json = serde_json::to_value(&parsed.targets).unwrap();
+        assert_eq!(json[0]["aspect"], "ObjcProtoAspect");
+        assert!(json[0].get("configuration").is_none());
     }
 
     #[test]

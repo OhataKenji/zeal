@@ -274,6 +274,18 @@
   font-size: 11px;
 }
 
+.result-identity {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-context {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .invocation-details dd {
   overflow-wrap: anywhere;
 }
