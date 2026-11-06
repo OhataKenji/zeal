@@ -37,7 +37,12 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
     }
 
     function rows(html: string): string[] {
-      return html.split("<li>").slice(1);
+      return Array.from(html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g), ([, content]) =>
+        content
+          .replace(/<[^>]*>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
     }
 
     await t.test("same-label results keep their full identity in each row", () => {
@@ -47,24 +52,12 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
         { label: "//pkg:lib", ok: false, aspect: "clippy", configuration: "cfg-a" },
         { label: "//pkg:lib", ok: true, configuration: "cfg-b" },
       ]);
-      const items = rows(html);
-      assert.equal(items.length, 4);
-      for (const item of items) {
-        assert.match(item, /<code>\/\/pkg:lib<\/code>/);
-      }
-      assert.match(items[0], />\s*Target\s*<\/div>/);
-      assert.doesNotMatch(items[0], /Aspect:/);
-      assert.match(items[0], /Configuration:[^<]*<code>cfg-a<\/code>/);
-      assert.match(items[1], /Aspect:[^<]*<code>rustfmt<\/code>/);
-      assert.match(items[1], /Configuration:[^<]*<code>cfg-a<\/code>/);
-      assert.match(items[2], /Aspect:[^<]*<code>clippy<\/code>/);
-      assert.match(items[2], /✗/);
-      assert.match(items[2], /Failed/);
-      assert.match(items[3], />\s*Target\s*<\/div>/);
-      assert.match(items[3], /Configuration:[^<]*<code>cfg-b<\/code>/);
-      assert.equal(html.match(/Aspect:/g)?.length, 2);
-      assert.equal(html.match(/Configuration:/g)?.length, 4);
-      assert.equal(html.match(/cfg-a/g)?.length, 3);
+      assert.deepEqual(rows(html), [
+        "✓ //pkg:lib Target Configuration: cfg-a Completed",
+        "✓ //pkg:lib Aspect: rustfmt Configuration: cfg-a Completed",
+        "✗ //pkg:lib Aspect: clippy Configuration: cfg-a Failed",
+        "✓ //pkg:lib Target Configuration: cfg-b Completed",
+      ]);
     });
 
     await t.test("missing aspect and configuration render no placeholder metadata", () => {
@@ -72,12 +65,10 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
         { label: "//pkg:bare", ok: true },
         { label: "//pkg:aspect-only", ok: false, aspect: "ObjcProtoAspect" },
       ]);
-      const items = rows(html);
-      assert.equal(items.length, 2);
-      assert.match(items[0], />\s*Target\s*<\/div>/);
-      assert.doesNotMatch(items[0], /Aspect:|Configuration:/);
-      assert.match(items[1], /Aspect:[^<]*<code>ObjcProtoAspect<\/code>/);
-      assert.doesNotMatch(items[1], /Configuration:/);
+      assert.deepEqual(rows(html), [
+        "✓ //pkg:bare Target Completed",
+        "✗ //pkg:aspect-only Aspect: ObjcProtoAspect Failed",
+      ]);
     });
 
     await t.test("aspect values are rendered escaped", () => {
