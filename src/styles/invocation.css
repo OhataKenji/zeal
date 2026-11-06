@@ -264,14 +264,37 @@
   font-size: 12px;
 }
 
-.result-list li code {
-  flex: 1;
+.result-list code {
   overflow-wrap: anywhere;
+}
+
+.result-list li > code {
+  flex: 1;
 }
 
 .result-list li > span:last-child {
   color: var(--muted-foreground);
   font-size: 11px;
+}
+
+.result-identity {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  min-width: 0;
+}
+
+.result-identity > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.result-context {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .invocation-details dd {

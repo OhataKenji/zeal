@@ -14,7 +14,17 @@
 {#if bep}
   {#if bep.targets.length}
     <ul class="result-list">
-      {#each bep.targets as target}<li><span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span><code>{target.label}</code><span>{target.ok ? "Completed" : "Failed"}</span></li>{/each}
+      {#each bep.targets as target}
+        <li>
+          <span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span>
+          <div class="result-identity">
+            <code>{target.label}</code>
+            <div class="result-context">{#if target.aspect}Aspect: <code>{target.aspect}</code>{:else}Target{/if}</div>
+            {#if target.configuration}<div class="result-context">Configuration: <code>{target.configuration}</code></div>{/if}
+          </div>
+          <span>{target.ok ? "Completed" : "Failed"}</span>
+        </li>
+      {/each}
     </ul>
   {:else}
     <p class="panel-empty">No results recorded.</p>

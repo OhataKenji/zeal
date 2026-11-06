@@ -111,7 +111,7 @@ export type Section<T> =
 
 /** Parsed build-event data retained for inspection in the invocation view. */
 export interface Bep {
-  targets: Array<{ label: string; ok: boolean }>;
+  targets: Array<{ label: string; ok: boolean; aspect?: string; configuration?: string }>;
   tests: Array<{ label: string; status: string }>;
   originalCommandLine?: string;
   canonicalCommandLine?: string;
