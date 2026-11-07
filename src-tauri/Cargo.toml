@@ -19,8 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
-tonic-build = "0.12.3"
-prost-build = "0.13.5"
+tonic-prost-build = "0.14"
 protoc-bin-vendored = "3.3.0"
 
 [dependencies]
@@ -38,9 +37,10 @@ rustix = { version = "1.1.6", features = ["event", "fs", "process", "termios"] }
 rustix-openpty = "0.2"
 
 rusqlite = { version = "0.41", features = ["bundled"] }
-tonic = "0.12.3"
-prost = "0.13.5"
-prost-types = "0.13.5"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
 tokio = { version = "1", features = ["net", "sync", "time", "rt", "macros"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
