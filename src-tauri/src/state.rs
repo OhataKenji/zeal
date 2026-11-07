@@ -159,7 +159,7 @@ pub struct CoreState {
     /// Ad-hoc editor query in flight (the "query" DTO field; distinct from
     /// ingest's `bazel query //...` snapshot fetch).
     pub query_running: bool,
-    /// Scoped XML query for a selected target.
+    /// Scoped proto query for a selected target.
     pub detail_query_running: bool,
     /// Process group of the query child (its pid), so app exit can kill it.
     pub query_pgid: Option<i32>,
