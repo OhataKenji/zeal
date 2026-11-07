@@ -3,6 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type {
+  ActionEntry,
   AppState,
   Edge,
   FileEntry,
@@ -405,6 +406,29 @@ export function installPreview() {
         files: FULL_DATA.files.filter((file) => file.owner === label),
         status: "ok",
       });
+    },
+    get_target_actions: (payload): ActionEntry[] => {
+      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
+        throw new Error("Target list changed; select the target again");
+      }
+      const label = String(payload?.label);
+      if (!currentSnapshot?.targets.some((item) => item.label === label)) {
+        throw new Error("Target not found");
+      }
+      return label === PARSER
+        ? [
+            {
+              mnemonic: "Javac",
+              owner: PARSER,
+              output: "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
+            },
+            {
+              mnemonic: "SourceJar",
+              owner: PARSER,
+              output: "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
+            },
+          ]
+        : [];
     },
     list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),

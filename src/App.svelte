@@ -328,6 +328,10 @@
             detail={app.view.targetDetail}
             wsRoot={workspace}
             onselect={(label) => select({ kind: "target", label })}
+            actions={app.view.targetActions}
+            actionsLoading={app.view.targetActionsLoading}
+            actionsError={app.view.targetActionsError}
+            onloadactions={() => void getSession().loadTargetActions()}
           />
         {/key}
       {:else if app.view.targetDetailError}

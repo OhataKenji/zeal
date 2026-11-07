@@ -239,6 +239,40 @@ button.chip:hover {
   color: var(--foreground);
 }
 
+.actions {
+  padding-bottom: 24px;
+}
+
+.action-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 12px/1.6 var(--mono);
+}
+
+.action-table th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  text-align: left;
+}
+
+.action-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.action-table td.out {
+  max-width: 320px;
+}
+
+.action-table td.owner {
+  color: var(--muted-foreground);
+}
+
 @media (max-width: 800px) {
   .target-head h1 {
     font-size: 18px;

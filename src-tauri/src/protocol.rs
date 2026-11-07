@@ -14,3 +14,6 @@ pub mod bep {
 pub mod query {
     pub use super::generated::blaze_query::*;
 }
+pub mod analysis {
+    pub use super::generated::analysis::*;
+}

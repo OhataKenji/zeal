@@ -5,6 +5,7 @@ export const COMMANDS = {
   getState: "get_state",
   getSnapshot: "get_snapshot",
   getTargetDetail: "get_target_detail",
+  getTargetActions: "get_target_actions",
   openWorkspace: "open_workspace",
   refresh: "refresh",
   listInvocations: "list_invocations",
