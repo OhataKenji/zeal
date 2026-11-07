@@ -20,3 +20,9 @@ export const COMMANDS = {
 } as const;
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS];
+
+/** IPC boundary used by a session to call the core and subscribe to events. */
+export interface Transport {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  listen<T>(event: string, callback: (payload: T) => void): Promise<() => void>;
+}

@@ -1,5 +1,5 @@
 import { COMMANDS } from "./commands.ts";
-import type { Transport } from "./session.ts";
+import type { Transport } from "./commands.ts";
 
 /** Bytes read from the core's durable console stream at a requested offset. */
 export interface ConsoleOutput {

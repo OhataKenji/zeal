@@ -2,8 +2,8 @@
   import type { SnapshotKey } from "fuzzysort";
   import { tick } from "svelte";
   import QueryExpr from "./QueryExpr.svelte";
-  import SearchInput from "./SearchInput.svelte";
-  import type { Target } from "./types";
+  import SearchInput from "../SearchInput.svelte";
+  import type { Target } from "../types";
   import {
     FUNCTIONS,
     KIND_GROUPS,
@@ -12,7 +12,7 @@
     UNIVERSE_HELP,
     type ArgSpec,
     type Expr,
-  } from "./query";
+  } from "./language";
 
   let {
     node = $bindable(),

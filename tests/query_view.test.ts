@@ -38,16 +38,17 @@ test("QueryView reflects the target detail query's Bazel slot", async (t) => {
       optimizeDeps: { noDiscovery: true, include: [] },
       ssr: { optimizeDeps: { exclude: ["svelte"] } },
     });
-    const { app } = await server.ssrLoadModule("/src/lib/state.svelte.ts");
-    const { default: QueryView } = await server.ssrLoadModule("/src/lib/QueryView.svelte");
+    const { bazelBusyReason } = await server.ssrLoadModule("/src/lib/session/session.ts");
+    const { default: QueryView } = await server.ssrLoadModule("/src/lib/query/QueryView.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
     function output(detailQuery: AppState["detailQuery"]): string {
-      Object.assign(app.view, {
-        ready: true,
-        state: { ...IDLE, detailQuery },
-      });
-      return render(QueryView, { props: { snap: null } }).body;
+      return render(QueryView, {
+        props: {
+          snap: null,
+          busyReason: bazelBusyReason({ ...IDLE, detailQuery }),
+        },
+      }).body;
     }
 
     await t.test("a running detail query disables Execute and explains why", () => {

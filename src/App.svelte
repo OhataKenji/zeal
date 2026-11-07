@@ -1,74 +1,67 @@
 <script lang="ts">
-  import {
-    CaretDown,
-    CaretRight,
-    ChartBar,
-    ArrowClockwise,
-    Gear,
-    Play,
-    Stop,
-    TreeStructure,
-  } from "phosphor-svelte";
-  import { onMount, tick } from "svelte";
+  import { ArrowClockwise, Gear } from "phosphor-svelte";
+  import { onMount } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
-  import { canSend, canStop, sessionBusy } from "./lib/session";
-  import { invocationStatus } from "./lib/invocation";
+  import {
+    bazelBusyReason,
+    canSend,
+    canStop,
+    invocationId,
+    sessionBusy,
+    type MainPage,
+  } from "./lib/session/session";
   import { createIndex } from "./lib/search";
   import { targetError } from "./lib/target";
-  import { buildTree } from "./lib/model";
-  import Tree from "./lib/Tree.svelte";
   import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
-  import InvocationStatus from "./lib/InvocationStatus.svelte";
   import Notice from "./lib/Notice.svelte";
   import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
-  import QueryView from "./lib/QueryView.svelte";
-  import SearchInput from "./lib/SearchInput.svelte";
-  import type { AppState, BazelCommand, ExplorerSelection } from "./lib/types";
+  import QueryView from "./lib/query/QueryView.svelte";
+  import CommandComposer from "./lib/workbench/CommandComposer.svelte";
+  import ExplorerSidebar from "./lib/workbench/ExplorerSidebar.svelte";
+  import type { AppState, ExplorerSelection } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
   function loadConsole() {
     return consoleComponent ??= import("./lib/ConsoleView.svelte");
   }
 
-  onMount(connect);
+  const initialPage: MainPage = (() => {
+    if (typeof location === "undefined") return "explorer";
+    const view = new URLSearchParams(location.search).get("view");
+    return view === "query" || view === "analytics" ? view : "explorer";
+  })();
+
+  onMount(() => connect(initialPage));
 
   const st = $derived(app.state);
-  const snap = $derived(app.view.snapshot);
-  const tree = $derived(snap ? buildTree(snap) : null);
-  const selection = $derived(app.view.selection);
+  const snap = $derived(app.view.targets.snapshot);
+  const page = $derived(app.view.page);
+  const selectedInvocation = $derived(invocationId(page));
+  const selection = $derived(app.view.targets.selection);
   const selected = $derived(selection?.kind === "target" ? selection.label : null);
 
   function retryTargets() {
-    if (app.view.snapshotError) void getSession().loadSnapshot();
+    if (app.view.targets.snapshotError) void getSession().loadSnapshot();
     else refresh();
   }
 
-  let analyticsOpen = $state(
-    typeof location !== "undefined" &&
-      new URLSearchParams(location.search).get("view") === "analytics",
-  );
-  let queryOpen = $state(
-    typeof location !== "undefined" &&
-      new URLSearchParams(location.search).get("view") === "query",
-  );
   let revealRequest = $state(0);
   let targetField = $state("");
-  let cmd = $state<BazelCommand>("build");
-  let argumentsText = $state("");
-  let argumentsOpen = $state(false);
-  let argumentsToggle: HTMLButtonElement | undefined;
-  let argumentsPanel = $state<HTMLDivElement>();
-  let argumentsInput = $state<HTMLInputElement>();
-  const argumentsConfigured = $derived(argumentsText.trim() !== "");
+  let targetsVisible = $state(true);
   let switchingWs = $state(false);
   const busy = $derived(sessionBusy(app.view));
+  // Queries serialize with other Bazel commands and ingest in the core; the reason
+  // text doubles as the disabled-Execute explanation.
+  const queryBusyReason = $derived.by((): string | null => {
+    if (!app.view.ready) return "not connected to Bazel";
+    if (app.view.opening) return "the workspace is changing";
+    if (app.view.starting) return "an invocation is starting";
+    return bazelBusyReason(st);
+  });
   const running = $derived(!!st?.activeInvocation);
-  const actionLabel = $derived(
-    running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
-  );
   const inputError = $derived(
     targetField === "" ? null : targetError(targetField),
   );
@@ -80,262 +73,87 @@
 
   function pickTarget(value: string) {
     select({ kind: "target", label: value });
-    collapsed.targets = false;
     revealRequest += 1;
   }
 
-  function submit() {
-    if (running) {
-      void getSession().stop();
-    } else {
-      void getSession().start(cmd, targetField, argumentsText);
-    }
-  }
-
-  async function setArgumentsOpen(open: boolean) {
-    argumentsOpen = open;
-    await tick();
-    if (argumentsOpen === open) {
-      (open ? argumentsInput : argumentsToggle)?.focus();
-    }
-  }
-
-  function argumentsKey(event: KeyboardEvent) {
-    if (!argumentsOpen || event.isComposing || event.key !== "Escape") return;
-    event.preventDefault();
-    void setArgumentsOpen(false);
-  }
-
-  function dismissArguments(event: Event) {
-    if (
-      argumentsOpen &&
-      event.target instanceof Node &&
-      !argumentsPanel?.contains(event.target) &&
-      !argumentsToggle?.contains(event.target)
-    ) {
-      argumentsOpen = false;
-    }
-  }
-
-  // Sidebar split: share of height given to the targets pane, and per-pane
-  // collapse. The divider drags the boundary like VS Code's stacked views.
-  let targetsShare = $state(0.55);
-  let collapsed = $state({ targets: false, invocations: false });
-
-  function dividerDown(e: PointerEvent) {
-    e.preventDefault();
-    const divider = e.currentTarget;
-    if (!(divider instanceof HTMLElement) || !divider.parentElement) return;
-    const sidebar = divider.parentElement;
-    const move = (ev: PointerEvent) => {
-      const r = sidebar.getBoundingClientRect();
-      targetsShare = Math.min(
-        0.85,
-        Math.max(0.15, (ev.clientY - r.top) / r.height),
-      );
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
-
   function select(selection: ExplorerSelection) {
-    analyticsOpen = false;
-    queryOpen = false;
-    getSession().selectInvocation(null);
     getSession().select(selection);
     if (selection?.kind === "target") targetField = selection.label;
   }
 </script>
 
-{#snippet targetPane(state: AppState)}
-  <section
-    class="pane"
-    class:collapsed={collapsed.targets}
-    style:flex-grow={collapsed.targets ? 0 : targetsShare}
-  >
-    <div class="pane-heading">
-      <button
-        class="pane-head"
-        aria-expanded={!collapsed.targets}
-        onclick={() => (collapsed.targets = !collapsed.targets)}
-      >
-        {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
-            size={10}
-          />{/if} Targets
-        <span class="pane-count"
-          >{snap?.targets.length.toLocaleString() ?? "—"}</span
-        >
-      </button>
-      <button
-        class="analytics-link"
-        class:active={queryOpen && !app.view.selectedInvocation}
-        onclick={() => {
-          queryOpen = true;
-          analyticsOpen = false;
-          getSession().selectInvocation(null);
-        }}><TreeStructure size={12} /> Query</button
-      >
-    </div>
-    {#if !collapsed.targets}
-      <div class="pane-body">
-        {#if snap && tree}
-          <Tree root={tree} {selection} {revealRequest} onselect={select} />
-        {:else if state.ingest === "running" || app.view.snapshotLoading}
-          <p class="dim">Loading targets…</p>
-        {:else if app.view.snapshotError || state.lastError}
-          <Notice tone="error" onaction={retryTargets}
-            >{app.view.snapshotError ?? state.lastError?.summary}</Notice
-          >
-        {:else}
-          <p class="dim">—</p>
-        {/if}
-      </div>
-    {/if}
-  </section>
-{/snippet}
-
-{#snippet invocationPane(state: AppState)}
-  <section
-    class="pane"
-    class:collapsed={collapsed.invocations}
-    style:flex-grow={collapsed.invocations ? 0 : 1 - targetsShare}
-  >
-    <div class="pane-heading">
-      <button
-        class="pane-head"
-        aria-expanded={!collapsed.invocations}
-        onclick={() => (collapsed.invocations = !collapsed.invocations)}
-      >
-        {#if collapsed.invocations}<CaretRight size={10} />{:else}<CaretDown
-            size={10}
-          />{/if} Invocations
-      </button>
-      <button
-        class="analytics-link"
-        class:active={analyticsOpen && !app.view.selectedInvocation}
-        onclick={() => {
-          analyticsOpen = true;
-          queryOpen = false;
-          getSession().selectInvocation(null);
-        }}><ChartBar size={12} /> Analytics</button
-      >
-    </div>
-    {#if !collapsed.invocations}
-      <div class="pane-body">
-        <ul class="list">
-          {#each app.view.invocations as inv (inv.id)}
-            {@const status = invocationStatus(inv, state.activeInvocation, state.stopping)}
-            {@const active =
-              app.view.selectedInvocation === inv.id ||
-              (app.view.consoleOpen && app.view.console?.id === inv.id)}
-            <li>
-              <button
-                class="invocation-row"
-                title={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id} — ${status.label}`}
-                aria-label={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id}: ${status.label}`}
-                class:selected={active}
-                aria-current={active ? "true" : undefined}
-                onclick={() =>
-                  inv.id === state.activeInvocation
-                    ? getSession().openConsole(inv)
-                    : getSession().selectInvocation(inv.id)}
-              >
-                <span class="invocation-label"
-                  ><InvocationStatus {...status} compact /><span class="invocation-command"
-                    >{inv.cmd ?? "?"}</span
-                  >
-                  {#if inv.startedAt !== undefined}
-                  <time datetime={new Date(inv.startedAt).toISOString()}
-                    >{new Date(inv.startedAt).toLocaleString([], {
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}</time
-                  >{:else}<span>Time not recorded</span>{/if}</span
-                >
-                <span class="invocation-pattern">{inv.pattern ?? inv.id}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
-        {#if app.view.invocationsError}<Notice tone="error" onaction={getSession().loadInvocations}
-            >{app.view.invocationsError}</Notice
-          >
-        {/if}
-      </div>
-    {/if}
-  </section>
-{/snippet}
-
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:invocation-content={app.view.consoleOpen || !!app.view.selectedInvocation || analyticsOpen || queryOpen}
+    class:invocation-content={page.kind !== "explorer"}
   >
     {#if app.view.console}
       {#key app.view.console.id}
-        <div class="console-container" hidden={!app.view.consoleOpen}>
+        <div class="console-container" hidden={page.kind !== "console"}>
           {#await loadConsole() then { default: ConsoleView }}
-          <ConsoleView record={app.view.invocations.find((inv) => inv.id === app.view.console?.id) ?? app.view.console}
-            visible={app.view.consoleOpen} running={state.activeInvocation === app.view.console.id} stopping={state.stopping} />
+          <ConsoleView record={app.view.invocations.records.find((inv) => inv.id === app.view.console?.id) ?? app.view.console}
+            visible={page.kind === "console"} running={state.activeInvocation === app.view.console.id} stopping={state.stopping} />
           {/await}
         </div>
       {/key}
     {/if}
-    {#if !app.view.consoleOpen}
+    {#if page.kind !== "console"}
     {#if snap?.meta.status === "partial"}
       <Notice tone="warning">
         Skipped some packages (exit {state.lastError?.exitCode ?? "?"}) —
         partial results from
         {new Date(snap.meta.fetchedAt).toLocaleTimeString()}
       </Notice>
-    {:else if snap && (state.lastError || app.view.snapshotError)}
-      <Notice tone="warning" onaction={app.view.snapshotError ? getSession().loadSnapshot : undefined}>
+    {:else if snap && (state.lastError || app.view.targets.snapshotError)}
+      <Notice tone="warning" onaction={app.view.targets.snapshotError ? getSession().loadSnapshot : undefined}>
         Refresh failed — showing the snapshot from {new Date(
           snap.meta.fetchedAt,
-        ).toLocaleTimeString()} ({state.lastError?.summary ?? app.view.snapshotError})
+        ).toLocaleTimeString()} ({state.lastError?.summary ?? app.view.targets.snapshotError})
       </Notice>
     {/if}
-    {#if state.ingest === "running" || app.view.snapshotLoading}
+    {#if state.ingest === "running" || app.view.targets.snapshotLoading}
       <p class="dim">Loading targets…</p>
     {/if}
-    {#if app.view.selectedInvocation}
-      {#key app.view.selectedInvocation}
-        <InvocationView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
+    {#if selectedInvocation}
+      {#key selectedInvocation}
+        <InvocationView
+          id={selectedInvocation}
+          record={app.view.invocations.detail?.record ??
+            app.view.invocations.records.find((inv) => inv.id === selectedInvocation)}
+          view={app.view.invocations}
+          running={state.activeInvocation === selectedInvocation}
+          stopping={state.stopping}
+          reload={getSession().loadDetail}
+          reloadProfile={getSession().loadProfile}
+        />
       {/key}
-    {:else if analyticsOpen}
-      {#key workspace}<AnalyticsView {workspace} invocations={app.view.invocations} />{/key}
-    {:else if queryOpen}
+    {:else if page.kind === "analytics"}
+      {#key workspace}<AnalyticsView {workspace} invocations={app.view.invocations.records} />{/key}
+    {:else if page.kind === "query"}
       {#key workspace}
-        <QueryView {snap} />
+        <QueryView {snap} busyReason={queryBusyReason} />
       {/key}
     {:else if snap && selection?.kind === "package"}
       <PackageView index={snap} pkg={selection.path} onselect={(label) => select({ kind: "target", label })} />
     {:else if snap && selected}
-      {#if app.view.targetDetail?.target.label === selected}
-        {#if app.view.targetDetail.status === "partial"}
+      {#if app.view.targets.targetDetail?.target.label === selected}
+        {#if app.view.targets.targetDetail.status === "partial"}
           <Notice tone="warning">Some target details could not be loaded.</Notice>
         {/if}
         {#key `${selected}:${snap.meta.fetchedAt}`}
           <TargetView
             index={snap}
-            detail={app.view.targetDetail}
+            detail={app.view.targets.targetDetail}
             wsRoot={workspace}
             onselect={(label) => select({ kind: "target", label })}
           />
         {/key}
-      {:else if app.view.targetDetailError}
+      {:else if app.view.targets.targetDetailError}
         <Notice tone="error" onaction={() =>
-          app.view.snapshotError
+          app.view.targets.snapshotError
             ? void getSession().loadSnapshot()
             : getSession().select(selection)}>
-          Could not load target details: {app.view.targetDetailError}
+          Could not load target details: {app.view.targets.targetDetailError}
         </Notice>
       {:else}
         <p class="dim">
@@ -346,10 +164,10 @@
       {/if}
     {:else if snap}
       <p class="dim">Select a target in the tree</p>
-    {:else if state.ingest !== "running" && !app.view.snapshotLoading && (app.view.snapshotError || state.lastError)}
-      <Notice tone="error" announce={collapsed.targets} onaction={retryTargets}>
-        {#if app.view.snapshotError}
-          {app.view.snapshotError}
+    {:else if state.ingest !== "running" && !app.view.targets.snapshotLoading && (app.view.targets.snapshotError || state.lastError)}
+      <Notice tone="error" announce={!targetsVisible} onaction={retryTargets}>
+        {#if app.view.targets.snapshotError}
+          {app.view.targets.snapshotError}
         {:else}
           Failed to load targets: {state.lastError?.summary}
         {/if}
@@ -358,12 +176,6 @@
     {/if}
   </main>
 {/snippet}
-
-<svelte:window
-  onpointerdown={dismissArguments}
-  onfocusin={dismissArguments}
-  onkeydown={argumentsKey}
-/>
 
 <div class="win">
   <div class="toolbar">
@@ -411,72 +223,19 @@
         <strong>Zeal</strong>
       {/if}
     </div>
-    <div class="composer" class:composer-invalid={!!inputError}>
-      <select class="select" aria-label="Bazel command" bind:value={cmd}>
-        <option>build</option>
-        <option>test</option>
-        <option>run</option>
-      </select>
-      <div class="composer-search">
-        <SearchInput
-          class="input composer-target"
-          aria-label="Target label or pattern"
-          aria-invalid={!!inputError}
-          aria-describedby={inputError ? "composer-target-error" : undefined}
-          placeholder="Fuzzy :all / //pkg:target"
-          {index}
-          value={targetField}
-          oninput={(v) => (targetField = v)}
-          onpick={pickTarget}
-        />
-      </div>
-      <button
-        bind:this={argumentsToggle}
-        type="button"
-        class="button button-ghost arguments-toggle"
-        aria-label={argumentsConfigured ? "Arguments (configured)" : "Arguments"}
-        aria-expanded={argumentsOpen}
-        aria-controls="command-arguments-popover"
-        title={argumentsConfigured ? argumentsText : "Specify arguments"}
-        onclick={() => setArgumentsOpen(!argumentsOpen)}
-      >
-        Arguments
-        {#if argumentsConfigured}<span class="arguments-indicator" aria-hidden="true"></span>{/if}
-      </button>
-      {#if argumentsOpen}
-        <div
-          bind:this={argumentsPanel}
-          class="arguments-popover"
-          id="command-arguments-popover"
-        >
-          <input
-            bind:this={argumentsInput}
-            bind:value={argumentsText}
-            id="command-arguments"
-            class="input arguments-input"
-            aria-label="Arguments"
-            placeholder="--config=dev; program arguments after --"
-            title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
-            autocomplete="off"
-            spellcheck={false}
-          />
-        </div>
-      {/if}
-      <button
-        type="button"
-        class="button button-primary icon-button"
-        aria-label={actionLabel}
-        title={actionLabel}
-        disabled={switchingWs ||
-          (running ? !canStop(app.view) : !canSend(app.view, targetField))}
-        onclick={submit}
-      >
-        {#if running}<Stop size={12} weight="fill" />{:else}<Play
-            size={12}
-            weight="fill"
-          />{/if}
-      </button>
-    </div>
+    <CommandComposer
+      {index}
+      value={targetField}
+      {inputError}
+      {running}
+      disabled={switchingWs ||
+        (running ? !canStop(app.view) : !canSend(app.view, targetField))}
+      oninput={(v) => (targetField = v)}
+      onpick={pickTarget}
+      onstart={(command, target, argumentsText) =>
+        void getSession().start(command, target, argumentsText)}
+      onstop={() => void getSession().stop()}
+    />
   </div>
   {#if app.view.error}<Notice tone="error">{app.view.error}</Notice>{/if}
   {#if st?.invocationNote}<Notice tone="error">{st.invocationNote}</Notice>{/if}
@@ -487,31 +246,48 @@
 
   {#if st === null}
     <div class="content dim">loading…</div>
-  {:else if st.workspace === null || switchingWs}
-    <div class="content">
-      <WorkspacePrompt
-        initial={st.workspace ?? ""}
-        initialScope={st.scope}
-        onclose={st.workspace ? () => (switchingWs = false) : undefined}
-      />
-      {#if st.workspace && st.bazel === null}
-        <Notice tone="error">bazelisk / bazel not found on PATH</Notice>
-      {/if}
-    </div>
   {:else}
-    <div class="win-body">
-      <aside class="sidebar">
-        {@render targetPane(st)}
-        <div
-          class="divider"
-          role="separator"
-          aria-label="Resize target and invocation panes"
-          aria-orientation="horizontal"
-          onpointerdown={dividerDown}
-        ></div>
-        {@render invocationPane(st)}
-      </aside>
-      {@render workspaceContent(st, st.workspace)}
+    {#if st.workspace === null || switchingWs}
+      <div class="content">
+        <WorkspacePrompt
+          initial={st.workspace ?? ""}
+          initialScope={st.scope}
+          onclose={st.workspace ? () => (switchingWs = false) : undefined}
+        />
+        {#if st.workspace && st.bazel === null}
+          <Notice tone="error">bazelisk / bazel not found on PATH</Notice>
+        {/if}
+      </div>
+    {/if}
+    <div
+      class="win-body"
+      style:display={st.workspace === null || switchingWs ? "none" : undefined}
+    >
+      <ExplorerSidebar
+        visible={st.workspace !== null && !switchingWs}
+        state={st}
+        targets={app.view.targets}
+        history={{
+          records: app.view.invocations.records,
+          error: app.view.invocations.error,
+          selectedId: selectedInvocation,
+          consoleId: page.kind === "console" ? (app.view.console?.id ?? null) : null,
+        }}
+        page={page.kind}
+        {revealRequest}
+        onselect={select}
+        oninvocation={(inv) =>
+          inv.id === st?.activeInvocation
+            ? getSession().openConsole(inv)
+            : getSession().selectInvocation(inv.id)}
+        onpage={(p) => getSession().showPage(p)}
+        onretryTargets={retryTargets}
+        onretryInvocations={getSession().loadInvocations}
+        onTargetVisibility={(v) => (targetsVisible = v)}
+      />
+      {#if st.workspace !== null && !switchingWs}
+        {@render workspaceContent(st, st.workspace)}
+      {/if}
     </div>
   {/if}
 </div>

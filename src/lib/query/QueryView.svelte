@@ -1,91 +1,37 @@
-<script lang="ts" module>
-  import VizWorker from "./viz-worker?worker";
-
-  // The Graphviz wasm is only fetched when a graph result is rendered. The
-  // worker is shared across remounts; a hung layout is abandoned by
-  // terminating it, which also drops the next render's warm instance.
-  let vizWorker: Worker | undefined;
-  let vizBusy = false;
-  const VIZ_TIMEOUT = 30_000;
-
-  function renderDot(
-    dot: string,
-    ok: (svg: string) => void,
-    fail: (error: string) => void,
-  ): () => void {
-    if (vizBusy) {
-      vizWorker?.terminate();
-      vizWorker = undefined;
-      vizBusy = false;
-    }
-    const w = (vizWorker ??= new VizWorker());
-    vizBusy = true;
-    const timer = setTimeout(() => {
-      kill();
-      fail("Graphviz could not lay out this result within 30s.");
-    }, VIZ_TIMEOUT);
-    w.onmessage = (e) => {
-      settle();
-      const d = e.data as { svg?: string; error?: string };
-      if (d.error) fail(d.error);
-      else ok(d.svg ?? "");
-    };
-    w.onerror = (e) => {
-      settle();
-      fail(e.message || "the graph renderer crashed");
-    };
-    function settle() {
-      clearTimeout(timer);
-      vizBusy = false;
-      w.onmessage = null;
-      w.onerror = null;
-    }
-    function kill() {
-      settle();
-      if (vizWorker === w) {
-        w.terminate();
-        vizWorker = undefined;
-      }
-    }
-    w.postMessage(dot);
-    // Abandoning a render means killing the worker: the queued DOT would
-    // otherwise delay the next layout by whatever time it still needs.
-    return () => {
-      if (vizBusy && vizWorker === w) kill();
-    };
-  }
-</script>
-
 <script lang="ts">
-  import Notice from "./Notice.svelte";
+  import Notice from "../Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown, Check, Copy } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { app } from "./state.svelte";
-  import { bazelBusyReason } from "./session";
-  import { createIndex } from "./search";
+  import { createIndex } from "../search";
   import QueryExpr from "./QueryExpr.svelte";
+  import QueryGraph from "./QueryGraph.svelte";
   import {
     applyExample,
     attrCandidates,
     codeDiverged,
-    commandLine,
-    createQuery,
-    DEFAULT_FLAGS,
     defaultNodeFor,
-    emptyQueryState,
     EXAMPLES,
     kindCandidates,
     parse,
     serialize,
     validate,
-    type CommandFlags,
     type Expr,
+  } from "./language";
+  import {
+    commandLine,
+    createQuery,
+    DEFAULT_FLAGS,
+    emptyQueryState,
+    type CommandFlags,
     type QueryState,
-  } from "./query";
-  import type { TargetIndex } from "./types";
+  } from "./execution";
+  import type { TargetIndex } from "../types";
 
-  let { snap }: { snap: TargetIndex | null } = $props();
+  let {
+    snap,
+    busyReason,
+  }: { snap: TargetIndex | null; busyReason: string | null } = $props();
 
   const searchIndex = $derived(
     snap ? createIndex(snap.targets) : null,
@@ -111,8 +57,6 @@
   let fbTimer: ReturnType<typeof setTimeout> | undefined;
   let qstate = $state<QueryState>(emptyQueryState());
   let controller = $state<ReturnType<typeof createQuery> | null>(null);
-  let graphUrl = $state<string | null>(null);
-  let graphError = $state<string | null>(null);
   const EXAMPLE_GROUPS = [
     { title: "Dependencies", ids: ["deps", "rdeps", "siblings", "buildfiles"] },
     { title: "Paths", ids: ["somepath", "allpaths"] },
@@ -120,9 +64,6 @@
     { title: "Set Operations", ids: ["osExceptKind", "depsIntersectKind"] },
   ] as const;
 
-  let graphZoom = $state(1);
-  let graphDialog = $state<HTMLDialogElement>();
-  let graphCanvas = $state<HTMLDivElement>();
   let viewEl = $state<HTMLElement>();
   let detailsEl = $state<HTMLDetailsElement>();
 
@@ -134,13 +75,8 @@
   onDestroy(() => {
     clearTimeout(fbTimer);
     clearTimeout(copyTimer);
-    vizWorker?.terminate();
-    vizWorker = undefined;
-    vizBusy = false;
-    if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
 
-  const st = $derived(app.state);
   const flags = $derived<CommandFlags>({ noImplicit, noTool });
   const serialized = $derived(serialize(root));
   const builderOk = $derived(serialized.ok);
@@ -169,14 +105,6 @@
     untrack(() => controller?.select(expr, view, options));
   });
 
-  // Queries serialize with other Bazel commands and ingest in the core; the reason
-  // text doubles as the disabled-Execute explanation.
-  const busyReason = $derived.by((): string | null => {
-    if (!app.view.ready) return "not connected to Bazel";
-    if (app.view.opening) return "the workspace is changing";
-    if (app.view.starting) return "an invocation is starting";
-    return bazelBusyReason(st);
-  });
   const canRun = $derived(valid && !busyReason && !qstate.running);
   const runBlockReason = $derived(
     qstate.running
@@ -231,42 +159,15 @@
     return lines.length ? lines.join("\n") : null;
   });
 
-  // A successful graph invocation's DOT becomes an SVG blob URL; Graphviz output is
-  // never appended to the DOM (CSP is unset and SVG links are an injection
-  // surface).
   const graphDot = $derived(
     resultView === "graph" &&
       stored &&
       !failedOutput &&
       !stored.truncated &&
-      stored.stdout.trim() !== ""
+      !qstate.running
       ? stored.stdout
       : null,
   );
-  $effect(() => {
-    const dot = graphDot;
-    graphError = null;
-    if (!dot) return;
-    const abandon = renderDot(
-      dot,
-      (svg) => {
-        graphUrl = URL.createObjectURL(
-          new Blob([svg], { type: "image/svg+xml" }),
-        );
-      },
-      (error) => {
-        graphError = error;
-      },
-    );
-    return () => {
-      abandon();
-      if (graphDialog?.open) graphDialog.close();
-      if (graphUrl) {
-        URL.revokeObjectURL(graphUrl);
-        graphUrl = null;
-      }
-    };
-  });
 
   function setMode(next: "builder" | "code") {
     if (next === mode) return;
@@ -556,9 +457,6 @@
               cannot be rendered.{:else}Bazel truncated this output.{/if}
           </Notice>
         {/if}
-        {#if graphError}
-          <Notice tone="error">{graphError}</Notice>
-        {/if}
         <div class="query-results-body">
           {#if runningThisView}
             <p class="query-empty" role="status">Executing…</p>
@@ -591,80 +489,6 @@
               {/if}
             {:else if stored.truncated}
               <p class="query-empty">No graph to render.</p>
-            {:else if graphError}
-              <pre class="query-raw">{stored.stdout}</pre>
-            {:else if graphUrl}
-              <div class="query-graph-actions">
-                <button
-                  type="button"
-                  class="button"
-                  onclick={() => {
-                    graphZoom = 1;
-                    graphDialog?.showModal();
-                    graphCanvas?.focus();
-                  }}>Open viewer</button
-                >
-              </div>
-              <img
-                class="query-graph"
-                src={graphUrl}
-                alt="Dependency graph for the query"
-              />
-              <dialog
-                class="query-graph-dialog"
-                aria-label="Query dependency graph viewer"
-                bind:this={graphDialog}
-              >
-                <div class="query-graph-toolbar">
-                  <span>Graph</span>
-                  <button
-                    type="button"
-                    class="button"
-                    aria-label="Zoom out"
-                    disabled={graphZoom <= 0.25}
-                    onclick={() => (graphZoom = Math.max(0.25, graphZoom - 0.25))}
-                    >−</button
-                  >
-                  <button
-                    type="button"
-                    class="button"
-                    title="Reset to original size"
-                    onclick={() => (graphZoom = 1)}
-                    >{Math.round(graphZoom * 100)}%</button
-                  >
-                  <button
-                    type="button"
-                    class="button"
-                    aria-label="Zoom in"
-                    disabled={graphZoom >= 4}
-                    onclick={() => (graphZoom = Math.min(4, graphZoom + 0.25))}
-                    >+</button
-                  >
-                  <button
-                    type="button"
-                    class="button"
-                    onclick={() => graphDialog?.close()}>Close</button
-                  >
-                </div>
-                <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll container needs focus for keyboard scrolling.) -->
-                <div
-                  class="query-graph-canvas"
-                  role="region"
-                  aria-label="Graph canvas"
-                  tabindex="0"
-                  bind:this={graphCanvas}
-                >
-                  <img
-                    src={graphUrl}
-                    alt="Dependency graph for the query"
-                    style:zoom={graphZoom}
-                  />
-                </div>
-              </dialog>
-            {:else if stored.stdout.trim() === ""}
-              <p class="query-empty">No graph output.</p>
-            {:else}
-              <p class="query-empty" role="status">Rendering graph…</p>
             {/if}
           {:else if failedOutput}
             <p class="query-empty">The last query failed — see the error above.</p>
@@ -673,6 +497,7 @@
           {:else}
             <p class="query-empty">Select Execute to fetch results.</p>
           {/if}
+          <QueryGraph dot={graphDot} />
         </div>
       </section>
     </div>

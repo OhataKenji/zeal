@@ -1,5 +1,5 @@
 import { COMMANDS } from "./commands.ts";
-import type { Transport } from "./session.ts";
+import type { Transport } from "./commands.ts";
 
 /** Date and optional invocation filters sent to the core analytics query. */
 export interface AnalyticsFilter {

@@ -3,11 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyExample,
   codeDiverged,
-  commandLine,
-  createQuery,
-  DEFAULT_FLAGS,
   defaultNodeFor,
-  emptyQueryState,
   EXAMPLES,
   KIND_GROUPS,
   attrCandidates,
@@ -15,16 +11,22 @@ import {
   kindOf,
   makeCall,
   parse,
-  queryArgv,
   serialize,
   switchKind,
   target,
   validate,
-  type CommandFlags,
   type Expr,
+} from "../src/lib/query/language.ts";
+import {
+  commandLine,
+  createQuery,
+  DEFAULT_FLAGS,
+  emptyQueryState,
+  queryArgv,
+  type CommandFlags,
   type QueryOutput,
   type QueryState,
-} from "../src/lib/query.ts";
+} from "../src/lib/query/execution.ts";
 import type { Target } from "../src/lib/types.ts";
 
 function parseOk(text: string): Expr {

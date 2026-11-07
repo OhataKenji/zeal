@@ -1,6 +1,7 @@
 <script lang="ts">
   import InvocationHeader from "./InvocationHeader.svelte";
-  import type { SessionView } from "./session";
+  import type { InvocationData } from "./session/invocations";
+  import type { InvocationRecord } from "./types";
   import {
     invocationStatus,
     sectionData,
@@ -13,21 +14,19 @@
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { formatOptions } from "./invocation/options";
 
-  let { view, reload, reloadProfile }: {
-    view: SessionView;
+  let { id, record, view, running, stopping, reload, reloadProfile }: {
+    id: string;
+    record: InvocationRecord | undefined;
+    view: InvocationData;
+    running: boolean;
+    stopping: boolean;
     reload: () => void;
     reloadProfile: () => void;
   } = $props();
-  const selectedInvocation = $derived(view.selectedInvocation);
-  const record = $derived(
-    view.detail?.record ??
-      view.invocations.find((inv) => inv.id === selectedInvocation),
-  );
-  const running = $derived(view.state?.activeInvocation === selectedInvocation);
   const profile = $derived(sectionData(view.profile ?? undefined));
   const bep = $derived(sectionData(view.detail?.bep));
   const status = $derived(
-    invocationStatus(record, view.state?.activeInvocation ?? null, view.state?.stopping),
+    invocationStatus(record, running ? id : null, stopping),
   );
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections] as const;
@@ -36,7 +35,7 @@
 
   $effect(() => {
     void active;
-    void selectedInvocation;
+    void id;
     if (panel) panel.scrollTop = 0;
   });
 
@@ -71,7 +70,7 @@
 </script>
 
 <div class="invocation-page">
-  <InvocationHeader {record} {status} fallback={selectedInvocation}>
+  <InvocationHeader {record} {status} fallback={id}>
     <div class="invocation-tabs" role="tablist" aria-label="Invocation views">
       {#each tabs as tab, index}
         <button
@@ -112,7 +111,7 @@
           {#if section === "Targets"}
             <TargetsPanel section={view.detail?.bep} />
           {:else if section === "Logs"}
-            {#key selectedInvocation}
+            {#key id}
             <LogPanel
               section={view.detail?.log}
               loading={view.detailLoading}

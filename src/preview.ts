@@ -16,7 +16,7 @@ import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
-import { bazelBusyReason } from "./lib/session.ts";
+import { bazelBusyReason } from "./lib/session/session.ts";
 
 const WORKSPACE = "/demo/cool-mono";
 const NOW = Date.now();
