@@ -115,13 +115,19 @@
     <tbody>
       {#each rows as compareRow (compareRow.label)}
         <tr class:compare-changed={compareRow.status === "changed"}>
-          <th scope="row" class="compare-item">
-            {compareRow.label}{#if compareRow.status === "changed"}<span
-                class="compare-change">Changed</span
-              >{/if}
-          </th>
-          <td class="compare-value"><code>{compareRow.left}</code></td>
-          <td class="compare-value"><code>{compareRow.right}</code></td>
+          <th scope="row" class="compare-item">{compareRow.label}</th>
+          <td class="compare-value"
+            ><code
+              >{#each compareRow.leftParts as part}{#if part.changed}<del class="compare-removed"
+                  >{part.text}</del
+                >{:else}{part.text}{/if}{/each}</code
+            ></td>
+          <td class="compare-value"
+            ><code
+              >{#each compareRow.rightParts as part}{#if part.changed}<ins class="compare-added"
+                  >{part.text}</ins
+                >{:else}{part.text}{/if}{/each}</code
+            ></td>
         </tr>
       {/each}
     </tbody>

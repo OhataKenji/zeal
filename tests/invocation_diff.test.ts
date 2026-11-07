@@ -178,6 +178,119 @@ test("option display escapes arguments while equality stays raw", () => {
   assert.ok(full.left.includes("'it'\\''s'"));
 });
 
+test("changed rows expose inline diff parts for a shared-prefix edit", () => {
+  const rows = comparisonRows(
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: ["--jobs=8"] })),
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: ["--jobs=16"] })),
+  );
+  const full = row(rows, "Full command line");
+  assert.equal(full.status, "changed");
+  assert.deepEqual(full.leftParts, [
+    { text: "--jobs=", changed: false },
+    { text: "8", changed: true },
+  ]);
+  assert.deepEqual(full.rightParts, [
+    { text: "--jobs=", changed: false },
+    { text: "16", changed: true },
+  ]);
+});
+
+test("inline diff parts reconstruct multiline option displays", () => {
+  const rows = comparisonRows(
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: ["--a=1", "--b=2"] })),
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: ["--a=1", "--b=3", "--c=4"] })),
+  );
+  const full = row(rows, "Full command line");
+  assert.equal(full.status, "changed");
+  assert.equal(full.leftParts.map((part) => part.text).join(""), full.left);
+  assert.equal(full.rightParts.map((part) => part.text).join(""), full.right);
+  assert.ok(full.leftParts.some((part) => part.changed));
+  assert.ok(full.rightParts.some((part) => part.changed));
+  assert.ok(full.leftParts.some((part) => !part.changed));
+});
+
+test("unknown and placeholder displays produce unhighlighted parts", () => {
+  const missing = comparisonRows(
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: ["--a"] })),
+    invocation({ id: "x" }, bepSection("missing")),
+  );
+  const absent = row(missing, "Full command line");
+  assert.equal(absent.status, "unknown");
+  assert.deepEqual(absent.rightParts, [{ text: "Not recorded", changed: false }]);
+  assert.ok(absent.leftParts.every((part) => !part.changed));
+
+  const unloaded = comparisonRows(null, invocation({ id: "x", cmd: "test" }));
+  assert.ok(
+    unloaded.every(
+      (candidate) =>
+        candidate.leftParts.every((part) => !part.changed) &&
+        candidate.rightParts.every((part) => !part.changed),
+    ),
+  );
+
+  const emptyVsReal = comparisonRows(
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: [] })),
+    invocation({ id: "x" }, bepSection("ok", { ...OPTS, cmdLine: ["--only"] })),
+  );
+  const empty = row(emptyVsReal, "Full command line");
+  assert.equal(empty.status, "changed");
+  assert.deepEqual(empty.leftParts, [{ text: "No options", changed: false }]);
+  assert.deepEqual(empty.rightParts, [{ text: "--only", changed: true }]);
+});
+
+test("equal and display-collided rows produce no changed parts", () => {
+  const same = comparisonRows(invocation({ id: "x" }), invocation({ id: "x" }));
+  assert.ok(
+    same.every(
+      (candidate) =>
+        candidate.leftParts.every((part) => !part.changed) &&
+        candidate.rightParts.every((part) => !part.changed),
+    ),
+  );
+
+  const collided = comparisonRows(
+    invocation({ id: "x", startedAt: 1700000000100, finishedAt: 1700000001100 }),
+    invocation({ id: "x", startedAt: 1700000000200, finishedAt: 1700000001200 }),
+  );
+  const start = row(collided, "Start date");
+  assert.equal(start.status, "changed");
+  assert.deepEqual(start.leftParts, [{ text: start.left, changed: false }]);
+  assert.deepEqual(start.rightParts, [{ text: start.right, changed: false }]);
+});
+
+test("raw values equal to sentinel text still get inline diffs", () => {
+  const rows = comparisonRows(
+    invocation({ id: "x", pattern: "No options" }),
+    invocation({ id: "x", pattern: "More options" }),
+  );
+  const pattern = row(rows, "Pattern");
+  assert.equal(pattern.status, "changed");
+  assert.ok(pattern.leftParts.some((part) => part.changed));
+  assert.ok(pattern.rightParts.some((part) => part.changed));
+  assert.equal(pattern.leftParts.map((part) => part.text).join(""), "No options");
+  assert.equal(pattern.rightParts.map((part) => part.text).join(""), "More options");
+});
+
+test("surrogate-splitting diffs fall back to whole-field parts", () => {
+  const rows = comparisonRows(
+    invocation({ id: "x", pattern: "//😀:target" }),
+    invocation({ id: "x", pattern: "//😃:target" }),
+  );
+  const pattern = row(rows, "Pattern");
+  assert.equal(pattern.status, "changed");
+  for (const part of [...pattern.leftParts, ...pattern.rightParts]) {
+    assert.doesNotMatch(
+      part.text,
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      `malformed part: ${JSON.stringify(part.text)}`,
+    );
+  }
+  assert.equal(pattern.leftParts.map((part) => part.text).join(""), pattern.left);
+  assert.equal(pattern.rightParts.map((part) => part.text).join(""), pattern.right);
+  assert.ok(pattern.leftParts.every((part) => part.changed));
+  assert.ok(pattern.rightParts.every((part) => part.changed));
+});
+
 test("unloaded sides render placeholders and unknown status", () => {
   const right = invocation({ id: "r", cmd: "test" });
   const rows = comparisonRows(null, right);

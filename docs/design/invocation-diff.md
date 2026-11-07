@@ -27,7 +27,7 @@ _Status: Draft_
 ## Overview
 
 既存の `get_invocation` を使い、frontend で左右比較する。
-新しい IPC、DB、receiver、依存は加えない。
+新しい IPC、DB、receiver は加えない。項目内の文字列 diff には BuildBuddy と同じ diff-match-patch を使う。
 
 ```mermaid
 flowchart LR
@@ -71,7 +71,7 @@ Host、Git、cache、remote execution、metrics など BuildBuddy にある項�
 
 ### 表示と欠損
 
-- 表は項目名、左、右の三列で全行を表示し、値が変わった行全体を強調する。項目内の文字列 diff は行わず、options は一引数一行で順序と重複を保つ。
+- 表は項目名、左、右の三列で全行を表示し、値が変わった行全体を強調する。既知の値どうしには BuildBuddy と同じ diff-match-patch で項目内の文字列 diff を示し、正規化はしない。options は一引数一行で順序と重複を保つ。
 - 等価は raw な値で比較し、map 化や sort などの正規化はしない。delta や増減率は出さず、duration も左右に並べるだけとする。
 - 値がない項目は「Not recorded」と表示し、その行の比較は unknown とする。空の options 配列は既知の空として扱う。
 - BEP section が ok 以外のときは options 由来の行を比較不可とし、section の状態を併記する(record 由来の行は独立して比較する)。右側の request 全体の失敗は右側の error であり、欠損項目を捏造しない。
