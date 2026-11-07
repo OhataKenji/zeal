@@ -123,13 +123,11 @@ export function canStop(view: SessionView): boolean {
 }
 
 /**
- * In-flight state for one async view slice. `claim` starts a load and returns
- * its generation token; `invalidate` (called by the matching clear*) makes an
- * in-flight reply stale; `release` ends the load. A load whose token went
- * stale mid-flight reloads from its own `finally`, so the newest selection is
- * what lands.
+ * In-flight state for one async view slice: `claim` starts a load and returns
+ * its generation token, `invalidate` (called by the matching clear*) makes an
+ * in-flight reply stale, and `release` ends the load.
  */
-function requestSlice() {
+function createRequestSlot() {
   let generation = 0;
   let busy = false;
   return {
@@ -151,7 +149,7 @@ function requestSlice() {
     },
   };
 }
-type RequestSlot = ReturnType<typeof requestSlice>;
+type RequestSlot = ReturnType<typeof createRequestSlot>;
 
 /**
  * Creates a workspace session that rejects stale requests. Call `dispose()`
@@ -161,18 +159,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let view = emptyView();
   let disposed = false;
   let stateRevision = 0;
-  // Snapshot fetches may overlap across snapshotFetchedAt changes: the
-  // generation drops a superseded fetch's reply, and snapshotRequested
-  // deduplicates calls for the current one.
+  // Snapshot fetches may overlap across snapshotFetchedAt changes, so there is
+  // no busy to serialize and no request slot; the generation drops a superseded
+  // fetch's reply, and snapshotRequested deduplicates calls for the current one.
   let snapshotGeneration = 0;
   let snapshotRequested: number | null = null;
   // Request slots for the serialized async slices; each clear* invalidates an
   // in-flight reply through its slot, and listPending coalesces history
   // notifications that arrive during a list read.
-  const detailReq = requestSlice();
-  const profileReq = requestSlice();
-  const targetReq = requestSlice();
-  const listReq = requestSlice();
+  const detailReq = createRequestSlot();
+  const profileReq = createRequestSlot();
+  const targetReq = createRequestSlot();
+  const listReq = createRequestSlot();
   let listPending = false;
   let pendingStart: { workspace: string; cmd: BazelCommand; pattern: string } | null = null;
   let unlisten: (() => void) | undefined;
@@ -213,6 +211,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     };
   }
 
+  // Not a loadSection: reads during a list coalesce through listPending
+  // instead of retrying stale replies, and the slice has no loading flag.
   async function loadInvocations() {
     if (!view.state?.workspace || disposed) return;
     if (listReq.busy) {
@@ -307,8 +307,9 @@ export function createSession(transport: Transport, changed: (view: SessionView)
    * Shared fetch lifecycle for the selected slices. Callers check the slice
    * guards and `req.busy` first; this claims a generation, applies `patches`,
    * and reloads once from `finally` when the slice was invalidated mid-flight.
+   * `ok`/`err` patches must return the slice to idle (e.g. `loading: false`).
    */
-  function loadSection<V>(
+  async function loadSection<V>(
     req: RequestSlot,
     invoke: () => Promise<V>,
     patches: {
@@ -319,18 +320,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     retry: () => void,
   ): Promise<void> {
     const generation = req.claim();
-    if (patches.pending) update(patches.pending);
-    return (async () => {
-      try {
-        const value = await invoke();
-        if (generation === req.current) update(patches.ok(value));
-      } catch (error) {
-        if (generation === req.current) update(patches.err(error));
-      } finally {
-        req.release();
-        if (generation !== req.current) void retry();
-      }
-    })();
+    try {
+      if (patches.pending) update(patches.pending);
+      const value = await invoke();
+      if (generation === req.current) update(patches.ok(value));
+    } catch (error) {
+      if (generation === req.current) update(patches.err(error));
+    } finally {
+      req.release();
+      if (generation !== req.current) void retry();
+    }
   }
 
   function requestTargetDetail() {
