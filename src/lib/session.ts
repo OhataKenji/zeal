@@ -123,6 +123,35 @@ export function canStop(view: SessionView): boolean {
 }
 
 /**
+ * In-flight state for one async view slice: `claim` starts a load and returns
+ * its generation token, `invalidate` (called by the matching clear*) makes an
+ * in-flight reply stale, and `release` ends the load.
+ */
+function createRequestSlot() {
+  let generation = 0;
+  let busy = false;
+  return {
+    claim() {
+      busy = true;
+      return ++generation;
+    },
+    release() {
+      busy = false;
+    },
+    invalidate() {
+      generation++;
+    },
+    get current() {
+      return generation;
+    },
+    get busy() {
+      return busy;
+    },
+  };
+}
+type RequestSlot = ReturnType<typeof createRequestSlot>;
+
+/**
  * Creates a workspace session that rejects stale requests. Call `dispose()`
  * to invalidate pending responses and remove its event subscription.
  */
@@ -130,17 +159,19 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let view = emptyView();
   let disposed = false;
   let stateRevision = 0;
-  let listGeneration = 0;
-  let listing = false;
-  let listPending = false;
-  let detailGeneration = 0;
-  let detailRequestInFlight = false;
-  let profileGeneration = 0;
-  let profileRequestInFlight = false;
+  // Snapshot fetches may overlap across snapshotFetchedAt changes, so there is
+  // no busy to serialize and no request slot; the generation drops a superseded
+  // fetch's reply, and snapshotRequested deduplicates calls for the current one.
   let snapshotGeneration = 0;
   let snapshotRequested: number | null = null;
-  let targetGeneration = 0;
-  let targetRequestInFlight = false;
+  // Request slots for the serialized async slices; each clear* invalidates an
+  // in-flight reply through its slot, and listPending coalesces history
+  // notifications that arrive during a list read.
+  const detailReq = createRequestSlot();
+  const profileReq = createRequestSlot();
+  const targetReq = createRequestSlot();
+  const listReq = createRequestSlot();
+  let listPending = false;
   let pendingStart: { workspace: string; cmd: BazelCommand; pattern: string } | null = null;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
@@ -153,19 +184,19 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   // Clearing a slice invalidates its in-flight loads, so a late response
   // cannot repopulate cleared data.
   function clearDetail() {
-    ++detailGeneration;
+    detailReq.invalidate();
     return { detail: null, detailLoading: false, detailError: null };
   }
   function clearProfile() {
-    ++profileGeneration;
+    profileReq.invalidate();
     return { profile: null, profileLoading: false, profileError: null };
   }
   function clearInvocations() {
-    ++listGeneration;
+    listReq.invalidate();
     return { invocations: [], invocationsError: null };
   }
   function clearTargetDetail() {
-    ++targetGeneration;
+    targetReq.invalidate();
     return { targetDetail: null, targetDetailError: null };
   }
   function clearTargets() {
@@ -180,23 +211,24 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     };
   }
 
+  // Not a loadSection: reads during a list coalesce through listPending
+  // instead of retrying stale replies, and the slice has no loading flag.
   async function loadInvocations() {
     if (!view.state?.workspace || disposed) return;
-    if (listing) {
+    if (listReq.busy) {
       listPending = true;
       return;
     }
-    listing = true;
-    const generation = ++listGeneration;
+    const generation = listReq.claim();
     try {
       const invocations = await transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations);
       acceptLoadedInvocations(generation, invocations);
     } catch (error) {
-      if (generation === listGeneration) {
+      if (generation === listReq.current) {
         update({ invocationsError: String(error) });
       }
     } finally {
-      listing = false;
+      listReq.release();
       if (listPending && !disposed) {
         listPending = false;
         void loadInvocations();
@@ -206,7 +238,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
 
   // A changed selected record means its saved observation may have completed.
   function acceptLoadedInvocations(generation: number, invocations: InvocationRecord[]) {
-    if (generation !== listGeneration || disposed) return;
+    if (generation !== listReq.current || disposed) return;
     if (JSON.stringify(invocations) !== JSON.stringify(view.invocations) || view.invocationsError) {
       update({ invocations, invocationsError: null });
     }
@@ -271,6 +303,37 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     return sessionBusy(view) || !workspaceReady(view);
   }
 
+  /**
+   * Shared fetch lifecycle for the selected slices. Claims a generation,
+   * applies `patches`, and re-runs `retry` (the guarded loader) when the slice
+   * was invalidated mid-flight. `ok`/`err` patches must return the slice to
+   * idle (e.g. `loading: false`); the matching `clear*` must likewise reset
+   * the slice's loading/error fields when it invalidates.
+   */
+  async function loadSection<V>(
+    req: RequestSlot,
+    invoke: () => Promise<V>,
+    patches: {
+      pending?: Partial<SessionView>;
+      ok: (value: V) => Partial<SessionView>;
+      err: (error: unknown) => Partial<SessionView>;
+    },
+    retry: () => void,
+  ): Promise<void> {
+    if (req.busy) return;
+    const generation = req.claim();
+    try {
+      if (patches.pending) update(patches.pending);
+      const value = await invoke();
+      if (generation === req.current) update(patches.ok(value));
+    } catch (error) {
+      if (generation === req.current) update(patches.err(error));
+    } finally {
+      req.release();
+      if (generation !== req.current) void retry();
+    }
+  }
+
   function requestTargetDetail() {
     const label = view.selection?.kind === "target" ? view.selection.label : null;
     const snapshot = view.snapshot;
@@ -281,17 +344,16 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       !snapshot ||
       view.targetDetail !== null ||
       view.targetDetailError !== null ||
-      targetRequestInFlight ||
+      targetReq.busy ||
       targetBusy() ||
       snapshot.meta.fetchedAt !== state?.snapshotFetchedAt
     ) {
       return;
     }
-    const generation = targetGeneration;
     const fetchedAt = snapshot.meta.fetchedAt;
-    targetRequestInFlight = true;
-    void (async () => {
-      try {
+    void loadSection(
+      targetReq,
+      async () => {
         const detail = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
           label,
           fetchedAt,
@@ -299,18 +361,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         if (detail.target.label !== label) {
           throw new Error("Target detail does not match the selected label");
         }
-        if (generation === targetGeneration) {
-          update({ targetDetail: detail, targetDetailError: null });
-        }
-      } catch (error) {
-        if (generation === targetGeneration) {
-          update({ targetDetailError: String(error) });
-        }
-      } finally {
-        targetRequestInFlight = false;
-        if (generation !== targetGeneration) requestTargetDetail();
-      }
-    })();
+        return detail;
+      },
+      {
+        ok: (detail) => ({ targetDetail: detail, targetDetailError: null }),
+        err: (error) => ({ targetDetailError: String(error) }),
+      },
+      requestTargetDetail,
+    );
   }
 
   function select(selection: ExplorerSelection) {
@@ -339,27 +397,21 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       disposed ||
       !view.ready ||
       view.starting ||
-      detailRequestInFlight ||
+      detailReq.busy ||
       id === view.state?.activeInvocation
     ) {
       return;
     }
-    const generation = ++detailGeneration;
-    detailRequestInFlight = true;
-    update({ detailLoading: true, detailError: null });
-    try {
-      const detail = await transport.invoke<InvocationDetail>(COMMANDS.getInvocation, { id });
-      if (generation === detailGeneration) {
-        update({ detail, detailLoading: false });
-      }
-    } catch (error) {
-      if (generation === detailGeneration) {
-        update({ detailError: String(error), detailLoading: false });
-      }
-    } finally {
-      detailRequestInFlight = false;
-      if (generation !== detailGeneration) void loadDetail();
-    }
+    await loadSection(
+      detailReq,
+      () => transport.invoke<InvocationDetail>(COMMANDS.getInvocation, { id }),
+      {
+        pending: { detailLoading: true, detailError: null },
+        ok: (detail) => ({ detail, detailLoading: false }),
+        err: (error) => ({ detailError: String(error), detailLoading: false }),
+      },
+      loadDetail,
+    );
   }
 
   async function loadProfile() {
@@ -369,29 +421,21 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       disposed ||
       !view.ready ||
       view.starting ||
-      profileRequestInFlight ||
+      profileReq.busy ||
       id === view.state?.activeInvocation
     ) {
       return;
     }
-    const generation = ++profileGeneration;
-    profileRequestInFlight = true;
-    update({ profileLoading: true, profileError: null });
-    try {
-      const profile = await transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
-        id,
-      });
-      if (generation === profileGeneration) {
-        update({ profile, profileLoading: false });
-      }
-    } catch (error) {
-      if (generation === profileGeneration) {
-        update({ profileError: String(error), profileLoading: false });
-      }
-    } finally {
-      profileRequestInFlight = false;
-      if (generation !== profileGeneration) void loadProfile();
-    }
+    await loadSection(
+      profileReq,
+      () => transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, { id }),
+      {
+        pending: { profileLoading: true, profileError: null },
+        ok: (profile) => ({ profile, profileLoading: false }),
+        err: (error) => ({ profileError: String(error), profileLoading: false }),
+      },
+      loadProfile,
+    );
   }
 
   function loadSelected() {
