@@ -53,6 +53,13 @@ export interface TargetDetail {
   status: "ok" | "partial";
 }
 
+/** One action from `bazel aquery`, reduced to list fields. */
+export interface ActionEntry {
+  mnemonic: string;
+  owner: string;
+  output: string;
+}
+
 /** A user-facing summary for a failed core operation. */
 export interface IngestError {
   exitCode: number | null;

@@ -39,6 +39,19 @@ impl Scope {
 
 /// The selected rule and its direct source files, needed to classify its attributes.
 pub fn target_query(label: &str) -> Result<String, String> {
+    validate_label(label)?;
+    Ok(format!(
+        "let selected = \"{label}\" in $selected union kind(\"source file\", deps($selected, 1))"
+    ))
+}
+
+/// The `aquery` expression covering a target and its dependencies.
+pub fn actions_query(label: &str) -> Result<String, String> {
+    validate_label(label)?;
+    Ok(format!("deps({label})"))
+}
+
+fn validate_label(label: &str) -> Result<(), String> {
     if !label.starts_with("//")
         || label
             .chars()
@@ -46,9 +59,7 @@ pub fn target_query(label: &str) -> Result<String, String> {
     {
         return Err("invalid target label".to_string());
     }
-    Ok(format!(
-        "let selected = \"{label}\" in $selected union kind(\"source file\", deps($selected, 1))"
-    ))
+    Ok(())
 }
 
 fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
@@ -160,6 +171,12 @@ mod tests {
             target_query("//app:chosen").unwrap(),
             "let selected = \"//app:chosen\" in $selected union kind(\"source file\", deps($selected, 1))"
         );
+    }
+
+    #[test]
+    fn actions_query_covers_the_target_and_its_deps() {
+        assert_eq!(actions_query("//app:server").unwrap(), "deps(//app:server)");
+        assert!(actions_query("app:server").is_err());
     }
 
     #[test]

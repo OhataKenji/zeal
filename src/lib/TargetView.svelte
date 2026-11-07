@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
-  import type { TargetDetail, TargetIndex } from "./types";
+  import type { ActionEntry, TargetDetail, TargetIndex } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
 
   let {
@@ -9,11 +9,19 @@
     detail,
     wsRoot,
     onselect,
+    actions = null,
+    actionsLoading = false,
+    actionsError = null,
+    onloadactions,
   }: {
     index: TargetIndex;
     detail: TargetDetail;
     wsRoot: string;
     onselect: (label: string) => void;
+    actions?: ActionEntry[] | null;
+    actionsLoading?: boolean;
+    actionsError?: string | null;
+    onloadactions?: () => void;
   } = $props();
   const rel = $derived(relations(detail));
   const target = $derived(rel.target);
@@ -28,6 +36,17 @@
   function location(file: string, line: number) {
     return `${file.startsWith(wsRoot + "/") ? file.slice(wsRoot.length + 1) : file}:${line}`;
   }
+  const shownActions = $derived(
+    (actions ?? []).filter(
+      (action) =>
+        matches(action.mnemonic) ||
+        matches(action.owner) ||
+        matches(action.output),
+    ),
+  );
+  const visibleActions = $derived(
+    expanded.has("actions") || query ? shownActions : shownActions.slice(0, 50),
+  );
 </script>
 
 {#snippet labels(values: string[], id: string, pkg: string)}
@@ -133,3 +152,46 @@
       )}
     </dd>
   </dl>
+  <section class="actions" aria-label="Actions">
+    <div class="attributes-head">
+      <h2>Actions</h2>
+      {#if actions}<span class="dim">{actions.length}</span>{/if}
+    </div>
+    {#if actionsLoading}
+      <p class="dim">Loading actions…</p>
+    {:else if actionsError}
+      <p class="dim">Could not load actions: {actionsError}</p>
+      <button class="chip more" onclick={onloadactions}>Retry</button>
+    {:else if actions === null}
+      <button class="chip more" onclick={onloadactions}>Load actions</button>
+    {:else if actions.length === 0}
+      <p class="dim">No actions</p>
+    {:else}
+      <table class="action-table">
+        <thead>
+          <tr><th>Action</th><th>Mnemonic</th><th>Owner</th></tr>
+        </thead>
+        <tbody>
+          {#each visibleActions as action, i (i)}
+            <tr>
+              <td class="out" title={action.output}>{action.output || "—"}</td>
+              <td>{action.mnemonic}</td>
+              <td class="owner" title={action.owner}
+                >{displayLabel(action.owner, target.pkg)}</td
+              >
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      {#if !query && shownActions.length > 50}
+        <button
+          class="chip more"
+          aria-expanded={expanded.has("actions")}
+          onclick={() =>
+            expanded.has("actions") ? expanded.delete("actions") : expanded.add("actions")}
+        >
+          {#if expanded.has("actions")}Show less{:else}+{shownActions.length - 50} more{/if}
+        </button>
+      {/if}
+    {/if}
+  </section>

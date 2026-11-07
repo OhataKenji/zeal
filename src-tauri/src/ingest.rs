@@ -3,6 +3,7 @@
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-invocation refresh is kept.
 
+use crate::actions::{self, ActionEntry};
 use crate::query_proto::{self, ParsedQuery};
 use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target};
@@ -81,7 +82,8 @@ pub fn target_detail(
     label: &str,
     fetched_at: u64,
 ) -> Result<snapshot::TargetDetail, String> {
-    let (ws, bazel, query) = acquire_detail(&core, label, fetched_at)?;
+    let query = crate::scope::target_query(label)?;
+    let (ws, bazel) = acquire_target(&core, label, fetched_at)?;
     let _slot = DetailSlot {
         app: app.clone(),
         core: core.clone(),
@@ -103,11 +105,41 @@ pub fn target_detail(
         .ok_or_else(|| "target not found in the current Scope".to_string())
 }
 
-fn acquire_detail(
-    core: &Core,
+/// The actions of a target and its dependencies, from `bazel aquery`. This is
+/// the heaviest target-page query, so the UI loads it on demand.
+#[tracing::instrument(target = "zeal::operations", name = "target.actions", skip_all)]
+pub fn target_actions(
+    app: AppHandle,
+    core: Arc<Core>,
     label: &str,
     fetched_at: u64,
-) -> Result<(PathBuf, PathBuf, String), String> {
+) -> Result<Vec<ActionEntry>, String> {
+    let expr = crate::scope::actions_query(label)?;
+    let (ws, bazel) = acquire_target(&core, label, fetched_at)?;
+    let _slot = DetailSlot {
+        app: app.clone(),
+        core: core.clone(),
+    };
+    core.emit(&app);
+    let mut command = Command::new(&bazel);
+    command
+        .arg("aquery")
+        .arg(&expr)
+        .arg("--output=proto")
+        .current_dir(&ws);
+    match fetch(
+        &core,
+        &mut command,
+        || core.emit(&app),
+        actions::parse_actions,
+        |entries: &Vec<ActionEntry>| !entries.is_empty(),
+    ) {
+        Outcome::Ok(entries) | Outcome::Partial(entries, _) => Ok(entries),
+        Outcome::Failed(error) => Err(error.summary),
+    }
+}
+
+fn acquire_target(core: &Core, label: &str, fetched_at: u64) -> Result<(PathBuf, PathBuf), String> {
     let mut st = core.state.lock().expect("application state lock poisoned");
     let index = st.snapshot.as_ref().ok_or("target list is not loaded")?;
     if index.meta.fetched_at != fetched_at {
@@ -122,9 +154,8 @@ fn acquire_detail(
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
-    let query = crate::scope::target_query(label)?;
     st.detail_query_running = true;
-    Ok((ws, bazel, query))
+    Ok((ws, bazel))
 }
 
 struct DetailSlot {
@@ -499,13 +530,12 @@ exit "$code"
                 }],
             }));
         }
-        assert!(acquire_detail(&core, "//app:chosen", 6).is_err());
-        assert!(acquire_detail(&core, "//app:unknown", 7).is_err());
-        let (ws, bazel, query) = acquire_detail(&core, "//app:chosen", 7).unwrap();
+        assert!(acquire_target(&core, "//app:chosen", 6).is_err());
+        assert!(acquire_target(&core, "//app:unknown", 7).is_err());
+        let (ws, bazel) = acquire_target(&core, "//app:chosen", 7).unwrap();
         assert_eq!(ws, PathBuf::from("/ws"));
         assert_eq!(bazel, PathBuf::from("/bin/bazel"));
-        assert_eq!(query, crate::scope::target_query("//app:chosen").unwrap());
         assert!(core.state.lock().unwrap().detail_query_running);
-        assert!(acquire_detail(&core, "//app:chosen", 7).is_err());
+        assert!(acquire_target(&core, "//app:chosen", 7).is_err());
     }
 }

@@ -1,6 +1,7 @@
 import { COMMANDS } from "./commands.ts";
 import { targetError } from "./target.ts";
 import type {
+  ActionEntry,
   AppState,
   ExplorerSelection,
   BazelCommand,
@@ -31,6 +32,10 @@ export interface SessionView {
   selection: ExplorerSelection;
   targetDetail: TargetDetail | null;
   targetDetailError: string | null;
+  /** Actions for the selected target; loaded on demand because aquery is heavy. */
+  targetActions: ActionEntry[] | null;
+  targetActionsLoading: boolean;
+  targetActionsError: string | null;
   ready: boolean;
   starting: boolean;
   opening: boolean;
@@ -58,6 +63,9 @@ export function emptyView(): SessionView {
     selection: null,
     targetDetail: null,
     targetDetailError: null,
+    targetActions: null,
+    targetActionsLoading: false,
+    targetActionsError: null,
     ready: false,
     starting: false,
     opening: false,
@@ -141,6 +149,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let snapshotRequested: number | null = null;
   let targetGeneration = 0;
   let targetRequestInFlight = false;
+  let actionsGeneration = 0;
+  let actionsRequestInFlight = false;
   let pendingStart: { workspace: string; cmd: BazelCommand; pattern: string } | null = null;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
@@ -166,7 +176,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
   function clearTargetDetail() {
     ++targetGeneration;
-    return { targetDetail: null, targetDetailError: null };
+    ++actionsGeneration;
+    return {
+      targetDetail: null,
+      targetDetailError: null,
+      targetActions: null,
+      targetActionsLoading: false,
+      targetActionsError: null,
+    };
   }
   function clearTargets() {
     ++snapshotGeneration;
@@ -311,6 +328,47 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         if (generation !== targetGeneration) requestTargetDetail();
       }
     })();
+  }
+
+  /** Loads the selected target's actions on demand; aquery is the slowest query. */
+  async function loadTargetActions() {
+    const selection = view.selection;
+    const snapshot = view.snapshot;
+    if (
+      selection?.kind !== "target" ||
+      disposed ||
+      !snapshot ||
+      view.targetActions !== null ||
+      view.targetActionsLoading ||
+      actionsRequestInFlight ||
+      targetBusy() ||
+      snapshot.meta.fetchedAt !== view.state?.snapshotFetchedAt ||
+      view.targetDetail?.target.label !== selection.label
+    ) {
+      return;
+    }
+    const generation = actionsGeneration;
+    const label = selection.label;
+    const fetchedAt = snapshot.meta.fetchedAt;
+    actionsRequestInFlight = true;
+    update({ targetActionsLoading: true, targetActionsError: null });
+    try {
+      const actions = await transport.invoke<ActionEntry[]>(COMMANDS.getTargetActions, {
+        label,
+        fetchedAt,
+      });
+      if (generation === actionsGeneration) {
+        update({ targetActions: actions });
+      }
+    } catch (error) {
+      if (generation === actionsGeneration) {
+        update({ targetActionsError: String(error) });
+      }
+    } finally {
+      actionsRequestInFlight = false;
+      update({ targetActionsLoading: false });
+      if (generation !== actionsGeneration) void loadTargetActions();
+    }
   }
 
   function select(selection: ExplorerSelection) {
@@ -702,5 +760,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     loadInvocations,
     loadSnapshot,
     select,
+    loadTargetActions,
   };
 }
