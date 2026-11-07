@@ -176,7 +176,11 @@ pub fn run(
     });
     let observed = wait(child, &core);
     if observed.cancelled {
-        return Err("Query stopped".to_string());
+        return Err(if observed.unconfirmed {
+            UNCONFIRMED_NOTE.to_string()
+        } else {
+            "Query stopped".to_string()
+        });
     }
     // A starved reader must not fake an empty result: dropped stdout is
     // reported as truncated and a missing stderr capture gets the same note

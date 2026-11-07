@@ -209,6 +209,9 @@ fn fetch<T: Send + 'static>(
     });
 
     let observed = query::wait(child, core);
+    if let Some(error) = supervision_error(&observed) {
+        return Outcome::Failed(error);
+    }
     let parsed = query::drain(&parse_rx, observed.unconfirmed);
     let stderr_bytes = query::drain(&stderr_rx, observed.unconfirmed);
     finish_fetch(observed, parsed, stderr_bytes, &parse_rx, has_data)
@@ -221,9 +224,6 @@ fn finish_fetch<T>(
     parse_rx: &mpsc::Receiver<Result<T, String>>,
     has_data: impl Fn(&T) -> bool,
 ) -> Outcome<T> {
-    if let Some(error) = supervision_error(&observed) {
-        return Outcome::Failed(error);
-    }
     let data = match parsed {
         Some(Ok(data)) => data,
         Some(Err(summary)) => {
@@ -260,7 +260,12 @@ fn finish_fetch<T>(
 }
 
 fn supervision_error(observed: &query::Observed) -> Option<IngestError> {
-    if observed.cancelled {
+    if observed.unconfirmed {
+        Some(IngestError {
+            exit_code: observed.exit,
+            summary: "Could not confirm the exit".to_string(),
+        })
+    } else if observed.cancelled {
         Some(IngestError {
             exit_code: observed.exit,
             summary: "Query stopped".to_string(),
@@ -269,11 +274,6 @@ fn supervision_error(observed: &query::Observed) -> Option<IngestError> {
         Some(IngestError {
             exit_code: None,
             summary: format!("query timed out after {}s", QUERY_TIMEOUT.as_secs()),
-        })
-    } else if observed.unconfirmed {
-        Some(IngestError {
-            exit_code: observed.exit,
-            summary: "Could not confirm the exit".to_string(),
         })
     } else {
         None
@@ -477,6 +477,13 @@ exit "$code"
         }
     }
 
+    fn ready_query_pgid(core: &Core, ready_path: &Path) -> Option<i32> {
+        ready_path
+            .exists()
+            .then(|| core.state.lock().unwrap().query_pgid)
+            .flatten()
+    }
+
     fn wait_for_query_ready(
         core: &Core,
         ready_path: &Path,
@@ -484,22 +491,21 @@ exit "$code"
         worker: thread::JoinHandle<()>,
     ) -> (i32, thread::JoinHandle<()>) {
         let ready_deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !ready_path.exists() && std::time::Instant::now() < ready_deadline {
+        while ready_query_pgid(core, ready_path).is_none()
+            && std::time::Instant::now() < ready_deadline
+        {
             thread::sleep(Duration::from_millis(10));
         }
-        if !ready_path.exists() {
+        let pgid = (std::time::Instant::now() < ready_deadline)
+            .then(|| ready_query_pgid(core, ready_path))
+            .flatten();
+        let Some(pgid) = pgid else {
             core.state.lock().unwrap().query_stopping = true;
             kill_query_group(core);
             let _ = result_rx.recv_timeout(Duration::from_secs(2));
             let _ = worker.join();
             panic!("fake Bazel did not report readiness");
-        }
-        let pgid = core
-            .state
-            .lock()
-            .unwrap()
-            .query_pgid
-            .expect("query process group is published");
+        };
         (pgid, worker)
     }
 
@@ -544,6 +550,21 @@ exit "$code"
             Outcome::Ok(targets) => targets,
             _ => panic!("successful ingest did not succeed"),
         }
+    }
+
+    #[test]
+    fn unconfirmed_cancellation_is_not_reported_as_stopped() {
+        assert_eq!(
+            supervision_error(&query::Observed {
+                exit: None,
+                timed_out: false,
+                unconfirmed: true,
+                cancelled: true,
+            })
+            .unwrap()
+            .summary,
+            "Could not confirm the exit"
+        );
     }
 
     #[test]
