@@ -326,6 +326,8 @@
           <TargetView
             index={snap}
             detail={app.view.targetDetail}
+            outputs={app.view.targetOutputs}
+            outputsError={app.view.targetOutputsError}
             wsRoot={workspace}
             onselect={(label) => select({ kind: "target", label })}
           />

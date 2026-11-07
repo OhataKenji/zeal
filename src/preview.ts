@@ -406,6 +406,16 @@ export function installPreview() {
         status: "ok",
       });
     },
+    get_target_outputs: (payload): string[] => {
+      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
+        throw new Error("Target list changed; select the target again");
+      }
+      const label = String(payload?.label);
+      if (!SNAPSHOT.targets.some((item) => item.label === label)) {
+        throw new Error("Target not found");
+      }
+      return label === "//app:server" ? ["bazel-out/k8-fastbuild/bin/app/server"] : [];
+    },
     list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
     resize_console: () => {},

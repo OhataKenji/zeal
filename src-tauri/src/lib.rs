@@ -80,6 +80,31 @@ async fn get_target_detail(
     }
 }
 
+/// The selected target's output files, resolved by `bazel cquery`.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "target.outputs.request", skip_all)]
+async fn get_target_outputs(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    label: String,
+    fetched_at: u64,
+) -> Result<Vec<String>, String> {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        ingest::target_outputs(app, core, &label, fetched_at)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("target outputs worker failed".to_string())
+        }
+    }
+}
+
 /// Open a directory as the Bazel workspace: validate it, resolve bazel, and
 /// start a background snapshot ingestion. Refused while an invocation is in
 /// flight: its
@@ -420,6 +445,7 @@ pub fn run() {
             get_state,
             get_snapshot,
             get_target_detail,
+            get_target_outputs,
             read_console,
             write_console,
             resize_console,

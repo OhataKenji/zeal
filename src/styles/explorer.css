@@ -44,6 +44,16 @@
   margin-bottom: 12px;
 }
 
+.outputs {
+  padding: 20px 0 12px;
+}
+
+.outputs h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .attributes-head {
   display: flex;
   align-items: center;

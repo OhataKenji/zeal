@@ -31,6 +31,9 @@ export interface SessionView {
   selection: ExplorerSelection;
   targetDetail: TargetDetail | null;
   targetDetailError: string | null;
+  /** Configuration-resolved output paths from `bazel cquery`. */
+  targetOutputs: string[] | null;
+  targetOutputsError: string | null;
   ready: boolean;
   starting: boolean;
   opening: boolean;
@@ -58,6 +61,8 @@ export function emptyView(): SessionView {
     selection: null,
     targetDetail: null,
     targetDetailError: null,
+    targetOutputs: null,
+    targetOutputsError: null,
     ready: false,
     starting: false,
     opening: false,
@@ -141,6 +146,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let snapshotRequested: number | null = null;
   let targetGeneration = 0;
   let targetRequestInFlight = false;
+  let outputsRequestInFlight = false;
   let pendingStart: { workspace: string; cmd: BazelCommand; pattern: string } | null = null;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
@@ -166,7 +172,12 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
   function clearTargetDetail() {
     ++targetGeneration;
-    return { targetDetail: null, targetDetailError: null };
+    return {
+      targetDetail: null,
+      targetDetailError: null,
+      targetOutputs: null,
+      targetOutputsError: null,
+    };
   }
   function clearTargets() {
     ++snapshotGeneration;
@@ -301,6 +312,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
         }
         if (generation === targetGeneration) {
           update({ targetDetail: detail, targetDetailError: null });
+          requestTargetOutputs();
         }
       } catch (error) {
         if (generation === targetGeneration) {
@@ -309,6 +321,47 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       } finally {
         targetRequestInFlight = false;
         if (generation !== targetGeneration) requestTargetDetail();
+      }
+    })();
+  }
+
+  // `cquery` is heavier than the detail query, so it waits for the detail to
+  // resolve and shares its index generation.
+  function requestTargetOutputs() {
+    const label = view.selection?.kind === "target" ? view.selection.label : null;
+    const snapshot = view.snapshot;
+    const state = view.state;
+    if (
+      !label ||
+      disposed ||
+      !snapshot ||
+      view.targetOutputs !== null ||
+      view.targetOutputsError !== null ||
+      outputsRequestInFlight ||
+      targetBusy() ||
+      snapshot.meta.fetchedAt !== state?.snapshotFetchedAt
+    ) {
+      return;
+    }
+    const generation = targetGeneration;
+    const fetchedAt = snapshot.meta.fetchedAt;
+    outputsRequestInFlight = true;
+    void (async () => {
+      try {
+        const outputs = await transport.invoke<string[]>(COMMANDS.getTargetOutputs, {
+          label,
+          fetchedAt,
+        });
+        if (generation === targetGeneration) {
+          update({ targetOutputs: outputs, targetOutputsError: null });
+        }
+      } catch (error) {
+        if (generation === targetGeneration) {
+          update({ targetOutputsError: String(error) });
+        }
+      } finally {
+        outputsRequestInFlight = false;
+        if (generation !== targetGeneration) requestTargetOutputs();
       }
     })();
   }

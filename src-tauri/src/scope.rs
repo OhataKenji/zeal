@@ -39,6 +39,19 @@ impl Scope {
 
 /// The selected rule and its direct source files, needed to classify its attributes.
 pub fn target_query(label: &str) -> Result<String, String> {
+    validate_label(label)?;
+    Ok(format!(
+        "let selected = \"{label}\" in $selected union kind(\"source file\", deps($selected, 1))"
+    ))
+}
+
+/// The target pattern for `bazel cquery`, validated like [`target_query`].
+pub fn cquery_target(label: &str) -> Result<String, String> {
+    validate_label(label)?;
+    Ok(label.to_string())
+}
+
+fn validate_label(label: &str) -> Result<(), String> {
     if !label.starts_with("//")
         || label
             .chars()
@@ -46,9 +59,7 @@ pub fn target_query(label: &str) -> Result<String, String> {
     {
         return Err("invalid target label".to_string());
     }
-    Ok(format!(
-        "let selected = \"{label}\" in $selected union kind(\"source file\", deps($selected, 1))"
-    ))
+    Ok(())
 }
 
 fn normalize(patterns: Vec<String>) -> Result<Vec<String>, String> {
@@ -151,7 +162,14 @@ mod tests {
         assert_eq!(
             scope.rules_query(),
             "kind(\"rule\", (\"//pkg:thing!%\" union \"//a:b:c\" union \"//a) union //...\" union \"//pkg:it's\"))"
-        );
+        )
+    }
+
+    #[test]
+    fn cquery_target_validates_like_target_query() {
+        assert_eq!(cquery_target("//app:server").unwrap(), "//app:server");
+        assert!(cquery_target("app:server").is_err());
+        assert!(cquery_target("//app:\"quoted\"").is_err());
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::query_proto::{self, ParsedQuery};
 use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
-use std::io::{BufReader, ErrorKind, Read};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command};
@@ -81,7 +81,8 @@ pub fn target_detail(
     label: &str,
     fetched_at: u64,
 ) -> Result<snapshot::TargetDetail, String> {
-    let (ws, bazel, query) = acquire_detail(&core, label, fetched_at)?;
+    let query = crate::scope::target_query(label)?;
+    let (ws, bazel) = acquire_target(&core, label, fetched_at)?;
     let _slot = DetailSlot {
         app: app.clone(),
         core: core.clone(),
@@ -103,11 +104,54 @@ pub fn target_detail(
         .ok_or_else(|| "target not found in the current Scope".to_string())
 }
 
-fn acquire_detail(
-    core: &Core,
+/// The target's output files as `bazel cquery --output=files` prints them:
+/// configuration-resolved `bazel-out/...` paths, not declared output labels.
+#[tracing::instrument(target = "zeal::operations", name = "target.outputs", skip_all)]
+pub fn target_outputs(
+    app: AppHandle,
+    core: Arc<Core>,
     label: &str,
     fetched_at: u64,
-) -> Result<(PathBuf, PathBuf, String), String> {
+) -> Result<Vec<String>, String> {
+    let pattern = crate::scope::cquery_target(label)?;
+    let (ws, bazel) = acquire_target(&core, label, fetched_at)?;
+    let _slot = DetailSlot {
+        app: app.clone(),
+        core: core.clone(),
+    };
+    core.emit(&app);
+    let mut command = Command::new(&bazel);
+    command
+        .arg("cquery")
+        .arg(&pattern)
+        .arg("--output=files")
+        .current_dir(&ws);
+    match fetch(
+        &core,
+        &mut command,
+        || core.emit(&app),
+        parse_output_paths,
+        |paths: &Vec<String>| !paths.is_empty(),
+    ) {
+        Outcome::Ok(paths) | Outcome::Partial(paths, _) => Ok(paths),
+        Outcome::Failed(error) => Err(error.summary),
+    }
+}
+
+/// `--output=files` prints one workspace-relative output path per line.
+fn parse_output_paths(input: impl BufRead) -> Result<Vec<String>, String> {
+    let mut paths = Vec::new();
+    for line in input.lines() {
+        let line = line.map_err(|_| "could not read cquery output".to_string())?;
+        let path = line.trim();
+        if !path.is_empty() && !paths.iter().any(|seen| seen == path) {
+            paths.push(path.to_string());
+        }
+    }
+    Ok(paths)
+}
+
+fn acquire_target(core: &Core, label: &str, fetched_at: u64) -> Result<(PathBuf, PathBuf), String> {
     let mut st = core.state.lock().expect("application state lock poisoned");
     let index = st.snapshot.as_ref().ok_or("target list is not loaded")?;
     if index.meta.fetched_at != fetched_at {
@@ -122,9 +166,8 @@ fn acquire_detail(
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
-    let query = crate::scope::target_query(label)?;
     st.detail_query_running = true;
-    Ok((ws, bazel, query))
+    Ok((ws, bazel))
 }
 
 struct DetailSlot {
@@ -479,6 +522,21 @@ exit "$code"
     }
 
     #[test]
+    fn output_paths_skip_blank_lines_and_dedupe() {
+        let paths = parse_output_paths(std::io::Cursor::new(
+            "bazel-out/k8/bin/app/server\n\n  bazel-out/k8/bin/app/lib.a \nbazel-out/k8/bin/app/server\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            paths,
+            [
+                "bazel-out/k8/bin/app/server".to_string(),
+                "bazel-out/k8/bin/app/lib.a".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn detail_requires_the_current_index_label_and_free_bazel_slot() {
         let core = Core::new();
         {
@@ -499,13 +557,12 @@ exit "$code"
                 }],
             }));
         }
-        assert!(acquire_detail(&core, "//app:chosen", 6).is_err());
-        assert!(acquire_detail(&core, "//app:unknown", 7).is_err());
-        let (ws, bazel, query) = acquire_detail(&core, "//app:chosen", 7).unwrap();
+        assert!(acquire_target(&core, "//app:chosen", 6).is_err());
+        assert!(acquire_target(&core, "//app:unknown", 7).is_err());
+        let (ws, bazel) = acquire_target(&core, "//app:chosen", 7).unwrap();
         assert_eq!(ws, PathBuf::from("/ws"));
         assert_eq!(bazel, PathBuf::from("/bin/bazel"));
-        assert_eq!(query, crate::scope::target_query("//app:chosen").unwrap());
         assert!(core.state.lock().unwrap().detail_query_running);
-        assert!(acquire_detail(&core, "//app:chosen", 7).is_err());
+        assert!(acquire_target(&core, "//app:chosen", 7).is_err());
     }
 }

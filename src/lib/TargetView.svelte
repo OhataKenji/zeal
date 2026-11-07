@@ -7,11 +7,15 @@
   let {
     index,
     detail,
+    outputs,
+    outputsError,
     wsRoot,
     onselect,
   }: {
     index: TargetIndex;
     detail: TargetDetail;
+    outputs: string[] | null;
+    outputsError: string | null;
     wsRoot: string;
     onselect: (label: string) => void;
   } = $props();
@@ -96,6 +100,22 @@
       </span>
     {/if}
   </header>
+  <section class="outputs">
+    <h2>Outputs</h2>
+    {#if outputsError}
+      <p class="dim">Could not load outputs: {outputsError}</p>
+    {:else if outputs === null}
+      <p class="dim">Loading outputs…</p>
+    {:else if outputs.length === 0}
+      <p class="dim">None</p>
+    {:else}
+      <div class="chips">
+        {#each outputs as path (path)}
+          <span class="chip file" title={path}>{path}</span>
+        {/each}
+      </div>
+    {/if}
+  </section>
   <div class="attributes-head">
     <h2>Attributes</h2>
     <label class="relation-filter"
