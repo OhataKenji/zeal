@@ -88,7 +88,7 @@ async fn get_target_outputs(
     core: State<'_, Arc<Core>>,
     label: String,
     fetched_at: u64,
-) -> Result<Vec<String>, String> {
+) -> Result<ingest::TargetOutputs, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();

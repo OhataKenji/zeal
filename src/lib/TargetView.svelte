@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
-  import type { TargetDetail, TargetIndex } from "./types";
+  import type { TargetDetail, TargetIndex, TargetOutputs } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
 
   let {
@@ -14,7 +14,7 @@
   }: {
     index: TargetIndex;
     detail: TargetDetail;
-    outputs: string[] | null;
+    outputs: TargetOutputs | null;
     outputsError: string | null;
     wsRoot: string;
     onselect: (label: string) => void;
@@ -106,13 +106,16 @@
       <p class="dim">Could not load outputs: {outputsError}</p>
     {:else if outputs === null}
       <p class="dim">Loading outputs…</p>
-    {:else if outputs.length === 0}
+    {:else if outputs.paths.length === 0}
       <p class="dim">None</p>
     {:else}
       <div class="chips">
-        {#each outputs as path (path)}
+        {#each outputs.paths as path (path)}
           <span class="chip file" title={path}>{path}</span>
         {/each}
+        {#if outputs.truncated}<span class="chip more" title="More outputs not shown"
+            >…</span
+          >{/if}
       </div>
     {/if}
   </section>

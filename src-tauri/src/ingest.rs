@@ -19,6 +19,9 @@ use tauri::AppHandle;
 /// capacity, UTF-8 conversion, and total process memory are separate.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
 
+/// Output paths shown on the target page before the "…" marker.
+const MAX_OUTPUT_PATHS: usize = 10;
+
 enum Outcome<T> {
     Ok(T),
     /// exit != 0 but some query data was parsed.
@@ -104,6 +107,14 @@ pub fn target_detail(
         .ok_or_else(|| "target not found in the current Scope".to_string())
 }
 
+/// Output paths kept for the target page; larger results set `truncated`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetOutputs {
+    pub paths: Vec<String>,
+    pub truncated: bool,
+}
+
 /// The target's output files as `bazel cquery --output=files` prints them:
 /// configuration-resolved `bazel-out/...` paths, not declared output labels.
 #[tracing::instrument(target = "zeal::operations", name = "target.outputs", skip_all)]
@@ -112,7 +123,7 @@ pub fn target_outputs(
     core: Arc<Core>,
     label: &str,
     fetched_at: u64,
-) -> Result<Vec<String>, String> {
+) -> Result<TargetOutputs, String> {
     let pattern = crate::scope::cquery_target(label)?;
     let (ws, bazel) = acquire_target(&core, label, fetched_at)?;
     let _slot = DetailSlot {
@@ -131,24 +142,32 @@ pub fn target_outputs(
         &mut command,
         || core.emit(&app),
         parse_output_paths,
-        |paths: &Vec<String>| !paths.is_empty(),
+        |outputs: &TargetOutputs| !outputs.paths.is_empty(),
     ) {
-        Outcome::Ok(paths) | Outcome::Partial(paths, _) => Ok(paths),
+        Outcome::Ok(outputs) | Outcome::Partial(outputs, _) => Ok(outputs),
         Outcome::Failed(error) => Err(error.summary),
     }
 }
 
-/// `--output=files` prints one workspace-relative output path per line.
-fn parse_output_paths(input: impl BufRead) -> Result<Vec<String>, String> {
+/// `--output=files` prints one workspace-relative output path per line. Only
+/// the first [`MAX_OUTPUT_PATHS`] are kept so filegroup-scale results stay
+/// cheap; the rest are reported through `truncated`.
+fn parse_output_paths(input: impl BufRead) -> Result<TargetOutputs, String> {
     let mut paths = Vec::new();
+    let mut truncated = false;
     for line in input.lines() {
         let line = line.map_err(|_| "could not read cquery output".to_string())?;
         let path = line.trim();
-        if !path.is_empty() && !paths.iter().any(|seen| seen == path) {
+        if path.is_empty() {
+            continue;
+        }
+        if paths.len() < MAX_OUTPUT_PATHS {
             paths.push(path.to_string());
+        } else {
+            truncated = true;
         }
     }
-    Ok(paths)
+    Ok(TargetOutputs { paths, truncated })
 }
 
 fn acquire_target(core: &Core, label: &str, fetched_at: u64) -> Result<(PathBuf, PathBuf), String> {
@@ -522,18 +541,23 @@ exit "$code"
     }
 
     #[test]
-    fn output_paths_skip_blank_lines_and_dedupe() {
-        let paths = parse_output_paths(std::io::Cursor::new(
-            "bazel-out/k8/bin/app/server\n\n  bazel-out/k8/bin/app/lib.a \nbazel-out/k8/bin/app/server\n",
+    fn output_paths_skip_blank_lines_and_cap_the_list() {
+        let mut input = String::new();
+        for i in 0..MAX_OUTPUT_PATHS + 3 {
+            input.push_str(&format!("bazel-out/k8/bin/app/out{i}\n"));
+        }
+        input.push_str("\n  bazel-out/k8/bin/app/last \n");
+        let outputs = parse_output_paths(std::io::Cursor::new(input)).unwrap();
+        assert_eq!(outputs.paths.len(), MAX_OUTPUT_PATHS);
+        assert_eq!(outputs.paths[0], "bazel-out/k8/bin/app/out0");
+        assert!(outputs.truncated);
+
+        let outputs = parse_output_paths(std::io::Cursor::new(
+            "bazel-out/k8/bin/app/server\n\nbazel-out/k8/bin/app/lib.a\n",
         ))
         .unwrap();
-        assert_eq!(
-            paths,
-            [
-                "bazel-out/k8/bin/app/server".to_string(),
-                "bazel-out/k8/bin/app/lib.a".to_string()
-            ]
-        );
+        assert_eq!(outputs.paths.len(), 2);
+        assert!(!outputs.truncated);
     }
 
     #[test]

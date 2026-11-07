@@ -11,6 +11,7 @@ import type {
   Target,
   TargetDetail,
   TargetIndex,
+  TargetOutputs,
 } from "./lib/types";
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
@@ -408,7 +409,7 @@ export function installPreview() {
         status: "ok",
       });
     },
-    get_target_outputs: (payload): string[] => {
+    get_target_outputs: (payload): TargetOutputs => {
       if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
         throw new Error("Target list changed; select the target again");
       }
@@ -416,9 +417,10 @@ export function installPreview() {
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
-      return FULL_DATA.files
+      const paths = FULL_DATA.files
         .filter((file) => file.owner === label && file.role === "out")
         .map((file) => `bazel-out/k8-fastbuild/bin/${file.path}`);
+      return { paths: paths.slice(0, 10), truncated: paths.length > 10 };
     },
     list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),

@@ -10,6 +10,7 @@ import type {
   Section,
   TargetDetail,
   TargetIndex,
+  TargetOutputs,
   TargetScope,
 } from "./types.ts";
 
@@ -32,7 +33,7 @@ export interface SessionView {
   targetDetail: TargetDetail | null;
   targetDetailError: string | null;
   /** Configuration-resolved output paths from `bazel cquery`. */
-  targetOutputs: string[] | null;
+  targetOutputs: TargetOutputs | null;
   targetOutputsError: string | null;
   ready: boolean;
   starting: boolean;
@@ -348,7 +349,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     outputsRequestInFlight = true;
     void (async () => {
       try {
-        const outputs = await transport.invoke<string[]>(COMMANDS.getTargetOutputs, {
+        const outputs = await transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
           label,
           fetchedAt,
         });
