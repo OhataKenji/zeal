@@ -40,8 +40,7 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryOutput {
-    /// Exit code, when the exit was confirmed and carries one. A signal death
-    /// and an unconfirmed exit are both `None`.
+    /// Exit code, or `None` when the process exited from a signal.
     pub exit_code: Option<i32>,
     /// stdout, at most the first [`STDOUT_CAP`] bytes.
     pub stdout: String,

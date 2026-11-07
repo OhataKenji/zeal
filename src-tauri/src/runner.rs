@@ -4,8 +4,8 @@
 //!
 //! Stop for active Bazel work uses its process group: SIGINT, then SIGKILL
 //! after the shared grace period.
-//! An unknown exit releases the slot with a note. Only
-//! only the currently held Bazel operation may be signalled; descendants are not supervised.
+//! An unknown exit releases the slot. Only the currently held operation may be
+//! signalled; descendants are not supervised.
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
 use crate::state::{ActiveInvocation, ConsoleSession, Core, CoreState};
