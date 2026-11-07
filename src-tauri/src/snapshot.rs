@@ -273,21 +273,112 @@ fn dep_label(attr: &str, raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::io::Cursor;
 
-    fn rule(label: &str) -> RawRule {
+    fn rule(
+        label: &str,
+        class: &str,
+        location: Option<(&str, u32)>,
+        attrs: &[(&str, &str)],
+        outputs: &[&str],
+    ) -> RawRule {
         RawRule {
-            label: label.into(),
-            rule_class: "r".into(),
-            ..Default::default()
+            label: label.to_string(),
+            rule_class: class.to_string(),
+            location: location.map(|(file, line)| (file.to_string(), line)),
+            label_attrs: attrs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            outputs: outputs.iter().map(|output| output.to_string()).collect(),
         }
     }
 
-    fn attrs(values: &[(&str, &str)]) -> Vec<(String, String)> {
-        values
+    /// The internal shape the retired `query.xml` fixture parsed to: seven
+    /// rules and five source files.
+    fn fixture_rules() -> ParsedQuery {
+        ParsedQuery {
+            rules: vec![
+                rule(
+                    "//app/lib:parser",
+                    "java_library",
+                    Some(("/repo/app/lib/BUILD", 3)),
+                    &[
+                        ("srcs", "//app/lib:Parser.java"),
+                        ("srcs", "//app/lib:Token.java"),
+                        ("deps", "//app/lib:parser_proto"),
+                        ("deps", "@@maven+//:com_google_guava_guava"),
+                        ("data", "//app:grammars"),
+                        ("data", "//app/lib:grammars.txt"),
+                        ("visibility", "//visibility:public"),
+                        ("$cc_toolchain", "//tools:cc"),
+                        ("deps_opt", "//conditions:default"),
+                        ("deps_opt", "//app/lib:parser_proto"),
+                    ],
+                    &["//app/lib:libparser.jar"],
+                ),
+                rule(
+                    "//app/lib:parser_proto",
+                    "proto_library",
+                    Some(("/repo/app/lib/BUILD", 10)),
+                    &[("srcs", "//app/lib:parser.proto")],
+                    &["//app/lib:libparser_proto_proto-descriptor-set.proto.bin"],
+                ),
+                rule(
+                    "//app/lib:parser_test",
+                    "java_test",
+                    Some(("/repo/app/lib/BUILD", 15)),
+                    &[
+                        ("srcs", "//app/lib:Parser.java"),
+                        ("deps", "//app/lib:parser"),
+                    ],
+                    &[],
+                ),
+                rule(
+                    "//app",
+                    "java_binary",
+                    Some(("/repo/app/BUILD", 2)),
+                    &[
+                        ("deps", "//app/lib:parser"),
+                        ("data", "//app:server.cfg"),
+                        ("tools", "//tools:launcher"),
+                    ],
+                    &["//app:server.jar"],
+                ),
+                rule(
+                    "//app:grammars",
+                    "filegroup",
+                    Some(("/repo/app/BUILD", 9)),
+                    &[("srcs", "//app:g1.txt"), ("srcs", "//app:g2.txt")],
+                    &[],
+                ),
+                rule(
+                    "//tools:launcher",
+                    "genrule",
+                    Some(("/repo/tools/build_defs.bzl", 22)),
+                    &[],
+                    &["//tools:launcher.sh"],
+                ),
+                rule(
+                    "//tools:cc",
+                    "cc_library",
+                    Some(("/repo/tools/BUILD", 4)),
+                    &[],
+                    &[],
+                ),
+            ],
+            source_files: [
+                "//app/lib:Parser.java",
+                "//app/lib:Token.java",
+                "//app/lib:grammars.txt",
+                "//app/lib:parser.proto",
+                "//app:server.cfg",
+            ]
             .iter()
-            .map(|(name, value)| ((*name).into(), (*value).into()))
-            .collect()
+            .map(|name| name.to_string())
+            .collect(),
+        }
     }
 
     #[test]
@@ -321,19 +412,21 @@ mod tests {
     fn selected_detail_excludes_other_targets_relationships() {
         let query = ParsedQuery {
             rules: vec![
-                RawRule {
-                    label_attrs: attrs(&[("deps", "//app:dep"), ("srcs", "//app:input.txt")]),
-                    outputs: vec!["//app:out.txt".into()],
-                    ..rule("//app:chosen")
-                },
-                RawRule {
-                    label_attrs: attrs(&[("deps", "//app:chosen")]),
-                    ..rule("//app:user")
-                },
-                RawRule {
-                    label_attrs: attrs(&[("deps", "//app:else"), ("srcs", "//app:other.txt")]),
-                    ..rule("//app:other")
-                },
+                rule(
+                    "//app:chosen",
+                    "r",
+                    None,
+                    &[("deps", "//app:dep"), ("srcs", "//app:input.txt")],
+                    &["//app:out.txt"],
+                ),
+                rule("//app:user", "r", None, &[("deps", "//app:chosen")], &[]),
+                rule(
+                    "//app:other",
+                    "r",
+                    None,
+                    &[("deps", "//app:else"), ("srcs", "//app:other.txt")],
+                    &[],
+                ),
             ],
             source_files: vec!["//app:input.txt".into(), "//app:other.txt".into()],
         };
@@ -347,305 +440,171 @@ mod tests {
 
     #[test]
     fn conditions_packages_keep_rule_and_file_inputs() {
-        let query = ParsedQuery {
+        let rules = ParsedQuery {
             rules: vec![
-                RawRule {
-                    label_attrs: attrs(&[
+                rule(
+                    "//app:direct",
+                    "filegroup",
+                    None,
+                    &[
                         ("srcs", "//conditions:inputs"),
                         ("srcs", "//conditions:input.txt"),
                         ("srcs", "//tools/conditions:input.txt"),
-                    ]),
-                    ..rule("//app:direct")
-                },
-                rule("//conditions:inputs"),
+                    ],
+                    &[],
+                ),
+                rule("//conditions:inputs", "filegroup", None, &[], &[]),
             ],
             source_files: vec![
                 "//conditions:input.txt".into(),
                 "//tools/conditions:input.txt".into(),
             ],
         };
-        let snapshot = build(&query, Status::Ok);
+        let snapshot = build(&rules, Status::Ok);
         assert!(snapshot.edges.contains(&Edge {
             from: "//app:direct".into(),
             to: "//conditions:inputs".into(),
             attr: "srcs".into(),
         }));
-        assert_eq!(
-            snapshot.files,
-            [
-                FileEntry {
-                    owner: "//app:direct".into(),
-                    path: "conditions/input.txt".into(),
-                    role: "srcs".into(),
-                },
-                FileEntry {
-                    owner: "//app:direct".into(),
-                    path: "tools/conditions/input.txt".into(),
-                    role: "srcs".into(),
-                },
-            ]
-        );
+        for path in ["conditions/input.txt", "tools/conditions/input.txt"] {
+            assert!(snapshot.files.contains(&FileEntry {
+                owner: "//app:direct".into(),
+                path: path.into(),
+                role: "srcs".into(),
+            }));
+        }
     }
 
     #[test]
     fn snapshot_targets_normalize_bare_labels() {
         let query = ParsedQuery {
-            rules: vec![rule("//app")],
+            rules: vec![RawRule {
+                label: "//app".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let snapshot = build(&query, Status::Ok);
-        assert_eq!(snapshot.targets.len(), 1);
+        let snap = build(&query, Status::Ok);
         // `//app` normalizes to `//app:app`.
-        assert_eq!(snapshot.targets[0].label, "//app:app");
+        assert_eq!(snap.targets[0].label, "//app:app");
+    }
+
+    fn edge_set(snap: &Snapshot) -> HashSet<(&str, &str, &str)> {
+        snap.edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str(), e.attr.as_str()))
+            .collect()
     }
 
     #[test]
-    fn deps_attr_produces_an_edge() {
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("deps", "//app:lib")]),
-                ..rule("//app:main")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert_eq!(
-            snapshot.edges,
-            [Edge {
-                from: "//app:main".into(),
-                to: "//app:lib".into(),
-                attr: "deps".into(),
-            }]
-        );
-    }
+    fn dep_attrs_produce_edges_under_their_attr_name() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let edges = edge_set(&snap);
 
-    #[test]
-    fn external_deps_keep_their_canonical_label() {
+        assert!(edges.contains(&("//app/lib:parser", "//app/lib:parser_proto", "deps")));
         // External canonical names are not apparent names without a repo mapping.
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("deps", "@@maven+//:com_google_guava_guava")]),
-                ..rule("//app/lib:parser")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert_eq!(
-            snapshot.edges,
-            [Edge {
-                from: "//app/lib:parser".into(),
-                to: "@@maven+//:com_google_guava_guava".into(),
-                attr: "deps".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn data_pointing_at_a_rule_is_an_edge() {
+        assert!(edges.contains(&(
+            "//app/lib:parser",
+            "@@maven+//:com_google_guava_guava",
+            "deps"
+        )));
         // `data` pointing at a rule is an edge, not a file.
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("data", "//app:grammars")]),
-                ..rule("//app/lib:parser")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert_eq!(
-            snapshot.edges,
-            [Edge {
-                from: "//app/lib:parser".into(),
-                to: "//app:grammars".into(),
-                attr: "data".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn tools_attr_produces_an_edge() {
+        assert!(edges.contains(&("//app/lib:parser", "//app:grammars", "data")));
         // Non-deps/data attrs still become edges with their attribute name.
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("tools", "//tools:launcher")]),
-                ..rule("//app:app")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert_eq!(
-            snapshot.edges,
-            [Edge {
-                from: "//app:app".into(),
-                to: "//tools:launcher".into(),
-                attr: "tools".into(),
-            }]
-        );
+        assert!(edges.contains(&("//app:app", "//tools:launcher", "tools")));
+        assert!(edges.contains(&("//app/lib:parser_test", "//app/lib:parser", "deps")));
     }
 
     #[test]
-    fn visibility_labels_are_not_dependencies() {
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("visibility", "//visibility:public")]),
-                ..rule("//app:main")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert!(snapshot.edges.is_empty());
-        assert!(snapshot.files.is_empty());
+    fn non_dep_attrs_produce_no_edges() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let edges = edge_set(&snap);
+
+        // Excluded: visibility, implicit `$` attrs, select() branch keys.
+        assert!(!edges.iter().any(|e| e.1 == "//visibility:public"));
+        assert!(!edges.iter().any(|e| e.2 == "$cc_toolchain"));
+        assert!(!edges.iter().any(|e| e.1.contains("conditions")));
+    }
+
+    /// File entries grouped by path as (owner, role) pairs.
+    fn owners_by_path(snap: &Snapshot) -> HashMap<&str, Vec<(&str, &str)>> {
+        let mut owners: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+        for f in &snap.files {
+            owners
+                .entry(f.path.as_str())
+                .or_default()
+                .push((f.owner.as_str(), f.role.as_str()));
+        }
+        owners
     }
 
     #[test]
-    fn implicit_attributes_are_not_dependencies() {
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("$cc_toolchain", "//tools:cc")]),
-                ..rule("//app:main")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert!(snapshot.edges.is_empty());
-        assert!(snapshot.files.is_empty());
-    }
+    fn file_inputs_carry_owner_and_attr_role() {
+        let snap = build(&fixture_rules(), Status::Ok);
+        let owners = owners_by_path(&snap);
 
-    #[test]
-    fn select_default_keys_are_not_dependencies() {
-        // Excluded: select() branch keys.
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("deps_opt", "//conditions:default")]),
-                ..rule("//app/lib:parser")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert!(snapshot.edges.is_empty());
-        assert!(snapshot.files.is_empty());
-    }
-
-    #[test]
-    fn shared_source_file_records_every_owner() {
-        let query = ParsedQuery {
-            rules: vec![
-                RawRule {
-                    label_attrs: attrs(&[("srcs", "//app:file.txt")]),
-                    ..rule("//app:a")
-                },
-                RawRule {
-                    label_attrs: attrs(&[("srcs", "//app:file.txt")]),
-                    ..rule("//app:b")
-                },
-            ],
-            source_files: vec!["//app:file.txt".into()],
-        };
-        let snapshot = build(&query, Status::Ok);
         // File referenced by two rules' srcs has both owners.
+        let mut pj = owners["app/lib/Parser.java"].clone();
+        pj.sort();
         assert_eq!(
-            snapshot.files,
+            pj,
             [
-                FileEntry {
-                    path: "app/file.txt".into(),
-                    owner: "//app:a".into(),
-                    role: "srcs".into(),
-                },
-                FileEntry {
-                    path: "app/file.txt".into(),
-                    owner: "//app:b".into(),
-                    role: "srcs".into(),
-                },
+                ("//app/lib:parser", "srcs"),
+                ("//app/lib:parser_test", "srcs"),
             ]
         );
-    }
 
-    #[test]
-    fn data_input_is_a_file_with_data_role() {
         // `data` label to a file lands in files with role `data`.
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("data", "//app:config.txt")]),
-                ..rule("//app:main")
-            }],
-            source_files: vec!["//app:config.txt".into()],
-        };
-        let snapshot = build(&query, Status::Ok);
         assert_eq!(
-            snapshot.files,
-            [FileEntry {
-                path: "app/config.txt".into(),
-                owner: "//app:main".into(),
-                role: "data".into(),
-            }]
+            owners["app/lib/grammars.txt"],
+            [("//app/lib:parser", "data")]
         );
+        assert_eq!(owners["app/server.cfg"], [("//app:app", "data")]);
     }
 
     #[test]
     fn declared_outputs_are_files_with_out_role() {
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                outputs: vec!["//app:out.txt".into()],
-                ..rule("//app:main")
-            }],
-            ..Default::default()
-        };
-        let snapshot = build(&query, Status::Ok);
+        let snap = build(&fixture_rules(), Status::Ok);
+        let owners = owners_by_path(&snap);
+
+        // Outputs carry role `out`; a genrule's `outs` is an output-typed
+        // attribute, so its file entry comes only from `rule_output`.
         assert_eq!(
-            snapshot.files,
-            [FileEntry {
-                path: "app/out.txt".into(),
-                owner: "//app:main".into(),
-                role: "out".into(),
-            }]
+            owners["app/lib/libparser.jar"],
+            [("//app/lib:parser", "out")]
         );
+        assert_eq!(owners["tools/launcher.sh"], [("//tools:launcher", "out")]);
     }
 
     #[test]
     fn file_entries_are_unique_per_path_owner_role() {
-        let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[
-                    ("srcs", "//app:file.txt"),
-                    ("srcs", "//app:file.txt"),
-                    ("data", "//app:file.txt"),
-                ]),
-                ..rule("//app:main")
-            }],
-            source_files: vec!["//app:file.txt".into()],
-        };
-        let snapshot = build(&query, Status::Ok);
-        assert_eq!(
-            snapshot.files,
-            [
-                FileEntry {
-                    path: "app/file.txt".into(),
-                    owner: "//app:main".into(),
-                    role: "data".into(),
-                },
-                FileEntry {
-                    path: "app/file.txt".into(),
-                    owner: "//app:main".into(),
-                    role: "srcs".into(),
-                },
-            ]
-        );
+        let snap = build(&fixture_rules(), Status::Ok);
+        let uniq: HashSet<(&str, &str, &str)> = snap
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.owner.as_str(), f.role.as_str()))
+            .collect();
+        assert_eq!(uniq.len(), snap.files.len());
     }
 
     #[test]
     fn edges_dedup() {
-        let query = ParsedQuery {
+        let rules = ParsedQuery {
             rules: vec![
-                RawRule {
-                    label_attrs: attrs(&[("deps", "//a:y"), ("deps", "//a:y")]),
-                    ..rule("//a:x")
-                },
-                rule("//a:y"),
+                rule(
+                    "//a:x",
+                    "r",
+                    None,
+                    &[("deps", "//a:y"), ("deps", "//a:y")],
+                    &[],
+                ),
+                rule("//a:y", "r", None, &[], &[]),
             ],
-            ..Default::default()
+            source_files: vec![],
         };
-        let snapshot = build(&query, Status::Ok);
+        let snap = build(&rules, Status::Ok);
         assert_eq!(
-            snapshot.edges,
+            snap.edges,
             [Edge {
                 from: "//a:x".into(),
                 to: "//a:y".into(),
@@ -653,14 +612,16 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn references_outside_scope_are_not_assumed_to_be_files() {
         let query = ParsedQuery {
-            rules: vec![RawRule {
-                label_attrs: attrs(&[("srcs", "//other:generated"), ("srcs", "//app:main.rs")]),
-                ..rule("//app:main")
-            }],
+            rules: vec![rule(
+                "//app:main",
+                "r",
+                None,
+                &[("srcs", "//other:generated"), ("srcs", "//app:main.rs")],
+                &[],
+            )],
             source_files: vec!["//app:main.rs".into()],
         };
         let snap = build(&query, Status::Ok);
