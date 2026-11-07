@@ -809,7 +809,6 @@ export interface QueryOutput {
   stdout: string;
   truncated: boolean;
   stderrTail: string;
-  timedOut: boolean;
 }
 
 /** IPC boundary the query runner uses to call the core. */
@@ -884,7 +883,7 @@ export function createQuery(
     update({ running: false });
     if (!acceptResult) return;
     update({ result });
-    if (result.exitCode !== 0 || result.timedOut) return;
+    if (result.exitCode !== 0) return;
     cache.set(key, result);
     if (cache.size > 10) cache.delete(cache.keys().next().value!);
   }

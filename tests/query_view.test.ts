@@ -19,7 +19,6 @@ const IDLE: AppState = {
   activeInvocation: null,
   stopping: false,
   invocationNote: null,
-  query: "idle",
   detailQuery: "idle",
 };
 

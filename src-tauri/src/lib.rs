@@ -155,17 +155,16 @@ fn start_invocation(
     )
 }
 
-/// Stop the active Bazel operation. Query owners send SIGINT and otherwise
-/// continue to their existing timeout; invocations use their process group.
+/// Stop the active Bazel operation through the shared process lifecycle.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocation.stop", skip_all)]
 fn stop_invocation(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     runner::stop(app, core.inner().clone())
 }
 
-/// Run an ad-hoc `bazel query` from the query editor. Serialized with ingest
-/// and invocation through the same busy slot; the blocking work is spawned so
-/// this command does not hold the main thread for the whole query.
+/// Run an ad-hoc `bazel query` from the query editor through the shared Bazel
+/// process slot. The blocking work is spawned so this command does not hold
+/// the main thread for the whole query.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
 async fn run_query(

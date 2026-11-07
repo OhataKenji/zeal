@@ -2,26 +2,22 @@
 //!
 //! Distinct from ingest's fixed `bazel query //...` snapshot fetch: the
 //! expression and the output format come from the editor. Execution holds the
-//! same serialized bazel slot as ingest and invocation, and keeps bounded
+//! same shared process slot as build, test, run, and ingest, and keeps bounded
 //! output:
 //! the first bytes of stdout and the tail of stderr.
 //!
-//! Composer Stop sends SIGINT to the query process group. If it ignores the
-//! signal, the existing query timeout remains in effect.
+//! Composer Stop and app exit use the same process-group lifecycle as other
+//! Bazel operations; queries have no separate timeout.
 
-use crate::ingest::QUERY_TIMEOUT;
-use crate::runner::signal_group;
-use crate::state::{Core, CoreState};
-use rustix::process::Signal;
+use crate::runner::{self, Output};
+use crate::state::Core;
 use serde::Serialize;
 use std::io::{self, Read};
-use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::AppHandle;
 
 /// The only output formats the editor offers.
@@ -36,22 +32,9 @@ const STDOUT_CAP: usize = 4 * 1024 * 1024;
 /// stderr keeps only its tail: bazel writes its errors there.
 const STDERR_TAIL: usize = 8 * 1024;
 
-/// Time SIGKILL gets to end the query before its exit is called unconfirmed.
-const KILL_CONFIRM: Duration = Duration::from_secs(2);
-
-/// When the exit is unconfirmed, the reader join is bounded: a descendant
-/// still holding a pipe must not delay the slot's release.
-const READER_GRACE: Duration = Duration::from_millis(500);
-
 /// Generous bound for a confirmed exit's reader join: buffered output drains
 /// in milliseconds, so anything past this is a lingering descendant.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
-
-/// Poll interval of the wait loop.
-const POLL: Duration = Duration::from_millis(50);
-
-/// Appended to stderr when the group's death could not be confirmed.
-const UNCONFIRMED_NOTE: &str = "Could not confirm the exit";
 
 /// Result of one ad-hoc `bazel query` invocation.
 #[derive(Debug, Clone, Serialize)]
@@ -66,8 +49,6 @@ pub struct QueryOutput {
     pub truncated: bool,
     /// The last ~8 KiB of stderr, where bazel writes its errors.
     pub stderr_tail: String,
-    /// The deadline passed and the group was killed.
-    pub timed_out: bool,
 }
 
 /// Arguments after the bazel executable. The expression is one `Command::arg`:
@@ -126,10 +107,9 @@ fn validate_expr(expr: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run one ad-hoc `bazel query` in the open workspace. Busy requests — an
-/// invocation, an ingest or another query in flight — are rejected rather than
-/// queued.
-/// Blocks until the query exits, times out, or is given up on.
+/// Run one ad-hoc `bazel query` in the open workspace. Busy requests are
+/// rejected rather than queued.
+/// Blocks until the query exits or its stop is given up on.
 #[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
 pub fn run(
     app: AppHandle,
@@ -141,31 +121,13 @@ pub fn run(
 ) -> Result<QueryOutput, String> {
     validate_expr(expr)?;
     validate_output(output)?;
-    let (ws, bazel) = acquire(&core)?;
-    // Constructed before anything else can panic: unwinding releases the slot.
-    let _slot = QuerySlot {
+    let (mut child, id) = spawn_query(&core, expr, output, no_implicit, no_tool)?;
+    let _slot = runner::BazelSlot {
         core: &core,
+        id: &id,
         emit: || core.emit(&app),
     };
     core.emit(&app);
-    // Its own process group: the timeout kill and app exit reach descendants.
-    let mut child = match Command::new(&bazel)
-        .args(argv(expr, output, no_implicit, no_tool))
-        .current_dir(&ws)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => return Err(format!("failed to spawn {}: {e}", bazel.display())),
-    };
-    let pgid = child.id() as i32;
-    core.state
-        .lock()
-        .expect("application state lock poisoned")
-        .query_pgid = Some(pgid);
     // stdout and stderr are drained concurrently so the child never blocks on
     // a full pipe; each reader sends its capture once, at end of stream.
     let (out_tx, out_rx) = mpsc::channel();
@@ -178,60 +140,51 @@ pub fn run(
     thread::spawn(move || {
         let _ = err_tx.send(capture_tail(&mut err_pipe, STDERR_TAIL));
     });
-    let observed = observe(&mut child, pgid, &core, QUERY_TIMEOUT, KILL_CONFIRM, POLL);
-    // An unconfirmed exit means the child's fate is unknown: spawn a detached
-    // reaper so it cannot linger as a zombie after the slot is released.
-    if observed.unconfirmed {
-        thread::spawn(move || {
-            let _ = child.wait();
-        });
-    }
+    let exit = runner::wait(&core, &id, || {
+        child
+            .try_wait()
+            .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+    })
+    .map_err(|error| format!("failed to wait on query: {error}"))?;
     let stopping = core
         .state
         .lock()
         .expect("application state lock poisoned")
-        .query_stopping;
+        .active_invocation
+        .as_ref()
+        .is_some_and(|invocation| invocation.id.as_str() == id && invocation.stopping);
     if stopping {
-        return Err(if observed.unconfirmed {
-            UNCONFIRMED_NOTE.to_string()
-        } else {
-            "Query stopped".to_string()
-        });
+        return Err("Query stopped".to_string());
     }
     // A starved reader must not fake an empty result: dropped stdout is
-    // reported as truncated and a missing stderr capture gets the same note
-    // an unconfirmed exit does.
-    let (stdout, truncated) = match drain(&out_rx, observed.unconfirmed)
+    // reported as truncated.
+    let (stdout, truncated) = match drain(&out_rx)
         .transpose()
         .map_err(|error| format!("failed to read query stdout: {error}"))?
     {
         Some((bytes, dropped)) => (bytes, dropped),
         None => (Vec::new(), true),
     };
-    let stderr = drain(&err_rx, observed.unconfirmed)
+    let stderr = drain(&err_rx)
         .transpose()
         .map_err(|error| format!("failed to read query stderr: {error}"))?;
-    let mut stderr_tail =
-        String::from_utf8_lossy(stderr.as_deref().unwrap_or_default()).into_owned();
-    if observed.unconfirmed || stderr.is_none() {
-        if !stderr_tail.is_empty() {
-            stderr_tail.push('\n');
-        }
-        stderr_tail.push_str(UNCONFIRMED_NOTE);
-    }
+    let stderr_tail = String::from_utf8_lossy(stderr.as_deref().unwrap_or_default()).into_owned();
     Ok(QueryOutput {
-        exit_code: observed.exit,
+        exit_code: (exit >= 0).then_some(exit),
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
         truncated,
         stderr_tail,
-        timed_out: observed.timed_out,
     })
 }
 
-/// Take the serialized bazel slot for this query: reject while an
-/// invocation, an ingest or another query holds it, and require an open
-/// workspace with a resolved bazel.
-fn acquire(core: &Core) -> Result<(PathBuf, PathBuf), String> {
+/// Reserve the shared Bazel slot and spawn atomically.
+fn spawn_query(
+    core: &Core,
+    expr: &str,
+    output: &str,
+    no_implicit: bool,
+    no_tool: bool,
+) -> Result<(Child, String), String> {
     let mut st = core.state.lock().expect("application state lock poisoned");
     if st.bazel_busy() {
         return Err("bazel is busy; run the query after it finishes".to_string());
@@ -239,131 +192,14 @@ fn acquire(core: &Core) -> Result<(PathBuf, PathBuf), String> {
     let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
         return Err("no workspace or bazel".to_string());
     };
-    st.query_running = true;
-    st.query_pgid = None;
-    st.query_stopping = false;
-    Ok((ws, bazel))
-}
-
-/// How supervising the query child ended.
-struct Observed {
-    /// Confirmed exit code (`None` for a signal death), if one was observed.
-    exit: Option<i32>,
-    /// The deadline passed; the group was killed.
-    timed_out: bool,
-    /// `wait` failed or the group outlived SIGKILL's confirm window.
-    unconfirmed: bool,
-}
-
-/// Poll the child until it exits or the deadline passes; the deadline sends
-/// the group straight to SIGKILL, then allows a short confirm window before
-/// calling the exit unconfirmed. Once `try_wait` reaps the child, its process
-/// group is revoked immediately: the pid is no longer ours to signal.
-#[tracing::instrument(target = "zeal::operations", name = "query.wait", skip_all)]
-fn observe(
-    child: &mut Child,
-    pgid: i32,
-    core: &Core,
-    deadline: Duration,
-    kill_confirm: Duration,
-    poll: Duration,
-) -> Observed {
-    let end = Instant::now() + deadline;
-    let mut confirm_end = None;
-    let mut interrupted = false;
-    loop {
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                clear_pgid(&mut st, pgid);
-                return Observed {
-                    exit: status.code(),
-                    timed_out: confirm_end.is_some(),
-                    unconfirmed: false,
-                };
-            }
-            Ok(None) => {
-                if st.query_stopping && !interrupted {
-                    interrupted = true;
-                    if let Err(error) = signal_group(pgid, Signal::INT) {
-                        log::warn!("SIGINT to query group failed: {error}");
-                    }
-                }
-            }
-            Err(_) => {
-                // A failed wait can mean another reaper consumed the child;
-                // its former pid is no longer safe to signal.
-                clear_pgid(&mut st, pgid);
-                return Observed {
-                    exit: None,
-                    timed_out: confirm_end.is_some(),
-                    unconfirmed: true,
-                };
-            }
-        }
-        if confirm_expired(&mut confirm_end, pgid, end, kill_confirm) {
-            clear_pgid(&mut st, pgid);
-            return Observed {
-                exit: None,
-                timed_out: true,
-                unconfirmed: true,
-            };
-        }
-        drop(st);
-        thread::sleep(poll);
-    }
-}
-
-/// Forget a reaped or killed group once its fate is known: the pid is no
-/// longer ours to signal.
-fn clear_pgid(st: &mut CoreState, pgid: i32) {
-    if st.query_pgid == Some(pgid) {
-        st.query_pgid = None;
-    }
-}
-
-/// Once `end` passes the group gets one SIGKILL and `kill_confirm` to be
-/// observed dead; `true` means the confirm window ran out.
-fn confirm_expired(
-    confirm_end: &mut Option<Instant>,
-    pgid: i32,
-    end: Instant,
-    kill_confirm: Duration,
-) -> bool {
-    let now = Instant::now();
-    if confirm_end.is_none() && now >= end {
-        if let Err(e) = signal_group(pgid, Signal::KILL) {
-            log::warn!("SIGKILL to query group failed: {e}");
-        }
-        *confirm_end = Some(now + kill_confirm);
-    }
-    confirm_end.is_some_and(|until| now >= until)
-}
-
-/// A panic in the worker must release the query slot. Only the holder can
-/// release it: nothing outside `run` clears `query_running`, so the worker
-/// still running provably owns the slot.
-struct QuerySlot<'a, F: Fn()> {
-    core: &'a Core,
-    emit: F,
-}
-
-impl<F: Fn()> Drop for QuerySlot<'_, F> {
-    fn drop(&mut self) {
-        let mut st = self
-            .core
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        st.query_running = false;
-        st.query_pgid = None;
-        st.query_stopping = false;
-        drop(st);
-        // Avoid a second panic from an event emission while unwinding.
-        if !thread::panicking() {
-            (self.emit)();
-        }
-    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut command = Command::new(&bazel);
+    command
+        .args(argv(expr, output, no_implicit, no_tool))
+        .current_dir(&ws);
+    let (child, _) = runner::spawn(&mut st, &mut command, &id, Output::Pipes)
+        .map_err(|error| format!("failed to spawn {}: {error}", bazel.display()))?;
+    Ok((child, id))
 }
 
 /// Keep the first `cap` bytes of the stream and drain the rest: the child
@@ -412,61 +248,15 @@ fn capture_tail(pipe: &mut impl Read, cap: usize) -> io::Result<Vec<u8>> {
 /// longer `DRAIN_GRACE` so ordinary end-of-stream delivery is not raced.
 /// `None` means the reader never delivered within the bound; callers must
 /// surface that loss rather than report a fabricated empty capture.
-fn drain<T>(rx: &mpsc::Receiver<T>, unconfirmed: bool) -> Option<T> {
-    let bound = if unconfirmed {
-        READER_GRACE
-    } else {
-        DRAIN_GRACE
-    };
-    rx.recv_timeout(bound).ok()
+fn drain<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
+    rx.recv_timeout(DRAIN_GRACE).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::CoreState;
-    use std::io::{BufRead, BufReader};
-
-    /// Best-effort SIGKILL of the test's group, so a failed assertion cannot
-    /// leave the `sleep` behind.
-    struct GroupGuard(i32);
-
-    impl Drop for GroupGuard {
-        fn drop(&mut self) {
-            let _ = signal_group(self.0, Signal::KILL);
-        }
-    }
-
-    /// A `sleep 60` child in its own process group, ready for signals.
-    fn sleeping(arg: &str) -> (Child, i32, GroupGuard) {
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(arg)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let pgid = child.id() as i32;
-        (child, pgid, GroupGuard(pgid))
-    }
-
-    /// Wait until the fixture printed its readiness marker.
-    fn wait_ready(child: &mut Child) {
-        let mut ready = String::new();
-        BufReader::new(child.stdout.as_mut().unwrap())
-            .read_line(&mut ready)
-            .unwrap();
-        assert_eq!(ready.trim(), "ready");
-    }
-
-    /// The state `run` leaves once its child is spawned.
-    fn held(core: &Core, pgid: i32) {
-        let mut st = core.state.lock().unwrap();
-        st.query_running = true;
-        st.query_pgid = Some(pgid);
-    }
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn argv_has_the_expression_the_output_and_the_flag_switches() {
@@ -578,140 +368,65 @@ mod tests {
         assert!(!msg.contains("bad"), "{msg}");
     }
 
-    /// Each way the slot can be held rejects a new query.
     #[test]
-    fn acquire_rejects_while_any_bazel_invocation_holds_the_slot() {
-        let core = Core::new();
-        assert!(acquire(&core).is_err(), "no workspace or bazel");
-        {
-            let mut st = core.state.lock().unwrap();
-            st.workspace = Some(PathBuf::from("/ws"));
-            st.bazel = Some(PathBuf::from("/bin/bazel"));
-        }
-        let holds: [fn(&mut CoreState); 3] = [
-            |st| st.ingest_running = true,
-            |st| st.active_invocation = Some(crate::state::ActiveInvocation::stub("r", None)),
-            |st| st.query_running = true,
-        ];
-        for hold in holds {
-            hold(&mut core.state.lock().unwrap());
-            assert!(acquire(&core).is_err());
-            let mut st = core.state.lock().unwrap();
-            st.ingest_running = false;
-            st.active_invocation = None;
-            st.query_running = false;
-        }
-    }
+    fn spawned_query_holds_and_releases_the_shared_bazel_slot() {
+        let dir = std::env::temp_dir().join(format!("zeal-query-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let workspace = dir.join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let bazel = dir.join("bazel");
+        fs::write(&bazel, "#!/bin/sh\nprintf '//app:chosen\\n'\n").unwrap();
+        fs::set_permissions(&bazel, fs::Permissions::from_mode(0o700)).unwrap();
 
-    /// A held query rejects a second one; the fields `run` leaves behind are
-    /// all set at acquire.
-    #[test]
-    fn a_held_query_rejects_the_next_acquire() {
         let core = Core::new();
         {
             let mut st = core.state.lock().unwrap();
-            st.workspace = Some(PathBuf::from("/ws"));
-            st.bazel = Some(PathBuf::from("/bin/bazel"));
-            st.query_stopping = true;
+            st.workspace = Some(workspace);
+            st.bazel = Some(bazel);
         }
-        let (ws, bazel) = acquire(&core).unwrap();
-        assert_eq!(ws, PathBuf::from("/ws"));
-        assert_eq!(bazel, PathBuf::from("/bin/bazel"));
-        let st = core.state.lock().unwrap();
-        assert!(st.query_running);
-        assert!(st.query_pgid.is_none());
-        assert!(!st.query_stopping);
-        drop(st);
-        assert!(acquire(&core).is_err(), "a held query rejects the next");
-    }
-
-    /// The deadline sends the group straight to SIGKILL and marks the result
-    /// timed out; the kill is a confirmed exit.
-    #[test]
-    fn the_deadline_kills_the_group_and_marks_timed_out() {
-        let (mut child, pgid, _guard) = sleeping("echo ready; sleep 60");
-        wait_ready(&mut child);
-        let core = Core::new();
-        held(&core, pgid);
-        let observed = observe(
-            &mut child,
-            pgid,
-            &core,
-            Duration::from_millis(50),
-            Duration::from_secs(5),
-            Duration::from_millis(10),
-        );
-        assert!(observed.timed_out);
-        assert!(!observed.unconfirmed);
-        assert!(observed.exit.is_none(), "a signal death has no code");
-    }
-
-    /// A clean exit before the deadline is not reported as a timeout.
-    #[test]
-    fn a_clean_exit_is_not_a_timeout() {
-        let (mut child, pgid, _guard) = sleeping("echo ready; sleep 0.05");
-        wait_ready(&mut child);
-        let core = Core::new();
-        held(&core, pgid);
-        let observed = observe(
-            &mut child,
-            pgid,
-            &core,
-            Duration::from_secs(30),
-            Duration::from_secs(5),
-            Duration::from_millis(10),
-        );
-        assert!(!observed.timed_out);
-        assert!(!observed.unconfirmed);
-        assert_eq!(observed.exit, Some(0));
-        assert!(core.state.lock().unwrap().query_pgid.is_none());
-    }
-
-    #[test]
-    fn stop_sends_sigint_to_a_running_query() {
-        let (mut child, pgid, _guard) = sleeping("echo ready; exec sleep 60");
-        wait_ready(&mut child);
-        let core = Core::new();
-        held(&core, pgid);
-        core.state.lock().unwrap().query_stopping = true;
-
-        let observed = observe(
-            &mut child,
-            pgid,
-            &core,
-            Duration::from_secs(30),
-            Duration::from_secs(5),
-            Duration::from_millis(10),
-        );
-
-        assert!(!observed.timed_out);
-        assert!(core.state.lock().unwrap().query_pgid.is_none());
-    }
-
-    /// A panic must release the slot: the next acquire may proceed.
-    #[test]
-    fn panic_releases_the_slot() {
-        let core = Arc::new(Core::new());
+        let (mut child, id) = spawn_query(&core, "//...", "label", false, false).unwrap();
+        let slot = runner::BazelSlot {
+            core: &core,
+            id: &id,
+            emit: || (),
+        };
         {
-            let mut st = core.state.lock().unwrap();
-            st.query_running = true;
-            st.query_pgid = Some(i32::MAX);
-            st.query_stopping = true;
+            let st = core.state.lock().unwrap();
+            let invocation = st.active_invocation.as_ref().unwrap();
+            assert_eq!(invocation.id.as_str(), id);
+            assert!(invocation.terminal.is_none());
+            assert!(st.bazel_busy());
         }
-        let panicking = core.clone();
-        let owner = thread::spawn(move || {
-            let emit = || ();
-            let _slot = QuerySlot {
-                core: &panicking,
-                emit,
-            };
-            panic!("injected worker panic");
-        });
-        assert!(owner.join().is_err());
-        let st = core.state.lock().unwrap();
-        assert!(!st.query_running);
-        assert!(st.query_pgid.is_none());
-        assert!(!st.query_stopping);
+        assert!(spawn_query(&core, "//...", "label", false, false).is_err());
+        assert_eq!(
+            runner::wait(&core, &id, || {
+                child
+                    .try_wait()
+                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+            })
+            .unwrap(),
+            0
+        );
+        drop(slot);
+        assert!(core.state.lock().unwrap().active_invocation.is_none());
+
+        let (mut child, id) = spawn_query(&core, "//...", "label", false, false).unwrap();
+        let slot = runner::BazelSlot {
+            core: &core,
+            id: &id,
+            emit: || (),
+        };
+        assert_eq!(
+            runner::wait(&core, &id, || {
+                child
+                    .try_wait()
+                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+            })
+            .unwrap(),
+            0
+        );
+        drop(slot);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     /// The wire shape the frontend's `QueryOutput` consumes.
@@ -722,12 +437,10 @@ mod tests {
             stdout: "//a:b\n".to_string(),
             truncated: false,
             stderr_tail: "oops".to_string(),
-            timed_out: false,
         })
         .unwrap();
         assert_eq!(json["exitCode"], 2);
         assert_eq!(json["stderrTail"], "oops");
-        assert_eq!(json["timedOut"], false);
         assert!(json.get("stderr_tail").is_none());
     }
 

@@ -74,8 +74,8 @@ export function emptyView(): SessionView {
   };
 }
 
-/** Serialized Bazel slots; the core emits each as a binary "idle" | "running" flag. */
-const RUNNING_SLOTS = ["ingest", "query", "detailQuery"] as const;
+/** Index/detail phase markers emitted as binary "idle" | "running" flags. */
+const RUNNING_SLOTS = ["ingest", "detailQuery"] as const;
 
 /** Whether a serialized Bazel operation occupies the workspace. Matches the core's bazel_busy. */
 function bazelBusy(state: AppState | null): boolean {
@@ -83,10 +83,9 @@ function bazelBusy(state: AppState | null): boolean {
 }
 
 export function bazelBusyReason(state: AppState | null): string | null {
-  if (state?.activeInvocation) return "a Bazel invocation is in progress";
+  if (state?.activeInvocation) return "a Bazel operation is in progress";
   const reasons = {
     ingest: "targets are loading",
-    query: "a query is already running",
     detailQuery: "target details are loading",
   };
   const slot = RUNNING_SLOTS.find((slot) => state?.[slot] === "running");
@@ -120,7 +119,7 @@ export function canSend(view: SessionView, target: string): boolean {
  * Returns whether the core can stop the active Bazel operation.
  */
 export function canStop(view: SessionView): boolean {
-  return !!(view.ready && bazelBusy(view.state) && !view.state?.stopping);
+  return !!(view.ready && view.state?.activeInvocation && !view.state.stopping);
 }
 
 /**

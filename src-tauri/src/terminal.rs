@@ -215,7 +215,12 @@ pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
     if invocation.id.as_str() != id || invocation.pgid.is_none() || invocation.stopping {
         return Err("terminal is no longer running".into());
     }
-    invocation.terminal.write(bytes).map_err(|e| e.to_string())
+    invocation
+        .terminal
+        .as_mut()
+        .ok_or_else(|| "terminal is no longer running".to_string())?
+        .write(bytes)
+        .map_err(|e| e.to_string())
 }
 
 pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -226,10 +231,9 @@ pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String>
     if invocation.id.as_str() != id || invocation.pgid.is_none() {
         return Ok(());
     }
-    invocation
-        .terminal
-        .resize(cols, rows)
-        .map_err(|e| e.to_string())
+    invocation.terminal.as_ref().map_or(Ok(()), |terminal| {
+        terminal.resize(cols, rows).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -254,7 +258,7 @@ mod tests {
             let mut st = core.state.lock().unwrap();
             st.active_invocation = Some(ActiveInvocation {
                 id: id.clone().into(),
-                terminal: control,
+                terminal: Some(control),
                 pgid: Some(child.id() as i32),
                 stopping: false,
                 stop_started: None,
@@ -358,6 +362,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .terminal
+                .as_ref()
+                .unwrap()
                 .foreground_group(),
             Some(f.child.id() as i32)
         );
@@ -372,6 +378,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .terminal
+                .as_ref()
+                .unwrap()
                 .foreground_group(),
             None
         );
