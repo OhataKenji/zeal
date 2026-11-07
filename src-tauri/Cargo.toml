@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
-tonic-build = "0.12.3"
+tonic-build = "0.14.0"
 prost-build = "0.13.5"
 protoc-bin-vendored = "3.3.0"
 
