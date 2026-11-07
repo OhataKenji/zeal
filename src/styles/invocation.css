@@ -313,6 +313,93 @@
   flex-wrap: wrap;
 }
 
+.compare-scroll {
+  overflow-x: auto;
+}
+
+.compare-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.compare-table caption {
+  padding: 0 0 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: left;
+}
+
+.compare-table th,
+.compare-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  text-align: left;
+}
+
+.compare-table thead th {
+  font-weight: 600;
+}
+
+.compare-item-head {
+  width: 20%;
+}
+
+.compare-side-head {
+  width: 40%;
+}
+
+.compare-item {
+  font-weight: 500;
+}
+
+.compare-removed,
+.compare-added {
+  text-decoration: none;
+}
+
+.compare-removed {
+  color: var(--destructive);
+  background: var(--destructive-muted);
+}
+
+.compare-added {
+  color: var(--success);
+  background: var(--success-muted);
+}
+
+.compare-value code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+tr.compare-changed > * {
+  background: var(--accent);
+}
+
+.compare-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compare-id-input {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.compare-status {
+  margin: 8px 0 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.compare-side-head .notice {
+  margin-top: 8px;
+}
+
 @media (max-width: 1050px) {
   .invocation-header {
     gap: 14px;
