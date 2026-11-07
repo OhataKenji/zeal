@@ -53,18 +53,18 @@ flowchart LR
 
 比較行は BuildBuddy の compare view の FACETS に合わせ、項目名と値の対応は次の通り。
 
-| 項目 | 値の由来 |
-| --- | --- |
-| Invocation ID | `record.id` |
-| Command | `record.cmd` |
-| Pattern | `record.pattern` |
-| Exit code | `record.exitCode` |
-| Start date | `record.startedAt` |
-| Duration | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) |
-| Explicit command line | `bep.options.explicitCmdLine` |
-| Full command line | `bep.options.cmdLine` |
-| Explicit startup options | `bep.options.explicitStartupOptions` |
-| Full startup options | `bep.options.startupOptions` |
+| 項目                     | 値の由来                                                         |
+| ------------------------ | ---------------------------------------------------------------- |
+| Invocation ID            | `record.id`                                                      |
+| Command                  | `record.cmd`                                                     |
+| Pattern                  | `record.pattern`                                                 |
+| Exit code                | `record.exitCode`                                                |
+| Start date               | `record.startedAt`                                               |
+| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) |
+| Explicit command line    | `bep.options.explicitCmdLine`                                    |
+| Full command line        | `bep.options.cmdLine`                                            |
+| Explicit startup options | `bep.options.explicitStartupOptions`                             |
+| Full startup options     | `bep.options.startupOptions`                                     |
 
 `originalCommandLine` と `canonicalCommandLine` は explicit/full の options 配列とは別の文字列で、対応する facet がないため行に出さない。
 Host、Git、cache、remote execution、metrics など BuildBuddy にある項目は Zeal の現在の projection にないため対象外とし、target/test の件数も Non Goals のままとする。
@@ -91,10 +91,10 @@ Host、Git、cache、remote execution、metrics など BuildBuddy にある項�
 
 採用案は、選択中の詳細を左、入力した ID を右に既存 IPC で並べる方式である。右側の読込状態だけを Compare 表示に持ち、永続化しない。
 
-| 案 | 採用しない理由 |
-| --- | --- |
-| pin して基準側を保持する方式(前版) | 基準の固定、保留操作、世代管理などの状態が要り、都度の再読込で足りる |
-| 比較専用の backend API | 既存の `get_invocation` が返す事実で行の組み立てが足り、新しい IPC と worker 変更を増やす |
+| 案                                 | 採用しない理由                                                                            |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| pin して基準側を保持する方式(前版) | 基準の固定、保留操作、世代管理などの状態が要り、都度の再読込で足りる                      |
+| 比較専用の backend API             | 既存の `get_invocation` が返す事実で行の組み立てが足り、新しい IPC と worker 変更を増やす |
 
 ## Caveats
 
