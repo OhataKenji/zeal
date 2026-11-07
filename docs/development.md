@@ -29,23 +29,6 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
-## Test fixtures
-
-`src-tauri/tests/fixtures/query-proto/` captures real `bazel query
---output=proto` output (`query.pb`) from Bazel 9.3.2, so unit tests decode
-actual Bazel bytes via `include_bytes!` — `cargo test` needs no Bazel or
-network access.
-
-Regenerate after changing the fixture workspace files:
-
-```sh
-python3 src-tauri/tests/fixtures/query-proto/regenerate.py
-```
-
-Set `BAZEL` to pick a specific Bazel/Bazelisk binary (default: `bazelisk`,
-then `bazel` on `PATH`). Captured rule locations embed the temporary
-workspace path; tests do not assert on them.
-
 ## Development traces
 
 Start [Jaeger](https://www.jaegertracing.io/docs/2.22/getting-started/) with OTLP/HTTP on port 4318, then run:
