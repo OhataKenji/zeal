@@ -7,6 +7,7 @@
     sectionMessage,
     sectionNoticeTone,
   } from "./invocation";
+  import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
   import Notice from "./Notice.svelte";
   import ProfileView from "./ProfileView.svelte";
@@ -30,7 +31,7 @@
     invocationStatus(record, view.state?.activeInvocation ?? null, view.state?.stopping),
   );
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
-  const tabs = ["All", ...sections] as const;
+  const tabs = ["All", ...sections, "Compare"] as const;
   let active = $state<(typeof tabs)[number]>("All");
   let panel = $state<HTMLDivElement>();
 
@@ -105,6 +106,16 @@
     role="tabpanel"
     aria-labelledby="invocation-tab-{active}"
   >
+    {#if active === "Compare"}
+      {#key `${view.state?.workspace ?? ""}:${selectedInvocation ?? ""}`}
+        <ComparisonPanel
+          left={view.detail?.record.id === selectedInvocation ? view.detail : null}
+          leftLoading={view.detailLoading}
+          leftError={view.detailError}
+          activeInvocation={view.state?.activeInvocation ?? null}
+        />
+      {/key}
+    {/if}
     {#each sections as section}
       {#if active === "All" || active === section}
         <section class="invocation-section" aria-labelledby="invocation-heading-{section}">
