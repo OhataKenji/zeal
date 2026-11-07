@@ -113,9 +113,12 @@ test("ComparisonPanel renders rows, placeholders, and the ID form", async (t) =>
       const html = output(panelProps());
       assert.match(
         html,
-        /<label[^>]*for="compare-invocation-id"[^>]*>\s*Invocation ID\s*<\/label>/,
+        /<label[^>]*for="compare-invocation-id"[^>]*>\s*Comparison invocation\s*<\/label>/,
       );
-      assert.match(html, /Enter an invocation ID and press Enter\./);
+      assert.ok(inputTag(html).includes('placeholder="Enter an invocation ID and press Enter."'));
+      assert.ok(!html.includes("compare-hint"));
+      assert.ok(!html.includes(">Item<"));
+      assert.equal(html.match(/scope="row"/g)?.length, 10);
       assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
     });
 

@@ -65,7 +65,7 @@
     <caption>Invocation comparison</caption>
     <thead>
       <tr>
-        <th scope="col" class="compare-item-head">Item</th>
+        <td class="compare-item-head"></td>
         <th scope="col" class="compare-side-head">
           Current invocation
           {#if leftLoading}
@@ -83,7 +83,7 @@
         </th>
         <th scope="col" class="compare-side-head">
           <form class="compare-form" onsubmit={submit}>
-            <label class="compare-label" for="compare-invocation-id">Invocation ID</label>
+            <label class="compare-label" for="compare-invocation-id">Comparison invocation</label>
             <input
               id="compare-invocation-id"
               class="input compare-id-input"
@@ -92,8 +92,8 @@
               disabled={loading || !leftReady}
               autocomplete="off"
               spellcheck="false"
+              placeholder="Enter an invocation ID and press Enter."
             />
-            <span class="compare-hint">Enter an invocation ID and press Enter.</span>
           </form>
           {#if loading}
             <p class="compare-status" role="status">Loading…</p>

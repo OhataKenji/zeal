@@ -382,11 +382,6 @@ tr.compare-changed > * {
   font-size: 12px;
 }
 
-.compare-hint {
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-
 .compare-status {
   margin: 8px 0 0;
   color: var(--muted-foreground);

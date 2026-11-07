@@ -44,7 +44,7 @@ flowchart LR
 
 ### 右側の ID 入力と読込
 
-- 「Invocation ID」と label 付けした入力欄を置き、Enter で確定する。keystroke ごとの fetch はしない。
+- 「Comparison invocation」の入力欄に ID を指定し、Enter で確定する。操作説明は placeholder に表示する。keystroke ごとの fetch はしない。
 - submit で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず左の選択を維持し、workspace の一致は既存 backend が保証する。同一 ID の指定も許可する。
 - 入力は trim し、UUID 検証は既存に任せる。submit で旧右データを消し、loading の後に record と BEP を表示する(log は保持しない)。
 - 送信中は submit を無効にして in-flight を一件に絞り、左の detail 読込中も submit を待たせる。失敗(未知の ID、別 workspace、不正、busy)は右側に inline error として出し、利用者が修正して再 submit する。自動 retry、polling、queue、新しい backend は設けず、worker の busy が起きても error として表面化するだけとする。
