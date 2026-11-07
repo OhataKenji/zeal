@@ -11,7 +11,7 @@
   } from "phosphor-svelte";
   import { onMount, tick } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
-  import { canSend, canStop, sessionBusy } from "./lib/session";
+  import { bazelBusyReason, canSend, canStop, sessionBusy } from "./lib/session";
   import { invocationStatus } from "./lib/invocation";
   import { createIndex } from "./lib/search";
   import { targetError } from "./lib/target";
@@ -65,7 +65,7 @@
   const argumentsConfigured = $derived(argumentsText.trim() !== "");
   let switchingWs = $state(false);
   const busy = $derived(sessionBusy(app.view));
-  const running = $derived(!!st?.activeInvocation);
+  const running = $derived(bazelBusyReason(st) !== null);
   const actionLabel = $derived(
     running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
   );

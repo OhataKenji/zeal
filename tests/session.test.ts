@@ -820,7 +820,7 @@ test("an argument parse failure is visible and allows a corrected start", async 
   assert.equal(h.view.error, null);
 });
 
-test("stop is offered only while an invocation is live and not already stopping", async () => {
+test("stop is offered while an invocation is live and not already stopping", async () => {
   const h = harness();
   assert.equal(canStop(h.view), false);
   await h.session.init();
@@ -840,6 +840,32 @@ test("stop is offered only while an invocation is live and not already stopping"
   assert.equal(requestCount(h, "stop_invocation"), 1);
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
   await stopping;
+});
+
+test("stop covers every active query slot without a snapshot", async () => {
+  const h = harness();
+  await h.session.init();
+  const slots: Array<Partial<AppState>> = [
+    { ingest: "running" },
+    { query: "running" },
+    { detailQuery: "running" },
+  ];
+  for (const [index, slot] of slots.entries()) {
+    h.emit("app-state", { ...IDLE, ...slot });
+    assert.equal(h.view.snapshot, null);
+    assert.equal(canStop(h.view), true);
+    assert.equal(canSend(h.view, "//..."), false);
+
+    const stopping = h.session.stop();
+    assert.equal(requestCount(h, "stop_invocation"), index + 1);
+    h.emit("app-state", { ...IDLE, ...slot, stopping: true });
+    assert.equal(canStop(h.view), false);
+    lastPendingRequest(h, "stop_invocation").reply.resolve(undefined);
+    await stopping;
+
+    h.emit("app-state", IDLE);
+    assert.equal(canSend(h.view, "//..."), true);
+  }
 });
 
 test("an unobserved invocation keeps composer input in the live Console only", async () => {

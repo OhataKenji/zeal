@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 /// Time SIGINT gets to end the invocation before its group is killed.
-const STOP_GRACE: Duration = Duration::from_secs(3);
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(3);
 /// Time SIGKILL gets to end the invocation before its exit is called unknown
 /// and its slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
@@ -153,20 +153,22 @@ fn finish_console(st: &mut CoreState, id: &str) {
     }
 }
 
-/// Stop the invocation in flight: SIGINT to its process group, SIGKILL after
-/// `STOP_GRACE` (3 s) and, if the exit is still unconfirmed `STOP_CONFIRM`
-/// (2 s) later, the slot released with the note. Does nothing when no
-/// invocation is held or a stop is already in flight, so the slot is never
-/// held by a stop.
+/// Stop the active Bazel operation: query supervisors send SIGINT and escalate
+/// after `STOP_GRACE` (3 s), while invocations use their own process group.
+/// An exit still unconfirmed after `STOP_CONFIRM` (2 s) releases the slot with
+/// a note. Repeated stops do not extend either grace period.
 pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
     core.emit(&app);
     Ok(())
 }
 
-/// The first request sends SIGINT and fixes the deadlines. Only the thread
-/// owning the child can reap or escalate, so a reap cannot race a later signal.
+/// Query owners handle signaling and escalation; this sends SIGINT to an
+/// invocation while its child-owning thread handles reaping and escalation.
 fn begin_stop(st: &mut CoreState) {
+    if st.ingest_running || st.detail_query_running || st.query_running {
+        st.query_stopping = true;
+    }
     let Some(invocation) = st.active_invocation.as_mut() else {
         return;
     };
@@ -268,14 +270,11 @@ impl<F: Fn()> Drop for BazelSlot<'_, F> {
 
 /// Bound process stopping to the short exit grace. A child already reaped has
 /// nothing left to signal; wait for its in-progress save to release the slot.
-/// A live editor query is simply killed: it has no stop path and the process
-/// is going away either way.
+/// A live query is killed outright because the app is going away.
 pub fn exit_stop(core: &Core) {
     let id = {
         let mut st = core.state.lock().expect("application state lock poisoned");
         begin_stop(&mut st);
-        // A query in flight has no stop path of its own; the process is going
-        // away either way, so the group is killed outright.
         if let Some(pgid) = st.query_pgid {
             let _ = signal_group(pgid, Signal::KILL);
         }
@@ -1226,6 +1225,28 @@ mod tests {
         assert!(held_pgid(&st).is_none());
         assert!(!is_stopping(&st));
     }
+    #[test]
+    fn begin_stop_marks_query_slots_before_a_process_group_is_registered() {
+        let query_slots: [fn(&mut CoreState); 3] = [
+            |st| st.ingest_running = true,
+            |st| st.detail_query_running = true,
+            |st| st.query_running = true,
+        ];
+        for hold in query_slots {
+            let core = Core::new();
+            hold(&mut core.state.lock().unwrap());
+            let mut st = core.state.lock().unwrap();
+            assert!(st.query_pgid.is_none());
+            begin_stop(&mut st);
+            assert!(st.query_stopping);
+            begin_stop(&mut st);
+            assert!(st.query_stopping);
+            assert!(st.query_pgid.is_none());
+            drop(st);
+            assert!(core.dto().stopping);
+        }
+    }
+
     #[test]
     fn repeated_stop_does_not_extend_deadlines() {
         let core = Core::new();

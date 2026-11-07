@@ -117,12 +117,10 @@ export function canSend(view: SessionView, target: string): boolean {
 }
 
 /**
- * Returns whether the core can stop an active invocation that is not already
- * stopping. Core remains responsible for releasing an unconfirmed invocation
- * with a note.
+ * Returns whether the core can stop the active Bazel operation.
  */
 export function canStop(view: SessionView): boolean {
-  return !!(view.ready && view.state?.activeInvocation && !view.state.stopping);
+  return !!(view.ready && bazelBusy(view.state) && !view.state?.stopping);
 }
 
 /**

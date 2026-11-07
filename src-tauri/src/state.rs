@@ -161,8 +161,9 @@ pub struct CoreState {
     pub query_running: bool,
     /// Scoped proto query for a selected target.
     pub detail_query_running: bool,
-    /// Process group of the query child (its pid), so app exit can kill it.
+    /// Process group shared by index, detail, and editor queries.
     pub query_pgid: Option<i32>,
+    pub query_stopping: bool,
 }
 
 impl CoreState {
@@ -208,6 +209,7 @@ impl Core {
                 query_running: false,
                 detail_query_running: false,
                 query_pgid: None,
+                query_stopping: false,
             }),
             invocation_finished: Condvar::new(),
         }
@@ -239,7 +241,8 @@ impl Core {
             stopping: st
                 .active_invocation
                 .as_ref()
-                .is_some_and(|invocation| invocation.stopping),
+                .is_some_and(|invocation| invocation.stopping)
+                || st.query_stopping,
             invocation_note: st.invocation_note.clone(),
             query: if st.query_running { "running" } else { "idle" },
             detail_query: if st.detail_query_running {
