@@ -117,6 +117,8 @@ const FULL_DATA: TargetIndex & { edges: Edge[]; files: FileEntry[] } = {
       owner: PARSER,
       role: "out",
     })),
+    { path: "app/server", owner: "//app:server", role: "out" },
+    { path: "app/server_deploy.jar", owner: "//app:server", role: "out" },
   ],
 };
 const SNAPSHOT: TargetIndex = {
@@ -414,7 +416,9 @@ export function installPreview() {
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
-      return label === "//app:server" ? ["bazel-out/k8-fastbuild/bin/app/server"] : [];
+      return FULL_DATA.files
+        .filter((file) => file.owner === label && file.role === "out")
+        .map((file) => `bazel-out/k8-fastbuild/bin/${file.path}`);
     },
     list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
