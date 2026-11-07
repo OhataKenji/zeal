@@ -304,10 +304,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   /**
-   * Shared fetch lifecycle for the selected slices. Callers check the slice
-   * guards and `req.busy` first; this claims a generation, applies `patches`,
-   * and reloads once from `finally` when the slice was invalidated mid-flight.
-   * `ok`/`err` patches must return the slice to idle (e.g. `loading: false`).
+   * Shared fetch lifecycle for the selected slices. Claims a generation,
+   * applies `patches`, and re-runs `retry` (the guarded loader) when the slice
+   * was invalidated mid-flight. `ok`/`err` patches must return the slice to
+   * idle (e.g. `loading: false`); the matching `clear*` must likewise reset
+   * the slice's loading/error fields when it invalidates.
    */
   async function loadSection<V>(
     req: RequestSlot,
@@ -319,6 +320,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     },
     retry: () => void,
   ): Promise<void> {
+    if (req.busy) return;
     const generation = req.claim();
     try {
       if (patches.pending) update(patches.pending);
