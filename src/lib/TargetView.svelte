@@ -1,17 +1,21 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
-  import type { TargetDetail, TargetIndex } from "./types";
+  import type { TargetDetail, TargetIndex, TargetOutputs } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
 
   let {
     index,
     detail,
+    outputs,
+    outputsError,
     wsRoot,
     onselect,
   }: {
     index: TargetIndex;
     detail: TargetDetail;
+    outputs: TargetOutputs | null;
+    outputsError: string | null;
     wsRoot: string;
     onselect: (label: string) => void;
   } = $props();
@@ -96,6 +100,25 @@
       </span>
     {/if}
   </header>
+  <section class="outputs">
+    <h2>Outputs</h2>
+    {#if outputsError}
+      <p class="dim">Could not load outputs: {outputsError}</p>
+    {:else if outputs === null}
+      <p class="dim">Loading outputs…</p>
+    {:else if outputs.paths.length === 0}
+      <p class="dim">None</p>
+    {:else}
+      <div class="chips">
+        {#each outputs.paths as path (path)}
+          <span class="chip file" title={path}>{path}</span>
+        {/each}
+        {#if outputs.truncated}<span class="chip more" title="More outputs not shown"
+            >…</span
+          >{/if}
+      </div>
+    {/if}
+  </section>
   <div class="attributes-head">
     <h2>Attributes</h2>
     <label class="relation-filter"

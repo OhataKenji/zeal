@@ -53,6 +53,12 @@ export interface TargetDetail {
   status: "ok" | "partial";
 }
 
+/** Output paths from `bazel cquery`, capped so huge filegroups stay cheap. */
+export interface TargetOutputs {
+  paths: string[];
+  truncated: boolean;
+}
+
 /** A user-facing summary for a failed core operation. */
 export interface IngestError {
   exitCode: number | null;
