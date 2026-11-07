@@ -155,18 +155,22 @@ mod tests {
     use super::*;
     use prost::Message;
 
-    fn encode(result: &proto::QueryResult) -> Vec<u8> {
-        result.encode_to_vec()
-    }
-
     fn wrap_rule(rule: proto::Rule) -> Vec<u8> {
-        encode(&proto::QueryResult {
+        proto::QueryResult {
             target: vec![proto::Target {
                 r#type: TargetType::Rule as i32,
                 rule: Some(rule),
                 ..Default::default()
             }],
-        })
+        }
+        .encode_to_vec()
+    }
+
+    fn wrap_target(target: proto::Target) -> Vec<u8> {
+        proto::QueryResult {
+            target: vec![target],
+        }
+        .encode_to_vec()
     }
 
     fn rule(name: &str) -> proto::Rule {
@@ -185,223 +189,384 @@ mod tests {
         }
     }
 
-    #[test]
-    fn collects_label_values_under_their_attribute_names() {
-        let mut label = attr("label_attr", AttributeType::Label);
-        label.string_value = Some("//app:one".to_string());
-        let mut list = attr("list_attr", AttributeType::LabelList);
-        list.string_list_value = vec!["//app:two".to_string(), "//app:three".to_string()];
-        let mut dict_unary = attr("dict_unary", AttributeType::LabelDictUnary);
-        dict_unary.label_dict_unary_value = vec![
-            proto::LabelDictUnaryEntry {
-                key: "//app:key1".to_string(),
-                value: "//app:val1".to_string(),
-            },
-            proto::LabelDictUnaryEntry {
-                key: "//app:key2".to_string(),
-                value: "//app:val2".to_string(),
-            },
-        ];
-        let mut list_dict = attr("list_dict", AttributeType::LabelListDict);
-        list_dict.label_list_dict_value = vec![
-            proto::LabelListDictEntry {
-                key: "//app:k1".to_string(),
-                value: vec!["//app:a".to_string(), "//app:b".to_string()],
-            },
-            proto::LabelListDictEntry {
-                key: "//app:k2".to_string(),
-                value: vec!["//app:c".to_string()],
-            },
-        ];
-        let mut keyed = attr("keyed", AttributeType::LabelKeyedStringDict);
-        keyed.label_keyed_string_dict_value = vec![
-            proto::LabelKeyedStringDictEntry {
-                key: "//app:kk1".to_string(),
-                value: "v1".to_string(),
-            },
-            proto::LabelKeyedStringDictEntry {
-                key: "//app:kk2".to_string(),
-                value: "v2".to_string(),
-            },
-        ];
-        let mut string = attr("string_attr", AttributeType::String);
-        string.string_value = Some("//app:not_a_label".to_string());
-        let mut string_list = attr("string_list", AttributeType::StringList);
-        string_list.string_list_value = vec!["//app:also_not".to_string()];
-        let mut output = attr("output_attr", AttributeType::Output);
-        output.string_value = Some("//app:out1".to_string());
-        let mut output_list = attr("output_list", AttributeType::OutputList);
-        output_list.string_list_value = vec!["//app:out2".to_string()];
+    fn parse_attributes(attributes: Vec<proto::Attribute>) -> Result<ParsedQuery, String> {
+        let bytes = wrap_rule(proto::Rule {
+            attribute: attributes,
+            ..rule("//app:main")
+        });
+        parse_query(bytes.as_slice())
+    }
 
-        let mut r = rule("//app:main");
-        r.rule_input = vec!["//app:flattened_input".to_string()];
-        r.attribute = vec![
-            label,
-            list,
-            dict_unary,
-            list_dict,
-            keyed,
-            string,
-            string_list,
-            output,
-            output_list,
-        ];
-        let parsed = parse_query(&wrap_rule(r)[..]).unwrap();
-        assert_eq!(parsed.rules.len(), 1);
+    #[test]
+    fn scalar_label_keeps_its_attribute_name() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            string_value: Some("//app:dep".into()),
+            ..attr("deps", AttributeType::Label)
+        }])
+        .unwrap();
+        assert_eq!(
+            parsed.rules[0].label_attrs,
+            [("deps".into(), "//app:dep".into())]
+        );
+    }
+
+    #[test]
+    fn valueless_scalar_label_produces_no_relationship() {
+        let parsed = parse_attributes(vec![attr("dep", AttributeType::Label)]).unwrap();
+        assert!(parsed.rules[0].label_attrs.is_empty());
+    }
+
+    #[test]
+    fn label_list_collects_each_value_under_the_attribute_name() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            string_list_value: vec!["//app:a".into(), "//app:b".into()],
+            ..attr("deps", AttributeType::LabelList)
+        }])
+        .unwrap();
         assert_eq!(
             parsed.rules[0].label_attrs,
             [
-                ("label_attr".to_string(), "//app:one".to_string()),
-                ("list_attr".to_string(), "//app:two".to_string()),
-                ("list_attr".to_string(), "//app:three".to_string()),
-                ("dict_unary".to_string(), "//app:val1".to_string()),
-                ("dict_unary".to_string(), "//app:val2".to_string()),
-                ("list_dict".to_string(), "//app:a".to_string()),
-                ("list_dict".to_string(), "//app:b".to_string()),
-                ("list_dict".to_string(), "//app:c".to_string()),
-                ("keyed".to_string(), "//app:kk1".to_string()),
-                ("keyed".to_string(), "//app:kk2".to_string()),
+                ("deps".into(), "//app:a".into()),
+                ("deps".into(), "//app:b".into()),
             ]
         );
     }
 
     #[test]
-    fn skips_nodep_and_valueless_label_attributes() {
-        let mut nodep = attr("nodep_attr", AttributeType::Label);
-        nodep.nodep = Some(true);
-        nodep.string_value = Some("//app:hidden".to_string());
-        let bare = attr("select_scalar", AttributeType::Label);
-        let mut r = rule("//app:main");
-        r.attribute = vec![nodep, bare];
-        let parsed = parse_query(&wrap_rule(r)[..]).unwrap();
+    fn label_dict_unary_collects_values_not_keys() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            label_dict_unary_value: vec![proto::LabelDictUnaryEntry {
+                key: "//app:key".into(),
+                value: "//app:value".into(),
+            }],
+            ..attr("deps", AttributeType::LabelDictUnary)
+        }])
+        .unwrap();
+        assert_eq!(
+            parsed.rules[0].label_attrs,
+            [("deps".into(), "//app:value".into())]
+        );
+    }
+
+    #[test]
+    fn label_list_dict_flattens_entry_values() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            label_list_dict_value: vec![
+                proto::LabelListDictEntry {
+                    key: "//app:k1".into(),
+                    value: vec!["//app:a".into(), "//app:b".into()],
+                },
+                proto::LabelListDictEntry {
+                    key: "//app:k2".into(),
+                    value: vec!["//app:c".into()],
+                },
+            ],
+            ..attr("deps", AttributeType::LabelListDict)
+        }])
+        .unwrap();
+        assert_eq!(
+            parsed.rules[0].label_attrs,
+            [
+                ("deps".into(), "//app:a".into()),
+                ("deps".into(), "//app:b".into()),
+                ("deps".into(), "//app:c".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn label_keyed_string_dict_collects_keys_not_values() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            label_keyed_string_dict_value: vec![
+                proto::LabelKeyedStringDictEntry {
+                    key: "//app:key1".into(),
+                    value: "first".into(),
+                },
+                proto::LabelKeyedStringDictEntry {
+                    key: "//app:key2".into(),
+                    value: "second".into(),
+                },
+            ],
+            ..attr("deps", AttributeType::LabelKeyedStringDict)
+        }])
+        .unwrap();
+        assert_eq!(
+            parsed.rules[0].label_attrs,
+            [
+                ("deps".into(), "//app:key1".into()),
+                ("deps".into(), "//app:key2".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_string_attributes() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            string_value: Some("//app:not_a_label".into()),
+            ..attr("string_attr", AttributeType::String)
+        }])
+        .unwrap();
         assert!(parsed.rules[0].label_attrs.is_empty());
     }
 
     #[test]
-    fn keeps_rule_class_location_outputs_and_source_files() {
-        let mut r = rule("//app:é");
-        r.rule_class = "cc_テスト".to_string();
-        r.location = Some("/ws/app/BUILD:b:12:5".to_string());
-        r.rule_output = vec!["//app:out.txt".to_string()];
-        let bytes = encode(&proto::QueryResult {
-            target: vec![
-                proto::Target {
-                    r#type: TargetType::Rule as i32,
-                    rule: Some(r),
-                    ..Default::default()
-                },
-                proto::Target {
-                    r#type: TargetType::SourceFile as i32,
-                    source_file: Some(proto::SourceFile {
-                        name: "//app:input.txt".to_string(),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                proto::Target {
-                    r#type: TargetType::GeneratedFile as i32,
-                    generated_file: Some(proto::GeneratedFile {
-                        name: "//app:gen.txt".to_string(),
-                        generating_rule: "//app:gen".to_string(),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
+    fn ignores_string_list_attributes() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            string_list_value: vec!["//app:also_not".into()],
+            ..attr("string_list", AttributeType::StringList)
+        }])
+        .unwrap();
+        assert!(parsed.rules[0].label_attrs.is_empty());
+    }
+
+    #[test]
+    fn ignores_output_attributes() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            string_value: Some("//app:out1".into()),
+            ..attr("output_attr", AttributeType::Output)
+        }])
+        .unwrap();
+        assert!(parsed.rules[0].label_attrs.is_empty());
+    }
+
+    #[test]
+    fn ignores_output_list_attributes() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            string_list_value: vec!["//app:out2".into()],
+            ..attr("output_list", AttributeType::OutputList)
+        }])
+        .unwrap();
+        assert!(parsed.rules[0].label_attrs.is_empty());
+    }
+
+    #[test]
+    fn skips_nodep_attributes() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            nodep: Some(true),
+            string_value: Some("//app:hidden".into()),
+            ..attr("hidden", AttributeType::Label)
+        }])
+        .unwrap();
+        assert!(parsed.rules[0].label_attrs.is_empty());
+    }
+
+    #[test]
+    fn ignores_flattened_rule_inputs() {
+        let bytes = wrap_rule(proto::Rule {
+            rule_input: vec!["//app:input.txt".into()],
+            ..rule("//app:main")
         });
         let parsed = parse_query(&bytes[..]).unwrap();
-        assert_eq!(parsed.rules.len(), 1);
-        let rule = &parsed.rules[0];
-        assert_eq!(rule.label, "//app:é");
-        assert_eq!(rule.rule_class, "cc_テスト");
-        assert_eq!(rule.location, Some(("/ws/app/BUILD:b".to_string(), 12)));
-        assert_eq!(rule.outputs, ["//app:out.txt"]);
-        assert_eq!(parsed.source_files, ["//app:input.txt"]);
+        assert!(parsed.rules[0].label_attrs.is_empty());
+        assert!(parsed.rules[0].outputs.is_empty());
     }
 
     #[test]
-    fn rejects_malformed_and_truncated_bytes() {
-        assert!(parse_query(&[0x0a, 0x80][..]).is_err());
-        let bytes = wrap_rule(rule("//app:main"));
-        assert!(parse_query(&bytes[..bytes.len() - 1][..]).is_err());
-        let empty = encode(&proto::QueryResult::default());
-        assert!(parse_query(&empty[..]).unwrap().rules.is_empty());
-    }
-
-    #[test]
-    fn rejects_unknown_and_inconsistent_target_types() {
-        let unknown = encode(&proto::QueryResult {
-            target: vec![proto::Target {
-                r#type: 999,
-                ..Default::default()
-            }],
+    fn keeps_unicode_label_and_rule_class() {
+        let bytes = wrap_rule(proto::Rule {
+            rule_class: "cc_テスト".into(),
+            ..rule("//app:é")
         });
-        assert!(parse_query(&unknown[..]).is_err());
-
-        let mismatched = encode(&proto::QueryResult {
-            target: vec![proto::Target {
-                r#type: TargetType::Rule as i32,
-                source_file: Some(proto::SourceFile {
-                    name: "//app:f".to_string(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }],
-        });
-        assert!(parse_query(&mismatched[..]).is_err());
-
-        let missing = encode(&proto::QueryResult {
-            target: vec![proto::Target {
-                r#type: TargetType::Rule as i32,
-                ..Default::default()
-            }],
-        });
-        assert!(parse_query(&missing[..]).is_err());
+        let parsed = parse_query(&bytes[..]).unwrap();
+        assert_eq!(parsed.rules[0].label, "//app:é");
+        assert_eq!(parsed.rules[0].rule_class, "cc_テスト");
     }
 
     #[test]
-    fn rejects_empty_rule_fields_and_unknown_attribute_types() {
-        let mut nameless = rule("//app:main");
-        nameless.name = String::new();
-        assert!(parse_query(&wrap_rule(nameless)[..]).is_err());
-
-        let mut classless = rule("//app:main");
-        classless.rule_class = String::new();
-        assert!(parse_query(&wrap_rule(classless)[..]).is_err());
-
-        let mut r = rule("//app:main");
-        r.attribute = vec![proto::Attribute {
-            r#type: 999,
-            ..attr("bad", AttributeType::Label)
-        }];
-        assert!(parse_query(&wrap_rule(r)[..]).is_err());
-
-        let mut empty_name = attr("", AttributeType::Label);
-        empty_name.string_value = Some("//app:x".to_string());
-        let mut r = rule("//app:main");
-        r.attribute = vec![empty_name];
-        assert!(parse_query(&wrap_rule(r)[..]).is_err());
-
-        let mut empty_label = attr("empty_label", AttributeType::Label);
-        empty_label.string_value = Some(String::new());
-        let mut r = rule("//app:main");
-        r.attribute = vec![empty_label];
-        assert!(parse_query(&wrap_rule(r)[..]).is_err());
-
-        let mut r = rule("//app:main");
-        r.rule_output = vec![String::new()];
-        assert!(parse_query(&wrap_rule(r)[..]).is_err());
+    fn parses_location_file_and_line() {
+        let bytes = wrap_rule(proto::Rule {
+            location: Some("/ws/app/BUILD:b:12:5".into()),
+            ..rule("//app:main")
+        });
+        let parsed = parse_query(&bytes[..]).unwrap();
+        assert_eq!(
+            parsed.rules[0].location,
+            Some(("/ws/app/BUILD:b".to_string(), 12))
+        );
     }
 
     #[test]
-    fn rejects_selector_list_attributes() {
-        let mut selector = attr("select_attr", AttributeType::SelectorList);
-        selector.selector_list = Some(proto::attribute::SelectorList {
+    fn keeps_declared_rule_outputs() {
+        let bytes = wrap_rule(proto::Rule {
+            rule_output: vec!["//app:out.txt".into()],
+            ..rule("//app:main")
+        });
+        let parsed = parse_query(&bytes[..]).unwrap();
+        assert_eq!(parsed.rules[0].outputs, ["//app:out.txt"]);
+    }
+
+    #[test]
+    fn collects_source_file_names() {
+        let bytes = wrap_target(proto::Target {
+            r#type: TargetType::SourceFile as i32,
+            source_file: Some(proto::SourceFile {
+                name: "//app:input.txt".into(),
+                ..Default::default()
+            }),
             ..Default::default()
         });
-        let mut r = rule("//app:main");
-        r.attribute = vec![selector];
-        assert!(parse_query(&wrap_rule(r)[..]).is_err());
+        let parsed = parse_query(&bytes[..]).unwrap();
+        assert_eq!(parsed.source_files, ["//app:input.txt"]);
+        assert!(parsed.rules.is_empty());
+    }
+
+    #[test]
+    fn ignores_generated_file_targets() {
+        let bytes = wrap_target(proto::Target {
+            r#type: TargetType::GeneratedFile as i32,
+            generated_file: Some(proto::GeneratedFile {
+                name: "//app:gen.txt".into(),
+                generating_rule: "//app:gen".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let parsed = parse_query(&bytes[..]).unwrap();
+        assert!(parsed.rules.is_empty());
+        assert!(parsed.source_files.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_attribute_type() {
+        assert!(
+            parse_attributes(vec![proto::Attribute {
+                r#type: 999,
+                ..attr("deps", AttributeType::Label)
+            }])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_unflattened_selector_attributes() {
+        let parsed = parse_attributes(vec![proto::Attribute {
+            selector_list: Some(proto::attribute::SelectorList::default()),
+            ..attr("select_attr", AttributeType::SelectorList)
+        }]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn rejects_empty_rule_name() {
+        let bytes = wrap_rule(proto::Rule {
+            name: String::new(),
+            ..rule("//app:main")
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_rule_class() {
+        let bytes = wrap_rule(proto::Rule {
+            rule_class: String::new(),
+            ..rule("//app:main")
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_source_file_without_name() {
+        let bytes = wrap_target(proto::Target {
+            r#type: TargetType::SourceFile as i32,
+            source_file: Some(proto::SourceFile::default()),
+            ..Default::default()
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_output_label() {
+        let bytes = wrap_rule(proto::Rule {
+            rule_output: vec![String::new()],
+            ..rule("//app:main")
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_attribute_name() {
+        assert!(
+            parse_attributes(vec![proto::Attribute {
+                string_value: Some("//app:x".into()),
+                ..attr("", AttributeType::Label)
+            }])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_empty_attribute_label() {
+        assert!(
+            parse_attributes(vec![proto::Attribute {
+                string_value: Some(String::new()),
+                ..attr("deps", AttributeType::Label)
+            }])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_target_type() {
+        let bytes = wrap_target(proto::Target {
+            r#type: 999,
+            ..Default::default()
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_target_payload_mismatched_with_type() {
+        let bytes = wrap_target(proto::Target {
+            r#type: TargetType::Rule as i32,
+            source_file: Some(proto::SourceFile {
+                name: "//app:f".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_target_without_payload() {
+        let bytes = wrap_target(proto::Target {
+            r#type: TargetType::Rule as i32,
+            ..Default::default()
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_target_with_multiple_payloads() {
+        let bytes = wrap_target(proto::Target {
+            r#type: TargetType::Rule as i32,
+            rule: Some(rule("//app:main")),
+            source_file: Some(proto::SourceFile {
+                name: "//app:f".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(parse_query(&bytes[..]).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_bytes() {
+        assert!(parse_query(&[0x0a, 0x80][..]).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_output() {
+        let bytes = wrap_rule(rule("//app:main"));
+        assert!(parse_query(&bytes[..bytes.len() - 1][..]).is_err());
+    }
+
+    #[test]
+    fn accepts_empty_query_result() {
+        let bytes = proto::QueryResult::default().encode_to_vec();
+        let parsed = parse_query(&bytes[..]).unwrap();
+        assert!(parsed.rules.is_empty());
+        assert!(parsed.source_files.is_empty());
     }
 
     struct Failing;
@@ -423,5 +588,117 @@ mod tests {
         // Unknown field 100, varint 1, appended to the QueryResult message.
         bytes.extend_from_slice(&[0xa0, 0x06, 0x01]);
         assert!(parse_query(&bytes[..]).is_ok());
+    }
+
+    fn bazel_fixture() -> ParsedQuery {
+        parse_query(&include_bytes!("../tests/fixtures/query-proto/query.pb")[..]).unwrap()
+    }
+
+    fn main_rule(query: &ParsedQuery) -> &RawRule {
+        query
+            .rules
+            .iter()
+            .find(|rule| rule.label == "//:main")
+            .unwrap()
+    }
+
+    fn attribute_values<'a>(rule: &'a RawRule, name: &str) -> Vec<&'a str> {
+        let mut values: Vec<&str> = rule
+            .label_attrs
+            .iter()
+            .filter(|(attr, _)| attr == name)
+            .map(|(_, value)| value.as_str())
+            .collect();
+        values.sort_unstable();
+        values
+    }
+
+    #[test]
+    fn bazel_fixture_scalar_label_keeps_its_attribute_name() {
+        let query = bazel_fixture();
+        assert_eq!(
+            attribute_values(main_rule(&query), "plain_dep"),
+            ["//:input.txt"]
+        );
+    }
+
+    #[test]
+    fn bazel_fixture_valueless_scalar_select_produces_no_values() {
+        let query = bazel_fixture();
+        assert!(attribute_values(main_rule(&query), "dep").is_empty());
+    }
+
+    #[test]
+    fn bazel_fixture_list_select_flattens_both_branches() {
+        let query = bazel_fixture();
+        assert_eq!(
+            attribute_values(main_rule(&query), "deps"),
+            ["//:input.txt", "//:other.txt"]
+        );
+    }
+
+    #[test]
+    fn bazel_fixture_label_keyed_dict_collects_keys() {
+        let query = bazel_fixture();
+        assert_eq!(
+            attribute_values(main_rule(&query), "mapping"),
+            ["//:input.txt", "//:other.txt"]
+        );
+    }
+
+    #[test]
+    fn bazel_fixture_keeps_declared_output() {
+        let query = bazel_fixture();
+        assert_eq!(main_rule(&query).outputs, ["//:result.txt"]);
+    }
+
+    #[test]
+    fn bazel_fixture_collects_source_files() {
+        let query = bazel_fixture();
+        let mut files = query.source_files.clone();
+        files.sort();
+        assert_eq!(files, ["//:input.txt", "//:other.txt"]);
+    }
+
+    #[test]
+    fn bazel_fixture_projects_files_through_snapshot() {
+        use crate::snapshot::{self, FileEntry, Status};
+        let snapshot = snapshot::build(&bazel_fixture(), Status::Ok);
+        assert!(snapshot.edges.is_empty());
+        assert_eq!(
+            snapshot.files,
+            [
+                FileEntry {
+                    path: "input.txt".into(),
+                    owner: "//:main".into(),
+                    role: "deps".into(),
+                },
+                FileEntry {
+                    path: "input.txt".into(),
+                    owner: "//:main".into(),
+                    role: "mapping".into(),
+                },
+                FileEntry {
+                    path: "input.txt".into(),
+                    owner: "//:main".into(),
+                    role: "plain_dep".into(),
+                },
+                FileEntry {
+                    path: "other.txt".into(),
+                    owner: "//:main".into(),
+                    role: "deps".into(),
+                },
+                FileEntry {
+                    path: "other.txt".into(),
+                    owner: "//:main".into(),
+                    role: "mapping".into(),
+                },
+                FileEntry {
+                    path: "result.txt".into(),
+                    owner: "//:main".into(),
+                    role: "out".into(),
+                },
+            ]
+        );
     }
 }

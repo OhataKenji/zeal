@@ -1,0 +1,17 @@
+load(":defs.bzl", "sample")
+
+exports_files(["input.txt", "other.txt"])
+
+config_setting(
+    name = "debug",
+    values = {"compilation_mode": "dbg"},
+)
+
+sample(
+    name = "main",
+    plain_dep = ":input.txt",
+    dep = select({":debug": ":input.txt", "//conditions:default": ":other.txt"}),
+    deps = select({":debug": [":input.txt"], "//conditions:default": [":other.txt"]}),
+    mapping = {":input.txt": "first", ":other.txt": "second"},
+    out = "result.txt",
+)
