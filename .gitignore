@@ -10,6 +10,7 @@ node_modules/
 # Test output
 /coverage/
 /.nyc_output/
+.svelte-check/
 
 # Browser QA
 /test-results/
