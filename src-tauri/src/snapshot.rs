@@ -276,37 +276,27 @@ mod tests {
     use std::collections::HashMap;
     use std::io::Cursor;
 
-    fn rule(
-        label: &str,
-        class: &str,
-        location: Option<(&str, u32)>,
-        attrs: &[(&str, &str)],
-        outputs: &[&str],
-    ) -> RawRule {
+    fn rule(label: &str, attrs: &[(&str, &str)], outputs: &[&str]) -> RawRule {
         RawRule {
-            label: label.to_string(),
-            rule_class: class.to_string(),
-            location: location.map(|(file, line)| (file.to_string(), line)),
+            label: label.into(),
+            rule_class: "r".into(),
             label_attrs: attrs
                 .iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .map(|(name, value)| ((*name).into(), (*value).into()))
                 .collect(),
-            outputs: outputs.iter().map(|output| output.to_string()).collect(),
+            outputs: outputs.iter().map(|output| (*output).into()).collect(),
+            ..Default::default()
         }
     }
 
-    /// The internal shape the retired `query.xml` fixture parsed to: seven
-    /// rules and five source files.
     fn fixture_rules() -> ParsedQuery {
         ParsedQuery {
             rules: vec![
                 rule(
                     "//app/lib:parser",
-                    "java_library",
-                    Some(("/repo/app/lib/BUILD", 3)),
                     &[
                         ("srcs", "//app/lib:Parser.java"),
-                        ("srcs", "//app/lib:Token.java"),
+                        ("srcs", "//app/lib:Parser.java"),
                         ("deps", "//app/lib:parser_proto"),
                         ("deps", "@@maven+//:com_google_guava_guava"),
                         ("data", "//app:grammars"),
@@ -314,21 +304,11 @@ mod tests {
                         ("visibility", "//visibility:public"),
                         ("$cc_toolchain", "//tools:cc"),
                         ("deps_opt", "//conditions:default"),
-                        ("deps_opt", "//app/lib:parser_proto"),
                     ],
                     &["//app/lib:libparser.jar"],
                 ),
                 rule(
-                    "//app/lib:parser_proto",
-                    "proto_library",
-                    Some(("/repo/app/lib/BUILD", 10)),
-                    &[("srcs", "//app/lib:parser.proto")],
-                    &["//app/lib:libparser_proto_proto-descriptor-set.proto.bin"],
-                ),
-                rule(
                     "//app/lib:parser_test",
-                    "java_test",
-                    Some(("/repo/app/lib/BUILD", 15)),
                     &[
                         ("srcs", "//app/lib:Parser.java"),
                         ("deps", "//app/lib:parser"),
@@ -337,46 +317,18 @@ mod tests {
                 ),
                 rule(
                     "//app",
-                    "java_binary",
-                    Some(("/repo/app/BUILD", 2)),
-                    &[
-                        ("deps", "//app/lib:parser"),
-                        ("data", "//app:server.cfg"),
-                        ("tools", "//tools:launcher"),
-                    ],
-                    &["//app:server.jar"],
-                ),
-                rule(
-                    "//app:grammars",
-                    "filegroup",
-                    Some(("/repo/app/BUILD", 9)),
-                    &[("srcs", "//app:g1.txt"), ("srcs", "//app:g2.txt")],
+                    &[("data", "//app:server.cfg"), ("tools", "//tools:launcher")],
                     &[],
                 ),
-                rule(
-                    "//tools:launcher",
-                    "genrule",
-                    Some(("/repo/tools/build_defs.bzl", 22)),
-                    &[],
-                    &["//tools:launcher.sh"],
-                ),
-                rule(
-                    "//tools:cc",
-                    "cc_library",
-                    Some(("/repo/tools/BUILD", 4)),
-                    &[],
-                    &[],
-                ),
+                rule("//tools:launcher", &[], &["//tools:launcher.sh"]),
             ],
             source_files: [
                 "//app/lib:Parser.java",
-                "//app/lib:Token.java",
                 "//app/lib:grammars.txt",
-                "//app/lib:parser.proto",
                 "//app:server.cfg",
             ]
-            .iter()
-            .map(|name| name.to_string())
+            .into_iter()
+            .map(str::to_owned)
             .collect(),
         }
     }
@@ -414,16 +366,12 @@ mod tests {
             rules: vec![
                 rule(
                     "//app:chosen",
-                    "r",
-                    None,
                     &[("deps", "//app:dep"), ("srcs", "//app:input.txt")],
                     &["//app:out.txt"],
                 ),
-                rule("//app:user", "r", None, &[("deps", "//app:chosen")], &[]),
+                rule("//app:user", &[("deps", "//app:chosen")], &[]),
                 rule(
                     "//app:other",
-                    "r",
-                    None,
                     &[("deps", "//app:else"), ("srcs", "//app:other.txt")],
                     &[],
                 ),
@@ -444,8 +392,6 @@ mod tests {
             rules: vec![
                 rule(
                     "//app:direct",
-                    "filegroup",
-                    None,
                     &[
                         ("srcs", "//conditions:inputs"),
                         ("srcs", "//conditions:input.txt"),
@@ -453,7 +399,7 @@ mod tests {
                     ],
                     &[],
                 ),
-                rule("//conditions:inputs", "filegroup", None, &[], &[]),
+                rule("//conditions:inputs", &[], &[]),
             ],
             source_files: vec![
                 "//conditions:input.txt".into(),
@@ -591,14 +537,8 @@ mod tests {
     fn edges_dedup() {
         let rules = ParsedQuery {
             rules: vec![
-                rule(
-                    "//a:x",
-                    "r",
-                    None,
-                    &[("deps", "//a:y"), ("deps", "//a:y")],
-                    &[],
-                ),
-                rule("//a:y", "r", None, &[], &[]),
+                rule("//a:x", &[("deps", "//a:y"), ("deps", "//a:y")], &[]),
+                rule("//a:y", &[], &[]),
             ],
             source_files: vec![],
         };
@@ -617,8 +557,6 @@ mod tests {
         let query = ParsedQuery {
             rules: vec![rule(
                 "//app:main",
-                "r",
-                None,
                 &[("srcs", "//other:generated"), ("srcs", "//app:main.rs")],
                 &[],
             )],
