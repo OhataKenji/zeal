@@ -28,7 +28,6 @@ const IDLE: AppState = {
   activeInvocation: null,
   stopping: false,
   invocationNote: null,
-  query: "idle",
   detailQuery: "idle",
 };
 const SNAPSHOT = {
@@ -437,9 +436,8 @@ test("bazelBusyReason reports the active Bazel slot and ignores readiness", () =
   assert.equal(bazelBusyReason(null), null);
   assert.equal(bazelBusyReason(IDLE), null);
   const cases: Array<[Partial<AppState>, string]> = [
-    [{ activeInvocation: "run-a" }, "a Bazel invocation is in progress"],
+    [{ activeInvocation: "run-a" }, "a Bazel operation is in progress"],
     [{ ingest: "running" }, "targets are loading"],
-    [{ query: "running" }, "a query is already running"],
     [{ detailQuery: "running" }, "target details are loading"],
   ];
   for (const [patch, reason] of cases) {
@@ -458,8 +456,6 @@ test("Send waits for listeners and rejects every active Bazel operation", async 
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, stopping: true });
-  assert.equal(canSend(h.view, "//:app"), false);
-  h.emit("app-state", { ...IDLE, query: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
   h.emit("app-state", { ...IDLE, detailQuery: "running" });
   assert.equal(canSend(h.view, "//:app"), false);
@@ -820,7 +816,7 @@ test("an argument parse failure is visible and allows a corrected start", async 
   assert.equal(h.view.error, null);
 });
 
-test("stop is offered only while an invocation is live and not already stopping", async () => {
+test("stop is offered while an invocation is live and not already stopping", async () => {
   const h = harness();
   assert.equal(canStop(h.view), false);
   await h.session.init();
@@ -840,6 +836,26 @@ test("stop is offered only while an invocation is live and not already stopping"
   assert.equal(requestCount(h, "stop_invocation"), 1);
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
   await stopping;
+});
+
+test("an active query can be stopped without a snapshot", async () => {
+  const h = harness();
+  await h.session.init();
+  const id = "query-invocation";
+  h.emit("app-state", { ...IDLE, activeInvocation: id });
+  assert.equal(h.view.snapshot, null);
+  assert.equal(canStop(h.view), true);
+  assert.equal(canSend(h.view, "//..."), false);
+
+  const stopping = h.session.stop();
+  assert.equal(requestCount(h, "stop_invocation"), 1);
+  h.emit("app-state", { ...IDLE, activeInvocation: id, stopping: true });
+  assert.equal(canStop(h.view), false);
+  pendingRequest(h, "stop_invocation").reply.resolve(undefined);
+  await stopping;
+
+  h.emit("app-state", IDLE);
+  assert.equal(canSend(h.view, "//..."), true);
 });
 
 test("an unobserved invocation keeps composer input in the live Console only", async () => {
@@ -1319,8 +1335,6 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
-  h.emit("app-state", { ...IDLE, query: "running" });
-  await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
   noPending(h, "open_workspace");
 });
 
@@ -1331,7 +1345,7 @@ test("refresh is rejected while busy and is never queued", async () => {
   await h.session.refresh();
   h.emit("app-state", { ...IDLE, ingest: "running" });
   await h.session.refresh();
-  h.emit("app-state", { ...IDLE, query: "running" });
+  h.emit("app-state", { ...IDLE, detailQuery: "running" });
   await h.session.refresh();
   h.emit("app-state", IDLE);
   noPending(h, "refresh");

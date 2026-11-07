@@ -339,7 +339,7 @@
         </Notice>
       {:else}
         <p class="dim">
-          {st?.ingest === "running" || st?.query === "running" || st?.activeInvocation
+          {st?.ingest === "running" || st?.activeInvocation
             ? "Waiting for Bazel…"
             : "Loading target details…"}
         </p>

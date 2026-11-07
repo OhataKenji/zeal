@@ -82,8 +82,6 @@ export interface AppState {
   // Stop is best-effort. An unconfirmed exit releases the slot with invocationNote.
   stopping: boolean;
   invocationNote: string | null;
-  // An ad-hoc query-editor `bazel query`, distinct from an invocation or snapshot ingest.
-  query: "idle" | "running";
   // A selected target's detail query, serialized with the other Bazel operations.
   detailQuery: "idle" | "running";
 }

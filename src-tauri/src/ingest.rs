@@ -4,20 +4,16 @@
 //! no pending query or post-invocation refresh is kept.
 
 use crate::query_proto::{self, ParsedQuery};
+use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
 use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{ChildStdout, Command, Stdio};
+use std::process::{ChildStdout, Command};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
 use tauri::AppHandle;
-
-/// Upper bound for one `bazel query`. First invocations may include a bazelisk
-/// download and a cold analysis cache.
-pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Maximum retained stderr diagnostic payload. Read storage, allocation
 /// capacity, UTF-8 conversion, and total process memory are separate.
@@ -46,11 +42,11 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     };
     core.emit(&app);
     thread::spawn(move || {
+        let mut command = command(&ws, &bazel, &query, "label_kind");
         let outcome = fetch(
-            &ws,
-            &bazel,
-            &query,
-            "label_kind",
+            &core,
+            &mut command,
+            || core.emit(&app),
             snapshot::parse_label_kind,
             |targets: &Vec<Target>| !targets.is_empty(),
         );
@@ -91,11 +87,11 @@ pub fn target_detail(
         core: core.clone(),
     };
     core.emit(&app);
+    let mut command = command(&ws, &bazel, &query, "proto");
     let (query, status) = match fetch(
-        &ws,
-        &bazel,
-        &query,
-        "proto",
+        &core,
+        &mut command,
+        || core.emit(&app),
         query_proto::parse_query,
         |query: &ParsedQuery| !query.rules.is_empty(),
     ) {
@@ -151,86 +147,91 @@ impl Drop for DetailSlot {
     }
 }
 
-/// Run one scoped query and parse stdout.
-#[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
-fn fetch<T: Send + 'static>(
-    ws: &Path,
-    bazel: &Path,
-    query: &str,
-    output: &str,
-    parse: impl FnOnce(BufReader<ChildStdout>) -> Result<T, String> + Send + 'static,
-    has_data: impl Fn(&T) -> bool,
-) -> Outcome<T> {
-    let mut child = match Command::new(bazel)
+fn command(ws: &Path, bazel: &Path, query: &str, output: &str) -> Command {
+    let mut command = Command::new(bazel);
+    command
         .arg("query")
         .arg(query)
         .arg(format!("--output={output}"))
         .args(["--noimplicit_deps", "--keep_going"])
-        .current_dir(ws)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
+        .current_dir(ws);
+    command
+}
+
+/// Run one scoped query and parse stdout.
+#[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
+fn fetch<T: Send + 'static>(
+    core: &Core,
+    command: &mut Command,
+    emit: impl Fn(),
+    parse: impl FnOnce(BufReader<ChildStdout>) -> Result<T, String> + Send + 'static,
+    has_data: impl Fn(&T) -> bool,
+) -> Outcome<T> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let bazel = command.get_program().to_string_lossy().into_owned();
+    let spawned = {
+        let mut st = core.state.lock().expect("application state lock poisoned");
+        runner::spawn(&mut st, command, &id, Output::Pipes)
+    };
+    let (mut child, _) = match spawned {
+        Ok(child) => child,
+        Err(error) => {
             return Outcome::Failed(IngestError {
                 exit_code: None,
-                summary: format!("failed to spawn {}: {e}", bazel.display()),
+                summary: format!("failed to spawn {bazel}: {error}"),
             });
         }
     };
-    // stdout is read on its own thread; stderr is drained concurrently so the
-    // child never blocks on a full pipe.
+    let _slot = runner::BazelSlot {
+        core,
+        id: &id,
+        emit: &emit,
+    };
+    emit();
+    // Read stdout and drain stderr concurrently so the child cannot block.
     let stdout = child.stdout.take().expect("stdout piped");
     let parse_handle = thread::spawn(move || parse(BufReader::new(stdout)));
     let mut stderr = child.stderr.take().expect("stderr piped");
     let stderr_handle = thread::spawn(move || capture_stderr_tail(&mut stderr));
-
-    let deadline = Instant::now() + QUERY_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = parse_handle.join();
-                let _ = stderr_handle.join();
-                return Outcome::Failed(IngestError {
-                    exit_code: None,
-                    summary: format!("query timed out after {}s", QUERY_TIMEOUT.as_secs()),
-                });
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = parse_handle.join();
-                let _ = stderr_handle.join();
-                return Outcome::Failed(IngestError {
-                    exit_code: None,
-                    summary: format!("failed to wait on query: {e}"),
-                });
-            }
+    let waited = runner::wait(core, &id, || {
+        child
+            .try_wait()
+            .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+    });
+    let exit = match waited {
+        Ok(exit) => exit,
+        Err(error) => {
+            return Outcome::Failed(IngestError {
+                exit_code: None,
+                summary: format!("failed to wait on query: {error}"),
+            });
         }
     };
-
-    let parsed = parse_handle.join();
+    let stopping = core
+        .state
+        .lock()
+        .expect("application state lock poisoned")
+        .active_invocation
+        .as_ref()
+        .is_some_and(|invocation| invocation.id.as_str() == id && invocation.stopping);
+    if stopping {
+        return Outcome::Failed(IngestError {
+            exit_code: None,
+            summary: "Query stopped".to_string(),
+        });
+    }
+    let parsed = parse_handle
+        .join()
+        .unwrap_or_else(|_| Err("query output parser failed".to_string()));
     let stderr_bytes = stderr_handle.join().unwrap_or_default();
     let stderr_tail = String::from_utf8_lossy(&stderr_bytes);
-    let code = status.code();
+    let code = (exit >= 0).then_some(exit);
     let data = match parsed {
-        Ok(Ok(data)) => data,
-        Ok(Err(summary)) => {
+        Ok(data) => data,
+        Err(summary) => {
             return Outcome::Failed(IngestError {
                 exit_code: code,
                 summary,
-            });
-        }
-        Err(_) => {
-            return Outcome::Failed(IngestError {
-                exit_code: code,
-                summary: "query output parser failed".to_string(),
             });
         }
     };
@@ -394,22 +395,22 @@ exit "$code"
     }
 
     fn fetch_list(fixture: &QueryFixture, scenario: &str) -> Outcome<Vec<Target>> {
+        let mut command = command(&fixture.workspace, &fixture.bazel, scenario, "label_kind");
         fetch(
-            &fixture.workspace,
-            &fixture.bazel,
-            scenario,
-            "label_kind",
+            &Core::new(),
+            &mut command,
+            || (),
             snapshot::parse_label_kind,
             |targets: &Vec<Target>| !targets.is_empty(),
         )
     }
 
     fn fetch_detail(fixture: &QueryFixture, scenario: &str) -> Outcome<ParsedQuery> {
+        let mut command = command(&fixture.workspace, &fixture.bazel, scenario, "proto");
         fetch(
-            &fixture.workspace,
-            &fixture.bazel,
-            scenario,
-            "proto",
+            &Core::new(),
+            &mut command,
+            || (),
             query_proto::parse_query,
             |query: &ParsedQuery| !query.rules.is_empty(),
         )

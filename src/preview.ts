@@ -169,7 +169,6 @@ const state: AppState = {
   activeInvocation: null,
   stopping: false,
   invocationNote: null,
-  query: "idle",
   detailQuery: "idle",
 };
 let currentSnapshot: TargetIndex | null = SNAPSHOT;
@@ -366,13 +365,18 @@ function startInvocation(cmd: string, pattern: string) {
 }
 
 function stopInvocation() {
-  const record = records.find((inv) => inv.id === state.activeInvocation);
+  const id = state.activeInvocation;
+  if (!id) return;
+  const record = records.find((inv) => inv.id === id);
+  state.stopping = true;
+  void emit("app-state", structuredClone(state));
   if (record) {
     record.finishedAt = Date.now();
     record.exitCode = 8;
+    state.activeInvocation = null;
+    state.stopping = false;
+    void emit("app-state", structuredClone(state));
   }
-  state.activeInvocation = null;
-  void emit("app-state", structuredClone(state));
 }
 
 /** Installs mock core IPC for the development-only browser preview. */
@@ -430,6 +434,7 @@ export function installPreview() {
       if (bazelBusyReason(state)) {
         throw new Error("bazel is busy");
       }
+      const id = `preview-query-${crypto.randomUUID()}`;
       const output = String(payload?.output ?? "label");
       const expr = String(payload?.expr ?? "");
       const labels = expr.includes("//")
@@ -449,17 +454,20 @@ export function installPreview() {
             : labels.join("\n") + "\n",
         truncated: false,
         stderrTail: "",
-        timedOut: false,
       };
-      // The reply lands only when the (mock) query finishes, so the
-      // preview's busy state behaves like the real slot.
-      state.query = "running";
+      state.activeInvocation = id;
+      state.stopping = false;
       void emit("app-state", structuredClone(state));
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         setTimeout(() => {
-          state.query = "idle";
-          void emit("app-state", structuredClone(state));
-          resolve(finished);
+          const stopped = state.activeInvocation === id && state.stopping;
+          if (state.activeInvocation === id) {
+            state.activeInvocation = null;
+            state.stopping = false;
+            void emit("app-state", structuredClone(state));
+          }
+          if (stopped) reject(new Error("Query stopped"));
+          else resolve(finished);
         }, 800);
       });
     },

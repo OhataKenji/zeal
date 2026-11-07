@@ -196,8 +196,6 @@
   const runningThisView = $derived(qstate.running);
   const failedOutput = $derived.by(() => {
     if (!stored) return null;
-    if (stored.timedOut)
-      return { summary: "Query timed out.", tail: stored.stderrTail };
     if (stored.exitCode !== 0)
       return {
         summary: `Query failed${stored.exitCode === null ? "" : ` (exit ${stored.exitCode})`}.`,

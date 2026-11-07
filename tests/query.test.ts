@@ -507,7 +507,6 @@ const OUTPUT: QueryOutput = {
   stdout: "//a:b\n",
   truncated: false,
   stderrTail: "",
-  timedOut: false,
 };
 
 function harness() {
@@ -742,7 +741,7 @@ test("cache evicts the least recently selected result after ten entries", async 
   assert.deepEqual(h.state.result, OUTPUT);
 });
 
-test("failed and timed out outputs are displayed but not cached", async () => {
+test("failed outputs are displayed but not cached", async () => {
   const h = harness();
   const failed = h.runner.run("//a", "raw", FLAGS);
   h.calls[0].resolve({ ...OUTPUT, exitCode: 1 });
@@ -751,12 +750,6 @@ test("failed and timed out outputs are displayed but not cached", async () => {
   h.runner.select("//a", "raw", FLAGS);
   const resultAfterReselect = h.state.result;
   assert.equal(resultAfterReselect, null);
-  const timeout = h.runner.run("//a", "raw", FLAGS);
-  h.calls[1].resolve({ ...OUTPUT, timedOut: true });
-  await timeout;
-  assert.equal(h.state.result?.timedOut, true);
-  h.runner.select("//a", "raw", FLAGS);
-  assert.equal(h.state.result, null);
 });
 
 test("selecting cached output during a run preserves it when the old reply arrives", async () => {

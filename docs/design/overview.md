@@ -170,7 +170,7 @@ content は target / invocation / analytics の3状態で、sidebar の tree と
 - `bazel query` は大きい repo で遅くなり得る。grpc/grpc でのツリー用 query は warm 時の中央値 194ms だった。cold 時の所要時間と画面表示までの時間は別に測る。
 - bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。実行中はConsoleを表示する。
 - workspace を移動・rename するとルートパスが変わり、履歴は新規 workspace として分断される。
-- 初版は同一 workspace で Zeal を二重起動しない前提で試す。取り込み中など bazel 呼び出しの待ちの間は Send が最大で query の timeout 分待たされ得る。
+- 初版は同一 workspace で Zeal を二重起動しない前提で試す。取り込みや他の Bazel 処理の間は同じ process slot が解放されるまで Send を拒否する。
 
 ## Security Concerns
 

@@ -1,10 +1,11 @@
-//! Runs `bazel build|test|run <target>` under a PTY and captures its output.
-//! All commands use a PTY; output is saved independently of the Console view.
+//! Runs build/test/run under a PTY; ad-hoc queries use stdout/stderr pipes.
+//! Terminal output is saved independently of the Console view.
 //! Build history is received by the app-owned BES, independently of process exit.
 //!
-//! Stop is best-effort: SIGINT, then SIGKILL after a grace period. An unknown
-//! exit releases the slot with a note. Only
-//! the currently held invocation may be signalled; descendants are not supervised.
+//! Stop for active Bazel work uses its process group: SIGINT, then SIGKILL
+//! after the shared grace period.
+//! An unknown exit releases the slot. Only the currently held operation may be
+//! signalled; descendants are not supervised.
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
 use crate::state::{ActiveInvocation, ConsoleSession, Core, CoreState};
@@ -13,11 +14,8 @@ use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
 use std::io;
-#[cfg(test)]
 use std::os::unix::process::CommandExt;
-use std::process::Command;
-#[cfg(test)]
-use std::process::Stdio;
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -35,6 +33,44 @@ const EXIT_POLL: Duration = Duration::from_millis(25);
 
 /// Shown when the group was killed but no exit was confirmed.
 const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
+
+pub(crate) enum Output<'a> {
+    Terminal(&'a std::fs::File),
+    Pipes,
+}
+
+pub(crate) fn spawn(
+    state: &mut CoreState,
+    command: &mut Command,
+    id: &str,
+    output: Output<'_>,
+) -> io::Result<(Child, Option<crate::terminal::Capture>)> {
+    let (child, terminal, capture) = match output {
+        Output::Terminal(log) => {
+            let (child, terminal, capture) = crate::terminal::spawn(command, log)?;
+            (child, Some(terminal), Some(capture))
+        }
+        Output::Pipes => (
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0)
+                .spawn()?,
+            None,
+            None,
+        ),
+    };
+    state.active_invocation = Some(ActiveInvocation {
+        id: id.into(),
+        terminal,
+        pgid: Some(child.id() as i32),
+        stopping: false,
+        stop_started: None,
+    });
+    state.invocation_note = None;
+    Ok((child, capture))
+}
 
 /// Start an invocation in the open workspace and return its record. The
 /// invocation finishes in the background; target data is refreshed only on
@@ -56,7 +92,7 @@ pub fn start(
     if st.bazel_busy() {
         return Err("bazel is busy".to_string());
     }
-    let endpoint = receiver_endpoint(&st)?;
+    let endpoint = receiver_endpoint(&st)?.to_string();
     // Held across the spawn so the busy check and slot stay one atomic step.
     let id = uuid::Uuid::new_v4().to_string();
     let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
@@ -70,27 +106,22 @@ pub fn start(
         exit_code: None,
     };
     // Its own process group: a stop reaches bazel and whatever it started.
-    let (mut child, terminal, capture) = crate::terminal::spawn(
+    let (mut child, capture) = spawn(
+        &mut st,
         Command::new(&bazel)
-            .args(argv(cmd, pattern, &arguments, endpoint, &rec.id))
+            .args(argv(cmd, pattern, &arguments, &endpoint, &rec.id))
             .current_dir(&ws),
-        &log,
+        &rec.id,
+        Output::Terminal(&log),
     )
     .map_err(|e| format!("failed to spawn {}: {e}", bazel.display()))?;
-    st.active_invocation = Some(ActiveInvocation {
-        id: rec.id.clone().into(),
-        terminal,
-        pgid: Some(child.id() as i32),
-        stopping: false,
-        stop_started: None,
-    });
+    let capture = capture.expect("terminal output capture");
     st.console = Some(ConsoleSession {
         id: rec.id.clone().into(),
         workspace: ws,
         log,
         finished: false,
     });
-    st.invocation_note = None;
     drop(st);
     core.emit(&app);
 
@@ -104,13 +135,7 @@ pub fn start(
         // Drop capture before the slot on unwind, so Console completion can
         // never precede the capture worker's final drain.
         let mut capture = capture;
-        let exit = observe_process(
-            &core,
-            &id,
-            || poll_capture(&mut child, &capture),
-            STOP_GRACE,
-            STOP_CONFIRM,
-        );
+        let exit = wait(&core, &id, || poll_capture(&mut child, &capture));
         // Reap already revoked signal ownership. Keep the slot until terminal
         // capture ends; build history is finalized only by BES.
         let captured = capture.finish();
@@ -153,19 +178,13 @@ fn finish_console(st: &mut CoreState, id: &str) {
     }
 }
 
-/// Stop the invocation in flight: SIGINT to its process group, SIGKILL after
-/// `STOP_GRACE` (3 s) and, if the exit is still unconfirmed `STOP_CONFIRM`
-/// (2 s) later, the slot released with the note. Does nothing when no
-/// invocation is held or a stop is already in flight, so the slot is never
-/// held by a stop.
+/// Stop the active Bazel process through the shared process-group lifecycle.
 pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
     core.emit(&app);
     Ok(())
 }
 
-/// The first request sends SIGINT and fixes the deadlines. Only the thread
-/// owning the child can reap or escalate, so a reap cannot race a later signal.
 fn begin_stop(st: &mut CoreState) {
     let Some(invocation) = st.active_invocation.as_mut() else {
         return;
@@ -179,6 +198,14 @@ fn begin_stop(st: &mut CoreState) {
     if let Err(e) = signal_invocation(st, pgid, Signal::INT) {
         log::warn!("SIGINT to invocation group failed: {e}");
     }
+}
+
+pub(crate) fn wait(
+    core: &Core,
+    id: &str,
+    poll: impl FnMut() -> io::Result<Option<i32>>,
+) -> io::Result<i32> {
+    observe_process(core, id, poll, STOP_GRACE, STOP_CONFIRM)
 }
 
 /// Poll and signal under the same lock. Once try_wait reaps the child, its PID
@@ -237,10 +264,10 @@ fn observe_process(
 
 /// A panic in observation or saving must release the slot and wake app exit.
 /// Normal completion publishes after the slot is released.
-struct BazelSlot<'a, F: Fn()> {
-    core: &'a Core,
-    id: &'a str,
-    emit: F,
+pub(crate) struct BazelSlot<'a, F: Fn()> {
+    pub(crate) core: &'a Core,
+    pub(crate) id: &'a str,
+    pub(crate) emit: F,
 }
 impl<F: Fn()> Drop for BazelSlot<'_, F> {
     fn drop(&mut self) {
@@ -268,17 +295,10 @@ impl<F: Fn()> Drop for BazelSlot<'_, F> {
 
 /// Bound process stopping to the short exit grace. A child already reaped has
 /// nothing left to signal; wait for its in-progress save to release the slot.
-/// A live editor query is simply killed: it has no stop path and the process
-/// is going away either way.
 pub fn exit_stop(core: &Core) {
     let id = {
         let mut st = core.state.lock().expect("application state lock poisoned");
         begin_stop(&mut st);
-        // A query in flight has no stop path of its own; the process is going
-        // away either way, so the group is killed outright.
-        if let Some(pgid) = st.query_pgid {
-            let _ = signal_group(pgid, Signal::KILL);
-        }
         st.active_invocation
             .as_ref()
             .map(|invocation| invocation.id.clone())
@@ -400,7 +420,8 @@ fn signal_invocation(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()
     if let Some(foreground) = st
         .active_invocation
         .as_ref()
-        .and_then(|invocation| invocation.terminal.foreground_group())
+        .and_then(|invocation| invocation.terminal.as_ref())
+        .and_then(crate::terminal::Control::foreground_group)
         && foreground != pgid
     {
         let _ = signal_group(foreground, signal);
@@ -446,7 +467,7 @@ mod tests {
         state.workspace = Some(ws.to_path_buf());
         state.active_invocation = Some(ActiveInvocation {
             id: id.into(),
-            terminal,
+            terminal: Some(terminal),
             pgid: Some(pgid),
             stopping: false,
             stop_started: None,
@@ -1226,6 +1247,64 @@ mod tests {
         assert!(held_pgid(&st).is_none());
         assert!(!is_stopping(&st));
     }
+    fn spawn_pipes(core: &Core, id: &str, command: &mut Command) -> Child {
+        let mut st = core.state.lock().unwrap();
+        let (child, capture) = spawn(&mut st, command, id, Output::Pipes).unwrap();
+        assert!(capture.is_none());
+        child
+    }
+
+    fn wait_child(core: &Core, id: &str, child: &mut Child) -> i32 {
+        wait(core, id, || {
+            child
+                .try_wait()
+                .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+        })
+        .unwrap()
+    }
+
+    fn assert_active_pipe(core: &Core, id: &str) {
+        let st = core.state.lock().unwrap();
+        let invocation = st.active_invocation.as_ref().unwrap();
+        assert_eq!(invocation.id.as_str(), id);
+        assert!(invocation.terminal.is_none());
+        assert!(st.bazel_busy());
+    }
+
+    #[test]
+    fn pipe_invocation_uses_shared_stop_and_releases_the_slot() {
+        let core = Core::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 60"]);
+        let mut child = spawn_pipes(&core, &id, &mut command);
+        let guard = GroupGuard(child.id() as i32);
+        let slot = BazelSlot {
+            core: &core,
+            id: &id,
+            emit: || (),
+        };
+        assert_active_pipe(&core, &id);
+        begin_stop(&mut core.state.lock().unwrap());
+        assert_eq!(wait_child(&core, &id, &mut child), -1);
+        drop(slot);
+        drop(guard);
+        assert!(!core.state.lock().unwrap().bazel_busy());
+
+        let next_id = uuid::Uuid::new_v4().to_string();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        let mut child = spawn_pipes(&core, &next_id, &mut command);
+        let slot = BazelSlot {
+            core: &core,
+            id: &next_id,
+            emit: || (),
+        };
+        assert_eq!(wait_child(&core, &next_id, &mut child), 0);
+        drop(slot);
+        assert!(!core.state.lock().unwrap().bazel_busy());
+    }
+
     #[test]
     fn repeated_stop_does_not_extend_deadlines() {
         let core = Core::new();

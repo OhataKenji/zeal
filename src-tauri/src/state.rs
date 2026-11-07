@@ -29,18 +29,16 @@ pub struct AppStateDto {
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
-    /// Id of the invocation in flight, if any.
+    /// Id of the Bazel operation in flight, if any.
     pub active_invocation: Option<InvocationId>,
     /// The Console whose output can still be read in the open workspace.
     pub console_invocation: Option<InvocationId>,
     /// A stop was accepted for `active_invocation`; it stays until the
-    /// invocation leaves the slot, however it ends.
+    /// Bazel operation leaves the slot, however it ends.
     pub stopping: bool,
-    /// Why the last invocation's exit is unknown: its `wait` failed, or its
+    /// Why the last Bazel process's exit is unknown: its `wait` failed, or its
     /// group was killed and no exit was confirmed.
     pub invocation_note: Option<String>,
-    /// "idle" | "running": whether an ad-hoc editor query is in flight.
-    pub query: &'static str,
     /// "idle" | "running": whether a selected target's detail is loading.
     pub detail_query: &'static str,
 }
@@ -60,7 +58,7 @@ pub struct IngestError {
 pub struct InvocationId(String);
 
 impl InvocationId {
-    /// Wraps an invocation identifier from a persisted invocation record.
+    /// Identifier for an invocation record or active Bazel operation.
     #[must_use]
     pub fn new(value: String) -> Self {
         Self(value)
@@ -92,20 +90,20 @@ impl Deref for InvocationId {
     }
 }
 
-/// The invocation holding the bazel slot. All of its fields exist exactly
-/// while an invocation owns the slot: releasing the slot drops them together,
-/// so a group id can never outlive the invocation it belongs to. `pgid` is
+/// The Bazel operation holding the slot. Its fields exist exactly while it
+/// owns the slot: releasing the slot drops them together,
+/// so a group id can never outlive the operation it belongs to. `pgid` is
 /// revoked at reap so a racing stop can never signal a recycled process group.
 pub struct ActiveInvocation {
-    /// Identifier passed to Bazel for the invocation in flight.
+    /// Identifier for the Bazel operation in flight.
     pub id: InvocationId,
-    /// The PTY the invocation's process writes through.
-    pub terminal: crate::terminal::Control,
+    /// Present for terminal output; queries use stdout/stderr pipes.
+    pub terminal: Option<crate::terminal::Control>,
     /// The child's process group, for the one stop that signals it; `None`
     /// once the owner has reaped the child.
     pub pgid: Option<i32>,
     /// A stop was accepted for `id`: its group was signalled and a repeated
-    /// stop does nothing. It stays until the invocation leaves the slot,
+    /// stop does nothing. It stays until the operation leaves the slot,
     /// however it ends.
     pub stopping: bool,
     /// First stop request; the child owner applies its escalation deadlines.
@@ -118,7 +116,7 @@ impl ActiveInvocation {
     pub fn stub(id: &str, pgid: Option<i32>) -> Self {
         Self {
             id: id.into(),
-            terminal: crate::terminal::Control::stub(),
+            terminal: Some(crate::terminal::Control::stub()),
             pgid,
             stopping: false,
             stop_started: None,
@@ -147,31 +145,23 @@ pub struct CoreState {
     /// The latest target index; swapped atomically per fetch.
     pub snapshot: Option<Arc<TargetIndex>>,
     pub last_error: Option<IngestError>,
-    /// At most one bazel invocation is active: ingest, detail, invocation, or
-    /// editor query. Busy requests are rejected.
+    /// The index/detail phase flags and process slot serialize Bazel work.
+    /// Busy requests are rejected.
     pub ingest_running: bool,
-    /// The invocation holding the slot; `None` when no invocation is in
+    /// The Bazel operation holding the slot; `None` when no process is in
     /// flight.
     pub active_invocation: Option<ActiveInvocation>,
     pub console: Option<ConsoleSession>,
-    /// Message for the UI about why the last invocation's exit is unknown.
+    /// Message for the UI about why the last process exit is unknown.
     pub invocation_note: Option<String>,
-    /// Ad-hoc editor query in flight (the "query" DTO field; distinct from
-    /// ingest's `bazel query //...` snapshot fetch).
-    pub query_running: bool,
     /// Scoped proto query for a selected target.
     pub detail_query_running: bool,
-    /// Process group of the query child (its pid), so app exit can kill it.
-    pub query_pgid: Option<i32>,
 }
 
 impl CoreState {
-    /// Whether any bazel invocation holds the serialized slot.
+    /// Whether Bazel work or an index/detail phase occupies the workspace.
     pub fn bazel_busy(&self) -> bool {
-        self.ingest_running
-            || self.active_invocation.is_some()
-            || self.query_running
-            || self.detail_query_running
+        self.ingest_running || self.active_invocation.is_some() || self.detail_query_running
     }
 }
 
@@ -205,9 +195,7 @@ impl Core {
                 active_invocation: None,
                 console: None,
                 invocation_note: None,
-                query_running: false,
                 detail_query_running: false,
-                query_pgid: None,
             }),
             invocation_finished: Condvar::new(),
         }
@@ -241,7 +229,6 @@ impl Core {
                 .as_ref()
                 .is_some_and(|invocation| invocation.stopping),
             invocation_note: st.invocation_note.clone(),
-            query: if st.query_running { "running" } else { "idle" },
             detail_query: if st.detail_query_running {
                 "running"
             } else {
@@ -316,7 +303,7 @@ mod tests {
 
     /// Every way the serialized slot can be held makes `bazel_busy` true.
     #[test]
-    fn bazel_busy_covers_ingest_invocation_and_query() {
+    fn bazel_busy_covers_ingest_invocation_and_detail_query() {
         let core = Core::new();
         assert!(!core.state.lock().unwrap().bazel_busy());
         {
@@ -327,35 +314,22 @@ mod tests {
             st.active_invocation = Some(ActiveInvocation::stub("r", None));
             assert!(st.bazel_busy());
             st.active_invocation = None;
-            st.query_running = true;
-            assert!(st.bazel_busy());
-            st.query_running = false;
             st.detail_query_running = true;
             assert!(st.bazel_busy());
         }
     }
 
     #[test]
-    fn dto_reports_the_query_state() {
+    fn dto_reports_the_detail_query_state() {
         let core = Core::new();
         let idle = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(idle["query"], "idle");
+        assert_eq!(idle["detailQuery"], "idle");
 
         {
             let mut st = core.state.lock().unwrap();
-            st.query_running = true;
-        }
-        let json = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(json["query"], "running");
-        assert_eq!(json["detailQuery"], "idle");
-
-        {
-            let mut st = core.state.lock().unwrap();
-            st.query_running = false;
             st.detail_query_running = true;
         }
         let json = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(json["query"], "idle");
         assert_eq!(json["detailQuery"], "running");
     }
 
