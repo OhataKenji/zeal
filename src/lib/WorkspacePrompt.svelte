@@ -67,16 +67,10 @@
   }}
 >
   <div class="workspace-folder">
-    <label>
-      Workspace
-      <input
-        class="input workspace-path"
-        value={path}
-        placeholder="No folder selected"
-        readonly
-        disabled={busy}
-      />
-    </label>
+    <div class="workspace-selection">
+      <span>Workspace</span>
+      <span class="workspace-path">{path || "No folder selected"}</span>
+    </div>
     <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
       Choose folder…
     </button>

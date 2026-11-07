@@ -82,8 +82,20 @@
   gap: 8px;
 }
 
-.ws-prompt .workspace-folder label {
+.ws-prompt .workspace-selection {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 4px;
   min-width: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.ws-prompt .workspace-path {
+  color: var(--foreground);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
 }
 
 .ws-prompt .scope-patterns {

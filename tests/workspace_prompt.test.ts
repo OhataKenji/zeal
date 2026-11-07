@@ -42,32 +42,23 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       return match[0];
     }
 
-    await t.test(
-      "an empty workspace shows a readonly path, a picker button, and a disabled open",
-      () => {
-        const html = output("");
-        const inputs = html.match(/<input[^>]*>/g) ?? [];
-        assert.equal(inputs.length, 1);
-        const input = inputs[0];
-        assert.ok(input);
-        assert.match(input, /workspace-path/);
-        assert.match(input, /readonly/);
-        assert.match(input, /placeholder="No folder selected"/);
-        const choose = tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
-        assert.match(choose, /type="button"/);
-        const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
-        assert.match(open, /disabled/);
-        assert.match(html, /Do not open an untrusted repository\./);
-        assert.match(html, /target patterns/);
-        assert.match(html, /scope-patterns/);
-      },
-    );
+    await t.test("an empty workspace shows a picker without a path input and disables open", () => {
+      const html = output("");
+      assert.doesNotMatch(html, /<input\b/);
+      assert.match(html, /No folder selected/);
+      const choose = tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
+      assert.match(choose, /type="button"/);
+      const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
+      assert.match(open, /disabled/);
+      assert.match(html, /Do not open an untrusted repository\./);
+      assert.match(html, /target patterns/);
+      assert.match(html, /scope-patterns/);
+    });
 
-    await t.test("an initial workspace fills the readonly path and enables open", () => {
+    await t.test("an initial workspace is displayed as text and enables open", () => {
       const html = output("/workspace");
-      const input = tag(html, /<input[^>]*workspace-path[^>]*>/);
-      assert.match(input, /readonly/);
-      assert.match(input, /value="\/workspace"/);
+      assert.doesNotMatch(html, /<input\b/);
+      assert.match(html, /class="workspace-path"[^>]*>\/workspace<\/span>/);
       const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
       assert.doesNotMatch(open, /disabled/);
     });
