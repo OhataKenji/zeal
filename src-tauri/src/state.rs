@@ -161,7 +161,7 @@ pub struct CoreState {
     pub query_running: bool,
     /// Scoped proto query for a selected target.
     pub detail_query_running: bool,
-    /// Process group shared by index, detail, and editor queries.
+    /// Process group of the editor query child, so app exit can kill it.
     pub query_pgid: Option<i32>,
     pub query_stopping: bool,
 }

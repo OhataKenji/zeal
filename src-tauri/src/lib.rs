@@ -155,8 +155,8 @@ fn start_invocation(
     )
 }
 
-/// Stop the active Bazel operation: query supervisors send SIGINT and escalate
-/// after the grace period; invocation stops use their process group.
+/// Stop the active Bazel operation. Query owners send SIGINT and otherwise
+/// continue to their existing timeout; invocations use their process group.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocation.stop", skip_all)]
 fn stop_invocation(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {

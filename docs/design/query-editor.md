@@ -156,7 +156,7 @@ serialize は `binary` に常に括弧を付け、記号表記を単語形に正
 
 Execute は snapshot 取り込みと同種の `bazel query` 呼び出しを起こす(build・test の invocation ではない)。
 実行は overview の直列化規則に従い、query・invocation・取り込みのいずれかが実行中なら新しい query を拒否し、理由つきで Execute を無効にする。
-timeout(目安5分)は snapshot 取り込みと同じ規則を適用する。Composer の Stop は実行中の query にも使え、SIGINT の後3秒で SIGKILL に切り替える。さらに2秒で終了を確認できなければ「Could not confirm the exit」として slot を解放する。
+timeout(目安5分)は snapshot 取り込みと同じ規則を適用する。Composer の Stop は実行中の query に SIGINT を送る。SIGINT で終わらない場合も既存の timeout が適用される。
 busy 中の呼び出しはアプリ側で拒否し、外部の bazel が lock を持っている場合は `--noblock_for_lock` で即座に失敗する。
 出力形式の切り替えやプリセット選択では実行しない。Execute ボタンまたは Cmd/Ctrl+Enter で明示的に実行する。
 `--keep_going` は付けない。部分結果を知る手段がないため、早く失敗して式を直させる方が扱いやすい。
@@ -216,7 +216,7 @@ attribute 名(`attr` の `name`、`labels` の `attr_name`)は静的な候補リ
 
 ## Caveats
 
-- Composer の Stop は実行中の query にも使える。SIGINT で終わらない process group は3秒後に SIGKILL し、終了が確認できない場合も2秒後に slot を解放する
+- Composer の Stop は実行中の query に SIGINT を送る。終了しない場合は既存の timeout が適用される
 
 - parse は対応構文の subset のみを扱う。subset 外の query は Builder に戻せず、Code のまま使う
 - serialize の括弧付けと表記の正規化により、Builder 経由後の query 文字列は手書きと見た目が変わる

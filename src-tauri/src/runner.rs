@@ -2,8 +2,8 @@
 //! All commands use a PTY; output is saved independently of the Console view.
 //! Build history is received by the app-owned BES, independently of process exit.
 //!
-//! Stop is best-effort: SIGINT, then SIGKILL after a grace period. An unknown
-//! exit releases the slot with a note. Only
+//! Invocation stop is best-effort: SIGINT, then SIGKILL after a grace period.
+//! An unknown exit releases the slot with a note. Only
 //! the currently held invocation may be signalled; descendants are not supervised.
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 /// Time SIGINT gets to end the invocation before its group is killed.
-pub(crate) const STOP_GRACE: Duration = Duration::from_secs(3);
+const STOP_GRACE: Duration = Duration::from_secs(3);
 /// Time SIGKILL gets to end the invocation before its exit is called unknown
 /// and its slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
@@ -153,22 +153,24 @@ fn finish_console(st: &mut CoreState, id: &str) {
     }
 }
 
-/// Stop the active Bazel operation: query supervisors send SIGINT and escalate
-/// after `STOP_GRACE` (3 s), while invocations use their own process group.
-/// An exit still unconfirmed after `STOP_CONFIRM` (2 s) releases the slot with
-/// a note. Repeated stops do not extend either grace period.
+/// Stop the active Bazel operation. Queries receive SIGINT; invocations keep
+/// their existing process-group stop behavior.
 pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
     begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
     core.emit(&app);
     Ok(())
 }
 
-/// Query owners handle signaling and escalation; this sends SIGINT to an
-/// invocation while its child-owning thread handles reaping and escalation.
+/// Query owners send SIGINT from their polling loops; this also starts the
+/// existing invocation stop behavior.
 fn begin_stop(st: &mut CoreState) {
     if st.ingest_running || st.detail_query_running || st.query_running {
         st.query_stopping = true;
     }
+    begin_invocation_stop(st);
+}
+
+fn begin_invocation_stop(st: &mut CoreState) {
     let Some(invocation) = st.active_invocation.as_mut() else {
         return;
     };
@@ -270,11 +272,13 @@ impl<F: Fn()> Drop for BazelSlot<'_, F> {
 
 /// Bound process stopping to the short exit grace. A child already reaped has
 /// nothing left to signal; wait for its in-progress save to release the slot.
-/// A live query is killed outright because the app is going away.
+/// A live editor query is killed outright because the app is going away.
 pub fn exit_stop(core: &Core) {
     let id = {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        begin_stop(&mut st);
+        begin_invocation_stop(&mut st);
+        // The editor query's group is killed outright because the app is going
+        // away.
         if let Some(pgid) = st.query_pgid {
             let _ = signal_group(pgid, Signal::KILL);
         }

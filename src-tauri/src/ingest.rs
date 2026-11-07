@@ -3,7 +3,6 @@
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-invocation refresh is kept.
 
-use crate::query;
 use crate::query_proto::{self, ParsedQuery};
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
@@ -13,9 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 /// Upper bound for one `bazel query`. First invocations may include a bazelisk
@@ -45,7 +43,6 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
         };
         let query = st.scope.rules_query();
         st.ingest_running = true;
-        st.query_pgid = None;
         st.query_stopping = false;
         (ws, bazel, query)
     };
@@ -77,7 +74,6 @@ pub fn request(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
         }
         st.last_error = error;
         st.ingest_running = false;
-        st.query_pgid = None;
         st.query_stopping = false;
         drop(st);
         core.emit(&app);
@@ -137,7 +133,6 @@ fn acquire_detail(
     };
     let query = crate::scope::target_query(label)?;
     st.detail_query_running = true;
-    st.query_pgid = None;
     st.query_stopping = false;
     Ok((ws, bazel, query))
 }
@@ -155,7 +150,6 @@ impl Drop for DetailSlot {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         st.detail_query_running = false;
-        st.query_pgid = None;
         st.query_stopping = false;
         drop(st);
         if !thread::panicking() {
@@ -195,99 +189,89 @@ fn fetch<T: Send + 'static>(
             });
         }
     };
-    // stdout is parsed on its own thread; stderr is drained concurrently so
-    // the child never blocks on a full pipe.
+    // Read stdout and drain stderr concurrently so the child cannot block.
     let stdout = child.stdout.take().expect("stdout piped");
-    let (parse_tx, parse_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = parse_tx.send(parse(BufReader::new(stdout)));
-    });
+    let parse_handle = thread::spawn(move || parse(BufReader::new(stdout)));
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let (stderr_tx, stderr_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = stderr_tx.send(capture_stderr_tail(&mut stderr));
-    });
-
-    let observed = query::wait(child, core);
-    if let Some(error) = supervision_error(&observed) {
-        return Outcome::Failed(error);
+    let stderr_handle = thread::spawn(move || capture_stderr_tail(&mut stderr));
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let mut interrupted = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = parse_handle.join();
+                let _ = stderr_handle.join();
+                return Outcome::Failed(IngestError {
+                    exit_code: None,
+                    summary: format!("query timed out after {}s", QUERY_TIMEOUT.as_secs()),
+                });
+            }
+            Ok(None) => {
+                send_interrupt_if_stopping(core, child.id() as i32, &mut interrupted);
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = parse_handle.join();
+                let _ = stderr_handle.join();
+                return Outcome::Failed(IngestError {
+                    exit_code: None,
+                    summary: format!("failed to wait on query: {e}"),
+                });
+            }
+        }
+    };
+    if interrupted {
+        return Outcome::Failed(IngestError {
+            exit_code: status.code(),
+            summary: "Query stopped".to_string(),
+        });
     }
-    let parsed = query::drain(&parse_rx, observed.unconfirmed);
-    let stderr_bytes = query::drain(&stderr_rx, observed.unconfirmed);
-    finish_fetch(observed, parsed, stderr_bytes, &parse_rx, has_data)
-}
-
-fn finish_fetch<T>(
-    observed: query::Observed,
-    parsed: Option<Result<T, String>>,
-    stderr_bytes: Option<Vec<u8>>,
-    parse_rx: &mpsc::Receiver<Result<T, String>>,
-    has_data: impl Fn(&T) -> bool,
-) -> Outcome<T> {
+    let parsed = parse_handle
+        .join()
+        .unwrap_or_else(|_| Err("query output parser failed".to_string()));
+    let stderr_bytes = stderr_handle.join().unwrap_or_default();
+    let stderr_tail = String::from_utf8_lossy(&stderr_bytes);
+    let code = status.code();
     let data = match parsed {
-        Some(Ok(data)) => data,
-        Some(Err(summary)) => {
+        Ok(data) => data,
+        Err(summary) => {
             return Outcome::Failed(IngestError {
-                exit_code: observed.exit,
+                exit_code: code,
                 summary,
             });
         }
-        None => {
-            return Outcome::Failed(parser_failure(observed.exit, parse_rx));
-        }
     };
-    let Some(stderr_bytes) = stderr_bytes else {
-        return Outcome::Failed(IngestError {
-            exit_code: observed.exit,
-            summary: "Could not confirm the exit".to_string(),
-        });
-    };
-    let stderr_tail = String::from_utf8_lossy(&stderr_bytes);
-    match observed.exit {
+    match code {
         Some(0) => Outcome::Ok(data),
         _ if has_data(&data) => Outcome::Partial(
             data,
             IngestError {
-                exit_code: observed.exit,
+                exit_code: code,
                 summary: summarize(&stderr_tail),
             },
         ),
         _ => Outcome::Failed(IngestError {
-            exit_code: observed.exit,
+            exit_code: code,
             summary: summarize(&stderr_tail),
         }),
     }
 }
 
-fn supervision_error(observed: &query::Observed) -> Option<IngestError> {
-    if observed.unconfirmed {
-        Some(IngestError {
-            exit_code: observed.exit,
-            summary: "Could not confirm the exit".to_string(),
-        })
-    } else if observed.cancelled {
-        Some(IngestError {
-            exit_code: observed.exit,
-            summary: "Query stopped".to_string(),
-        })
-    } else if observed.timed_out {
-        Some(IngestError {
-            exit_code: None,
-            summary: format!("query timed out after {}s", QUERY_TIMEOUT.as_secs()),
-        })
-    } else {
-        None
-    }
-}
-
-fn parser_failure<T>(exit_code: Option<i32>, parse_rx: &mpsc::Receiver<T>) -> IngestError {
-    IngestError {
-        exit_code,
-        summary: if matches!(parse_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
-            "query output parser failed".to_string()
-        } else {
-            "Could not confirm the exit".to_string()
-        },
+fn send_interrupt_if_stopping(core: &Core, pgid: i32, interrupted: &mut bool) {
+    let query_stopping = core
+        .state
+        .lock()
+        .expect("application state lock poisoned")
+        .query_stopping;
+    if let (true, false) = (query_stopping, *interrupted) {
+        *interrupted = true;
+        let _ = crate::runner::signal_group(pgid, rustix::process::Signal::INT)
+            .inspect_err(|error| log::warn!("SIGINT to query group failed: {error}"));
     }
 }
 
@@ -400,10 +384,7 @@ while [ "$i" -lt 40 ]; do
 done
 printf 'final diagnostic marker\n' >&2
 case "$2" in
-  slow-cancel)
-    trap 'exit 130' INT
-    sh -c 'trap "printf stopped > descendant-stopped; exit 0" INT; : > descendant-ready; while :; do sleep 1; done'
-    ;;
+  slow) exec sleep 60 ;;
   success) code=0 ;;
   partial) code=9 ;;
   failed) code=7 ;;
@@ -438,20 +419,11 @@ exit "$code"
         }
     }
 
-    fn fetch_list(core: &Core, fixture: &QueryFixture, scenario: &str) -> Outcome<Vec<Target>> {
-        fetch_list_at(core, &fixture.workspace, &fixture.bazel, scenario)
-    }
-
-    fn fetch_list_at(
-        core: &Core,
-        workspace: &Path,
-        bazel: &Path,
-        scenario: &str,
-    ) -> Outcome<Vec<Target>> {
+    fn fetch_list(fixture: &QueryFixture, scenario: &str) -> Outcome<Vec<Target>> {
         fetch(
-            core,
-            workspace,
-            bazel,
+            &Core::new(),
+            &fixture.workspace,
+            &fixture.bazel,
             scenario,
             "label_kind",
             snapshot::parse_label_kind,
@@ -459,9 +431,9 @@ exit "$code"
         )
     }
 
-    fn fetch_detail(core: &Core, fixture: &QueryFixture, scenario: &str) -> Outcome<ParsedQuery> {
+    fn fetch_detail(fixture: &QueryFixture, scenario: &str) -> Outcome<ParsedQuery> {
         fetch(
-            core,
+            &Core::new(),
             &fixture.workspace,
             &fixture.bazel,
             scenario,
@@ -471,107 +443,11 @@ exit "$code"
         )
     }
 
-    fn kill_query_group(core: &Core) {
-        if let Some(pgid) = core.state.lock().unwrap().query_pgid {
-            let _ = crate::runner::signal_group(pgid, rustix::process::Signal::KILL);
-        }
-    }
-
-    fn ready_query_pgid(core: &Core, ready_path: &Path) -> Option<i32> {
-        ready_path
-            .exists()
-            .then(|| core.state.lock().unwrap().query_pgid)
-            .flatten()
-    }
-
-    fn wait_for_query_ready(
-        core: &Core,
-        ready_path: &Path,
-        result_rx: &mpsc::Receiver<Outcome<Vec<Target>>>,
-        worker: thread::JoinHandle<()>,
-    ) -> (i32, thread::JoinHandle<()>) {
-        let ready_deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while ready_query_pgid(core, ready_path).is_none()
-            && std::time::Instant::now() < ready_deadline
-        {
-            thread::sleep(Duration::from_millis(10));
-        }
-        let pgid = (std::time::Instant::now() < ready_deadline)
-            .then(|| ready_query_pgid(core, ready_path))
-            .flatten();
-        let Some(pgid) = pgid else {
-            core.state.lock().unwrap().query_stopping = true;
-            kill_query_group(core);
-            let _ = result_rx.recv_timeout(Duration::from_secs(2));
-            let _ = worker.join();
-            panic!("fake Bazel did not report readiness");
-        };
-        (pgid, worker)
-    }
-
-    fn stop_ingest_query(
-        core: &Core,
-        pgid: i32,
-        result_rx: &mpsc::Receiver<Outcome<Vec<Target>>>,
-        worker: thread::JoinHandle<()>,
-    ) -> (Outcome<Vec<Target>>, Duration) {
-        let started = std::time::Instant::now();
-        core.state.lock().unwrap().query_stopping = true;
-        let outcome =
-            match result_rx.recv_timeout(crate::runner::STOP_GRACE + Duration::from_secs(3)) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    let _ = crate::runner::signal_group(pgid, rustix::process::Signal::KILL);
-                    let _ = result_rx.recv_timeout(Duration::from_secs(2));
-                    let _ = worker.join();
-                    panic!("query cancellation did not return: {error}");
-                }
-            };
-        worker.join().unwrap();
-        (outcome, started.elapsed())
-    }
-
-    fn set_ingest_slot(core: &Core, running: bool) {
-        let mut st = core.state.lock().unwrap();
-        st.ingest_running = running;
-        st.query_pgid = None;
-        st.query_stopping = false;
-    }
-
-    fn stopped_ingest_summary(outcome: Outcome<Vec<Target>>) -> String {
-        match outcome {
-            Outcome::Failed(error) => error.summary,
-            _ => panic!("cancelled ingest did not fail"),
-        }
-    }
-
-    fn successful_ingest_targets(outcome: Outcome<Vec<Target>>) -> Vec<Target> {
-        match outcome {
-            Outcome::Ok(targets) => targets,
-            _ => panic!("successful ingest did not succeed"),
-        }
-    }
-
-    #[test]
-    fn unconfirmed_cancellation_is_not_reported_as_stopped() {
-        assert_eq!(
-            supervision_error(&query::Observed {
-                exit: None,
-                timed_out: false,
-                unconfirmed: true,
-                cancelled: true,
-            })
-            .unwrap()
-            .summary,
-            "Could not confirm the exit"
-        );
-    }
-
     #[test]
     fn heavy_stderr_does_not_block_target_list_success() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_list(&Core::new(), &fixture, "success"), Outcome::Ok(targets) if targets.len() == 1)
+            matches!(fetch_list(&fixture, "success"), Outcome::Ok(targets) if targets.len() == 1)
         );
     }
 
@@ -579,7 +455,7 @@ exit "$code"
     fn heavy_stderr_preserves_partial_target_list() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_list(&Core::new(), &fixture, "partial"), Outcome::Partial(targets, error)
+            matches!(fetch_list(&fixture, "partial"), Outcome::Partial(targets, error)
             if targets.len() == 1 && error.exit_code == Some(9) && error.summary == "final diagnostic marker")
         );
     }
@@ -588,7 +464,7 @@ exit "$code"
     fn heavy_stderr_allows_successful_selected_target_detail() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_detail(&Core::new(), &fixture, "success"), Outcome::Ok(query)
+            matches!(fetch_detail(&fixture, "success"), Outcome::Ok(query)
             if query.rules.len() == 1 && query.rules[0].label == "//app:chosen")
         );
     }
@@ -597,7 +473,7 @@ exit "$code"
     fn heavy_stderr_preserves_partial_selected_target_detail() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_detail(&Core::new(), &fixture, "partial"), Outcome::Partial(query, error)
+            matches!(fetch_detail(&fixture, "partial"), Outcome::Partial(query, error)
             if query.rules.len() == 1 && error.exit_code == Some(9) && error.summary == "final diagnostic marker")
         );
     }
@@ -606,7 +482,7 @@ exit "$code"
     fn malformed_proto_fails_despite_zero_exit() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_detail(&Core::new(), &fixture, "malformed-success"), Outcome::Failed(error)
+            matches!(fetch_detail(&fixture, "malformed-success"), Outcome::Failed(error)
             if error.exit_code == Some(0) && error.summary.contains("protobuf"))
         );
     }
@@ -615,7 +491,7 @@ exit "$code"
     fn malformed_proto_fails_partial_output() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_detail(&Core::new(), &fixture, "malformed-partial"), Outcome::Failed(error)
+            matches!(fetch_detail(&fixture, "malformed-partial"), Outcome::Failed(error)
             if error.exit_code == Some(9) && error.summary.contains("protobuf"))
         );
     }
@@ -624,55 +500,30 @@ exit "$code"
     fn heavy_stderr_reports_failed_selected_target_detail() {
         let fixture = QueryFixture::new();
         assert!(
-            matches!(fetch_detail(&Core::new(), &fixture, "failed"), Outcome::Failed(error)
+            matches!(fetch_detail(&fixture, "failed"), Outcome::Failed(error)
             if error.exit_code == Some(7) && error.summary == "final diagnostic marker")
         );
     }
 
     #[test]
-    fn stopping_ingest_cancels_its_group_and_keeps_the_slot_reusable() {
+    fn stop_interrupts_an_ingest_query() {
         let fixture = QueryFixture::new();
-        let core = Arc::new(Core::new());
-        set_ingest_slot(&core, true);
+        let core = Core::new();
+        core.state.lock().unwrap().query_stopping = true;
+        let started = Instant::now();
 
-        let fetch_core = core.clone();
-        let workspace = fixture.workspace.clone();
-        let bazel = fixture.bazel.clone();
-        let (result_tx, result_rx) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let _ = result_tx.send(fetch_list_at(
-                &fetch_core,
-                &workspace,
-                &bazel,
-                "slow-cancel",
-            ));
-        });
-        let (pgid, worker) = wait_for_query_ready(
+        let outcome = fetch(
             &core,
-            &fixture.workspace.join("descendant-ready"),
-            &result_rx,
-            worker,
+            &fixture.workspace,
+            &fixture.bazel,
+            "slow",
+            "label_kind",
+            snapshot::parse_label_kind,
+            |targets: &Vec<Target>| !targets.is_empty(),
         );
-        let (outcome, elapsed) = stop_ingest_query(&core, pgid, &result_rx, worker);
-        assert!(elapsed < crate::runner::STOP_GRACE + Duration::from_secs(3));
-        assert_eq!(stopped_ingest_summary(outcome), "Query stopped");
-        assert!(
-            fixture.workspace.join("descendant-stopped").exists(),
-            "SIGINT did not reach the descendant"
-        );
-        set_ingest_slot(&core, false);
-        let st = core.state.lock().unwrap();
-        assert_eq!(
-            (st.query_pgid, st.snapshot.is_some(), st.bazel_busy()),
-            (None, false, false)
-        );
-        drop(st);
-        set_ingest_slot(&core, true);
-        assert_eq!(
-            successful_ingest_targets(fetch_list(&core, &fixture, "success")).len(),
-            1
-        );
-        set_ingest_slot(&core, false);
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(matches!(outcome, Outcome::Failed(error) if error.summary == "Query stopped"));
     }
 
     #[test]
@@ -698,25 +549,11 @@ exit "$code"
         }
         assert!(acquire_detail(&core, "//app:chosen", 6).is_err());
         assert!(acquire_detail(&core, "//app:unknown", 7).is_err());
-        let mut st = core.state.lock().unwrap();
-        st.query_pgid = Some(42);
-        st.query_stopping = true;
-        drop(st);
         let (ws, bazel, query) = acquire_detail(&core, "//app:chosen", 7).unwrap();
-        assert_eq!(
-            (ws, bazel, query),
-            (
-                PathBuf::from("/ws"),
-                PathBuf::from("/bin/bazel"),
-                crate::scope::target_query("//app:chosen").unwrap()
-            )
-        );
-        let st = core.state.lock().unwrap();
-        assert_eq!(
-            (st.detail_query_running, st.query_pgid, st.query_stopping),
-            (true, None, false)
-        );
-        drop(st);
+        assert_eq!(ws, PathBuf::from("/ws"));
+        assert_eq!(bazel, PathBuf::from("/bin/bazel"));
+        assert_eq!(query, crate::scope::target_query("//app:chosen").unwrap());
+        assert!(core.state.lock().unwrap().detail_query_running);
         assert!(acquire_detail(&core, "//app:chosen", 7).is_err());
     }
 }
