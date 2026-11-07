@@ -8,9 +8,11 @@ Zeal は workspace を開いたとき、Scope 内の rule を `bazel query --out
 この結果にはツリーと検索に必要な label と rule class が入る。
 取得した一覧をメモリに保持し、refresh が成功したときに一括で置き換える。
 
-利用者が target を選ぶと、Zeal はその rule と直接依存する source file だけを XML 形式で取得する。
-XML から選択 target の属性、入出力ファイル、定義位置を求める。
-UI へ渡すのは選択 target の詳細だけであり、XML 全体は保持しない。
+利用者が target を選ぶと、Zeal はその rule と直接依存する source file だけを proto 形式で取得する。
+Bazel の query schema から生成した型で decode し、選択 target の属性、入出力ファイル、定義位置を求める。
+壊れた byte 列は error とし、`--keep_going` の正常な部分結果はこれまでどおり受理する。
+既定の出力では `select()` の scalar 属性が値なしで届くことがあり、その場合は関係を作らない。
+UI へ渡すのは選択 target の詳細だけであり、query 結果全体は保持しない。
 一覧の先頭 target を自動選択しないため、クリック前に詳細 query は走らない。
 
 両 query は build、test、run、Query Editor と同じ Bazel の排他枠を使う。

@@ -5,7 +5,7 @@
 
 use crate::label;
 use crate::label::LabelParts;
-use crate::xml::{ParsedQuery, RawRule};
+use crate::query_proto::{ParsedQuery, RawRule};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::io::BufRead;
@@ -89,7 +89,7 @@ pub struct TargetDetail {
     pub status: Status,
 }
 
-/// Parse Bazel's `<rule class> rule <label>` lines without XML attributes.
+/// Parse Bazel's `<rule class> rule <label>` lines.
 #[tracing::instrument(target = "zeal::operations", name = "query.label_kind_parse", skip_all)]
 pub fn parse_label_kind(input: impl BufRead) -> Result<Vec<Target>, String> {
     let mut targets = Vec::new();
@@ -246,8 +246,8 @@ fn rule_relationships(
             role: attr.clone(),
         });
     }
-    // Outputs come only from <rule-output>: output-typed attributes like
-    // `outs` arrive as <output> elements and are never label_attrs.
+    // Outputs come only from `rule_output`: output-typed attributes like
+    // `outs` are not label kinds and never become label_attrs.
     for out in &r.outputs {
         files.insert(FileEntry {
             path: label::label_to_path(&label::normalize(out)),
@@ -273,9 +273,113 @@ fn dep_label(attr: &str, raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xml;
     use std::collections::HashMap;
     use std::io::Cursor;
+
+    fn rule(
+        label: &str,
+        class: &str,
+        location: Option<(&str, u32)>,
+        attrs: &[(&str, &str)],
+        outputs: &[&str],
+    ) -> RawRule {
+        RawRule {
+            label: label.to_string(),
+            rule_class: class.to_string(),
+            location: location.map(|(file, line)| (file.to_string(), line)),
+            label_attrs: attrs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            outputs: outputs.iter().map(|output| output.to_string()).collect(),
+        }
+    }
+
+    /// The internal shape the retired `query.xml` fixture parsed to: seven
+    /// rules and five source files.
+    fn fixture_rules() -> ParsedQuery {
+        ParsedQuery {
+            rules: vec![
+                rule(
+                    "//app/lib:parser",
+                    "java_library",
+                    Some(("/repo/app/lib/BUILD", 3)),
+                    &[
+                        ("srcs", "//app/lib:Parser.java"),
+                        ("srcs", "//app/lib:Token.java"),
+                        ("deps", "//app/lib:parser_proto"),
+                        ("deps", "@@maven+//:com_google_guava_guava"),
+                        ("data", "//app:grammars"),
+                        ("data", "//app/lib:grammars.txt"),
+                        ("visibility", "//visibility:public"),
+                        ("$cc_toolchain", "//tools:cc"),
+                        ("deps_opt", "//conditions:default"),
+                        ("deps_opt", "//app/lib:parser_proto"),
+                    ],
+                    &["//app/lib:libparser.jar"],
+                ),
+                rule(
+                    "//app/lib:parser_proto",
+                    "proto_library",
+                    Some(("/repo/app/lib/BUILD", 10)),
+                    &[("srcs", "//app/lib:parser.proto")],
+                    &["//app/lib:libparser_proto_proto-descriptor-set.proto.bin"],
+                ),
+                rule(
+                    "//app/lib:parser_test",
+                    "java_test",
+                    Some(("/repo/app/lib/BUILD", 15)),
+                    &[
+                        ("srcs", "//app/lib:Parser.java"),
+                        ("deps", "//app/lib:parser"),
+                    ],
+                    &[],
+                ),
+                rule(
+                    "//app",
+                    "java_binary",
+                    Some(("/repo/app/BUILD", 2)),
+                    &[
+                        ("deps", "//app/lib:parser"),
+                        ("data", "//app:server.cfg"),
+                        ("tools", "//tools:launcher"),
+                    ],
+                    &["//app:server.jar"],
+                ),
+                rule(
+                    "//app:grammars",
+                    "filegroup",
+                    Some(("/repo/app/BUILD", 9)),
+                    &[("srcs", "//app:g1.txt"), ("srcs", "//app:g2.txt")],
+                    &[],
+                ),
+                rule(
+                    "//tools:launcher",
+                    "genrule",
+                    Some(("/repo/tools/build_defs.bzl", 22)),
+                    &[],
+                    &["//tools:launcher.sh"],
+                ),
+                rule(
+                    "//tools:cc",
+                    "cc_library",
+                    Some(("/repo/tools/BUILD", 4)),
+                    &[],
+                    &[],
+                ),
+            ],
+            source_files: [
+                "//app/lib:Parser.java",
+                "//app/lib:Token.java",
+                "//app/lib:grammars.txt",
+                "//app/lib:parser.proto",
+                "//app:server.cfg",
+            ]
+            .iter()
+            .map(|name| name.to_string())
+            .collect(),
+        }
+    }
 
     #[test]
     fn label_kind_parses_rules_into_sorted_targets() {
@@ -306,22 +410,26 @@ mod tests {
 
     #[test]
     fn selected_detail_excludes_other_targets_relationships() {
-        let query = xml::parse_query(Cursor::new(
-            r#"<query>
-              <rule class="r" name="//app:chosen">
-                <list name="deps"><label value="//app:dep"/></list>
-                <list name="srcs"><label value="//app:input.txt"/></list>
-                <rule-output name="//app:out.txt"/>
-              </rule>
-              <rule class="r" name="//app:user"><list name="deps"><label value="//app:chosen"/></list></rule>
-              <rule class="r" name="//app:other">
-                <list name="deps"><label value="//app:else"/></list>
-                <list name="srcs"><label value="//app:other.txt"/></list>
-              </rule>
-              <source-file name="//app:input.txt"/>
-              <source-file name="//app:other.txt"/>
-            </query>"#,
-        ));
+        let query = ParsedQuery {
+            rules: vec![
+                rule(
+                    "//app:chosen",
+                    "r",
+                    None,
+                    &[("deps", "//app:dep"), ("srcs", "//app:input.txt")],
+                    &["//app:out.txt"],
+                ),
+                rule("//app:user", "r", None, &[("deps", "//app:chosen")], &[]),
+                rule(
+                    "//app:other",
+                    "r",
+                    None,
+                    &[("deps", "//app:else"), ("srcs", "//app:other.txt")],
+                    &[],
+                ),
+            ],
+            source_files: vec!["//app:input.txt".into(), "//app:other.txt".into()],
+        };
         let detail = select_detail(build(&query, Status::Ok), "//app:chosen").unwrap();
         assert_eq!(detail.edges.len(), 1);
         assert!(detail.edges.iter().all(|edge| edge.from == "//app:chosen"));
@@ -330,31 +438,28 @@ mod tests {
         assert_eq!(detail.target.label, "//app:chosen");
     }
 
-    fn fixture_rules() -> xml::ParsedQuery {
-        let xml = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/query.xml"
-        ))
-        .unwrap();
-        xml::parse_query(Cursor::new(xml))
-    }
-
     #[test]
     fn conditions_packages_keep_rule_and_file_inputs() {
-        let rules = xml::parse_query(Cursor::new(
-            r#"<query>
-              <rule class="filegroup" name="//app:direct">
-                <list name="srcs">
-                  <label value="//conditions:inputs"/>
-                  <label value="//conditions:input.txt"/>
-                  <label value="//tools/conditions:input.txt"/>
-                </list>
-              </rule>
-              <rule class="filegroup" name="//conditions:inputs"/>
-              <source-file name="//conditions:input.txt"/>
-              <source-file name="//tools/conditions:input.txt"/>
-            </query>"#,
-        ));
+        let rules = ParsedQuery {
+            rules: vec![
+                rule(
+                    "//app:direct",
+                    "filegroup",
+                    None,
+                    &[
+                        ("srcs", "//conditions:inputs"),
+                        ("srcs", "//conditions:input.txt"),
+                        ("srcs", "//tools/conditions:input.txt"),
+                    ],
+                    &[],
+                ),
+                rule("//conditions:inputs", "filegroup", None, &[], &[]),
+            ],
+            source_files: vec![
+                "//conditions:input.txt".into(),
+                "//tools/conditions:input.txt".into(),
+            ],
+        };
         let snapshot = build(&rules, Status::Ok);
         assert!(snapshot.edges.contains(&Edge {
             from: "//app:direct".into(),
@@ -414,8 +519,6 @@ mod tests {
         assert!(!edges.iter().any(|e| e.1 == "//visibility:public"));
         assert!(!edges.iter().any(|e| e.2 == "$cc_toolchain"));
         assert!(!edges.iter().any(|e| e.1.contains("conditions")));
-        // And rule-input never produces edges.
-        assert!(!edges.iter().any(|e| e.1.contains("SHOULD_NOT")));
     }
 
     /// File entries grouped by path as (owner, role) pairs.
@@ -462,8 +565,8 @@ mod tests {
         let snap = build(&fixture_rules(), Status::Ok);
         let owners = owners_by_path(&snap);
 
-        // Outputs carry role `out`; a genrule's `outs` label merges with its
-        // <rule-output> into a single entry.
+        // Outputs carry role `out`; a genrule's `outs` is an output-typed
+        // attribute, so its file entry comes only from `rule_output`.
         assert_eq!(
             owners["app/lib/libparser.jar"],
             [("//app/lib:parser", "out")]
@@ -484,11 +587,19 @@ mod tests {
 
     #[test]
     fn edges_dedup() {
-        let rules = xml::parse_query(Cursor::new(
-            r#"<query><rule name="//a:x" class="r"><list name="deps">
-            <label value="//a:y"/><label value="//a:y"/></list></rule>
-            <rule name="//a:y" class="r"/></query>"#,
-        ));
+        let rules = ParsedQuery {
+            rules: vec![
+                rule(
+                    "//a:x",
+                    "r",
+                    None,
+                    &[("deps", "//a:y"), ("deps", "//a:y")],
+                    &[],
+                ),
+                rule("//a:y", "r", None, &[], &[]),
+            ],
+            source_files: vec![],
+        };
         let snap = build(&rules, Status::Ok);
         assert_eq!(
             snap.edges,
@@ -501,14 +612,16 @@ mod tests {
     }
     #[test]
     fn references_outside_scope_are_not_assumed_to_be_files() {
-        let query = xml::parse_query(Cursor::new(
-            r#"<query>
-          <rule name="//app:main" class="r"><list name="srcs">
-            <label value="//other:generated"/><label value="//app:main.rs"/>
-          </list></rule>
-          <source-file name="//app:main.rs"/>
-        </query>"#,
-        ));
+        let query = ParsedQuery {
+            rules: vec![rule(
+                "//app:main",
+                "r",
+                None,
+                &[("srcs", "//other:generated"), ("srcs", "//app:main.rs")],
+                &[],
+            )],
+            source_files: vec!["//app:main.rs".into()],
+        };
         let snap = build(&query, Status::Ok);
         assert_eq!(snap.targets.len(), 1);
         assert_eq!(snap.edges[0].to, "//other:generated");

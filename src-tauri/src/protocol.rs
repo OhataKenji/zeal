@@ -11,3 +11,6 @@ pub mod bes {
 pub mod bep {
     pub use super::generated::build_event_stream::*;
 }
+pub mod query {
+    pub use super::generated::blaze_query::*;
+}

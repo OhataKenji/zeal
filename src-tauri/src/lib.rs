@@ -7,6 +7,7 @@ mod label;
 mod profile;
 mod protocol;
 mod query;
+mod query_proto;
 mod runargs;
 mod runner;
 mod scope;
@@ -16,7 +17,6 @@ mod store;
 mod telemetry;
 mod terminal;
 mod workspace;
-mod xml;
 
 // Public boundaries used by external clients and integration tests.
 pub use bes::serve as serve_build_events;

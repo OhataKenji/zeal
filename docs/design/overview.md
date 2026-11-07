@@ -51,12 +51,12 @@ flowchart TD
     BAZEL["bazel CLI<br/>query ・ build/test/run"]
     UI <-->|"Tauri commands / events"| CORE
     CORE -->|"spawn + 観測 flag"| BAZEL
-    BAZEL -->|"BES event / profile(file) / query XML(stdout)"| CORE
+    BAZEL -->|"BES event / profile(file) / query proto(stdout)"| CORE
 ```
 
 データは二系統に分かれる。
 構造データのうち target の一覧は起動時に `bazel query --output=label_kind` で取得し、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
-属性、依存、file は target を選んだときに XML query で取得する([Target の段階的な取得](./target-loading.md))。
+属性、依存、file は target を選んだときに proto query で取得する([Target の段階的な取得](./target-loading.md))。
 観測データは invocation ごとの BEP と profile に残す。
 invocationのevent fileは詳細表示のたびに一度parseし、入力、BEP時刻、build exitはSQLiteの共通invocation表に保存する。
 phase の集計値や parse 結果は DB に保存しない。
@@ -78,7 +78,7 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 | UI(Svelte)      | content 3状態(target / invocation / analytics)の表示、composer、tree、invocations 一覧 |
 | core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                       |
 | core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理        |
-| core::ingest    | query XML / BEP / profile の parse。観測 file は詳細表示のたびに読む                   |
+| core::ingest    | query proto / BEP / profile の parse。観測 file は詳細表示のたびに読む                 |
 | core::store     | BEPの元事実をSQLite、ログ込みeventと任意のprofileをfileへ保存する                      |
 
 live ConsoleはPTYの出力を表示し、stdinと停止をメモリのprocess状態で制御する。

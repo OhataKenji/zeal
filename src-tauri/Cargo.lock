@@ -5673,7 +5673,6 @@ dependencies = [
  "prost-build",
  "prost-types",
  "protoc-bin-vendored",
- "quick-xml",
  "reqwest",
  "rusqlite",
  "rustix",

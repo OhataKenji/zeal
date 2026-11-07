@@ -5,6 +5,7 @@ fn main() {
     let bazel_bep = format!(
         "{bazel_proto_root}/src/main/java/com/google/devtools/build/lib/buildeventstream/proto/build_event_stream.proto"
     );
+    let bazel_query = format!("{bazel_proto_root}/src/main/protobuf/build.proto");
     let includes = vec![
         "proto".to_owned(),
         bazel_proto_root.to_owned(),
@@ -15,7 +16,11 @@ fn main() {
     ];
     config.include_file("bazel_protos.rs");
     tonic_build::configure()
-        .compile_protos_with_config(config, &["proto/bes.proto", &bazel_bep], &includes)
-        .expect("compile BES/BEP protocol");
+        .compile_protos_with_config(
+            config,
+            &["proto/bes.proto", &bazel_bep, &bazel_query],
+            &includes,
+        )
+        .expect("compile Bazel protocols");
     tauri_build::build()
 }

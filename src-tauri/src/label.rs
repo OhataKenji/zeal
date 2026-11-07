@@ -1,6 +1,6 @@
 //! Bazel label helpers: normalization, package/name split, file path derivation.
 
-/// Normalize absolute labels found in `bazel query --output=xml` output.
+/// Normalize absolute labels found in `bazel query` output.
 /// Keep canonical (`@@repo`) and apparent (`@repo`) repository names distinct:
 /// converting between them requires the referring repository's mapping.
 /// The main repository's `@@//` is equivalent to `//` in this query context.

@@ -1,11 +1,11 @@
-//! Fast target-list ingestion and on-demand XML details for one target.
+//! Fast target-list ingestion and on-demand proto details for one target.
 //!
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-invocation refresh is kept.
 
+use crate::query_proto::{self, ParsedQuery};
 use crate::snapshot::{self, Status, Target};
 use crate::state::{Core, IngestError};
-use crate::xml::{self, ParsedQuery};
 use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
@@ -95,8 +95,8 @@ pub fn target_detail(
         &ws,
         &bazel,
         &query,
-        "xml",
-        |output| Ok(xml::parse_query(output)),
+        "proto",
+        query_proto::parse_query,
         |query: &ParsedQuery| !query.rules.is_empty(),
     ) {
         Outcome::Ok(query) => (query, Status::Ok),
@@ -151,7 +151,7 @@ impl Drop for DetailSlot {
     }
 }
 
-/// Run one scoped query and parse stdout as it arrives.
+/// Run one scoped query and parse stdout.
 #[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
 fn fetch<T: Send + 'static>(
     ws: &Path,
@@ -180,7 +180,7 @@ fn fetch<T: Send + 'static>(
             });
         }
     };
-    // stdout is parsed as it arrives; stderr is drained concurrently so the
+    // stdout is read on its own thread; stderr is drained concurrently so the
     // child never blocks on a full pipe.
     let stdout = child.stdout.take().expect("stdout piped");
     let parse_handle = thread::spawn(move || parse(BufReader::new(stdout)));
@@ -290,7 +290,9 @@ fn summarize(stderr_tail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::query as query_schema;
     use crate::snapshot::{Meta, TargetIndex};
+    use prost::Message;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -333,6 +335,19 @@ mod tests {
             let workspace =
                 std::env::temp_dir().join(format!("zeal-ingest-stderr-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&workspace).unwrap();
+            let result = query_schema::QueryResult {
+                target: vec![query_schema::Target {
+                    r#type: query_schema::target::Discriminator::Rule as i32,
+                    rule: Some(query_schema::Rule {
+                        name: "//app:chosen".to_string(),
+                        rule_class: "cc_library".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+            };
+            fs::write(workspace.join("query.pb"), result.encode_to_vec()).unwrap();
+            fs::write(workspace.join("bad.pb"), [0x0a, 0x80]).unwrap();
             let bazel = workspace.join("bazel");
             fs::write(
                 &bazel,
@@ -347,12 +362,19 @@ case "$2" in
   success) code=0 ;;
   partial) code=9 ;;
   failed) code=7 ;;
+  malformed-success) code=0 ;;
+  malformed-partial) code=9 ;;
   *) exit 99 ;;
 esac
 if [ "$2" != failed ]; then
   case "$3" in
     --output=label_kind) printf 'cc_library rule //app:chosen\n' ;;
-    --output=xml) printf '<query><rule class="cc_library" name="//app:chosen"/></query>\n' ;;
+    --output=proto)
+      case "$2" in
+        malformed-*) cat bad.pb ;;
+        *) cat query.pb ;;
+      esac
+      ;;
     *) exit 99 ;;
   esac
 fi
@@ -387,8 +409,8 @@ exit "$code"
             &fixture.workspace,
             &fixture.bazel,
             scenario,
-            "xml",
-            |output| Ok(xml::parse_query(output)),
+            "proto",
+            query_proto::parse_query,
             |query: &ParsedQuery| !query.rules.is_empty(),
         )
     }
@@ -411,11 +433,38 @@ exit "$code"
     }
 
     #[test]
+    fn heavy_stderr_allows_successful_selected_target_detail() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_detail(&fixture, "success"), Outcome::Ok(query)
+            if query.rules.len() == 1 && query.rules[0].label == "//app:chosen")
+        );
+    }
+
+    #[test]
     fn heavy_stderr_preserves_partial_selected_target_detail() {
         let fixture = QueryFixture::new();
         assert!(
             matches!(fetch_detail(&fixture, "partial"), Outcome::Partial(query, error)
             if query.rules.len() == 1 && error.exit_code == Some(9) && error.summary == "final diagnostic marker")
+        );
+    }
+
+    #[test]
+    fn malformed_proto_fails_despite_zero_exit() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_detail(&fixture, "malformed-success"), Outcome::Failed(error)
+            if error.exit_code == Some(0) && error.summary.contains("protobuf"))
+        );
+    }
+
+    #[test]
+    fn malformed_proto_fails_partial_output() {
+        let fixture = QueryFixture::new();
+        assert!(
+            matches!(fetch_detail(&fixture, "malformed-partial"), Outcome::Failed(error)
+            if error.exit_code == Some(9) && error.summary.contains("protobuf"))
         );
     }
 
