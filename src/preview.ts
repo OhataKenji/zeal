@@ -474,6 +474,7 @@ export function installPreview() {
   };
   mockIPC(
     (command, args) => {
+      if (command === "plugin:dialog|open") return WORKSPACE;
       const handler = handlers[command as CommandName];
       if (!handler) throw new Error(`Unsupported preview command: ${command}`);
       return handler(args as Record<string, unknown> | undefined);

@@ -75,6 +75,28 @@
   color: var(--muted-foreground);
 }
 
+.ws-prompt .workspace-folder {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ws-prompt .workspace-selection {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.ws-prompt .workspace-path {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
 .ws-prompt .scope-patterns {
   height: auto;
   padding: 8px 10px;
