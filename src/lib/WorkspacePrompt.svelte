@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { openWorkspace } from "./state.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
@@ -20,6 +21,25 @@
   let error = $state<string | null>(null);
   let busy = $state(false);
   const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
+
+  async function selectWorkspace() {
+    if (busy) return;
+    busy = true;
+    error = null;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Bazel workspace",
+        defaultPath: path || undefined,
+      });
+      if (selected !== null) path = selected;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
 
   async function submit() {
     if (!canSubmit) return;
@@ -46,15 +66,21 @@
     submit();
   }}
 >
-  <label>
-    Workspace
-    <input
-      class="input workspace-path"
-      bind:value={path}
-      placeholder="/path/to/bazel/workspace"
-      disabled={busy}
-    />
-  </label>
+  <div class="workspace-folder">
+    <label>
+      Workspace
+      <input
+        class="input workspace-path"
+        value={path}
+        placeholder="No folder selected"
+        readonly
+        disabled={busy}
+      />
+    </label>
+    <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
+      Choose folder…
+    </button>
+  </div>
   <Notice tone="warning">Do not open an untrusted repository.</Notice>
   <label>
     target patterns

@@ -75,6 +75,17 @@
   color: var(--muted-foreground);
 }
 
+.ws-prompt .workspace-folder {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ws-prompt .workspace-folder label {
+  min-width: 0;
+}
+
 .ws-prompt .scope-patterns {
   height: auto;
   padding: 8px 10px;
