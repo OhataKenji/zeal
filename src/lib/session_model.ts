@@ -858,27 +858,27 @@ function acceptTargetOutputs(draft: Draft, result: Result<TargetOutputs>) {
 function finishDetail(draft: Draft, requestId: number, result: Result<InvocationDetail>) {
   if (draft.detail.running !== requestId) return;
   draft.detail.running = null;
-  if (draft.detail.wanted === requestId) {
-    draft.detail.wanted = null;
-    if (savedEligible(draft)) {
-      if (result.ok) draft.data.detail = result.value;
-      draft.data.detailError = result.ok ? null : result.error;
-    }
+  if (draft.detail.wanted !== requestId) {
+    startDetail(draft);
+    return;
   }
-  startDetail(draft);
+  draft.detail.wanted = null;
+  if (!savedEligible(draft)) return;
+  if (result.ok) draft.data.detail = result.value;
+  draft.data.detailError = result.ok ? null : result.error;
 }
 
 function finishProfile(draft: Draft, requestId: number, result: Result<Section<Profile>>) {
   if (draft.profile.running !== requestId) return;
   draft.profile.running = null;
-  if (draft.profile.wanted === requestId) {
-    draft.profile.wanted = null;
-    if (savedEligible(draft)) {
-      if (result.ok) draft.data.profile = result.value;
-      draft.data.profileError = result.ok ? null : result.error;
-    }
+  if (draft.profile.wanted !== requestId) {
+    startProfile(draft);
+    return;
   }
-  startProfile(draft);
+  draft.profile.wanted = null;
+  if (!savedEligible(draft)) return;
+  if (result.ok) draft.data.profile = result.value;
+  draft.data.profileError = result.ok ? null : result.error;
 }
 
 function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: string) {
