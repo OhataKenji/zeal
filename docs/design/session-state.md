@@ -12,7 +12,7 @@ _Status: Approved_
 
 ### 3つの決定
 
-1. **状態判断は純粋な `update` に置く。** Svelte は表示、実行層は IPC を担当する。
+1. **状態の更新は純粋な `update` に集める。** 現在の Model と Message から、次の Model と副作用の指示を返す。Svelte は表示、実行層は IPC を担当する。
 2. **通常操作は `void`。** 完了は画面の data / loading / error で見る。
 3. **workspace だけ `await` する。** 成功でダイアログを閉じ、失敗で入力とエラーを残すため。
 
