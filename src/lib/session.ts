@@ -121,393 +121,622 @@ export function canSend(view: SessionView, target: string): boolean {
   return !!(!sessionBusy(view) && workspaceReady(view) && targetError(target) === null);
 }
 
-/**
- * Returns whether the core can stop the active Bazel operation.
- */
+/** Returns whether the core can stop the active Bazel operation. */
 export function canStop(view: SessionView): boolean {
   return !!(view.ready && view.state?.activeInvocation && !view.state.stopping);
 }
 
+type RequestSlot = ReturnType<typeof createRequestSlot>;
+type SliceKey = readonly unknown[];
+type Slice = {
+  slot: RequestSlot;
+  inFlight: Set<string>;
+  key: () => SliceKey;
+  enabled: () => boolean;
+  fetch: (key: SliceKey) => Promise<unknown>;
+  pending?: () => Partial<SessionView>;
+  success: (value: unknown, key: SliceKey, token: string) => Partial<SessionView>;
+  failure: (error: unknown, key: SliceKey) => Partial<SessionView>;
+  reset: (previous: SliceKey | null, next: SliceKey) => Partial<SessionView>;
+  mode?: "coalesce" | "overlap";
+  invalidateOnChange?: (previous: SliceKey | null, next: SliceKey) => boolean;
+  acceptStale?: (request: SliceKey, current: SliceKey) => boolean;
+  onTokenChange?: () => void;
+  identity: string | null;
+  token: string | null;
+  currentKey: SliceKey | null;
+  attempted: string | null;
+  failed: string | null;
+  revision: number;
+  pendingAgain: boolean;
+  lastPromise: Promise<void>;
+};
+
+/** In-flight state for one async view slice. */
+function createRequestSlot() {
+  let generation = 0;
+  let requests = 0;
+  return {
+    claim() {
+      requests++;
+      return ++generation;
+    },
+    release() {
+      requests--;
+    },
+    invalidate() {
+      generation++;
+    },
+    get current() {
+      return generation;
+    },
+    get busy() {
+      return requests > 0;
+    },
+  };
+}
+
 /**
- * Creates a workspace session that rejects stale requests. Call `dispose()`
- * to invalidate pending responses and remove its event subscription.
+ * Runs one workspace session. Slice dependencies and lifecycle state are
+ * private so the public view and API remain stable.
  */
 export function createSession(transport: Transport, changed: (view: SessionView) => void) {
   let view = emptyView();
   let disposed = false;
   let stateRevision = 0;
-  let listGeneration = 0;
-  let listing = false;
-  let listPending = false;
-  let detailGeneration = 0;
-  let detailRequestInFlight = false;
-  let profileGeneration = 0;
-  let profileRequestInFlight = false;
-  let snapshotGeneration = 0;
-  let snapshotRequested: number | null = null;
-  let targetGeneration = 0;
-  let targetRequestInFlight = false;
-  let outputsRequestInFlight = false;
-  let pendingStart: { workspace: string; cmd: BazelCommand; pattern: string } | null = null;
+  let syncing = false;
+  let syncAgain = false;
+  let slices: Slice[] = [];
+  let snapshotSlice: Slice;
+  let invocationSlice: Slice;
+  let targetDetailSlice: Slice;
+  let targetDetailValueToken: string | null = null;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
-  function update(patch: Partial<SessionView>) {
-    if (disposed) return;
+
+  type Lifecycle =
+    | { kind: "idle" }
+    | {
+        kind: "starting";
+        workspace: string;
+        cmd: BazelCommand;
+        pattern: string;
+        previous: Lifecycle;
+        observedId?: string;
+        observedComplete?: boolean;
+      }
+    | { kind: "running"; workspace: string; id: string; observed: boolean }
+    | { kind: "completed"; workspace: string; id: string };
+
+  let lifecycle: Lifecycle = { kind: "idle" };
+
+  function update(patch: Partial<SessionView>, sync = true) {
+    if (disposed || Object.keys(patch).length === 0) return;
     view = { ...view, ...patch };
     changed(view);
+    if (sync) syncSlices();
   }
 
-  // Clearing a slice invalidates its in-flight loads, so a late response
-  // cannot repopulate cleared data.
-  function clearDetail() {
-    ++detailGeneration;
-    return { detail: null, detailLoading: false, detailError: null };
-  }
-  function clearProfile() {
-    ++profileGeneration;
-    return { profile: null, profileLoading: false, profileError: null };
-  }
-  function clearInvocations() {
-    ++listGeneration;
-    return { invocations: [], invocationsError: null };
-  }
-  function clearTargetDetail() {
-    ++targetGeneration;
+  function createSlice(
+    definition: Omit<
+      Slice,
+      | "slot"
+      | "inFlight"
+      | "identity"
+      | "token"
+      | "currentKey"
+      | "attempted"
+      | "failed"
+      | "revision"
+      | "pendingAgain"
+      | "lastPromise"
+    >,
+  ): Slice {
     return {
-      targetDetail: null,
-      targetDetailError: null,
-      targetOutputs: null,
-      targetOutputsError: null,
-    };
-  }
-  function clearTargets() {
-    ++snapshotGeneration;
-    snapshotRequested = null;
-    return {
-      snapshot: null,
-      snapshotLoading: false,
-      snapshotError: null,
-      selection: null,
-      ...clearTargetDetail(),
+      ...definition,
+      slot: createRequestSlot(),
+      inFlight: new Set(),
+      identity: null,
+      token: null,
+      currentKey: null,
+      attempted: null,
+      failed: null,
+      revision: 0,
+      pendingAgain: false,
+      lastPromise: Promise.resolve(),
     };
   }
 
-  async function loadInvocations() {
-    if (!view.state?.workspace || disposed) return;
-    if (listing) {
-      listPending = true;
-      return;
+  function identity(key: SliceKey): string {
+    return JSON.stringify(key);
+  }
+
+  function mergePatch(target: Partial<SessionView>, patch: Partial<SessionView>) {
+    Object.assign(target, patch);
+  }
+
+  function updateSliceKeys(authoritative: boolean): Partial<SessionView> {
+    const reset: Partial<SessionView> = {};
+    for (const slice of slices) {
+      const key = slice.key();
+      const nextIdentity = identity(key);
+      if (
+        authoritative &&
+        slice === snapshotSlice &&
+        slice.identity === nextIdentity &&
+        slice.failed === slice.token
+      ) {
+        slice.revision++;
+      }
+      if (slice.identity !== nextIdentity) {
+        const previous = slice.currentKey;
+        if (slice.invalidateOnChange?.(previous, key) ?? true) slice.slot.invalidate();
+        slice.identity = nextIdentity;
+        slice.currentKey = key;
+        slice.attempted = null;
+        slice.failed = null;
+        mergePatch(reset, slice.reset(previous, key));
+      } else {
+        slice.currentKey = key;
+      }
+      const nextToken = JSON.stringify([nextIdentity, slice.revision]);
+      if (slice.token !== nextToken) {
+        slice.token = nextToken;
+        slice.attempted = null;
+        slice.failed = null;
+        slice.onTokenChange?.();
+      }
     }
-    listing = true;
-    const generation = ++listGeneration;
+    return reset;
+  }
+
+  async function loadSection(slice: Slice, key: SliceKey, token: string, generation: number) {
     try {
-      const invocations = await transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations);
-      acceptLoadedInvocations(generation, invocations);
+      if (slice.pending) update(slice.pending());
+      const value = await slice.fetch(key);
+      const currentKey = slice.currentKey ?? [];
+      const accepted =
+        generation === slice.slot.current &&
+        (token === slice.token || slice.acceptStale?.(key, currentKey));
+      if (!disposed && accepted) {
+        update(slice.success(value, key, token));
+      }
     } catch (error) {
-      if (generation === listGeneration) {
-        update({ invocationsError: String(error) });
+      const currentKey = slice.currentKey ?? [];
+      const accepted =
+        generation === slice.slot.current &&
+        (token === slice.token || slice.acceptStale?.(key, currentKey));
+      if (!disposed && accepted) {
+        slice.failed = token;
+        update(slice.failure(error, key));
       }
     } finally {
-      listing = false;
-      if (listPending && !disposed) {
-        listPending = false;
-        void loadInvocations();
+      slice.inFlight.delete(token);
+      slice.slot.release();
+      const retry = slice.pendingAgain;
+      slice.pendingAgain = false;
+      if (retry) slice.attempted = null;
+      if (generation !== slice.slot.current || retry) syncSlices();
+    }
+  }
+
+  function startSlice(slice: Slice) {
+    if (disposed || !slice.enabled() || !slice.token || !slice.currentKey) return;
+    if (slice.attempted === slice.token) return;
+    if (slice.slot.busy) {
+      if (slice.mode === "coalesce") slice.pendingAgain = true;
+      if (slice.mode === "overlap") {
+        const key = slice.currentKey;
+        const token = slice.token;
+        slice.attempted = token;
+        slice.failed = null;
+        const generation = slice.slot.claim();
+        slice.lastPromise = loadSection(slice, key, token, generation);
       }
-    }
-  }
-
-  // A changed selected record means its saved observation may have completed.
-  function acceptLoadedInvocations(generation: number, invocations: InvocationRecord[]) {
-    if (generation !== listGeneration || disposed) return;
-    if (JSON.stringify(invocations) !== JSON.stringify(view.invocations) || view.invocationsError) {
-      update({ invocations, invocationsError: null });
-    }
-    const selected = invocations.find((inv) => inv.id === view.selectedInvocation);
-    if (
-      !selected ||
-      !view.detail ||
-      view.detailLoading ||
-      view.detailError ||
-      JSON.stringify(selected) === JSON.stringify(view.detail.record)
-    ) {
       return;
     }
-    loadSelected();
+    const key = slice.currentKey;
+    const token = slice.token;
+    slice.attempted = token;
+    slice.failed = null;
+    const generation = slice.slot.claim();
+    slice.inFlight.add(token);
+    slice.lastPromise = loadSection(slice, key, token, generation);
   }
 
-  // The DTO carries only the snapshot's fetchedAt; its data is fetched when
-  // that timestamp changes, not on every state event.
-  function acceptLoadedSnapshot(snapshot: TargetIndex | null) {
-    snapshotRequested = null;
-    update({ snapshot, snapshotLoading: false, snapshotError: null, targetDetailError: null });
-    const selection = view.selection;
-    if (
-      selection?.kind === "package" ||
-      (selection?.kind === "target" && !snapshot?.targets.some((t) => t.label === selection.label))
-    ) {
-      select(null);
+  function syncSlices(authoritative = false) {
+    if (disposed) return;
+    if (syncing) {
+      syncAgain = true;
       return;
     }
-    requestTargetDetail();
-  }
-
-  async function loadSnapshot() {
-    // Manual calls re-check in-flight state that acceptState already guards.
-    if (snapshotRequested !== null && view.state?.snapshotFetchedAt === snapshotRequested) return;
-    snapshotRequested = view.state?.snapshotFetchedAt ?? null;
-    const generation = ++snapshotGeneration;
-    update({ snapshotLoading: true, snapshotError: null });
+    syncing = true;
     try {
-      const snapshot = await transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot);
-      if (generation === snapshotGeneration) {
-        acceptLoadedSnapshot(snapshot);
-      }
-    } catch (error) {
-      failSnapshotLoad(generation, error);
+      do {
+        syncAgain = false;
+        const reset = updateSliceKeys(authoritative);
+        if (Object.keys(reset).length > 0) update(reset, false);
+        if (syncAgain) continue;
+        for (const slice of slices) startSlice(slice);
+      } while (syncAgain);
+    } finally {
+      syncing = false;
+      if (syncAgain) syncSlices();
     }
   }
 
-  function failSnapshotLoad(generation: number, error: unknown) {
-    if (generation !== snapshotGeneration) return;
-    snapshotRequested = null;
-    update({
+  function forceSlice(slice: Slice, retry: Partial<SessionView> = {}): Promise<void> {
+    if (disposed || !slice.enabled()) return Promise.resolve();
+    if (slice.slot.busy) {
+      if (slice.mode === "coalesce") slice.pendingAgain = true;
+      if (slice.mode !== "overlap" || slice.inFlight.has(slice.token ?? "")) {
+        return Promise.resolve();
+      }
+    }
+    const previous = slice.lastPromise;
+    if (Object.keys(retry).length > 0) update(retry, false);
+    slice.revision++;
+    slice.failed = null;
+    syncSlices();
+    return slice.lastPromise === previous ? Promise.resolve() : slice.lastPromise;
+  }
+
+  function scopeKey(state: AppState | null): string {
+    return JSON.stringify(state?.scope.include ?? []);
+  }
+
+  function selectedRecord(): InvocationRecord | undefined {
+    return view.invocations.find((invocation) => invocation.id === view.selectedInvocation);
+  }
+
+  function targetKey(): SliceKey {
+    const selection = view.selection;
+    return [
+      view.state?.workspace ?? null,
+      scopeKey(view.state),
+      selection?.kind ?? null,
+      selection?.kind === "target"
+        ? selection.label
+        : selection?.kind === "package"
+          ? selection.path
+          : null,
+      view.state?.snapshotFetchedAt ?? null,
+      view.snapshot?.meta.fetchedAt ?? null,
+    ];
+  }
+
+  function targetReady(): boolean {
+    const state = view.state;
+    const snapshot = view.snapshot;
+    const selection = view.selection;
+    return !!(
+      selection?.kind === "target" &&
+      snapshot &&
+      snapshot.targets.some((target) => target.label === selection.label) &&
+      snapshot.meta.fetchedAt === state?.snapshotFetchedAt &&
+      workspaceReady(view) &&
+      !sessionBusy(view)
+    );
+  }
+
+  invocationSlice = createSlice({
+    key: () => [view.state?.workspace ?? null, view.state?.activeInvocation ?? null, view.ready],
+    enabled: () => !!(view.state?.workspace && view.ready),
+    fetch: () => transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations),
+    mode: "coalesce",
+    invalidateOnChange: (previous, next) => !previous || previous[0] !== next[0],
+    acceptStale: (request, current) => request[0] === current[0],
+    pending: () => ({ invocationsError: null }),
+    success: (value) => {
+      const invocations = value as InvocationRecord[];
+      if (
+        JSON.stringify(invocations) === JSON.stringify(view.invocations) &&
+        view.invocationsError === null
+      ) {
+        return {};
+      }
+      return { invocations, invocationsError: null };
+    },
+    failure: (error) => ({ invocationsError: String(error) }),
+    reset: (previous, next) =>
+      previous && previous[0] !== next[0] ? { invocations: [], invocationsError: null } : {},
+  });
+
+  snapshotSlice = createSlice({
+    key: () => [
+      view.state?.workspace ?? null,
+      scopeKey(view.state),
+      view.state?.snapshotFetchedAt ?? null,
+    ],
+    enabled: () => !!(view.state?.workspace && view.state.snapshotFetchedAt !== null),
+    fetch: () => transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot),
+    mode: "overlap",
+    pending: () => ({ snapshotLoading: true, snapshotError: null }),
+    success: (value) => {
+      const snapshot = value as TargetIndex | null;
+      const selection = view.selection;
+      const selectionIsValid =
+        selection?.kind === "target" &&
+        snapshot?.targets.some((target) => target.label === selection.label);
+      if (
+        view.targetDetailError === "Could not load the target list" &&
+        view.targetDetail === null
+      ) {
+        targetDetailSlice.revision++;
+      }
+      return {
+        snapshot,
+        snapshotLoading: false,
+        snapshotError: null,
+        selection:
+          selection?.kind === "package" || (selection?.kind === "target" && !selectionIsValid)
+            ? null
+            : selection,
+        ...(view.targetDetailError === "Could not load the target list"
+          ? { targetDetailError: null }
+          : {}),
+      };
+    },
+    failure: (error) => ({
       snapshotLoading: false,
       snapshotError: `Could not load the workspace snapshot: ${String(error)}`,
       ...(view.selection?.kind === "target"
         ? { targetDetailError: "Could not load the target list" }
         : {}),
-    });
-  }
+    }),
+    reset: (previous, next) =>
+      previous && (previous[0] !== next[0] || previous[1] !== next[1] || next[2] === null)
+        ? { snapshot: null, snapshotLoading: false, snapshotError: null }
+        : {},
+  });
 
-  function targetBusy(): boolean {
-    return sessionBusy(view) || !workspaceReady(view);
-  }
-
-  function requestTargetDetail() {
-    const label = view.selection?.kind === "target" ? view.selection.label : null;
-    const snapshot = view.snapshot;
-    const state = view.state;
-    if (
-      !label ||
-      disposed ||
-      !snapshot ||
-      view.targetDetail !== null ||
-      view.targetDetailError !== null ||
-      targetRequestInFlight ||
-      targetBusy() ||
-      snapshot.meta.fetchedAt !== state?.snapshotFetchedAt
-    ) {
-      return;
-    }
-    const generation = targetGeneration;
-    const fetchedAt = snapshot.meta.fetchedAt;
-    targetRequestInFlight = true;
-    void (async () => {
-      try {
-        const detail = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
-          label,
-          fetchedAt,
-        });
-        if (detail.target.label !== label) {
-          throw new Error("Target detail does not match the selected label");
-        }
-        if (generation === targetGeneration) {
-          update({ targetDetail: detail, targetDetailError: null });
-          requestTargetOutputs();
-        }
-      } catch (error) {
-        if (generation === targetGeneration) {
-          update({ targetDetailError: String(error) });
-        }
-      } finally {
-        targetRequestInFlight = false;
-        if (generation !== targetGeneration) requestTargetDetail();
+  targetDetailSlice = createSlice({
+    key: targetKey,
+    enabled: targetReady,
+    fetch: async (key) => {
+      const label = key[2] === "target" ? (key[3] as string) : "";
+      const fetchedAt = key[4] as number;
+      const detail = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
+        label,
+        fetchedAt,
+      });
+      if (detail.target.label !== label) {
+        throw new Error("Target detail does not match the selected label");
       }
-    })();
+      return detail;
+    },
+    pending: () => ({ targetDetailError: null }),
+    success: (value, _key, token) => {
+      targetDetailValueToken = token;
+      return { targetDetail: value as TargetDetail, targetDetailError: null };
+    },
+    failure: (error) => ({ targetDetailError: String(error) }),
+    reset: () => {
+      targetDetailValueToken = null;
+      return {
+        targetDetail: null,
+        targetDetailError: null,
+        targetOutputs: null,
+        targetOutputsError: null,
+      };
+    },
+    onTokenChange: () => {
+      targetDetailValueToken = null;
+    },
+  });
+
+  const targetOutputsSlice = createSlice({
+    key: () => [...targetKey(), targetDetailSlice.revision],
+    enabled: () =>
+      targetReady() &&
+      view.targetDetail !== null &&
+      targetDetailValueToken === targetDetailSlice.token,
+    fetch: (key) => {
+      const label = key[2] === "target" ? (key[3] as string) : "";
+      const fetchedAt = key[4] as number;
+      return transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, { label, fetchedAt });
+    },
+    pending: () => ({ targetOutputsError: null }),
+    success: (value) => ({ targetOutputs: value as TargetOutputs, targetOutputsError: null }),
+    failure: (error) => ({ targetOutputsError: String(error) }),
+    reset: () => ({ targetOutputs: null, targetOutputsError: null }),
+  });
+
+  function detailKey(): SliceKey {
+    const id = view.selectedInvocation;
+    const eligible = !!(id && view.ready && !view.starting && id !== view.state?.activeInvocation);
+    return [view.state?.workspace ?? null, id, eligible, JSON.stringify(selectedRecord() ?? null)];
   }
 
-  // `cquery` is heavier than the detail query, so it waits for the detail to
-  // resolve and shares its index generation.
-  function requestTargetOutputs() {
-    const label = view.selection?.kind === "target" ? view.selection.label : null;
-    const snapshot = view.snapshot;
-    const state = view.state;
-    if (
-      !label ||
-      disposed ||
-      !snapshot ||
-      view.targetOutputs !== null ||
-      view.targetOutputsError !== null ||
-      outputsRequestInFlight ||
-      targetBusy() ||
-      snapshot.meta.fetchedAt !== state?.snapshotFetchedAt
-    ) {
-      return;
+  function resetInvocationData(previous: SliceKey | null, next: SliceKey) {
+    return previous && (previous[0] !== next[0] || previous[1] !== next[1])
+      ? { detail: null, detailLoading: false, detailError: null }
+      : { detailLoading: false, detailError: null };
+  }
+
+  const detailSlice = createSlice({
+    key: detailKey,
+    enabled: () => !!detailKey()[0] && !!detailKey()[1] && detailKey()[2] === true,
+    fetch: (key) => transport.invoke<InvocationDetail>(COMMANDS.getInvocation, { id: key[1] }),
+    pending: () => ({ detailLoading: true, detailError: null }),
+    success: (value) => ({ detail: value as InvocationDetail, detailLoading: false }),
+    failure: (error) => ({ detailError: String(error), detailLoading: false }),
+    reset: resetInvocationData,
+  });
+
+  const profileSlice = createSlice({
+    key: detailKey,
+    enabled: () => !!detailKey()[0] && !!detailKey()[1] && detailKey()[2] === true,
+    fetch: (key) =>
+      transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, { id: key[1] }),
+    pending: () => ({ profileLoading: true, profileError: null }),
+    success: (value) => ({ profile: value as Section<Profile>, profileLoading: false }),
+    failure: (error) => ({ profileError: String(error), profileLoading: false }),
+    reset: (previous, next) =>
+      previous && (previous[0] !== next[0] || previous[1] !== next[1])
+        ? { profile: null, profileLoading: false, profileError: null }
+        : { profileLoading: false, profileError: null },
+  });
+
+  slices = [
+    invocationSlice,
+    snapshotSlice,
+    targetDetailSlice,
+    targetOutputsSlice,
+    detailSlice,
+    profileSlice,
+  ];
+
+  function refreshInvocations(): Promise<void> {
+    return forceSlice(invocationSlice);
+  }
+
+  function loadInvocations(): Promise<void> {
+    return refreshInvocations();
+  }
+
+  function loadSnapshot(): Promise<void> {
+    if (snapshotSlice.inFlight.has(snapshotSlice.token ?? "")) {
+      return Promise.resolve();
     }
-    const generation = targetGeneration;
-    const fetchedAt = snapshot.meta.fetchedAt;
-    outputsRequestInFlight = true;
-    void (async () => {
-      try {
-        const outputs = await transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
-          label,
-          fetchedAt,
-        });
-        if (generation === targetGeneration) {
-          update({ targetOutputs: outputs, targetOutputsError: null });
-        }
-      } catch (error) {
-        if (generation === targetGeneration) {
-          update({ targetOutputsError: String(error) });
-        }
-      } finally {
-        outputsRequestInFlight = false;
-        if (generation !== targetGeneration) requestTargetOutputs();
-      }
-    })();
+    return forceSlice(snapshotSlice, { snapshotError: null });
+  }
+
+  function loadDetail(): Promise<void> {
+    return forceSlice(detailSlice, { detailError: null });
+  }
+
+  function loadProfile(): Promise<void> {
+    return forceSlice(profileSlice, { profileError: null });
+  }
+
+  function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boolean {
+    if (left?.kind !== right?.kind) return false;
+    if (left?.kind === "target" && right?.kind === "target") return left.label === right.label;
+    if (left?.kind === "package" && right?.kind === "package") return left.path === right.path;
+    return left === null && right === null;
   }
 
   function select(selection: ExplorerSelection) {
-    if (
-      selection?.kind === "package" &&
-      view.selection?.kind === "package" &&
-      selection.path === view.selection.path
-    )
-      return;
-    if (
-      selection?.kind === "target" &&
-      view.selection?.kind === "target" &&
-      selection.label === view.selection.label &&
-      !view.targetDetailError
-    )
-      return;
-    update({ selection, ...clearTargetDetail() });
-    requestTargetDetail();
-  }
-
-  async function loadDetail() {
-    const id = view.selectedInvocation;
-    // Saved observations are read after the active invocation ends.
-    if (
-      !id ||
-      disposed ||
-      !view.ready ||
-      view.starting ||
-      detailRequestInFlight ||
-      id === view.state?.activeInvocation
-    ) {
+    if (sameSelection(selection, view.selection)) {
+      if (selection?.kind === "target" && view.targetDetailError) {
+        void forceSlice(targetDetailSlice, { targetDetailError: null });
+      }
       return;
     }
-    const generation = ++detailGeneration;
-    detailRequestInFlight = true;
-    update({ detailLoading: true, detailError: null });
-    try {
-      const detail = await transport.invoke<InvocationDetail>(COMMANDS.getInvocation, { id });
-      if (generation === detailGeneration) {
-        update({ detail, detailLoading: false });
-      }
-    } catch (error) {
-      if (generation === detailGeneration) {
-        update({ detailError: String(error), detailLoading: false });
-      }
-    } finally {
-      detailRequestInFlight = false;
-      if (generation !== detailGeneration) void loadDetail();
-    }
-  }
-
-  async function loadProfile() {
-    const id = view.selectedInvocation;
-    if (
-      !id ||
-      disposed ||
-      !view.ready ||
-      view.starting ||
-      profileRequestInFlight ||
-      id === view.state?.activeInvocation
-    ) {
-      return;
-    }
-    const generation = ++profileGeneration;
-    profileRequestInFlight = true;
-    update({ profileLoading: true, profileError: null });
-    try {
-      const profile = await transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
-        id,
-      });
-      if (generation === profileGeneration) {
-        update({ profile, profileLoading: false });
-      }
-    } catch (error) {
-      if (generation === profileGeneration) {
-        update({ profileError: String(error), profileLoading: false });
-      }
-    } finally {
-      profileRequestInFlight = false;
-      if (generation !== profileGeneration) void loadProfile();
-    }
-  }
-
-  function loadSelected() {
-    void loadDetail();
-    void loadProfile();
+    update({ selection });
   }
 
   function selectInvocation(id: string | null) {
-    update({
-      consoleOpen: false,
-      selectedInvocation: id,
-      ...clearDetail(),
-      ...clearProfile(),
-    });
-    loadSelected();
-  }
-
-  // Only lifecycle transitions call this; reopening a completed Console stays put.
-  function selectCompletedConsole(id: string | null | undefined): boolean {
-    if (
-      !id ||
-      !view.consoleOpen ||
-      view.console?.id !== id ||
-      view.starting ||
-      view.state?.activeInvocation
-    ) {
-      return false;
+    const changedId = id !== view.selectedInvocation;
+    update({ consoleOpen: false, selectedInvocation: id });
+    if (!changedId) {
+      void loadDetail();
+      void loadProfile();
     }
-    selectInvocation(id);
-    return true;
   }
 
-  // Console read access outlives process controls for the last local process.
   function openConsole(record: InvocationRecord) {
     if (record.id !== (view.state?.consoleInvocation ?? view.state?.activeInvocation)) {
       selectInvocation(record.id);
       return;
     }
     if (view.consoleOpen && view.console?.id === record.id) return;
-    update({
-      console: record,
-      consoleOpen: true,
-      selectedInvocation: null,
-      ...clearDetail(),
-      ...clearProfile(),
-    });
+    update({ console: record, consoleOpen: true, selectedInvocation: null });
   }
 
-  function resetWorkspaceData() {
-    update({
-      console: null,
-      consoleOpen: false,
-      selectedInvocation: null,
-      ...clearInvocations(),
-      ...clearDetail(),
-      ...clearProfile(),
-      ...clearTargets(),
-    });
+  function completeConsole(id: string) {
+    if (
+      view.starting ||
+      view.state?.activeInvocation ||
+      !view.consoleOpen ||
+      view.console?.id !== id
+    ) {
+      return;
+    }
+    selectInvocation(id);
   }
 
-  function resetTargetData() {
-    update(clearTargets());
+  function transitionAppState(
+    state: AppState,
+    before: AppState | null,
+    workspaceChanged: boolean,
+    resumed: boolean,
+  ): string | null {
+    if (workspaceChanged) {
+      lifecycle =
+        resumed && state.activeInvocation
+          ? {
+              kind: "running",
+              workspace: state.workspace ?? "",
+              id: state.activeInvocation,
+              observed: true,
+            }
+          : { kind: "idle" };
+      return null;
+    }
+    const current = lifecycle;
+    if (current.kind === "starting") {
+      if (current.workspace !== state.workspace) {
+        lifecycle = { kind: "idle" };
+        return null;
+      }
+      const activeId = state.activeInvocation;
+      if (activeId && state.consoleInvocation === activeId) {
+        const shouldOpen = current.observedId !== activeId;
+        lifecycle = { ...current, observedId: activeId, observedComplete: false };
+        if (shouldOpen) {
+          update(
+            {
+              console: { id: activeId, cmd: current.cmd, pattern: current.pattern },
+              consoleOpen: true,
+              selectedInvocation: null,
+            },
+            false,
+          );
+        }
+      } else if (current.observedId && activeId !== current.observedId) {
+        lifecycle = { ...current, observedComplete: true };
+      }
+      return null;
+    }
+    if (current.kind === "running") {
+      const activeId = state.activeInvocation;
+      if (activeId === current.id) {
+        lifecycle = { ...current, observed: true };
+        return null;
+      }
+      if (activeId) {
+        const completed =
+          current.observed && before?.activeInvocation === current.id ? current.id : null;
+        lifecycle = {
+          kind: "running",
+          workspace: state.workspace ?? current.workspace,
+          id: activeId,
+          observed: true,
+        };
+        return completed;
+      }
+      if (current.observed && before?.activeInvocation === current.id) {
+        lifecycle = { kind: "completed", workspace: current.workspace, id: current.id };
+        return current.id;
+      }
+      if (state.consoleInvocation === current.id) {
+        lifecycle = { kind: "completed", workspace: current.workspace, id: current.id };
+        return current.id;
+      }
+      lifecycle = { kind: "idle" };
+      return null;
+    }
+    if (state.activeInvocation) {
+      lifecycle = {
+        kind: "running",
+        workspace: state.workspace ?? "",
+        id: state.activeInvocation,
+        observed: true,
+      };
+    }
+    return null;
   }
 
   function acceptState(state: AppState) {
@@ -517,85 +746,67 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     const workspaceChanged = state.workspace !== before?.workspace;
     const scopeChanged =
       JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
-    const contextChanged = workspaceChanged || scopeChanged;
     ++stateRevision;
-    if (workspaceChanged) {
-      resetWorkspaceData();
-    } else if (scopeChanged) {
-      resetTargetData();
-    }
-    update({
+    const patch: Partial<SessionView> = {
       state,
       ready: true,
       ...(resumed ? { error: null } : {}),
-    });
-    openPendingConsole(state);
-    syncTargetData(state, before, contextChanged);
-    if (resumed || workspaceChanged || state.activeInvocation !== before?.activeInvocation) {
-      void loadInvocations();
+    };
+    if (workspaceChanged) {
+      Object.assign(patch, {
+        console: null,
+        consoleOpen: false,
+        selectedInvocation: null,
+        selection: null,
+        starting: false,
+      });
+    } else if (scopeChanged || state.snapshotFetchedAt === null) {
+      patch.selection = null;
     }
-    syncCompletedInvocation(state, before, resumed);
+    update(patch, false);
+    const completed = transitionAppState(state, before, workspaceChanged, resumed);
+    if (completed) completeConsole(completed);
+    syncSlices(true);
   }
 
-  // A started invocation claims the Console only when its own workspace grants it.
-  function openPendingConsole(state: AppState) {
-    if (
-      !pendingStart ||
-      pendingStart.workspace !== state.workspace ||
-      !state.activeInvocation ||
-      state.consoleInvocation !== state.activeInvocation
-    ) {
+  function finishStart(workspace: string, record: InvocationRecord | null) {
+    if (disposed || workspace !== view.state?.workspace) return;
+    if (lifecycle.kind !== "starting" || lifecycle.workspace !== workspace) {
+      update({ starting: false });
       return;
     }
-    openConsole({
-      id: state.activeInvocation,
-      cmd: pendingStart.cmd,
-      pattern: pendingStart.pattern,
-    });
-  }
-
-  function syncCompletedInvocation(state: AppState, before: AppState | null, resumed: boolean) {
-    if (
-      !resumed &&
-      (!before?.activeInvocation || before.activeInvocation === state.activeInvocation)
-    )
-      return;
-    const completed = before?.activeInvocation ?? (resumed ? state.consoleInvocation : undefined);
-    if (selectCompletedConsole(completed)) return;
-    if (resumed || view.selectedInvocation === completed) loadSelected();
-  }
-
-  function syncTargetData(state: AppState, before: AppState | null, contextChanged: boolean) {
-    if (!contextChanged && state.snapshotFetchedAt !== before?.snapshotFetchedAt) {
-      update(clearTargetDetail());
+    const current = lifecycle;
+    let completed: string | null = null;
+    if (!record) {
+      lifecycle = current.previous;
+    } else if (!view.ready) {
+      lifecycle = {
+        kind: "running",
+        workspace,
+        id: record.id,
+        observed: current.observedId === record.id,
+      };
+    } else if (view.state?.activeInvocation === record.id) {
+      lifecycle = { kind: "running", workspace, id: record.id, observed: true };
+    } else if (!view.state?.activeInvocation) {
+      lifecycle = { kind: "completed", workspace, id: record.id };
+      completed = record.id;
+    } else {
+      lifecycle = {
+        kind: "running",
+        workspace,
+        id: view.state.activeInvocation,
+        observed: true,
+      };
     }
-    const wantFetchedAt = state.snapshotFetchedAt;
-    if (wantFetchedAt === null) {
-      clearSnapshot();
-      if (view.selection) select(null);
-    } else if (
-      // A fetch for this snapshot may already be in flight; re-issuing would
-      // duplicate the transfer this split exists to avoid.
-      wantFetchedAt !== view.snapshot?.meta.fetchedAt &&
-      wantFetchedAt !== snapshotRequested
-    ) {
-      void loadSnapshot();
-    }
-    requestTargetDetail();
-  }
-
-  // Defensive: the core drops its snapshot only on a workspace switch,
-  // which the reset above already clears.
-  function clearSnapshot() {
-    if (view.snapshot || view.snapshotError || snapshotRequested) {
-      snapshotRequested = null;
-      ++snapshotGeneration;
-      update({ snapshot: null, snapshotLoading: false, snapshotError: null });
-    }
+    update({ starting: false }, false);
+    syncSlices();
+    if (completed) completeConsole(completed);
   }
 
   function dispose() {
     disposed = true;
+    for (const slice of slices) slice.slot.invalidate();
     unlisten?.();
     unlisten = undefined;
     unlistenHistory?.();
@@ -609,16 +820,14 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       const state = await transport.invoke<AppState>(COMMANDS.getState);
       if (revision === stateRevision) acceptState(state);
     } catch (error) {
-      // A state event can recover a failed read, or already have superseded it.
       if (!view.ready) update({ error: `Could not connect: ${String(error)}` });
     }
   }
 
-  // Returns false when disposed mid-registration or a subscription failed.
   async function subscribe() {
     try {
       const removeHistory = await transport.listen<void>("invocations-changed", () => {
-        void loadInvocations();
+        void refreshInvocations();
       });
       if (disposed) {
         removeHistory();
@@ -641,9 +850,6 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   }
 
   async function reconcileStartedState(workspace: string) {
-    // Invoke responses and events use different Tauri delivery paths. The
-    // reply may precede its running event, so reconcile before deciding to
-    // read completed files. Events received during this read take priority.
     const revision = stateRevision;
     try {
       const state = await transport.invoke<AppState>(COMMANDS.getState);
@@ -663,45 +869,36 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     if (!canSend(view, pattern)) return;
     const workspace = view.state?.workspace;
     if (!workspace) return;
-    let startedInvocation: string | undefined;
-    pendingStart = { workspace, cmd, pattern };
+    lifecycle = {
+      kind: "starting",
+      workspace,
+      cmd,
+      pattern,
+      previous: lifecycle,
+    };
     update({ starting: true, error: null });
+    let record: InvocationRecord | null = null;
     try {
-      // The core parses arguments once; the pattern stays a separate token.
-      const record = await transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
+      record = await transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
         cmd,
         pattern,
         arguments: argumentsText,
       });
-      pendingStart = null;
       if (disposed || workspace !== view.state?.workspace) return;
-      startedInvocation = record.id;
-      openStartedConsole(record, cmd, pattern);
+      if (!view.consoleOpen || view.console?.id !== record.id) {
+        update({
+          console: { ...record, cmd, pattern },
+          consoleOpen: true,
+          selectedInvocation: null,
+        });
+      }
       await reconcileStartedState(workspace);
-      if (disposed || workspace !== view.state?.workspace) return;
-      // The invocation may already have finished before start_invocation's
-      // reply. Never write that reply back into the authoritative active state.
-      void loadInvocations();
+      if (!disposed && workspace === view.state?.workspace) void refreshInvocations();
     } catch (error) {
       if (workspace === view.state?.workspace) update({ error: String(error) });
     } finally {
-      finishStart(workspace, startedInvocation);
+      finishStart(workspace, record);
     }
-  }
-
-  function openStartedConsole(record: InvocationRecord, cmd: BazelCommand, pattern: string) {
-    if (view.consoleOpen && view.console?.id === record.id) return;
-    selectInvocation(null);
-    // Composer input labels the live Console until build events report it.
-    update({ console: { ...record, cmd, pattern }, consoleOpen: true });
-  }
-
-  function finishStart(workspace: string, startedInvocation: string | undefined) {
-    pendingStart = null;
-    update({ starting: false });
-    requestTargetDetail();
-    if (disposed || workspace !== view.state?.workspace || !view.ready) return;
-    if (!selectCompletedConsole(startedInvocation)) loadSelected();
   }
 
   async function stop() {
@@ -727,14 +924,11 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       if (revision === stateRevision) acceptState(state);
     } finally {
       update({ opening: false });
-      requestTargetDetail();
     }
   }
 
   async function refresh() {
-    if (sessionBusy(view)) {
-      return;
-    }
+    if (sessionBusy(view)) return;
     try {
       await transport.invoke(COMMANDS.refresh);
     } catch (error) {

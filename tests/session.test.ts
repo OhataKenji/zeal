@@ -15,6 +15,7 @@ import type {
   Profile,
   Section,
   TargetIndex,
+  TargetOutputs,
 } from "../src/lib/types.ts";
 
 const IDLE: AppState = {
@@ -1515,6 +1516,15 @@ test("openConsole restores the Console for an invocation already in flight at co
   assert.equal(h.view.selectedInvocation, null);
 });
 
+test("an invocation active in the initial state completes its reopened Console once", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, activeInvocation: RECORD.id }));
+  await h.session.init();
+  h.session.openConsole(RECORD);
+  h.emit("app-state", IDLE);
+  assert.equal(h.view.consoleOpen, false);
+  assert.equal(h.view.selectedInvocation, RECORD.id);
+});
+
 test("openConsole cancels an in-flight invocation detail read", async () => {
   const h = harness();
   await h.session.init();
@@ -1656,4 +1666,159 @@ test("selecting the same package does not publish another view or query", async 
   h.session.select({ kind: "package", path: "app" });
   assert.equal(h.view, selectedView);
   assert.equal(requestCount(h, "get_target_detail"), 0);
+});
+
+test("target outputs wait for current detail and discard stale responses", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([]);
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  h.session.select({ kind: "target", label: "//app:first" });
+  const firstDetail = pendingRequest(h, "get_target_detail");
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+
+  h.session.select({ kind: "target", label: "//app:second" });
+  firstDetail.reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+  const secondDetail = lastPendingRequest(h, "get_target_detail");
+  secondDetail.reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+  const staleOutputs = pendingRequest(h, "get_target_outputs");
+  assert.deepEqual(staleOutputs.args, {
+    label: "//app:second",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  const refreshedSnapshot = lastPendingRequest(h, "get_snapshot");
+  staleOutputs.reply.resolve({ paths: ["old.out"], truncated: false } satisfies TargetOutputs);
+  refreshedSnapshot.reply.resolve({
+    ...TARGETS,
+    meta: { ...TARGETS.meta, fetchedAt: 2 },
+  });
+  await settle();
+  assert.equal(h.view.targetOutputs, null);
+  const refreshedDetail = lastPendingRequest(h, "get_target_detail");
+  assert.deepEqual(refreshedDetail.args, { label: "//app:second", fetchedAt: 2 });
+  refreshedDetail.reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+  const currentOutputs = lastPendingRequest(h, "get_target_outputs");
+  assert.deepEqual(currentOutputs.args, { label: "//app:second", fetchedAt: 2 });
+  const outputs = { paths: ["app/second.out"], truncated: false } satisfies TargetOutputs;
+  currentOutputs.reply.resolve(outputs);
+  await settle();
+  assert.deepEqual(h.view.targetOutputs, outputs);
+
+  staleOutputs.reply.resolve({ paths: ["stale.out"], truncated: false });
+  await settle();
+  assert.deepEqual(h.view.targetOutputs, outputs);
+});
+
+test("declared slice dependencies refresh only affected data", async () => {
+  const setup = async () => {
+    const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+    await h.session.init();
+    pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+    pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+    await settle();
+    h.session.selectInvocation(RECORD.id);
+    pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+    pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+    await settle();
+    h.session.select({ kind: "target", label: "//app:first" });
+    pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+    await settle();
+    pendingRequest(h, "get_target_outputs").reply.resolve({
+      paths: ["app/first.out"],
+      truncated: false,
+    });
+    await settle();
+    return h;
+  };
+
+  const cases = [
+    {
+      name: "unchanged app state",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
+      },
+      expected: {
+        list_invocations: 1,
+        get_snapshot: 1,
+        get_invocation: 1,
+        get_invocation_profile: 1,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+    {
+      name: "scope changes",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("app-state", {
+          ...IDLE,
+          scope: { include: ["//other/..."] },
+          snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
+        });
+      },
+      expected: {
+        list_invocations: 1,
+        get_snapshot: 2,
+        get_invocation: 1,
+        get_invocation_profile: 1,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+    {
+      name: "workspace changes",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("app-state", {
+          ...IDLE,
+          workspace: "/other",
+          snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
+        });
+      },
+      expected: {
+        list_invocations: 2,
+        get_snapshot: 2,
+        get_invocation: 1,
+        get_invocation_profile: 1,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+    {
+      name: "the selected record changes",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("invocations-changed", undefined);
+        lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+        await settle();
+      },
+      expected: {
+        list_invocations: 2,
+        get_snapshot: 1,
+        get_invocation: 2,
+        get_invocation_profile: 2,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const h = await setup();
+    await scenario.run(h);
+    for (const [command, count] of Object.entries(scenario.expected)) {
+      assert.equal(requestCount(h, command), count, `${scenario.name}: ${command}`);
+    }
+  }
 });
