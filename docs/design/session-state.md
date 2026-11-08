@@ -83,7 +83,7 @@ dispose 後は Message を無視する。開始済み IPC は取り消さず、�
 
 ### 3. 古い応答を捨てても、実行中の要求は忘れない
 
-target detail / outputs / saved detail / profile は、それぞれ Reader として `value`・`error`・`running`・`wanted` を持つ。refresh が失敗しても前の `value` と `error` は共存する。
+target detail / outputs / saved detail / profile は、それぞれ Reader として `value`・`error`・`running`・`wanted` を持つ。saved detail / profile の再取得が失敗した場合は、前の `value` を残して `error` と共存させる。
 
 - **running：** 実行中の要求 ID。応答まで worker を占有する。
 - **wanted：** 今必要な要求 ID。選択やデータ条件が変われば置き換える。
