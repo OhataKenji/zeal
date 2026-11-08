@@ -316,6 +316,8 @@
             detail={app.view.targetDetail}
             outputs={app.view.targetOutputs}
             outputsError={app.view.targetOutputsError}
+            actions={app.view.targetActions}
+            actionsError={app.view.targetActionsError}
             wsRoot={workspace}
             onselect={(label) => select({ kind: "target", label })}
           />

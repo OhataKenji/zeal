@@ -57,6 +57,21 @@ function targetDetail(label: string): TargetDetail {
   return { target, edges: [], files: [], status: "ok" };
 }
 
+const OUTPUTS = {
+  paths: ["bazel-out/k8-fastbuild/bin/app/first"],
+  truncated: false,
+};
+const ACTIONS = {
+  actions: [
+    {
+      output: "bazel-out/k8-fastbuild/bin/app/first",
+      mnemonic: "Javac",
+      owner: "//app:first",
+    },
+  ],
+  truncated: false,
+};
+
 function effect<T extends SessionEffect["type"]>(
   effects: SessionEffect[],
   type: T,
@@ -443,4 +458,107 @@ test("failed saved refreshes retain cached detail and profile values", () => {
   assert.equal(profileFailure.model.saved.detail.error, "detail refresh failed");
   assert.equal(profileFailure.model.saved.profile.value, PROFILE);
   assert.equal(profileFailure.model.saved.profile.error, "profile refresh failed");
+});
+
+test("target actions are requested only after outputs finishes", () => {
+  const indexed = indexedModel();
+  const selected = update(indexed, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  assert.deepEqual(
+    selected.effects.map((item) => item.type),
+    ["getTargetDetail"],
+  );
+  const detail = effect(selected.effects, "getTargetDetail");
+  const withDetail = update(selected.model, {
+    type: "targetDetailResult",
+    requestId: detail.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  assert.deepEqual(
+    withDetail.effects.map((item) => item.type),
+    ["getTargetOutputs"],
+  );
+  const outputs = effect(withDetail.effects, "getTargetOutputs");
+  const withOutputs = update(withDetail.model, {
+    type: "targetOutputsResult",
+    requestId: outputs.id,
+    result: { ok: true, value: OUTPUTS },
+  });
+  const actions = effect(withOutputs.effects, "getTargetActions");
+  assert.equal(actions.label, "//app:first");
+  assert.equal(actions.fetchedAt, TARGETS.meta.fetchedAt);
+});
+
+test("target actions still load when outputs fails", () => {
+  const indexed = indexedModel();
+  const selected = update(indexed, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  const detail = effect(selected.effects, "getTargetDetail");
+  const withDetail = update(selected.model, {
+    type: "targetDetailResult",
+    requestId: detail.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  const outputs = effect(withDetail.effects, "getTargetOutputs");
+  const withOutputs = update(withDetail.model, {
+    type: "targetOutputsResult",
+    requestId: outputs.id,
+    result: { ok: false, error: "cquery failed" },
+  });
+  const actions = effect(withOutputs.effects, "getTargetActions");
+  const finished = update(withOutputs.model, {
+    type: "targetActionsResult",
+    requestId: actions.id,
+    result: { ok: true, value: ACTIONS },
+  });
+  assert.deepEqual(finished.model.targets.actions.value, ACTIONS);
+  assert.equal(finished.model.targets.outputs.error, "cquery failed");
+});
+
+test("workspace and snapshot changes clear target actions", () => {
+  const indexed = indexedModel();
+  const selected = update(indexed, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  const detail = effect(selected.effects, "getTargetDetail");
+  const withDetail = update(selected.model, {
+    type: "targetDetailResult",
+    requestId: detail.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  const outputs = effect(withDetail.effects, "getTargetOutputs");
+  const withOutputs = update(withDetail.model, {
+    type: "targetOutputsResult",
+    requestId: outputs.id,
+    result: { ok: true, value: OUTPUTS },
+  });
+  const actions = effect(withOutputs.effects, "getTargetActions");
+  const loaded = update(withOutputs.model, {
+    type: "targetActionsResult",
+    requestId: actions.id,
+    result: { ok: true, value: ACTIONS },
+  });
+  assert.deepEqual(loaded.model.targets.actions.value, ACTIONS);
+
+  const switched = update(loaded.model, {
+    type: "appState",
+    state: { ...state(), workspace: "/other" },
+  });
+  assert.equal(switched.model.targets.actions.value, null);
+  assert.equal(switched.model.targets.actions.error, null);
+  assert.equal(switched.model.targets.actions.wanted, null);
+
+  const refreshed = update(loaded.model, {
+    type: "appState",
+    state: state(2),
+  });
+  assert.equal(refreshed.model.targets.selection?.kind, "target");
+  assert.equal(refreshed.model.targets.actions.value, null);
+  assert.equal(refreshed.model.targets.actions.error, null);
+  assert.equal(refreshed.model.targets.actions.wanted, null);
 });

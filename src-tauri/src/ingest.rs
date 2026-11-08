@@ -3,6 +3,7 @@
 //! Triggers: workspace open and manual refresh. Busy requests are rejected;
 //! no pending query or post-invocation refresh is kept.
 
+use crate::actions;
 use crate::query_proto::{self, ParsedQuery};
 use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target};
@@ -168,6 +169,42 @@ fn parse_output_paths(input: impl BufRead) -> Result<TargetOutputs, String> {
         }
     }
     Ok(TargetOutputs { paths, truncated })
+}
+
+#[tracing::instrument(target = "zeal::operations", name = "target.actions", skip_all)]
+pub fn target_actions(
+    app: AppHandle,
+    core: Arc<Core>,
+    label: &str,
+    fetched_at: u64,
+) -> Result<actions::TargetActions, String> {
+    let pattern = crate::scope::cquery_target(label)?;
+    let (ws, bazel) = acquire_target(&core, label, fetched_at)?;
+    let _slot = DetailSlot {
+        app: app.clone(),
+        core: core.clone(),
+    };
+    core.emit(&app);
+    let mut command = Command::new(&bazel);
+    command
+        .arg("aquery")
+        .arg(format!("\"{pattern}\""))
+        .args([
+            "--output=jsonproto",
+            "--noinclude_commandline",
+            "--include_artifacts",
+        ])
+        .current_dir(&ws);
+    match fetch(
+        &core,
+        &mut command,
+        || core.emit(&app),
+        actions::parse,
+        |actions: &actions::TargetActions| !actions.actions.is_empty(),
+    ) {
+        Outcome::Ok(actions) | Outcome::Partial(actions, _) => Ok(actions),
+        Outcome::Failed(error) => Err(error.summary),
+    }
 }
 
 fn acquire_target(core: &Core, label: &str, fetched_at: u64) -> Result<(PathBuf, PathBuf), String> {

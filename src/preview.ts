@@ -9,6 +9,7 @@ import type {
   InvocationRecord,
   Profile,
   Target,
+  TargetActions,
   TargetDetail,
   TargetIndex,
   TargetOutputs,
@@ -382,6 +383,14 @@ function stopInvocation() {
   }
 }
 
+function actionMnemonic(path: string): string {
+  const name = path.split("/").pop() ?? path;
+  if (name.endsWith("-src.jar") || name.endsWith(".srcjar")) return "SourceJar";
+  if (name.endsWith("_deploy.jar")) return "DeployJar";
+  if (name.endsWith(".jar")) return "Javac";
+  return "SingleJar";
+}
+
 /** Installs mock core IPC for the development-only browser preview. */
 export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
@@ -421,6 +430,23 @@ export function installPreview() {
         .filter((file) => file.owner === label && file.role === "out")
         .map((file) => `bazel-out/k8-fastbuild/bin/${file.path}`);
       return { paths: paths.slice(0, 10), truncated: paths.length > 10 };
+    },
+    get_target_actions: (payload): TargetActions => {
+      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
+        throw new Error("Target list changed; select the target again");
+      }
+      const label = String(payload?.label);
+      if (!SNAPSHOT.targets.some((item) => item.label === label)) {
+        throw new Error("Target not found");
+      }
+      const actions = FULL_DATA.files
+        .filter((file) => file.owner === label && file.role === "out")
+        .map((file) => ({
+          output: `bazel-out/k8-fastbuild/bin/${file.path}`,
+          mnemonic: actionMnemonic(file.path),
+          owner: file.owner,
+        }));
+      return { actions: actions.slice(0, 10), truncated: actions.length > 10 };
     },
     list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
