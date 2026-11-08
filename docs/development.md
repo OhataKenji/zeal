@@ -2,6 +2,8 @@
 
 Tauri v2 (Rust + system WebView) app. Frontend is Vite + Svelte 5 + TypeScript.
 
+See the [frontend README](../src/README.md) for state ownership and the UI update flow.
+
 ## Getting started
 
 Tool versions are pinned with [mise](https://mise.jdx.dev/).

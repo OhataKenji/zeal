@@ -7,6 +7,7 @@ import {
   createSession,
   emptyView,
   type Transport,
+  type WorkspacePage,
 } from "../src/lib/session.ts";
 import type {
   AppState,
@@ -15,6 +16,7 @@ import type {
   Profile,
   Section,
   TargetIndex,
+  TargetOutputs,
 } from "../src/lib/types.ts";
 
 const IDLE: AppState = {
@@ -80,8 +82,8 @@ afterEach(() => {
   cleanup.splice(0).forEach((dispose) => dispose());
 });
 
-function harness(initial = Promise.resolve(IDLE)) {
-  let view = emptyView();
+function harness(initial = Promise.resolve(IDLE), page: WorkspacePage = "targets") {
+  let view = emptyView(page);
   let coreState = IDLE;
   let initialRequested = false;
   let nextState: Promise<AppState> | undefined;
@@ -134,9 +136,13 @@ function harness(initial = Promise.resolve(IDLE)) {
       };
     },
   };
-  const session = createSession(transport, (next) => {
-    view = next;
-  });
+  const session = createSession(
+    transport,
+    (next) => {
+      view = next;
+    },
+    page,
+  );
   cleanup.push(session.dispose);
   return {
     session,
@@ -211,7 +217,15 @@ async function settle() {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
+
+test("initial page survives the initial state fetch", async () => {
+  const h = harness(Promise.resolve(IDLE), "query");
+  await h.session.init();
+  assert.deepEqual(h.view.content, { kind: "query" });
+});
 
 test("logs and results arrive while profile parsing is still pending", async () => {
   const h = harness();
@@ -247,7 +261,7 @@ test("history notification refreshes terminal details and missing timing after c
   assert.equal(requestCount(h, "get_invocation"), 2);
   assert.equal(h.view.detail, earlier);
   assert.equal(h.view.detailLoading, true);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.equal(requestCount(h, "get_invocation_profile"), 2);
   assert.equal(h.view.profileLoading, true);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
@@ -289,23 +303,84 @@ test("the next unchanged list refresh recovers completion during a detail read",
   const h = harness();
   await h.session.init();
   await selectRecord(h);
-  const first = h.session.loadInvocations();
+  h.session.loadInvocations();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await first;
+  await settle();
   assert.equal(requestCount(h, "get_invocation"), 1);
   pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
   await settle();
 
-  const next = h.session.loadInvocations();
+  h.session.loadInvocations();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await next;
+  await settle();
   assert.equal(requestCount(h, "get_invocation"), 2);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
-  const stable = h.session.loadInvocations();
+  h.session.loadInvocations();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await stable;
+  await settle();
   assert.equal(requestCount(h, "get_invocation"), 2);
+});
+
+test("successful history reads reconcile a loaded stale detail without retrying in a loop", async () => {
+  const h = harness();
+  await h.session.init();
+  await selectRecord(h, [COMPLETED.record]);
+  const earlier = { ...COMPLETED, record: RECORD };
+  pendingRequest(h, "get_invocation").reply.resolve(earlier);
+  pendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
+  await settle();
+
+  h.emit("invocations-changed", undefined);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+
+  lastPendingRequest(h, "get_invocation").reply.resolve(earlier);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+
+  h.emit("invocations-changed", undefined);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  assert.equal(requestCount(h, "get_invocation_profile"), 3);
+
+  lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  h.session.loadInvocations();
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  assert.equal(requestCount(h, "get_invocation_profile"), 3);
+});
+
+test("stale-detail reconciliation also refreshes a profile already being read", async () => {
+  const h = harness();
+  await h.session.init();
+  await selectRecord(h, [COMPLETED.record]);
+  pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
+  await settle();
+
+  h.emit("invocations-changed", undefined);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+
+  pendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
+  await settle();
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.equal(h.view.profile, null);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  await settle();
+  assert.deepEqual(h.view.profile, PROFILE);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
 });
 
 test("a failed automatic detail refresh waits for explicit Retry", async () => {
@@ -315,20 +390,20 @@ test("a failed automatic detail refresh waits for explicit Retry", async () => {
   const earlier = { ...COMPLETED, record: RECORD };
   pendingRequest(h, "get_invocation").reply.resolve(earlier);
   await settle();
-  const first = h.session.loadInvocations();
+  h.session.loadInvocations();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await first;
+  await settle();
   lastPendingRequest(h, "get_invocation").reply.reject(new Error("record unavailable"));
   await settle();
-  const next = h.session.loadInvocations();
+  h.session.loadInvocations();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await next;
+  await settle();
   assert.equal(requestCount(h, "get_invocation"), 2);
   assert.equal(h.view.detail, earlier);
   assert.match(h.view.detailError ?? "", /record unavailable/);
-  const retry = h.session.loadDetail();
+  h.session.loadDetail();
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  await retry;
+  await settle();
   assert.equal(h.view.detailError, null);
 });
 
@@ -357,10 +432,10 @@ test("a list response after disposal cannot start a detail refresh", async () =>
   await selectRecord(h);
   pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
   await settle();
-  const poll = h.session.loadInvocations();
+  h.session.loadInvocations();
   h.session.dispose();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
-  await poll;
+  await settle();
   assert.equal(requestCount(h, "get_invocation"), 1);
 });
 
@@ -388,9 +463,11 @@ test("a profile failure leaves logs visible and retries only timing", async () =
   assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detailError, null);
   assert.match(h.view.profileError ?? "", /profile worker busy/);
-  const retry = h.session.loadProfile();
+  h.session.loadProfile();
+  assert.equal(h.view.profileError, null);
+  assert.equal(h.view.profileLoading, true);
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
-  await retry;
+  await settle();
   assert.equal(requestCount(h, "get_invocation"), 1);
   assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
@@ -405,9 +482,11 @@ test("a log request failure leaves timing visible and retries only the summary",
   await settle();
   assert.deepEqual(h.view.profile, PROFILE);
   assert.match(h.view.detailError ?? "", /record unavailable/);
-  const retry = h.session.loadDetail();
+  h.session.loadDetail();
+  assert.equal(h.view.detailError, null);
+  assert.equal(h.view.detailLoading, true);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  await retry;
+  await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
   assert.equal(h.view.detailError, null);
   assert.equal(requestCount(h, "get_invocation_profile"), 1);
@@ -426,7 +505,7 @@ test("a late profile response or error cannot replace a newer selection", async 
   assert.deepEqual(lastPendingRequest(h, "get_invocation_profile").args, { id: "run-c" });
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
-  assert.equal(h.view.selectedInvocation, "run-c");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-c", page: "targets" });
   assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
   assert.equal(h.view.profileLoading, false);
@@ -549,6 +628,29 @@ test("a stale snapshot fetch cannot replace the current snapshot", async () => {
   assert.deepEqual(h.view.snapshot, newer);
 });
 
+test("overlapping snapshot loads deduplicate the current timestamp", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: 1 }));
+  await h.session.init();
+  const older = pendingRequest(h, "get_snapshot");
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  const requests = pendingRequests(h, "get_snapshot");
+  assert.equal(requests.length, 2);
+
+  h.session.loadSnapshot();
+  h.session.loadSnapshot();
+  assert.equal(requestCount(h, "get_snapshot"), 2);
+
+  older.reply.resolve(SNAPSHOT);
+  await settle();
+  assert.equal(h.view.snapshot, null);
+  assert.equal(h.view.snapshotLoading, true);
+
+  const newer = { ...SNAPSHOT, meta: { ...SNAPSHOT.meta, fetchedAt: 2 } };
+  requests[1].reply.resolve(newer);
+  await settle();
+  assert.deepEqual(h.view.snapshot, newer);
+});
+
 test("workspace switch drops the snapshot and its in-flight fetch", async () => {
   const h = harness();
   await h.session.init();
@@ -579,8 +681,8 @@ test("loadSnapshot retries a failed fetch directly and deduplicates calls", asyn
   pendingRequest(h, "get_snapshot").reply.reject(new Error("snapshot worker failed"));
   await settle();
   assert.match(h.view.snapshotError ?? "", /snapshot worker failed/);
-  void h.session.loadSnapshot();
-  void h.session.loadSnapshot();
+  h.session.loadSnapshot();
+  h.session.loadSnapshot();
   assert.equal(h.view.snapshotError, null);
   assert.equal(h.view.snapshotLoading, true);
   assert.equal(requestCount(h, "get_snapshot"), 2);
@@ -737,7 +839,7 @@ test("a successful target-list retry resumes the selected detail", async () => {
   lastPendingRequest(h, "get_snapshot").reply.reject(new Error("list failed"));
   await settle();
   assert.match(h.view.targetDetailError ?? "", /target list/);
-  void h.session.loadSnapshot();
+  h.session.loadSnapshot();
   lastPendingRequest(h, "get_snapshot").reply.resolve({
     ...TARGETS,
     meta: { ...TARGETS.meta, fetchedAt: 2 },
@@ -752,17 +854,17 @@ test("changing Scope preserves the selected invocation", async () => {
   await h.session.init();
   await selectRecord(h);
   h.emit("app-state", { ...IDLE, scope: { include: ["//other/..."] } });
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.deepEqual(h.view.invocations, [RECORD]);
 });
 
 test("Send passes the pattern through unchanged and ignores whitespace and duplicate starts", async () => {
   const h = harness();
   await h.session.init();
-  void h.session.start("build", " //:app ");
+  h.session.start("build", " //:app ");
   noPending(h, "start_invocation");
-  void h.session.start("build", "//:app");
-  void h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   assert.equal(requestCount(h, "start_invocation"), 1);
   assert.deepEqual(pendingRequest(h, "start_invocation").args, {
     cmd: "build",
@@ -774,18 +876,18 @@ test("Send passes the pattern through unchanged and ignores whitespace and dupli
 test("start records the selected cmd and the pattern string unchanged", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("test", "//app:tar;get");
+  h.session.start("test", "//app:tar;get");
   const call = pendingRequest(h, "start_invocation");
   assert.deepEqual(call.args, { cmd: "test", pattern: "//app:tar;get", arguments: "" });
   call.reply.resolve({ ...RECORD, cmd: "test", pattern: "//app:tar;get" });
-  await started;
+  await settle();
 });
 
 test("start forwards quoted arguments and the program separator unchanged", async () => {
   const h = harness();
   await h.session.init();
   const argumentsText = `--config=dev --define='message=hello world' -- "two words" '$HOME; echo'`;
-  const started = h.session.start("run", "//:app", argumentsText);
+  h.session.start("run", "//:app", argumentsText);
   const call = pendingRequest(h, "start_invocation");
   assert.deepEqual(call.args, {
     cmd: "run",
@@ -793,18 +895,18 @@ test("start forwards quoted arguments and the program separator unchanged", asyn
     arguments: argumentsText,
   });
   call.reply.resolve(RECORD);
-  await started;
+  await settle();
 });
 
 test("an argument parse failure is visible and allows a corrected start", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("run", "//:app", '"unfinished');
+  h.session.start("run", "//:app", '"unfinished');
   pendingRequest(h, "start_invocation").reply.reject(new Error("Unclosed quote in arguments"));
-  await started;
+  await settle();
   assert.match(h.view.error ?? "", /Unclosed quote/);
   assert.equal(canSend(h.view, "//:app"), true);
-  const retried = h.session.start("run", "//:app", '"complete"');
+  h.session.start("run", "//:app", '"complete"');
   assert.equal(requestCount(h, "start_invocation"), 2);
   assert.deepEqual(lastPendingRequest(h, "start_invocation").args, {
     cmd: "run",
@@ -812,7 +914,7 @@ test("an argument parse failure is visible and allows a corrected start", async 
     arguments: '"complete"',
   });
   lastPendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await retried;
+  await settle();
   assert.equal(h.view.error, null);
 });
 
@@ -821,21 +923,21 @@ test("stop is offered while an invocation is live and not already stopping", asy
   assert.equal(canStop(h.view), false);
   await h.session.init();
   assert.equal(canStop(h.view), false);
-  await h.session.stop();
+  h.session.stop();
   noPending(h, "stop_invocation");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   assert.equal(canStop(h.view), true);
-  const stopping = h.session.stop();
+  h.session.stop();
   // No optimistic local flag: the core reports stopping through app-state.
   assert.equal(h.view.state?.stopping, false);
   assert.equal(canStop(h.view), true);
   assert.equal(requestCount(h, "stop_invocation"), 1);
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, stopping: true });
   assert.equal(canStop(h.view), false);
-  await h.session.stop();
+  h.session.stop();
   assert.equal(requestCount(h, "stop_invocation"), 1);
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
-  await stopping;
+  await settle();
 });
 
 test("an active query can be stopped without a snapshot", async () => {
@@ -847,12 +949,12 @@ test("an active query can be stopped without a snapshot", async () => {
   assert.equal(canStop(h.view), true);
   assert.equal(canSend(h.view, "//..."), false);
 
-  const stopping = h.session.stop();
+  h.session.stop();
   assert.equal(requestCount(h, "stop_invocation"), 1);
   h.emit("app-state", { ...IDLE, activeInvocation: id, stopping: true });
   assert.equal(canStop(h.view), false);
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
-  await stopping;
+  await settle();
 
   h.emit("app-state", IDLE);
   assert.equal(canSend(h.view, "//..."), true);
@@ -861,22 +963,22 @@ test("an active query can be stopped without a snapshot", async () => {
 test("an unobserved invocation keeps composer input in the live Console only", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("run", "//:app");
+  h.session.start("run", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, false);
+  assert.notEqual(h.view.content.kind, "console");
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
-  await started;
+  await settle();
   const liveConsole = h.view.console;
   assert.deepEqual(liveConsole, { id: RECORD.id, cmd: "run", pattern: "//:app" });
   assert.equal(h.view.console?.startedAt, undefined);
   pendingRequest(h, "list_invocations").reply.resolve([]);
   await settle();
-  h.session.selectInvocation(null);
-  assert.equal(h.view.consoleOpen, false);
+  h.session.showPage("targets");
+  assert.notEqual(h.view.content.kind, "console");
   const live = h.view.console;
   assert.ok(live);
   h.session.openConsole(live);
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   assert.equal(canStop(h.view), true);
 });
 
@@ -885,23 +987,23 @@ test("a confirmed build result leaves the live program and Console controls acti
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   h.session.openConsole(COMPLETED.record);
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   assert.equal(canStop(h.view), true);
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
   noPending(h, "get_invocation");
-  const stopping = h.session.stop();
+  h.session.stop();
   pendingRequest(h, "stop_invocation").reply.resolve(undefined);
-  await stopping;
-  assert.equal(h.view.consoleOpen, true);
+  await settle();
+  assert.equal(h.view.content.kind, "console");
 });
 
 test("stop failure is surfaced and leaves the invocation in flight", async () => {
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
-  const stopping = h.session.stop();
+  h.session.stop();
   pendingRequest(h, "stop_invocation").reply.reject(new Error("stop unavailable"));
-  await stopping;
+  await settle();
   assert.match(h.view.error ?? "", /stop unavailable/);
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
 });
@@ -909,17 +1011,17 @@ test("stop failure is surfaced and leaves the invocation in flight", async () =>
 test("full artifacts are read only after the invocation finishes", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await started;
-  assert.equal(h.view.selectedInvocation, null);
+  await settle();
+  assert.notEqual(h.view.content.kind, "invocation");
   assert.equal(h.view.console?.id, RECORD.id);
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   noPending(h, "get_invocation", "get_invocation_profile");
   h.emit("app-state", IDLE);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
@@ -929,16 +1031,16 @@ test("full artifacts are read only after the invocation finishes", async () => {
 test("invocation completing before start response opens its detail after reconciliation", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, consoleInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   assert.deepEqual(h.view.console, { id: RECORD.id, cmd: "build", pattern: "//:app" });
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
-  await started;
+  await settle();
   assert.equal(h.view.state?.activeInvocation, null);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.equal(h.view.console?.id, RECORD.id);
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: RECORD.id });
   assert.deepEqual(pendingRequest(h, "get_invocation_profile").args, { id: RECORD.id });
@@ -947,56 +1049,91 @@ test("invocation completing before start response opens its detail after reconci
 test("running state opens Console before the start response and keeps it open", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   assert.equal(h.view.starting, true);
-  assert.equal(h.view.consoleOpen, false);
+  assert.notEqual(h.view.content.kind, "console");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, consoleInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   const consoleBeforeReply = h.view.console;
   assert.deepEqual(consoleBeforeReply, { id: RECORD.id, cmd: "build", pattern: "//:app" });
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
-  await started;
+  await settle();
   assert.equal(h.view.starting, false);
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   assert.strictEqual(h.view.console, consoleBeforeReply);
 });
 
 test("pending start ignores a running state without its Console grant", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, consoleInvocation: "other-run" });
-  assert.equal(h.view.consoleOpen, false);
+  assert.notEqual(h.view.content.kind, "console");
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
-  await started;
+  await settle();
 });
 
 test("pending start ignores another workspace's running state", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", {
     ...IDLE,
     workspace: "/other",
     activeInvocation: RECORD.id,
     consoleInvocation: RECORD.id,
   });
-  assert.equal(h.view.consoleOpen, false);
+  assert.notEqual(h.view.content.kind, "console");
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
-  await started;
-  assert.equal(h.view.consoleOpen, false);
+  await settle();
+  assert.notEqual(h.view.content.kind, "console");
 });
 
 test("start response before the running event reconciles state without reading active observations", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.setCore({ ...IDLE, activeInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await started;
+  await settle();
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
   noPending(h, "get_invocation");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
+});
+
+test("reselecting an invocation shares its pending detail and profile reads", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+
+  h.session.selectInvocation(RECORD.id);
+  h.session.selectInvocation(RECORD.id);
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  assert.equal(h.view.detailLoading, false);
+  assert.equal(h.view.profileLoading, false);
+});
+
+test("start reconciliation refreshes history when state remains idle", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+
+  const startedRecord = { ...RECORD, id: "run-b", startedAt: 2 };
+  h.session.start("build", "//:app");
+  pendingRequest(h, "start_invocation").reply.resolve(startedRecord);
+  await settle();
+
+  assert.equal(requestCount(h, "list_invocations"), 2);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record, startedRecord]);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), 2);
 });
 
 test("completion event during post-start reconciliation wins over its stale running response", async () => {
@@ -1004,16 +1141,16 @@ test("completion event during post-start reconciliation wins over its stale runn
   await h.session.init();
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await settle();
   h.emit("app-state", IDLE);
   reconciled.resolve({ ...IDLE, activeInvocation: RECORD.id });
-  await started;
+  await settle();
   assert.equal(h.view.state?.activeInvocation, null);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
@@ -1024,18 +1161,18 @@ test("failed state reconciliation waits for a later state event before opening c
   await h.session.init();
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await settle();
   reconciled.reject(new Error("state unavailable"));
-  await started;
+  await settle();
   assert.match(h.view.error ?? "", /invocation started/);
   assert.equal(canSend(h.view, "//:app"), false);
   assert.equal(h.view.console?.id, RECORD.id);
   noPending(h, "get_invocation");
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.error, null);
@@ -1049,17 +1186,17 @@ test("state recovery keeps a previous Console reopened while reconciliation was 
   h.emit("app-state", { ...IDLE, consoleInvocation: "old-run" });
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await settle();
   reconciled.reject(new Error("state unavailable"));
-  await started;
+  await settle();
   h.session.openConsole({ id: "old-run" });
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   assert.equal(h.view.ready, true);
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   assert.equal(h.view.console?.id, "old-run");
-  assert.equal(h.view.selectedInvocation, null);
+  assert.notEqual(h.view.content.kind, "invocation");
   noPending(h, "get_invocation");
 });
 
@@ -1089,7 +1226,7 @@ test("a slow previous invocation detail cannot replace the selected invocation",
     record: { ...COMPLETED.record, id: "run-b" },
   });
   await settle();
-  assert.equal(h.view.selectedInvocation, "run-b");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-b", page: "targets" });
   assert.equal(h.view.detail?.record.id, "run-b");
 });
 
@@ -1114,7 +1251,7 @@ test("selecting another invocation during a read loads only the latest selection
   });
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
-  assert.equal(h.view.selectedInvocation, "run-c");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-c", page: "targets" });
   assert.equal(h.view.detail?.record.id, "run-c");
   assert.equal(h.view.detailError, null);
   assert.deepEqual(h.view.profile, PROFILE);
@@ -1135,7 +1272,7 @@ test("workspace switch rejects both stale invocation list and stale detail", asy
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
   assert.equal(h.view.profileLoading, false);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.notEqual(h.view.content.kind, "invocation");
   const otherRecord = { ...RECORD, workspace: "/other" };
   lastPendingRequest(h, "list_invocations").reply.resolve([otherRecord]);
   await settle();
@@ -1146,7 +1283,7 @@ test("target selection cancels an in-flight detail without changing core running
   const h = harness();
   await h.session.init();
   h.session.selectInvocation("run-a");
-  h.session.selectInvocation(null);
+  h.session.showPage("targets");
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
@@ -1161,12 +1298,12 @@ test("target selection cancels an in-flight detail without changing core running
 test("failed spawn is visible and allows another Send", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("test", "//:app");
+  h.session.start("test", "//:app");
   pendingRequest(h, "start_invocation").reply.reject(new Error("failed to spawn bazel"));
-  await started;
+  await settle();
   assert.match(h.view.error ?? "", /failed to spawn/);
   assert.equal(h.view.starting, false);
-  assert.equal(h.view.consoleOpen, false);
+  assert.notEqual(h.view.content.kind, "console");
   assert.equal(canSend(h.view, "//:app"), true);
 });
 
@@ -1175,25 +1312,25 @@ test("failed spawn leaves a previously completed Console open", async () => {
   await h.session.init();
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   h.session.openConsole(COMPLETED.record);
-  const started = h.session.start("build", "//:other");
+  h.session.start("build", "//:other");
   assert.equal(h.view.starting, true);
   assert.equal(h.view.console?.id, RECORD.id);
   pendingRequest(h, "start_invocation").reply.reject(new Error("failed to spawn bazel"));
-  await started;
-  assert.equal(h.view.consoleOpen, true);
+  await settle();
+  assert.equal(h.view.content.kind, "console");
   assert.equal(h.view.console?.id, RECORD.id);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.notEqual(h.view.content.kind, "invocation");
   noPending(h, "get_invocation");
 });
 
 test("failed spawn resumes a saved invocation detail selected while start was pending", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.session.selectInvocation("saved-run");
   noPending(h, "get_invocation");
   pendingRequest(h, "start_invocation").reply.reject(new Error("failed to spawn"));
-  await started;
+  await settle();
   assert.equal(h.view.detailLoading, true);
   const request = pendingRequest(h, "get_invocation");
   assert.deepEqual(request.args, { id: "saved-run" });
@@ -1223,13 +1360,13 @@ test("dispose during start reconciliation ignores completion without reading art
   await h.session.init();
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await settle();
   const before = h.view;
   h.session.dispose();
   reconciled.resolve({ ...IDLE, consoleInvocation: RECORD.id });
-  await started;
+  await settle();
   assert.equal(h.view, before);
   assert.deepEqual(h.removed, ["app-state", "invocations-changed"]);
   noPending(h, "get_invocation", "get_invocation_profile");
@@ -1334,7 +1471,8 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
-  await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
+  h.session.openWorkspace("/other", IDLE.scope);
+  assert.match(h.view.workspaceError ?? "", /Bazel/);
   noPending(h, "open_workspace");
 });
 
@@ -1342,16 +1480,16 @@ test("refresh is rejected while busy and is never queued", async () => {
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
-  await h.session.refresh();
+  h.session.refresh();
   h.emit("app-state", { ...IDLE, ingest: "running" });
-  await h.session.refresh();
+  h.session.refresh();
   h.emit("app-state", { ...IDLE, detailQuery: "running" });
-  await h.session.refresh();
+  h.session.refresh();
   h.emit("app-state", IDLE);
   noPending(h, "refresh");
-  const refreshing = h.session.refresh();
+  h.session.refresh();
   pendingRequest(h, "refresh").reply.resolve(undefined);
-  await refreshing;
+  await settle();
 });
 
 test("an unconfirmed exit stays unknown and is not retried automatically", async () => {
@@ -1371,28 +1509,46 @@ test("an unconfirmed exit stays unknown and is not retried automatically", async
 test("leaving Console keeps the process and prevents automatic navigation", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("run", "//:app");
+  h.session.start("run", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await started;
-  h.session.selectInvocation(null);
+  await settle();
+  h.session.showPage("targets");
   assert.equal(h.view.state?.activeInvocation, RECORD.id);
   noPending(h, "stop_invocation");
   h.emit("app-state", IDLE);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.notEqual(h.view.content.kind, "invocation");
+});
+
+test("workspace page navigation is not stolen by Console completion", async () => {
+  for (const page of ["query", "analytics"] as const) {
+    const h = harness();
+    await h.session.init();
+    h.emit("app-state", {
+      ...IDLE,
+      activeInvocation: RECORD.id,
+      consoleInvocation: RECORD.id,
+    });
+    h.session.openConsole(RECORD);
+    assert.deepEqual(h.view.content, { kind: "console", page: "targets" });
+    h.session.showPage(page);
+    h.emit("app-state", IDLE);
+    assert.deepEqual(h.view.content, { kind: page });
+    assert.equal(h.view.console?.id, RECORD.id);
+  }
 });
 
 test("process completion opens detail once and allows Console to stay reopened", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("run", "//:app");
+  h.session.start("run", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, consoleInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve({ id: RECORD.id });
-  await started;
+  await settle();
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(canStop(h.view), false);
   h.session.openConsole({ id: RECORD.id });
@@ -1402,8 +1558,7 @@ test("process completion opens detail once and allows Console to stay reopened",
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   pendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
   await settle();
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.equal(h.view.content.kind, "console");
   assert.equal(requestCount(h, "get_invocation"), 1);
   assert.equal(requestCount(h, "get_invocation_profile"), 1);
 });
@@ -1411,28 +1566,30 @@ test("process completion opens detail once and allows Console to stay reopened",
 test("successive invocations each open detail once after their own completion", async () => {
   const h = harness();
   await h.session.init();
-  const first = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, consoleInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await first;
+  await settle();
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.deepEqual({ ...h.view.content }, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: RECORD.id });
   h.session.openConsole(RECORD);
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   const secondRecord = { ...RECORD, id: "run-b" };
-  const second = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", {
     ...IDLE,
     activeInvocation: secondRecord.id,
     consoleInvocation: secondRecord.id,
   });
   lastPendingRequest(h, "start_invocation").reply.resolve(secondRecord);
-  await second;
+  await settle();
   h.emit("app-state", { ...IDLE, consoleInvocation: secondRecord.id });
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, secondRecord.id);
+  assert.deepEqual(
+    { ...h.view.content },
+    { kind: "invocation", id: secondRecord.id, page: "targets" },
+  );
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
@@ -1440,8 +1597,7 @@ test("successive invocations each open detail once after their own completion", 
   assert.deepEqual(lastPendingRequest(h, "get_invocation_profile").args, { id: secondRecord.id });
   h.session.openConsole(secondRecord);
   h.emit("app-state", { ...IDLE, consoleInvocation: secondRecord.id });
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.equal(h.view.content.kind, "console");
   assert.equal(requestCount(h, "get_invocation"), 2);
   assert.equal(requestCount(h, "get_invocation_profile"), 2);
 });
@@ -1449,14 +1605,14 @@ test("successive invocations each open detail once after their own completion", 
 test("process completion preserves another selected invocation", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id, consoleInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await started;
+  await settle();
   h.session.selectInvocation("saved-run");
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, "saved-run");
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "saved-run", page: "targets" });
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: "saved-run" });
 });
 
@@ -1465,16 +1621,16 @@ test("completion during start reconciliation preserves a screen selected before 
   await h.session.init();
   const reconciled = deferred<AppState>();
   h.nextStateReply(reconciled.promise);
-  const started = h.session.start("build", "//:app");
+  h.session.start("build", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await settle();
   h.session.selectInvocation("saved-run");
   h.emit("app-state", IDLE);
   reconciled.resolve(IDLE);
-  await started;
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, "saved-run");
+  await settle();
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "saved-run", page: "targets" });
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: "saved-run" });
 });
 
@@ -1490,15 +1646,15 @@ test("observed live invocations remain in the workspace list", async () => {
 test("openConsole returns to a Console left while its invocation is in flight", async () => {
   const h = harness();
   await h.session.init();
-  const started = h.session.start("run", "//:app");
+  h.session.start("run", "//:app");
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
-  await started;
-  h.session.selectInvocation(null);
-  assert.equal(h.view.consoleOpen, false);
+  await settle();
+  h.session.showPage("targets");
+  assert.notEqual(h.view.content.kind, "console");
   h.session.openConsole(RECORD);
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.equal(h.view.content.kind, "console");
+  assert.notEqual(h.view.content.kind, "invocation");
   assert.equal(h.view.console?.id, RECORD.id);
   noPending(h, "stop_invocation", "get_invocation");
 });
@@ -1511,8 +1667,61 @@ test("openConsole restores the Console for an invocation already in flight at co
   assert.equal(consoleBeforeOpen, null);
   h.session.openConsole(RECORD);
   assert.equal(h.view.console?.id, RECORD.id);
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.equal(h.view.content.kind, "console");
+  assert.notEqual(h.view.content.kind, "invocation");
+});
+
+test("an active invocation completes its reopened Console once after a workspace transition", async () => {
+  const scenarios = [
+    {
+      name: "initial state",
+      create: () => harness(Promise.resolve({ ...IDLE, activeInvocation: RECORD.id })),
+      activate: (_h: ReturnType<typeof harness>) => {},
+      workspace: IDLE.workspace,
+    },
+    {
+      name: "workspace switch",
+      create: () => harness(),
+      activate: (h: ReturnType<typeof harness>) =>
+        h.emit("app-state", { ...IDLE, workspace: "/other", activeInvocation: RECORD.id }),
+      workspace: "/other",
+    },
+  ];
+  for (const scenario of scenarios) {
+    const h = scenario.create();
+    await h.session.init();
+    scenario.activate(h);
+    h.session.openConsole(RECORD);
+    h.emit("app-state", { ...IDLE, workspace: scenario.workspace });
+    assert.notEqual(h.view.content.kind, "console", scenario.name);
+    assert.deepEqual(
+      h.view.content,
+      { kind: "invocation", id: RECORD.id, page: "targets" },
+      scenario.name,
+    );
+  }
+});
+
+test("a late start response cannot reclaim a Console after an A-to-B-to-A switch", async () => {
+  const h = harness();
+  await h.session.init();
+  h.session.start("run", "//:old");
+  const oldRequest = pendingRequest(h, "start_invocation");
+  h.emit("app-state", { ...IDLE, workspace: "/other" });
+  h.emit("app-state", IDLE);
+
+  h.session.start("run", "//:new");
+  const newRequest = lastPendingRequest(h, "start_invocation");
+  assert.equal(h.view.starting, true);
+
+  oldRequest.reply.resolve({ ...RECORD, id: "run-old" });
+  await settle();
+  assert.equal(h.view.starting, true);
+  assert.equal(h.view.console, null);
+  assert.notEqual(h.view.content.kind, "console");
+
+  newRequest.reply.resolve({ ...RECORD, id: "run-new" });
+  await settle();
 });
 
 test("openConsole cancels an in-flight invocation detail read", async () => {
@@ -1527,16 +1736,16 @@ test("openConsole cancels an in-flight invocation detail read", async () => {
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
   assert.equal(h.view.profileLoading, false);
-  assert.equal(h.view.selectedInvocation, null);
-  assert.equal(h.view.consoleOpen, true);
+  assert.notEqual(h.view.content.kind, "invocation");
+  assert.equal(h.view.content.kind, "console");
 });
 
 test("openConsole on a finished invocation lands on its detail view", async () => {
   const h = harness();
   await h.session.init();
   h.session.openConsole(RECORD);
-  assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.id, RECORD.id);
@@ -1547,14 +1756,14 @@ test("a completed Console can be reopened after viewing its build details", asyn
   await h.session.init();
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   h.session.openConsole({ id: RECORD.id });
-  assert.equal(h.view.consoleOpen, true);
+  assert.equal(h.view.content.kind, "console");
   h.session.selectInvocation(RECORD.id);
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
   h.session.openConsole(COMPLETED.record);
-  assert.equal(h.view.consoleOpen, true);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.equal(h.view.content.kind, "console");
+  assert.notEqual(h.view.content.kind, "invocation");
   assert.equal(canStop(h.view), false);
   assert.equal(h.view.console?.id, RECORD.id);
 });
@@ -1570,10 +1779,10 @@ test("workspace changes revoke a completed Console and discard its pending detai
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.console, null);
-  assert.equal(h.view.consoleOpen, false);
+  assert.notEqual(h.view.content.kind, "console");
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
-  assert.equal(h.view.selectedInvocation, null);
+  assert.notEqual(h.view.content.kind, "invocation");
 });
 
 test("workspace opening sends all target patterns to the core", async () => {
@@ -1582,13 +1791,85 @@ test("workspace opening sends all target patterns to the core", async () => {
   const scope = {
     include: ["//services/payments/...", "//libs/money/...", "//tools:generator"],
   };
-  const opened = h.session.openWorkspace("/other", scope);
+  assert.equal(h.session.openWorkspace("/other", scope), undefined);
+  assert.equal(h.view.workspacePromptOpen, true);
+  assert.equal(h.view.opening, true);
   const request = pendingRequest(h, "open_workspace");
   assert.deepEqual(request.args, { path: "/other", scope });
   request.reply.resolve({ ...IDLE, workspace: "/other", scope });
-  await opened;
+  await settle();
   assert.deepEqual(h.view.state?.scope, scope);
+  assert.equal(h.view.workspacePromptOpen, false);
+  assert.equal(h.view.opening, false);
 });
+
+test("a failed workspace open resumes a target selected while opening", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([]);
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  h.session.openWorkspace("/other", IDLE.scope);
+  h.session.select({ kind: "target", label: "//app:first" });
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+
+  pendingRequest(h, "open_workspace").reply.reject(new Error("open failed"));
+  await settle();
+  assert.equal(h.view.workspacePromptOpen, true);
+  assert.equal(h.view.opening, false);
+  assert.match(h.view.workspaceError ?? "", /open failed/);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  assert.deepEqual(pendingRequest(h, "get_target_detail").args, {
+    label: "//app:first",
+    fetchedAt: SNAPSHOT.meta.fetchedAt,
+  });
+});
+
+test("workspace notifications keep opening exclusive and stale success resumes targets", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: 1 }));
+  await h.session.init();
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  h.session.openWorkspace("/other", IDLE.scope);
+  const newerState = { ...IDLE, snapshotFetchedAt: 1, lastError: "newer state" };
+  h.emit("app-state", newerState);
+  h.session.select({ kind: "target", label: "//app:first" });
+  assert.equal(h.view.opening, true);
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+  h.session.openWorkspace("/third", IDLE.scope);
+  assert.match(h.view.workspaceError ?? "", /Bazel/);
+  assert.equal(requestCount(h, "open_workspace"), 1);
+
+  pendingRequest(h, "open_workspace").reply.resolve({ ...IDLE, workspace: "/other" });
+  await settle();
+  assert.deepEqual(h.view.state, newerState);
+  assert.equal(h.view.opening, false);
+  assert.equal(h.view.workspacePromptOpen, false);
+  assert.equal(h.view.workspaceError, null);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+});
+
+for (const fails of [false, true]) {
+  test(`disposing while opening ignores a late ${fails ? "failure" : "success"}`, async () => {
+    const h = harness();
+    await h.session.init();
+    h.session.openWorkspace("/other", IDLE.scope);
+    const view = h.view;
+    h.session.dispose();
+    const request = pendingRequest(h, "open_workspace");
+    if (fails) {
+      request.reply.reject(new Error("open failed"));
+    } else {
+      request.reply.resolve({ ...IDLE, workspace: "/other" });
+    }
+    await settle();
+    assert.equal(h.view, view);
+    h.session.openWorkspace("/third", IDLE.scope);
+    assert.equal(requestCount(h, "open_workspace"), 1);
+  });
+}
 
 test("clearing the target selection rejects an older target detail", async () => {
   const h = harness();
@@ -1656,4 +1937,155 @@ test("selecting the same package does not publish another view or query", async 
   h.session.select({ kind: "package", path: "app" });
   assert.equal(h.view, selectedView);
   assert.equal(requestCount(h, "get_target_detail"), 0);
+});
+
+test("target outputs wait for current detail and discard stale responses", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([]);
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  h.session.select({ kind: "target", label: "//app:first" });
+  const firstDetail = pendingRequest(h, "get_target_detail");
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+
+  h.session.select({ kind: "target", label: "//app:second" });
+  firstDetail.reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+  const secondDetail = lastPendingRequest(h, "get_target_detail");
+  secondDetail.reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+  const staleOutputs = pendingRequest(h, "get_target_outputs");
+  assert.deepEqual(staleOutputs.args, {
+    label: "//app:second",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  const refreshedSnapshot = lastPendingRequest(h, "get_snapshot");
+  staleOutputs.reply.resolve({ paths: ["old.out"], truncated: false } satisfies TargetOutputs);
+  refreshedSnapshot.reply.resolve({
+    ...TARGETS,
+    meta: { ...TARGETS.meta, fetchedAt: 2 },
+  });
+  await settle();
+  assert.equal(h.view.targetOutputs, null);
+  const refreshedDetail = lastPendingRequest(h, "get_target_detail");
+  assert.deepEqual(refreshedDetail.args, { label: "//app:second", fetchedAt: 2 });
+  refreshedDetail.reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+  const currentOutputs = lastPendingRequest(h, "get_target_outputs");
+  assert.deepEqual(currentOutputs.args, { label: "//app:second", fetchedAt: 2 });
+  const outputs = { paths: ["app/second.out"], truncated: false } satisfies TargetOutputs;
+  currentOutputs.reply.resolve(outputs);
+  await settle();
+  assert.deepEqual(h.view.targetOutputs, outputs);
+});
+
+test("declared session dependencies refresh only affected data", async () => {
+  const setup = async () => {
+    const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+    await h.session.init();
+    pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+    pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+    await settle();
+    h.session.select({ kind: "target", label: "//app:first" });
+    pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+    await settle();
+    pendingRequest(h, "get_target_outputs").reply.resolve({
+      paths: ["app/first.out"],
+      truncated: false,
+    });
+    await settle();
+    h.session.selectInvocation(RECORD.id);
+    pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+    pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+    await settle();
+    return h;
+  };
+
+  const cases = [
+    {
+      name: "unchanged app state",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("app-state", { ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt });
+      },
+      expected: {
+        list_invocations: 1,
+        get_snapshot: 1,
+        get_invocation: 1,
+        get_invocation_profile: 1,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+    {
+      name: "scope changes",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("app-state", {
+          ...IDLE,
+          scope: { include: ["//other/..."] },
+          snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
+        });
+      },
+      expected: {
+        list_invocations: 1,
+        get_snapshot: 2,
+        get_invocation: 1,
+        get_invocation_profile: 1,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+    {
+      name: "workspace changes",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("app-state", {
+          ...IDLE,
+          workspace: "/other",
+          snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
+        });
+      },
+      expected: {
+        list_invocations: 2,
+        get_snapshot: 2,
+        get_invocation: 1,
+        get_invocation_profile: 1,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+    {
+      name: "the selected record changes",
+      run: async (h: ReturnType<typeof harness>) => {
+        h.emit("invocations-changed", undefined);
+        lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+        await settle();
+      },
+      expected: {
+        list_invocations: 2,
+        get_snapshot: 1,
+        get_invocation: 2,
+        get_invocation_profile: 2,
+        get_target_detail: 1,
+        get_target_outputs: 1,
+      },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const h = await setup();
+    await scenario.run(h);
+    for (const [command, count] of Object.entries(scenario.expected)) {
+      assert.equal(requestCount(h, command), count, `${scenario.name}: ${command}`);
+    }
+  }
 });

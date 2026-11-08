@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { openWorkspace } from "./state.svelte";
+  import { app, getSession, openWorkspace } from "./state.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
 
@@ -19,13 +19,15 @@
   let path = $state(untrack(() => initial));
   let include = $state(untrack(() => initialScope.include.join("\n")));
   let error = $state<string | null>(null);
-  let busy = $state(false);
+  let choosing = $state(false);
+  const busy = $derived(choosing || app.view.opening);
   const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
 
   async function selectWorkspace() {
     if (busy) return;
-    busy = true;
+    choosing = true;
     error = null;
+    getSession().setWorkspacePromptOpen(true);
     try {
       const selected = await open({
         directory: true,
@@ -37,25 +39,16 @@
     } catch (e) {
       error = String(e);
     } finally {
-      busy = false;
+      choosing = false;
     }
   }
 
-  async function submit() {
+  function submit() {
     if (!canSubmit) return;
-    const close = onclose;
-    busy = true;
     error = null;
-    try {
-      await openWorkspace(path.trim(), {
-        include: include.split("\n"),
-      });
-      close?.();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
+    openWorkspace(path.trim(), {
+      include: include.split("\n"),
+    });
   }
 </script>
 
@@ -102,5 +95,7 @@
       <button class="button" type="button" onclick={onclose} disabled={busy}>cancel</button>
     {/if}
   </div>
-  {#if error}<Notice tone="error">{error}</Notice>{/if}
+  {#if error ?? app.view.workspaceError}
+    <Notice tone="error">{error ?? app.view.workspaceError}</Notice>
+  {/if}
 </form>
