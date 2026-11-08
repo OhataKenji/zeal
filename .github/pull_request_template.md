@@ -50,7 +50,9 @@ focused diagram with only the actors or nodes needed to explain the change.
 <!-- Evidence the change works: manual verification steps, edge cases tested.
      - Do not mention checks guaranteed by CI (e.g. formatting, lint, build,
        automated tests). A speculative "CI is green" is sufficient.
-     - For UI changes, show before and after with screenshots or videos. -->
+     - For UI changes, show before and after with screenshots or videos. Attach
+       PR-only images with `gh pr create --attach <path>` or
+       `gh pr edit --attach <path>`; do not commit them to `docs/screenshot/`. -->
 
 ## References
 
