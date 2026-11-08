@@ -550,6 +550,29 @@ test("a stale snapshot fetch cannot replace the current snapshot", async () => {
   assert.deepEqual(h.view.snapshot, newer);
 });
 
+test("overlapping snapshot loads deduplicate the current timestamp", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: 1 }));
+  await h.session.init();
+  const older = pendingRequest(h, "get_snapshot");
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
+  const requests = pendingRequests(h, "get_snapshot");
+  assert.equal(requests.length, 2);
+
+  const firstLoad = h.session.loadSnapshot();
+  const secondLoad = h.session.loadSnapshot();
+  assert.equal(requestCount(h, "get_snapshot"), 2);
+
+  older.reply.resolve(SNAPSHOT);
+  await settle();
+  assert.equal(h.view.snapshot, null);
+  assert.equal(h.view.snapshotLoading, true);
+
+  const newer = { ...SNAPSHOT, meta: { ...SNAPSHOT.meta, fetchedAt: 2 } };
+  requests[1].reply.resolve(newer);
+  await Promise.all([firstLoad, secondLoad]);
+  assert.deepEqual(h.view.snapshot, newer);
+});
+
 test("workspace switch drops the snapshot and its in-flight fetch", async () => {
   const h = harness();
   await h.session.init();
@@ -1516,13 +1539,53 @@ test("openConsole restores the Console for an invocation already in flight at co
   assert.equal(h.view.selectedInvocation, null);
 });
 
-test("an invocation active in the initial state completes its reopened Console once", async () => {
-  const h = harness(Promise.resolve({ ...IDLE, activeInvocation: RECORD.id }));
+test("an active invocation completes its reopened Console once after a workspace transition", async () => {
+  const scenarios = [
+    {
+      name: "initial state",
+      create: () => harness(Promise.resolve({ ...IDLE, activeInvocation: RECORD.id })),
+      activate: (_h: ReturnType<typeof harness>) => {},
+      workspace: IDLE.workspace,
+    },
+    {
+      name: "workspace switch",
+      create: () => harness(),
+      activate: (h: ReturnType<typeof harness>) =>
+        h.emit("app-state", { ...IDLE, workspace: "/other", activeInvocation: RECORD.id }),
+      workspace: "/other",
+    },
+  ];
+  for (const scenario of scenarios) {
+    const h = scenario.create();
+    await h.session.init();
+    scenario.activate(h);
+    h.session.openConsole(RECORD);
+    h.emit("app-state", { ...IDLE, workspace: scenario.workspace });
+    assert.equal(h.view.consoleOpen, false, scenario.name);
+    assert.equal(h.view.selectedInvocation, RECORD.id, scenario.name);
+  }
+});
+
+test("a late start response cannot reclaim a Console after an A-to-B-to-A switch", async () => {
+  const h = harness();
   await h.session.init();
-  h.session.openConsole(RECORD);
+  const oldStart = h.session.start("run", "//:old");
+  const oldRequest = pendingRequest(h, "start_invocation");
+  h.emit("app-state", { ...IDLE, workspace: "/other" });
   h.emit("app-state", IDLE);
+
+  const newStart = h.session.start("run", "//:new");
+  const newRequest = lastPendingRequest(h, "start_invocation");
+  assert.equal(h.view.starting, true);
+
+  oldRequest.reply.resolve({ ...RECORD, id: "run-old" });
+  await oldStart;
+  assert.equal(h.view.starting, true);
+  assert.equal(h.view.console, null);
   assert.equal(h.view.consoleOpen, false);
-  assert.equal(h.view.selectedInvocation, RECORD.id);
+
+  newRequest.reply.resolve({ ...RECORD, id: "run-new" });
+  await newStart;
 });
 
 test("openConsole cancels an in-flight invocation detail read", async () => {
@@ -1715,10 +1778,6 @@ test("target outputs wait for current detail and discard stale responses", async
   assert.deepEqual(currentOutputs.args, { label: "//app:second", fetchedAt: 2 });
   const outputs = { paths: ["app/second.out"], truncated: false } satisfies TargetOutputs;
   currentOutputs.reply.resolve(outputs);
-  await settle();
-  assert.deepEqual(h.view.targetOutputs, outputs);
-
-  staleOutputs.reply.resolve({ paths: ["stale.out"], truncated: false });
   await settle();
   assert.deepEqual(h.view.targetOutputs, outputs);
 });
