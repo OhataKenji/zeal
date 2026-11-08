@@ -13,9 +13,16 @@ import type {
   TargetScope,
 } from "./types.ts";
 
+export type WorkspacePage = "targets" | "analytics" | "query";
+
+export type SessionContent =
+  | { readonly kind: WorkspacePage }
+  | { readonly kind: "invocation"; readonly id: string }
+  | { readonly kind: "console" };
+
 export interface SessionView {
+  content: SessionContent;
   console: InvocationRecord | null;
-  consoleOpen: boolean;
   state: AppState | null;
   snapshot: TargetIndex | null;
   snapshotLoading: boolean;
@@ -33,7 +40,6 @@ export interface SessionView {
   error: string | null;
   invocations: InvocationRecord[];
   invocationsError: string | null;
-  selectedInvocation: string | null;
   detail: InvocationDetail | null;
   detailLoading: boolean;
   detailError: string | null;
@@ -74,6 +80,7 @@ interface StartRequest {
 
 export interface SessionModel {
   readonly data: SessionData;
+  readonly workspacePage: WorkspacePage;
   readonly nextRequestId: number;
   readonly stateRevision: number;
   readonly pendingStart: StartRequest | null;
@@ -152,7 +159,8 @@ export type SessionMessage =
   | RequestResult<"detailResult", InvocationDetail>
   | RequestResult<"profileResult", Section<Profile>>
   | { readonly type: "select"; readonly selection: ExplorerSelection }
-  | { readonly type: "selectInvocation"; readonly id: string | null }
+  | { readonly type: "selectInvocation"; readonly id: string }
+  | { readonly type: "showPage"; readonly page: WorkspacePage }
   | { readonly type: "openConsole"; readonly record: InvocationRecord }
   | { readonly type: "loadDetail" }
   | { readonly type: "loadProfile" }
@@ -183,10 +191,10 @@ interface SessionTransition {
 const RUNNING_SLOTS = ["ingest", "detailQuery"] as const;
 const TARGET_LIST_ERROR = "Could not load the target list";
 
-function emptyData(): SessionData {
+function emptyData(page: WorkspacePage): SessionData {
   return {
+    content: { kind: page },
     console: null,
-    consoleOpen: false,
     state: null,
     snapshot: null,
     snapshotError: null,
@@ -201,7 +209,6 @@ function emptyData(): SessionData {
     error: null,
     invocations: [],
     invocationsError: null,
-    selectedInvocation: null,
     detail: null,
     detailError: null,
     profile: null,
@@ -213,9 +220,10 @@ function emptyReader(): Reader {
   return { running: null, wanted: null };
 }
 
-export function initialModel(): SessionModel {
+export function initialModel(page: WorkspacePage = "targets"): SessionModel {
   return {
-    data: emptyData(),
+    data: emptyData(page),
+    workspacePage: page,
     nextRequestId: 1,
     stateRevision: 0,
     pendingStart: null,
@@ -231,8 +239,13 @@ export function initialModel(): SessionModel {
   };
 }
 
+function selectedInvocation(model: SessionModel): string | null {
+  const content = model.data.content;
+  return content.kind === "invocation" ? content.id : null;
+}
+
 function savedEligible(model: SessionModel): boolean {
-  const id = model.data.selectedInvocation;
+  const id = selectedInvocation(model);
   return !!(
     id &&
     model.data.ready &&
@@ -256,8 +269,8 @@ export function sessionView(model: SessionModel): SessionView {
   };
 }
 
-export function emptyView(): SessionView {
-  return sessionView(initialModel());
+export function emptyView(page: WorkspacePage = "targets"): SessionView {
+  return sessionView(initialModel(page));
 }
 
 export function bazelBusyReason(state: AppState | null): string | null {
@@ -403,7 +416,7 @@ function startTargetOutputs(draft: Draft) {
 function startDetail(draft: Draft) {
   if (draft.detail.running !== null || draft.detail.wanted === null || !savedEligible(draft))
     return;
-  const invocationId = draft.data.selectedInvocation;
+  const invocationId = selectedInvocation(draft);
   if (!invocationId) return;
   const id = draft.detail.wanted;
   draft.detail.running = id;
@@ -414,7 +427,7 @@ function startDetail(draft: Draft) {
 function startProfile(draft: Draft) {
   if (draft.profile.running !== null || draft.profile.wanted === null || !savedEligible(draft))
     return;
-  const invocationId = draft.data.selectedInvocation;
+  const invocationId = selectedInvocation(draft);
   if (!invocationId) return;
   const id = draft.profile.wanted;
   draft.profile.running = id;
@@ -433,26 +446,29 @@ function resumeSaved(draft: Draft) {
 }
 
 function retryDetail(draft: Draft) {
-  if (draft.data.selectedInvocation === null) return;
+  if (selectedInvocation(draft) === null) return;
   if (draft.detail.wanted === null) draft.detail.wanted = nextId(draft);
   startDetail(draft);
 }
 
 function retryProfile(draft: Draft) {
-  if (draft.data.selectedInvocation === null) return;
+  if (selectedInvocation(draft) === null) return;
   if (draft.profile.wanted === null) draft.profile.wanted = nextId(draft);
   startProfile(draft);
 }
 
-function selectSaved(draft: Draft, id: string | null, retrySame = false) {
-  if (draft.data.selectedInvocation === id) {
-    if (retrySame) {
-      retryDetail(draft);
-      retryProfile(draft);
-    }
+function showContent(draft: Draft, content: SessionContent) {
+  if (
+    draft.data.content.kind === content.kind &&
+    (content.kind !== "invocation" ||
+      (draft.data.content.kind === "invocation" && draft.data.content.id === content.id))
+  ) {
     return;
   }
-  draft.data.selectedInvocation = id;
+  const previousId = selectedInvocation(draft);
+  draft.data.content = content;
+  const id = selectedInvocation(draft);
+  if (previousId === id) return;
   setData(draft, {
     detail: null,
     detailError: null,
@@ -464,13 +480,24 @@ function selectSaved(draft: Draft, id: string | null, retrySame = false) {
   resumeSaved(draft);
 }
 
+function selectSaved(draft: Draft, id: string) {
+  showContent(draft, { kind: "invocation", id });
+  retryDetail(draft);
+  retryProfile(draft);
+}
+
+function showPage(draft: Draft, page: WorkspacePage) {
+  draft.workspacePage = page;
+  showContent(draft, { kind: page });
+}
+
 function savedEligibilityChanged(draft: Draft, wasEligible: boolean, isEligible: boolean) {
   if (wasEligible === isEligible) return;
   if (isEligible) {
     resumeSaved(draft);
     return;
   }
-  if (draft.data.selectedInvocation === null) {
+  if (selectedInvocation(draft) === null) {
     draft.detail.wanted = null;
     draft.profile.wanted = null;
     return;
@@ -486,7 +513,7 @@ function revokeReaderIntent(draft: Draft, reader: Reader) {
 }
 
 function refreshSavedFromHistory(draft: Draft) {
-  if (draft.data.selectedInvocation === null) return;
+  if (selectedInvocation(draft) === null) return;
   draft.detail.wanted = nextId(draft);
   draft.profile.wanted = nextId(draft);
   draft.data.detailError = null;
@@ -536,12 +563,11 @@ function resetWorkspaceData(draft: Draft, state: AppState) {
   draft.snapshotRequestId = null;
   if (draft.historyRequest) draft.historyRequest.valid = false;
   draft.historyAgain = true;
-  selectSaved(draft, null);
+  showPage(draft, draft.workspacePage);
   draft.data.selection = null;
   resetTargetContext(draft);
   setData(draft, {
     console: null,
-    consoleOpen: false,
     snapshot: null,
     snapshotError: null,
     invocations: [],
@@ -564,9 +590,8 @@ function applyPendingStartState(draft: Draft, state: AppState): boolean {
   draft.pendingStart = { ...starting, observedId: activeId };
   setData(draft, {
     console: { id: activeId, cmd: starting.cmd, pattern: starting.pattern },
-    consoleOpen: true,
   });
-  selectSaved(draft, null);
+  showContent(draft, { kind: "console" });
   return true;
 }
 
@@ -654,12 +679,11 @@ function completeConsole(draft: Draft, id: string) {
   if (
     draft.pendingStart ||
     draft.data.state?.activeInvocation ||
-    !draft.data.consoleOpen ||
+    draft.data.content.kind !== "console" ||
     draft.data.console?.id !== id
   ) {
     return;
   }
-  draft.data.consoleOpen = false;
   selectSaved(draft, id);
 }
 
@@ -688,7 +712,7 @@ function finishStart(draft: Draft, requestId: number) {
 }
 
 function acceptHistory(draft: Draft, records: InvocationRecord[]) {
-  const id = draft.data.selectedInvocation;
+  const id = selectedInvocation(draft);
   const previous = recordFor(draft.data.invocations, id);
   const next = recordFor(records, id);
   const changed = JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
@@ -860,12 +884,11 @@ function startResult(draft: Draft, requestId: number, result: Result<InvocationR
     return;
   }
   draft.pendingStart = { ...pending, record: result.value };
-  if (!draft.data.consoleOpen || draft.data.console?.id !== result.value.id) {
+  if (draft.data.content.kind !== "console" || draft.data.console?.id !== result.value.id) {
     setData(draft, {
       console: { ...result.value, cmd: pending.cmd, pattern: pending.pattern },
-      consoleOpen: true,
     });
-    selectSaved(draft, null);
+    showContent(draft, { kind: "console" });
   }
   draft.effects.push({
     type: "getStartState",
@@ -907,13 +930,12 @@ function initialStateResult(
 function openConsole(draft: Draft, record: InvocationRecord) {
   const expected = draft.data.state?.consoleInvocation ?? draft.data.state?.activeInvocation;
   if (record.id !== expected) {
-    draft.data.consoleOpen = false;
-    selectSaved(draft, record.id, true);
+    selectSaved(draft, record.id);
     return;
   }
-  if (draft.data.consoleOpen && draft.data.console?.id === record.id) return;
-  selectSaved(draft, null);
-  setData(draft, { console: record, consoleOpen: true });
+  if (draft.data.content.kind === "console" && draft.data.console?.id === record.id) return;
+  draft.data.console = record;
+  showContent(draft, { kind: "console" });
 }
 
 function setWorkspacePromptOpen(draft: Draft, open: boolean) {
@@ -990,11 +1012,14 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       finishProfile(next, message.requestId, message.result);
       break;
     case "select":
+      showPage(next, "targets");
       selectTarget(next, message.selection);
       break;
     case "selectInvocation":
-      next.data.consoleOpen = false;
-      selectSaved(next, message.id, true);
+      selectSaved(next, message.id);
+      break;
+    case "showPage":
+      showPage(next, message.page);
       break;
     case "openConsole":
       openConsole(next, message.record);

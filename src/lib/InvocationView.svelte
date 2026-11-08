@@ -19,7 +19,7 @@
     reload: () => void;
     reloadProfile: () => void;
   } = $props();
-  const selectedInvocation = $derived(view.selectedInvocation);
+  const selectedInvocation = $derived(view.content.kind === "invocation" ? view.content.id : null);
   const record = $derived(
     view.detail?.record ??
       view.invocations.find((inv) => inv.id === selectedInvocation),

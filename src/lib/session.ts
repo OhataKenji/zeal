@@ -7,6 +7,7 @@ import {
   type SessionEffect,
   type SessionMessage,
   type SessionView as SessionViewType,
+  type WorkspacePage,
 } from "./session_model.ts";
 import type {
   AppState,
@@ -23,7 +24,7 @@ import type {
 } from "./types.ts";
 
 export { bazelBusyReason, canSend, canStop, emptyView, sessionBusy } from "./session_model.ts";
-export type { SessionView } from "./session_model.ts";
+export type { SessionView, WorkspacePage } from "./session_model.ts";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
 export interface Transport {
@@ -39,8 +40,12 @@ async function resultOf<T>(operation: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-export function createSession(transport: Transport, changed: (view: SessionViewType) => void) {
-  let model = initialModel();
+export function createSession(
+  transport: Transport,
+  changed: (view: SessionViewType) => void,
+  page: WorkspacePage = "targets",
+) {
+  let model = initialModel(page);
   let view = sessionView(model);
   let disposed = false;
   let subscribed = false;
@@ -66,14 +71,14 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     const transition = update(model, message);
     model = transition.model;
     publish();
-    transition.effects.forEach((effect) => void runEffect(effect));
+    transition.effects.forEach((effect) => void runEffect(effect).then(dispatch));
   }
 
   async function settle<T>(
     operation: () => Promise<T>,
     message: (result: Result<T>) => SessionMessage,
-  ) {
-    dispatch(message(await resultOf(operation)));
+  ): Promise<SessionMessage> {
+    return message(await resultOf(operation));
   }
 
   async function initialize() {
@@ -119,22 +124,20 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     return initializing;
   }
 
-  async function runEffect(effect: SessionEffect): Promise<void> {
+  async function runEffect(effect: SessionEffect): Promise<SessionMessage> {
     switch (effect.type) {
       case "listInvocations":
-        await settle(
+        return settle(
           () => transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations),
           (result) => ({ type: "invocationsResult", requestId: effect.id, result }),
         );
-        return;
       case "getSnapshot":
-        await settle(
+        return settle(
           () => transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot),
           (result) => ({ type: "snapshotResult", requestId: effect.id, result }),
         );
-        return;
       case "getTargetDetail": {
-        await settle(
+        return settle(
           () =>
             transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
               label: effect.label,
@@ -142,10 +145,9 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
             }),
           (result) => ({ type: "targetDetailResult", requestId: effect.id, result }),
         );
-        return;
       }
       case "getTargetOutputs": {
-        await settle(
+        return settle(
           () =>
             transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
               label: effect.label,
@@ -153,28 +155,25 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
             }),
           (result) => ({ type: "targetOutputsResult", requestId: effect.id, result }),
         );
-        return;
       }
       case "getInvocation":
-        await settle(
+        return settle(
           () =>
             transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
               id: effect.invocationId,
             }),
           (result) => ({ type: "detailResult", requestId: effect.id, result }),
         );
-        return;
       case "getProfile":
-        await settle(
+        return settle(
           () =>
             transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
               id: effect.invocationId,
             }),
           (result) => ({ type: "profileResult", requestId: effect.id, result }),
         );
-        return;
       case "startInvocation":
-        dispatch({
+        return {
           type: "startResult",
           requestId: effect.id,
           result: await resultOf(() =>
@@ -184,10 +183,9 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
               arguments: effect.argumentsText,
             }),
           ),
-        });
-        return;
+        };
       case "getStartState":
-        await settle(
+        return settle(
           () => transport.invoke<AppState>(COMMANDS.getState),
           (result) => ({
             type: "startStateResult",
@@ -196,9 +194,8 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
             result,
           }),
         );
-        return;
       case "openWorkspace":
-        await settle(
+        return settle(
           () =>
             transport.invoke<AppState>(COMMANDS.openWorkspace, {
               path: effect.path,
@@ -206,19 +203,16 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
             }),
           (result) => ({ type: "workspaceResult", revision: effect.revision, result }),
         );
-        return;
       case "stop":
-        await settle(
+        return settle(
           () => transport.invoke<void>(COMMANDS.stopInvocation),
           (result) => ({ type: "stopResult", workspace: effect.workspace, result }),
         );
-        return;
       case "refresh":
-        await settle(
+        return settle(
           () => transport.invoke<void>(COMMANDS.refresh),
           (result) => ({ type: "refreshResult", workspace: effect.workspace, result }),
         );
-        return;
     }
   }
 
@@ -240,7 +234,8 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
       dispatch({ type: "openWorkspace", path, scope }),
     setWorkspacePromptOpen: (open: boolean) => dispatch({ type: "workspacePrompt", open }),
     refresh: () => dispatch({ type: "refresh" }),
-    selectInvocation: (id: string | null) => dispatch({ type: "selectInvocation", id }),
+    selectInvocation: (id: string) => dispatch({ type: "selectInvocation", id }),
+    showPage: (page: WorkspacePage) => dispatch({ type: "showPage", page }),
     openConsole: (record: InvocationRecord) => dispatch({ type: "openConsole", record }),
     loadDetail: () => dispatch({ type: "loadDetail" }),
     loadProfile: () => dispatch({ type: "loadProfile" }),

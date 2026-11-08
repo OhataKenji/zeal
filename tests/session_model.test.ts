@@ -86,6 +86,61 @@ function indexedModel() {
   }).model;
 }
 
+test("selecting a target leaves Console in one transition and survives completion", () => {
+  const active = { ...state(), activeInvocation: RECORD.id, consoleInvocation: RECORD.id };
+  const observed = update(indexedModel(), { type: "appState", state: active }).model;
+  const console = freeze(update(observed, { type: "openConsole", record: RECORD }).model);
+  const selected = update(console, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+
+  assert.deepEqual(console.data.content, { kind: "console" });
+  assert.deepEqual(selected.model.data.content, { kind: "targets" });
+  assert.equal(selected.model.data.console?.id, RECORD.id);
+  assert.deepEqual(selected.model.data.selection, { kind: "target", label: "//app:first" });
+  const completed = update(selected.model, {
+    type: "appState",
+    state: { ...active, activeInvocation: null },
+  });
+  assert.deepEqual(completed.model.data.content, { kind: "targets" });
+  assert.equal(effect(completed.effects, "getTargetDetail").label, "//app:first");
+});
+
+test("workspace pages own navigation and reject a previous invocation's profile", () => {
+  for (const page of ["query", "analytics"] as const) {
+    const selected = update(indexedModel(), { type: "selectInvocation", id: RECORD.id });
+    const profile = effect(selected.effects, "getProfile");
+    const navigated = update(freeze(selected.model), { type: "showPage", page });
+    const finished = update(navigated.model, {
+      type: "profileResult",
+      requestId: profile.id,
+      result: { ok: true, value: PROFILE },
+    });
+    assert.deepEqual(selected.model.data.content, { kind: "invocation", id: RECORD.id });
+    assert.deepEqual(finished.model.data.content, { kind: page });
+    assert.equal(finished.model.data.profile, null);
+    assert.equal(finished.model.profile.running, null);
+    assert.equal(finished.model.profile.wanted, null);
+  }
+});
+
+test("initial and remembered workspace pages survive workspace changes", () => {
+  for (const page of ["targets", "query", "analytics"] as const) {
+    const initial = initialModel(page);
+    assert.deepEqual(initial.data.content, { kind: page });
+    const connected = update(initial, { type: "appState", state: state() }).model;
+    const selected = update(connected, { type: "selectInvocation", id: RECORD.id }).model;
+    const switched = update(selected, {
+      type: "appState",
+      state: { ...state(), workspace: "/other" },
+    });
+    assert.deepEqual(switched.model.data.content, { kind: page });
+    assert.equal(switched.model.data.console, null);
+    assert.equal(switched.model.data.selection, null);
+  }
+});
+
 test("update is deterministic and leaves nested reader state untouched", () => {
   const model = freeze(update(initialModel(), { type: "appState", state: state() }).model);
   const message = freeze({

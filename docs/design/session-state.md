@@ -51,9 +51,16 @@ Console の byte stream・入力キュー・xterm は専用処理に残す。メ
 - **`session.ts`：** update → Model の置換 → publish → Effect 実行。IPC の失敗も結果 Message にし、未処理の Promise rejection を残さない。
 - **Model に重複状態を持たせない。** loading は要求状態から導出する。Rust の実行状態、frontend の起動要求、表示先は区別する。
 
+表示先は `content` の union（targets / invocation / console / analytics / query）で表す。invocation ID はその表示先に含め、`consoleOpen`・`selectedInvocation`・Svelte の表示フラグの優先順位では画面を決めない。
+UI は target 選択など一つの操作を一つの Message で伝え、update が表示先・選択・取得要求をまとめて更新する。Query / Analytics の切替も同じ入口を通る。
+表示中でない target の選択や Console の記録は保持する。workspace を変えたときに戻るページは `workspacePage` として別に記憶する。
+
+`runEffect(effect): Promise<SessionMessage>` は IPC の成功・失敗を結果 Message として返し、呼び出し側が dispatch する。戻り値を必須にすることで、Effect を追加して処理を忘れると型エラーになる。採否や画面遷移は update が決める。継続的な通知の購読は一回限りの Effect と区別する。
+コードの配置と具体的な更新例は [frontend README](../../src/README.md) に置く。
+
 | API                                                            | 戻り値                   |
 | -------------------------------------------------------------- | ------------------------ |
-| `select`, `selectInvocation`, `openConsole`                    | `void`                   |
+| `select`, `selectInvocation`, `openConsole`, `showPage`        | `void`                   |
 | `start`, `stop`, `refresh`                                     | `void`                   |
 | `loadDetail`, `loadProfile`, `loadInvocations`, `loadSnapshot` | `void`                   |
 | `openWorkspace`, `setWorkspacePromptOpen`                      | `void`                   |

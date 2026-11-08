@@ -1,7 +1,7 @@
 import type { TargetScope } from "./types.ts";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { createSession, emptyView } from "./session";
+import { createSession, emptyView, type WorkspacePage } from "./session";
 
 // Raw profiles avoid deep proxying. The session replaces the view; timeline
 // geometry is derived separately from the original event fields.
@@ -16,7 +16,7 @@ export const app = {
   },
 };
 
-function newSession() {
+function newSession(page: WorkspacePage = "targets") {
   return createSession(
     {
       invoke,
@@ -26,6 +26,7 @@ function newSession() {
     (next) => {
       view = next;
     },
+    page,
   );
 }
 
@@ -37,10 +38,10 @@ export function getSession() {
 }
 
 /** Replaces the session and starts event listening. */
-export function connect() {
+export function connect(page: WorkspacePage = "targets") {
   session.dispose();
-  view = emptyView();
-  session = newSession();
+  view = emptyView(page);
+  session = newSession(page);
   void session.init();
   const current = session;
   return () => {

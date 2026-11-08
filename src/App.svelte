@@ -33,27 +33,26 @@
     return consoleComponent ??= import("./lib/ConsoleView.svelte");
   }
 
-  onMount(connect);
+  const requestedPage = typeof location === "undefined"
+    ? null
+    : new URLSearchParams(location.search).get("view");
+  const initialPage = requestedPage === "analytics" || requestedPage === "query"
+    ? requestedPage
+    : "targets";
+  onMount(() => connect(initialPage));
 
   const st = $derived(app.state);
   const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const selection = $derived(app.view.selection);
   const selected = $derived(selection?.kind === "target" ? selection.label : null);
+  const content = $derived(app.view.content);
 
   function retryTargets() {
     if (app.view.snapshotError) void getSession().loadSnapshot();
     else refresh();
   }
 
-  let analyticsOpen = $state(
-    typeof location !== "undefined" &&
-      new URLSearchParams(location.search).get("view") === "analytics",
-  );
-  let queryOpen = $state(
-    typeof location !== "undefined" &&
-      new URLSearchParams(location.search).get("view") === "query",
-  );
   let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<BazelCommand>("build");
@@ -143,9 +142,6 @@
   }
 
   function select(selection: ExplorerSelection) {
-    analyticsOpen = false;
-    queryOpen = false;
-    getSession().selectInvocation(null);
     getSession().select(selection);
     if (selection?.kind === "target") targetField = selection.label;
   }
@@ -172,12 +168,8 @@
       </button>
       <button
         class="analytics-link"
-        class:active={queryOpen && !app.view.selectedInvocation}
-        onclick={() => {
-          queryOpen = true;
-          analyticsOpen = false;
-          getSession().selectInvocation(null);
-        }}><TreeStructure size={12} /> Query</button
+        class:active={content.kind === "query"}
+        onclick={() => getSession().showPage("query")}><TreeStructure size={12} /> Query</button
       >
     </div>
     {#if !collapsed.targets}
@@ -216,12 +208,8 @@
       </button>
       <button
         class="analytics-link"
-        class:active={analyticsOpen && !app.view.selectedInvocation}
-        onclick={() => {
-          analyticsOpen = true;
-          queryOpen = false;
-          getSession().selectInvocation(null);
-        }}><ChartBar size={12} /> Analytics</button
+        class:active={content.kind === "analytics"}
+        onclick={() => getSession().showPage("analytics")}><ChartBar size={12} /> Analytics</button
       >
     </div>
     {#if !collapsed.invocations}
@@ -230,8 +218,8 @@
           {#each app.view.invocations as inv (inv.id)}
             {@const status = invocationStatus(inv, state.activeInvocation, state.stopping)}
             {@const active =
-              app.view.selectedInvocation === inv.id ||
-              (app.view.consoleOpen && app.view.console?.id === inv.id)}
+              (content.kind === "invocation" && content.id === inv.id) ||
+              (content.kind === "console" && app.view.console?.id === inv.id)}
             <li>
               <button
                 class="invocation-row"
@@ -276,19 +264,19 @@
 {#snippet workspaceContent(state: AppState, workspace: string)}
   <main
     class="content"
-    class:invocation-content={app.view.consoleOpen || !!app.view.selectedInvocation || analyticsOpen || queryOpen}
+    class:invocation-content={content.kind !== "targets"}
   >
     {#if app.view.console}
       {#key app.view.console.id}
-        <div class="console-container" hidden={!app.view.consoleOpen}>
+        <div class="console-container" hidden={content.kind !== "console"}>
           {#await loadConsole() then { default: ConsoleView }}
           <ConsoleView record={app.view.invocations.find((inv) => inv.id === app.view.console?.id) ?? app.view.console}
-            visible={app.view.consoleOpen} running={state.activeInvocation === app.view.console.id} stopping={state.stopping} />
+            visible={content.kind === "console"} running={state.activeInvocation === app.view.console.id} stopping={state.stopping} />
           {/await}
         </div>
       {/key}
     {/if}
-    {#if !app.view.consoleOpen}
+    {#if content.kind !== "console"}
     {#if snap?.meta.status === "partial"}
       <Notice tone="warning">
         Skipped some packages (exit {state.lastError?.exitCode ?? "?"}) —
@@ -305,13 +293,13 @@
     {#if state.ingest === "running" || app.view.snapshotLoading}
       <p class="dim">Loading targets…</p>
     {/if}
-    {#if app.view.selectedInvocation}
-      {#key app.view.selectedInvocation}
+    {#if content.kind === "invocation"}
+      {#key content.id}
         <InvocationView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
       {/key}
-    {:else if analyticsOpen}
+    {:else if content.kind === "analytics"}
       {#key workspace}<AnalyticsView {workspace} invocations={app.view.invocations} />{/key}
-    {:else if queryOpen}
+    {:else if content.kind === "query"}
       {#key workspace}
         <QueryView {snap} />
       {/key}
