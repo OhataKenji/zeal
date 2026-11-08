@@ -346,6 +346,30 @@ test("successful history reads reconcile a loaded stale detail without retrying 
   assert.equal(requestCount(h, "get_invocation_profile"), 3);
 });
 
+test("stale-detail reconciliation also refreshes a profile already being read", async () => {
+  const h = harness();
+  await h.session.init();
+  await selectRecord(h, [COMPLETED.record]);
+  pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
+  await settle();
+
+  h.emit("invocations-changed", undefined);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+
+  pendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
+  await settle();
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.equal(h.view.profile, null);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  await settle();
+  assert.deepEqual(h.view.profile, PROFILE);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+});
+
 test("a failed automatic detail refresh waits for explicit Retry", async () => {
   const h = harness();
   await h.session.init();
@@ -427,6 +451,8 @@ test("a profile failure leaves logs visible and retries only timing", async () =
   assert.equal(h.view.detailError, null);
   assert.match(h.view.profileError ?? "", /profile worker busy/);
   const retry = h.session.loadProfile();
+  assert.equal(h.view.profileError, null);
+  assert.equal(h.view.profileLoading, true);
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await retry;
   assert.equal(requestCount(h, "get_invocation"), 1);
@@ -444,6 +470,8 @@ test("a log request failure leaves timing visible and retries only the summary",
   assert.deepEqual(h.view.profile, PROFILE);
   assert.match(h.view.detailError ?? "", /record unavailable/);
   const retry = h.session.loadDetail();
+  assert.equal(h.view.detailError, null);
+  assert.equal(h.view.detailLoading, true);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await retry;
   assert.deepEqual(h.view.detail, COMPLETED);

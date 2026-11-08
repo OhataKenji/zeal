@@ -45,33 +45,18 @@ export type SessionData = Omit<
   "snapshotLoading" | "starting" | "opening" | "detailLoading" | "profileLoading"
 >;
 
+interface Reader {
+  running: number | null;
+  wanted: number | null;
+}
+
 interface HistoryRequest {
-  readonly id: number;
-  readonly workspaceGeneration: number;
-}
-
-interface SnapshotRequest {
-  readonly id: number;
-  readonly key: string;
-}
-
-interface TargetRequest {
-  readonly id: number;
-  readonly key: string;
-  readonly label: string;
-  readonly fetchedAt: number;
-}
-
-interface SavedRequest {
-  readonly id: number;
-  readonly key: string;
-  readonly invocationId: string;
+  id: number;
+  valid: boolean;
 }
 
 interface WorkspaceRequest {
   readonly id: number;
-  readonly path: string;
-  readonly scope: TargetScope;
   readonly revision: number;
 }
 
@@ -85,7 +70,6 @@ interface StartRequest {
   readonly workspace: string;
   readonly cmd: BazelCommand;
   readonly pattern: string;
-  readonly argumentsText: string;
   readonly previousExecution: ObservedExecution | null;
   readonly observedId: string | null;
   readonly record: InvocationRecord | null;
@@ -95,24 +79,16 @@ export interface SessionModel {
   readonly data: SessionData;
   readonly nextRequestId: number;
   readonly stateRevision: number;
-  readonly workspaceGeneration: number;
-  readonly invocationGeneration: number;
-  readonly selectionGeneration: number;
   readonly pendingStart: StartRequest | null;
   readonly observedExecution: ObservedExecution | null;
   readonly workspaceRequest: WorkspaceRequest | null;
   readonly historyRequest: HistoryRequest | null;
-  readonly historyAttempt: string | null;
   readonly historyAgain: boolean;
-  readonly snapshotRequest: SnapshotRequest | null;
-  readonly snapshotAttempt: string | null;
-  readonly targetDetailRequest: TargetRequest | null;
-  readonly targetDetailAttempt: string | null;
-  readonly targetOutputsRequest: TargetRequest | null;
-  readonly detailRequest: SavedRequest | null;
-  readonly detailAttempt: string | null;
-  readonly profileRequest: SavedRequest | null;
-  readonly profileAttempt: string | null;
+  readonly snapshotRequestId: number | null;
+  readonly targetDetail: Reader;
+  readonly targetOutputs: Reader;
+  readonly detail: Reader;
+  readonly profile: Reader;
 }
 
 export type Result<T> =
@@ -128,20 +104,41 @@ type RequestResult<T extends string, V> = ResultMessage<T, V> & {
 };
 
 export type SessionEffect =
-  | { readonly type: "listInvocations"; readonly request: HistoryRequest }
-  | { readonly type: "getSnapshot"; readonly request: SnapshotRequest }
-  | { readonly type: "getTargetDetail"; readonly request: TargetRequest }
-  | { readonly type: "getTargetOutputs"; readonly request: TargetRequest }
-  | { readonly type: "getInvocation"; readonly request: SavedRequest }
-  | { readonly type: "getProfile"; readonly request: SavedRequest }
-  | { readonly type: "startInvocation"; readonly request: StartRequest }
+  | { readonly type: "listInvocations"; readonly id: number }
+  | { readonly type: "getSnapshot"; readonly id: number }
+  | {
+      readonly type: "getTargetDetail";
+      readonly id: number;
+      readonly label: string;
+      readonly fetchedAt: number;
+    }
+  | {
+      readonly type: "getTargetOutputs";
+      readonly id: number;
+      readonly label: string;
+      readonly fetchedAt: number;
+    }
+  | { readonly type: "getInvocation"; readonly id: number; readonly invocationId: string }
+  | { readonly type: "getProfile"; readonly id: number; readonly invocationId: string }
+  | {
+      readonly type: "startInvocation";
+      readonly id: number;
+      readonly cmd: BazelCommand;
+      readonly pattern: string;
+      readonly argumentsText: string;
+    }
   | {
       readonly type: "getStartState";
       readonly id: number;
       readonly startId: number;
       readonly revision: number;
     }
-  | { readonly type: "openWorkspace"; readonly request: WorkspaceRequest }
+  | {
+      readonly type: "openWorkspace";
+      readonly id: number;
+      readonly path: string;
+      readonly scope: TargetScope;
+    }
   | { readonly type: "rejectWorkspaceOpen"; readonly id: number; readonly message: string }
   | { readonly type: "stop"; readonly id: number; readonly workspace: string | null }
   | { readonly type: "refresh"; readonly id: number; readonly workspace: string | null };
@@ -217,42 +214,50 @@ function emptyData(): SessionData {
   };
 }
 
+function emptyReader(): Reader {
+  return { running: null, wanted: null };
+}
+
 export function initialModel(): SessionModel {
   return {
     data: emptyData(),
     nextRequestId: 1,
     stateRevision: 0,
-    workspaceGeneration: 0,
-    invocationGeneration: 0,
-    selectionGeneration: 0,
     pendingStart: null,
     observedExecution: null,
     workspaceRequest: null,
     historyRequest: null,
-    historyAttempt: null,
     historyAgain: false,
-    snapshotRequest: null,
-    snapshotAttempt: null,
-    targetDetailRequest: null,
-    targetDetailAttempt: null,
-    targetOutputsRequest: null,
-    detailRequest: null,
-    detailAttempt: null,
-    profileRequest: null,
-    profileAttempt: null,
+    snapshotRequestId: null,
+    targetDetail: emptyReader(),
+    targetOutputs: emptyReader(),
+    detail: emptyReader(),
+    profile: emptyReader(),
   };
 }
 
+function savedEligible(model: SessionModel): boolean {
+  const id = model.data.selectedInvocation;
+  return !!(
+    id &&
+    model.data.ready &&
+    model.data.state?.workspace &&
+    model.pendingStart === null &&
+    id !== model.data.state.activeInvocation
+  );
+}
+
 export function sessionView(model: SessionModel): SessionView {
-  const key = savedKey(model);
   const eligible = savedEligible(model);
   return {
     ...model.data,
-    snapshotLoading: model.snapshotRequest?.key === snapshotKey(model),
+    snapshotLoading: model.snapshotRequestId !== null,
     starting: model.pendingStart !== null,
     opening: model.workspaceRequest !== null,
-    detailLoading: eligible && model.detailRequest?.key === key,
-    profileLoading: eligible && model.profileRequest?.key === key,
+    detailLoading:
+      eligible && model.detail.running !== null && model.detail.running === model.detail.wanted,
+    profileLoading:
+      eligible && model.profile.running !== null && model.profile.running === model.profile.wanted,
   };
 }
 
@@ -293,11 +298,20 @@ type Draft = { -readonly [K in keyof SessionModel]: SessionModel[K] } & {
 
 function draft(model: SessionModel): Draft {
   // Only these fresh containers are mutable; nested requests and payloads stay shared.
-  return { ...model, data: { ...model.data }, effects: [] };
+  return {
+    ...model,
+    data: { ...model.data },
+    historyRequest: model.historyRequest ? { ...model.historyRequest } : null,
+    targetDetail: { ...model.targetDetail },
+    targetOutputs: { ...model.targetOutputs },
+    detail: { ...model.detail },
+    profile: { ...model.profile },
+    effects: [],
+  };
 }
 
-function finishDraft(draft: Draft): SessionTransition {
-  const { effects, waitFor, ...model } = draft;
+function finishDraft(next: Draft): SessionTransition {
+  const { effects, waitFor, ...model } = next;
   return { model, effects, waitFor };
 }
 
@@ -313,8 +327,8 @@ function unexpected(message: never): never {
   throw new Error(`Unhandled session message: ${JSON.stringify(message)}`);
 }
 
-function scopeKey(state: AppState | null): string {
-  return JSON.stringify(state?.scope.include ?? []);
+function sameScope(left: AppState | null, right: AppState): boolean {
+  return JSON.stringify(left?.scope.include ?? []) === JSON.stringify(right.scope.include);
 }
 
 function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boolean {
@@ -324,93 +338,46 @@ function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boole
   return left === null && right === null;
 }
 
-function setSelection(draft: Draft, selection: ExplorerSelection) {
-  if (sameSelection(draft.data.selection, selection)) return;
-  draft.selectionGeneration++;
-  draft.data.selection = selection;
+function recordFor(records: InvocationRecord[], id: string | null): InvocationRecord | undefined {
+  return records.find((record) => record.id === id);
 }
 
-function setSelectedInvocation(draft: Draft, id: string | null) {
-  if (draft.data.selectedInvocation === id) return;
-  draft.invocationGeneration++;
-  Object.assign(draft.data, {
-    selectedInvocation: id,
-    detail: null,
-    detailError: null,
-    profile: null,
-    profileError: null,
-  });
+function startHistory(draft: Draft): number | undefined {
+  if (!draft.data.ready || !draft.data.state?.workspace || draft.historyRequest) {
+    return;
+  }
+  const id = nextId(draft);
+  draft.historyRequest = { id, valid: true };
+  draft.historyAgain = false;
+  draft.data.invocationsError = null;
+  draft.effects.push({ type: "listInvocations", id });
+  return id;
 }
 
-function selectedRecord(model: SessionModel): InvocationRecord | undefined {
-  return model.data.invocations.find((record) => record.id === model.data.selectedInvocation);
+function requestHistory(draft: Draft) {
+  if (draft.historyRequest) {
+    draft.historyAgain = true;
+    return draft.historyRequest.id;
+  }
+  return startHistory(draft);
 }
 
-function savedEligible(model: SessionModel): boolean {
-  const id = model.data.selectedInvocation;
-  return !!(
-    id &&
-    model.data.ready &&
-    model.data.state?.workspace &&
-    model.pendingStart === null &&
-    id !== model.data.state.activeInvocation
-  );
+function startSnapshot(draft: Draft): number | undefined {
+  const state = draft.data.state;
+  if (!state?.workspace || state.snapshotFetchedAt === null) return;
+  if (draft.snapshotRequestId !== null) return draft.snapshotRequestId;
+  const id = nextId(draft);
+  draft.snapshotRequestId = id;
+  draft.data.snapshotError = null;
+  draft.effects.push({ type: "getSnapshot", id });
+  return id;
 }
 
-function savedKey(model: SessionModel): string {
-  const id = model.data.selectedInvocation;
-  return JSON.stringify([
-    model.data.state?.workspace ?? null,
-    model.workspaceGeneration,
-    model.invocationGeneration,
-    id,
-    savedEligible(model),
-    JSON.stringify(selectedRecord(model) ?? null),
-  ]);
-}
-
-function snapshotKey(model: SessionModel): string {
-  return JSON.stringify([
-    model.data.state?.workspace ?? null,
-    model.workspaceGeneration,
-    scopeKey(model.data.state),
-    model.data.state?.snapshotFetchedAt ?? null,
-  ]);
-}
-
-function targetKey(model: SessionModel): string {
-  const selection = model.data.selection;
-  const target =
-    selection?.kind === "target"
-      ? ["target", selection.label]
-      : selection?.kind === "package"
-        ? ["package", selection.path]
-        : null;
-  return JSON.stringify([
-    model.data.state?.workspace ?? null,
-    model.workspaceGeneration,
-    scopeKey(model.data.state),
-    target,
-    model.selectionGeneration,
-    model.data.state?.snapshotFetchedAt ?? null,
-    model.data.snapshot?.meta.fetchedAt ?? null,
-  ]);
-}
-
-function historyKey(model: SessionModel): string {
-  return JSON.stringify([
-    model.data.state?.workspace ?? null,
-    model.workspaceGeneration,
-    model.data.state?.activeInvocation ?? null,
-    model.data.ready,
-  ]);
-}
-
-function targetReady(model: SessionModel): boolean {
-  const selection = model.data.selection;
-  const state = model.data.state;
-  const snapshot = model.data.snapshot;
-  const view = sessionView(model);
+function targetCanRead(draft: Draft): boolean {
+  const selection = draft.data.selection;
+  const state = draft.data.state;
+  const snapshot = draft.data.snapshot;
+  const view = sessionView(draft);
   return !!(
     selection?.kind === "target" &&
     snapshot &&
@@ -421,237 +388,320 @@ function targetReady(model: SessionModel): boolean {
   );
 }
 
-function resetTargetContext(draft: Draft, previousKey: string) {
-  if (previousKey === targetKey(draft)) return;
-  draft.targetDetailAttempt = null;
+function startTargetDetail(draft: Draft) {
+  if (draft.targetDetail.running !== null || draft.targetDetail.wanted === null) return;
+  if (!targetCanRead(draft)) return;
+  const selection = draft.data.selection;
+  const fetchedAt = draft.data.state?.snapshotFetchedAt;
+  if (selection?.kind !== "target" || fetchedAt === null || fetchedAt === undefined) return;
+  const id = draft.targetDetail.wanted;
+  draft.targetDetail.running = id;
+  draft.effects.push({ type: "getTargetDetail", id, label: selection.label, fetchedAt });
+}
+
+function startTargetOutputs(draft: Draft) {
+  if (draft.targetOutputs.running !== null || draft.targetOutputs.wanted === null) return;
+  if (!targetCanRead(draft)) return;
+  const selection = draft.data.selection;
+  const fetchedAt = draft.data.state?.snapshotFetchedAt;
+  if (
+    selection?.kind !== "target" ||
+    fetchedAt === null ||
+    fetchedAt === undefined ||
+    draft.data.targetDetail?.target.label !== selection.label
+  ) {
+    return;
+  }
+  const id = draft.targetOutputs.wanted;
+  draft.targetOutputs.running = id;
+  draft.effects.push({ type: "getTargetOutputs", id, label: selection.label, fetchedAt });
+}
+
+function startDetail(draft: Draft) {
+  if (draft.detail.running !== null || draft.detail.wanted === null || !savedEligible(draft))
+    return;
+  const invocationId = draft.data.selectedInvocation;
+  if (!invocationId) return;
+  const id = draft.detail.wanted;
+  draft.detail.running = id;
+  draft.data.detailError = null;
+  draft.effects.push({ type: "getInvocation", id, invocationId });
+}
+
+function startProfile(draft: Draft) {
+  if (draft.profile.running !== null || draft.profile.wanted === null || !savedEligible(draft))
+    return;
+  const invocationId = draft.data.selectedInvocation;
+  if (!invocationId) return;
+  const id = draft.profile.wanted;
+  draft.profile.running = id;
+  draft.data.profileError = null;
+  draft.effects.push({ type: "getProfile", id, invocationId });
+}
+
+function resumeTargets(draft: Draft) {
+  startTargetDetail(draft);
+  startTargetOutputs(draft);
+}
+
+function resumeSaved(draft: Draft) {
+  startDetail(draft);
+  startProfile(draft);
+}
+
+function retryDetail(draft: Draft) {
+  if (draft.data.selectedInvocation === null) return;
+  if (draft.detail.wanted === null) draft.detail.wanted = nextId(draft);
+  startDetail(draft);
+}
+
+function retryProfile(draft: Draft) {
+  if (draft.data.selectedInvocation === null) return;
+  if (draft.profile.wanted === null) draft.profile.wanted = nextId(draft);
+  startProfile(draft);
+}
+
+function selectSaved(draft: Draft, id: string | null, retrySame = false) {
+  if (draft.data.selectedInvocation === id) {
+    if (retrySame) {
+      retryDetail(draft);
+      retryProfile(draft);
+    }
+    return;
+  }
+  draft.data.selectedInvocation = id;
+  setData(draft, {
+    detail: null,
+    detailError: null,
+    profile: null,
+    profileError: null,
+  });
+  draft.detail.wanted = id === null ? null : nextId(draft);
+  draft.profile.wanted = id === null ? null : nextId(draft);
+  resumeSaved(draft);
+}
+
+function savedEligibilityChanged(draft: Draft, wasEligible: boolean, isEligible: boolean) {
+  if (wasEligible === isEligible) return;
+  if (isEligible) {
+    resumeSaved(draft);
+    return;
+  }
+  if (draft.data.selectedInvocation === null) {
+    draft.detail.wanted = null;
+    draft.profile.wanted = null;
+    return;
+  }
+  revokeReaderIntent(draft, draft.detail);
+  revokeReaderIntent(draft, draft.profile);
+}
+
+function revokeReaderIntent(draft: Draft, reader: Reader) {
+  if (reader.running !== null && reader.wanted === reader.running) {
+    reader.wanted = nextId(draft);
+  }
+}
+
+function refreshSavedFromHistory(draft: Draft) {
+  if (draft.data.selectedInvocation === null) return;
+  draft.detail.wanted = nextId(draft);
+  draft.profile.wanted = nextId(draft);
+  draft.data.detailError = null;
+  draft.data.profileError = null;
+  resumeSaved(draft);
+}
+
+function queueTargetDetail(draft: Draft) {
+  if (draft.data.selection?.kind !== "target") {
+    draft.targetDetail.wanted = null;
+    draft.targetOutputs.wanted = null;
+    return;
+  }
+  draft.targetDetail.wanted = nextId(draft);
+  draft.targetOutputs.wanted = null;
+}
+
+function resetTargetContext(draft: Draft) {
   setData(draft, {
     targetDetail: null,
     targetDetailError: null,
     targetOutputs: null,
     targetOutputsError: null,
   });
+  queueTargetDetail(draft);
+  resumeTargets(draft);
 }
 
-function syncHistory(draft: Draft): number | undefined {
-  const key = historyKey(draft);
-  if (draft.historyAttempt !== key) draft.historyAttempt = null;
-  if (!draft.data.state?.workspace || !draft.data.ready || draft.historyRequest) {
-    return draft.historyRequest?.id;
-  }
-  if (draft.historyAttempt === key) return;
-  const request = { id: nextId(draft), workspaceGeneration: draft.workspaceGeneration };
-  draft.historyRequest = request;
-  draft.historyAttempt = key;
-  draft.data.invocationsError = null;
-  draft.effects.push({ type: "listInvocations", request });
-  return request.id;
-}
-
-function syncSnapshot(draft: Draft, authoritative = false) {
-  const state = draft.data.state;
-  const key = snapshotKey(draft);
-  if (draft.snapshotAttempt !== key) {
-    draft.snapshotAttempt = null;
-    draft.data.snapshotError = null;
-  }
-  if (!state?.workspace || state.snapshotFetchedAt === null) return;
-  if (authoritative && draft.data.snapshotError !== null) draft.snapshotAttempt = null;
-  if (draft.snapshotRequest?.key === key || draft.snapshotAttempt === key) return;
-  const request = { id: nextId(draft), key };
-  draft.snapshotRequest = request;
-  draft.snapshotAttempt = key;
-  draft.data.snapshotError = null;
-  draft.effects.push({ type: "getSnapshot", request });
-}
-
-function startTargetDetail(draft: Draft) {
-  if (!targetReady(draft) || draft.targetDetailRequest) return;
-  const selection = draft.data.selection;
-  const fetchedAt = draft.data.state?.snapshotFetchedAt;
-  if (selection?.kind !== "target" || fetchedAt == null) return;
-  const key = targetKey(draft);
-  if (draft.targetDetailAttempt === key) return;
-  const request = { id: nextId(draft), key, label: selection.label, fetchedAt };
-  draft.targetDetailRequest = request;
-  draft.targetDetailAttempt = key;
-  draft.data.targetDetailError = null;
-  draft.effects.push({ type: "getTargetDetail", request });
-}
-
-function startTargetOutputs(draft: Draft) {
-  const selection = draft.data.selection;
-  const fetchedAt = draft.data.state?.snapshotFetchedAt;
-  if (
-    !targetReady(draft) ||
-    selection?.kind !== "target" ||
-    draft.data.targetDetail?.target.label !== selection.label ||
-    draft.targetOutputsRequest ||
-    draft.data.targetOutputs ||
-    draft.data.targetOutputsError !== null
-  ) {
+function selectTarget(draft: Draft, selection: ExplorerSelection) {
+  if (sameSelection(draft.data.selection, selection)) {
+    if (selection?.kind === "target" && draft.data.targetDetailError !== null) {
+      draft.data.targetDetailError = null;
+      queueTargetDetail(draft);
+      startTargetDetail(draft);
+    }
     return;
   }
-  if (fetchedAt == null) return;
-  const request = { id: nextId(draft), key: targetKey(draft), label: selection.label, fetchedAt };
-  draft.targetOutputsRequest = request;
-  draft.data.targetOutputsError = null;
-  draft.effects.push({ type: "getTargetOutputs", request });
+  draft.data.selection = selection;
+  resetTargetContext(draft);
 }
 
-function startDetail(draft: Draft): number | undefined {
-  const key = savedKey(draft);
-  if (!savedEligible(draft)) return;
-  if (draft.detailRequest) return draft.detailRequest.id;
-  if (draft.detailAttempt === key) return;
-  const invocationId = draft.data.selectedInvocation;
-  if (!invocationId) return;
-  const request = { id: nextId(draft), key, invocationId };
-  draft.detailRequest = request;
-  draft.detailAttempt = key;
-  draft.data.detailError = null;
-  draft.effects.push({ type: "getInvocation", request });
-  return request.id;
+function targetContextChanged(before: AppState | null, next: AppState): boolean {
+  return (
+    before === null ||
+    before.workspace !== next.workspace ||
+    !sameScope(before, next) ||
+    before.snapshotFetchedAt !== next.snapshotFetchedAt
+  );
 }
 
-function startProfile(draft: Draft): number | undefined {
-  const key = savedKey(draft);
-  if (!savedEligible(draft)) return;
-  if (draft.profileRequest) return draft.profileRequest.id;
-  if (draft.profileAttempt === key) return;
-  const invocationId = draft.data.selectedInvocation;
-  if (!invocationId) return;
-  const request = { id: nextId(draft), key, invocationId };
-  draft.profileRequest = request;
-  draft.profileAttempt = key;
-  draft.data.profileError = null;
-  draft.effects.push({ type: "getProfile", request });
-  return request.id;
+function resetWorkspaceData(draft: Draft, state: AppState) {
+  draft.pendingStart = null;
+  draft.observedExecution = state.activeInvocation
+    ? { id: state.activeInvocation, active: true }
+    : null;
+  draft.snapshotRequestId = null;
+  if (draft.historyRequest) draft.historyRequest.valid = false;
+  draft.historyAgain = true;
+  selectSaved(draft, null);
+  draft.data.selection = null;
+  resetTargetContext(draft);
+  setData(draft, {
+    console: null,
+    consoleOpen: false,
+    snapshot: null,
+    snapshotError: null,
+    invocations: [],
+    invocationsError: null,
+  });
 }
 
-function syncAll(draft: Draft, authoritative = false) {
-  syncHistory(draft);
-  syncSnapshot(draft, authoritative);
-  startTargetDetail(draft);
-  startTargetOutputs(draft);
-  syncSaved(draft);
-}
-
-function syncSaved(draft: Draft) {
-  const key = savedKey(draft);
-  if (draft.detailAttempt !== key) {
-    draft.detailAttempt = null;
-    draft.data.detailError = null;
-  }
-  if (draft.profileAttempt !== key) {
-    draft.profileAttempt = null;
-    draft.data.profileError = null;
-  }
-  startDetail(draft);
-  startProfile(draft);
-}
-
-function refreshSavedAfterHistory(draft: Draft) {
-  const record = selectedRecord(draft);
+function applyPendingStartState(draft: Draft, state: AppState): boolean {
+  const starting = draft.pendingStart;
+  const activeId = state.activeInvocation;
   if (
-    record &&
-    draft.data.detail &&
-    !sessionView(draft).detailLoading &&
-    draft.data.detailError === null &&
-    JSON.stringify(record) !== JSON.stringify(draft.data.detail.record)
+    !starting ||
+    starting.workspace !== state.workspace ||
+    !activeId ||
+    state.consoleInvocation !== activeId ||
+    starting.observedId === activeId
   ) {
-    draft.detailAttempt = null;
-    draft.profileAttempt = null;
-    draft.data.profileError = null;
+    return false;
   }
+  draft.pendingStart = { ...starting, observedId: activeId };
+  setData(draft, {
+    console: { id: activeId, cmd: starting.cmd, pattern: starting.pattern },
+    consoleOpen: true,
+  });
+  selectSaved(draft, null);
+  return true;
+}
+
+function observedCompletionId(
+  draft: Draft,
+  before: AppState | null,
+  state: AppState,
+  activeId: string | null,
+): string | null {
+  const observed = draft.observedExecution;
+  if (activeId) {
+    return observed?.active && before?.activeInvocation === observed.id && observed.id !== activeId
+      ? observed.id
+      : null;
+  }
+  if (!observed) return null;
+  if (
+    (observed.active && before?.activeInvocation === observed.id) ||
+    state.consoleInvocation === observed.id
+  ) {
+    return observed.id;
+  }
+  return null;
+}
+
+function observeExecution(draft: Draft, before: AppState | null, state: AppState) {
+  const activeId = state.activeInvocation;
+  const completed = observedCompletionId(draft, before, state, activeId);
+  draft.observedExecution = activeId ? { id: activeId, active: true } : null;
+  if (completed) completeConsole(draft, completed);
+}
+
+function updateExecutionState(draft: Draft, before: AppState | null, state: AppState) {
+  if (!applyPendingStartState(draft, state)) observeExecution(draft, before, state);
+}
+
+function updateHistoryForState(draft: Draft, workspaceChanged: boolean, shouldRefresh: boolean) {
+  if (workspaceChanged) {
+    if (!draft.historyRequest) startHistory(draft);
+  } else if (shouldRefresh) {
+    requestHistory(draft);
+  }
+}
+
+function updateTargetsForState(
+  draft: Draft,
+  before: AppState | null,
+  state: AppState,
+  workspaceChanged: boolean,
+  scopeChanged: boolean,
+  selectionCleared: boolean,
+) {
+  const contextChanged = targetContextChanged(before, state);
+  if ((contextChanged && !workspaceChanged) || selectionCleared) resetTargetContext(draft);
+  if (!contextChanged) {
+    if (draft.data.snapshotError !== null) startSnapshot(draft);
+    return;
+  }
+  draft.snapshotRequestId = null;
+  if (state.snapshotFetchedAt === null || scopeChanged || workspaceChanged) {
+    draft.data.snapshot = null;
+  }
+  if (state.snapshotFetchedAt !== null) startSnapshot(draft);
+}
+
+function applyStateContext(
+  draft: Draft,
+  before: AppState | null,
+  state: AppState,
+  workspaceChanged: boolean,
+  scopeChanged: boolean,
+) {
+  if (workspaceChanged) {
+    resetWorkspaceData(draft, state);
+    return;
+  }
+  if (scopeChanged || state.snapshotFetchedAt === null) {
+    draft.data.selection = null;
+    setData(draft, { snapshot: null, snapshotError: null });
+  }
+  updateExecutionState(draft, before, state);
 }
 
 function applyAppState(draft: Draft, state: AppState) {
   const before = draft.data.state;
+  const wasReady = draft.data.ready;
+  const wasSavedEligible = savedEligible(draft);
+  const wasBusy = sessionBusy(sessionView(draft));
   const workspaceChanged = state.workspace !== before?.workspace;
-  const scopeChanged =
-    JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
-  const oldTargetKey = targetKey(draft);
-  const resumed = !draft.data.ready;
+  const scopeChanged = !sameScope(before, state);
+  const selectionCleared =
+    !workspaceChanged &&
+    (scopeChanged || state.snapshotFetchedAt === null) &&
+    draft.data.selection !== null;
+
   draft.stateRevision++;
   draft.data.state = state;
   draft.data.ready = true;
-  if (resumed) draft.data.error = null;
+  if (!wasReady) draft.data.error = null;
+  applyStateContext(draft, before, state, workspaceChanged, scopeChanged);
 
-  if (workspaceChanged) {
-    draft.workspaceGeneration++;
-    draft.pendingStart = null;
-    draft.historyAgain = false;
-    draft.observedExecution = state.activeInvocation
-      ? { id: state.activeInvocation, active: true }
-      : null;
-    draft.snapshotAttempt = null;
-    draft.snapshotRequest = null;
-    setData(draft, {
-      console: null,
-      consoleOpen: false,
-      snapshot: null,
-      snapshotError: null,
-      selection: null,
-      targetDetail: null,
-      targetDetailError: null,
-      targetOutputs: null,
-      targetOutputsError: null,
-      invocations: [],
-      invocationsError: null,
-      detail: null,
-      detailError: null,
-      profile: null,
-      profileError: null,
-    });
-    setSelectedInvocation(draft, null);
-    setSelection(draft, null);
-  } else {
-    if (scopeChanged || state.snapshotFetchedAt === null) {
-      setSelection(draft, null);
-      draft.snapshotAttempt = null;
-      draft.snapshotRequest = null;
-      setData(draft, { snapshot: null, snapshotError: null });
-    }
-
-    const starting = draft.pendingStart;
-    if (starting) {
-      if (
-        starting.workspace === state.workspace &&
-        state.activeInvocation &&
-        state.consoleInvocation === state.activeInvocation &&
-        starting.observedId !== state.activeInvocation
-      ) {
-        draft.pendingStart = { ...starting, observedId: state.activeInvocation };
-        setData(draft, {
-          console: { id: state.activeInvocation, cmd: starting.cmd, pattern: starting.pattern },
-          consoleOpen: true,
-        });
-        setSelectedInvocation(draft, null);
-      }
-    } else {
-      const observed = draft.observedExecution;
-      const activeId = state.activeInvocation;
-      let completedId: string | null = null;
-      if (activeId) {
-        if (observed && observed.active && before?.activeInvocation === observed.id) {
-          if (observed.id !== activeId) completedId = observed.id;
-        }
-        draft.observedExecution = { id: activeId, active: true };
-      } else {
-        if (
-          observed &&
-          ((observed.active && before?.activeInvocation === observed.id) ||
-            state.consoleInvocation === observed.id)
-        ) {
-          completedId = observed.id;
-        }
-        draft.observedExecution = null;
-      }
-      if (completedId) completeConsole(draft, completedId);
-    }
-  }
-
-  resetTargetContext(draft, oldTargetKey);
+  updateHistoryForState(
+    draft,
+    workspaceChanged,
+    before === null || !wasReady || state.activeInvocation !== before?.activeInvocation,
+  );
+  updateTargetsForState(draft, before, state, workspaceChanged, scopeChanged, selectionCleared);
+  savedEligibilityChanged(draft, wasSavedEligible, savedEligible(draft));
+  if (wasBusy && sessionBusy(sessionView(draft)) === false) resumeTargets(draft);
 }
 
 function completeConsole(draft: Draft, id: string) {
@@ -664,202 +714,195 @@ function completeConsole(draft: Draft, id: string) {
     return;
   }
   draft.data.consoleOpen = false;
-  setSelectedInvocation(draft, id);
+  selectSaved(draft, id);
 }
 
 function finishStart(draft: Draft, requestId: number) {
   const current = draft.pendingStart;
   if (!current || current.id !== requestId) return;
-  if (!current.record) {
-    draft.pendingStart = null;
-    draft.observedExecution = current.previousExecution;
-    return;
-  }
-  const id = current.record.id;
+  const wasEligible = savedEligible(draft);
   draft.pendingStart = null;
-  if (!draft.data.ready) {
-    draft.observedExecution = { id, active: current.observedId === id };
-  } else if (draft.data.state?.activeInvocation === id) {
-    draft.observedExecution = { id, active: true };
-  } else if (!draft.data.state?.activeInvocation) {
-    draft.observedExecution = null;
-    completeConsole(draft, id);
+  if (!current.record) {
+    draft.observedExecution = current.previousExecution;
   } else {
-    draft.observedExecution = { id: draft.data.state.activeInvocation, active: true };
+    const id = current.record.id;
+    if (!draft.data.ready) {
+      draft.observedExecution = { id, active: current.observedId === id };
+    } else if (draft.data.state?.activeInvocation === id) {
+      draft.observedExecution = { id, active: true };
+    } else if (!draft.data.state?.activeInvocation) {
+      draft.observedExecution = null;
+      completeConsole(draft, id);
+    } else {
+      draft.observedExecution = { id: draft.data.state.activeInvocation, active: true };
+    }
   }
+  savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
+  resumeTargets(draft);
 }
 
-function loadHistory(draft: Draft) {
-  if (!draft.data.state?.workspace || !draft.data.ready) return;
-  if (draft.historyRequest) {
-    draft.historyAgain = true;
-    draft.waitFor = draft.historyRequest.id;
-    return;
-  }
-  draft.historyAttempt = null;
-  draft.waitFor = syncHistory(draft);
-}
-
-function loadSnapshot(draft: Draft) {
-  const key = snapshotKey(draft);
-  if (draft.snapshotRequest?.key === key) {
-    draft.waitFor = draft.snapshotRequest.id;
-    return;
-  }
-  if (!draft.data.state?.workspace || draft.data.state.snapshotFetchedAt === null) return;
-  draft.snapshotAttempt = null;
-  syncSnapshot(draft);
-  draft.waitFor = draft.snapshotRequest?.id;
-}
-
-function forceDetail(draft: Draft) {
-  if (!savedEligible(draft)) return;
-  const key = savedKey(draft);
-  if (draft.detailRequest?.key === key) {
-    draft.waitFor = draft.detailRequest.id;
-    return;
-  }
-  if (draft.detailRequest) {
-    draft.detailAttempt = null;
-    draft.waitFor = draft.detailRequest.id;
-    return;
-  }
-  draft.detailAttempt = null;
-  draft.waitFor = startDetail(draft);
-}
-
-function forceProfile(draft: Draft) {
-  if (!savedEligible(draft)) return;
-  const key = savedKey(draft);
-  if (draft.profileRequest?.key === key) {
-    draft.waitFor = draft.profileRequest.id;
-    return;
-  }
-  if (draft.profileRequest) {
-    draft.profileAttempt = null;
-    draft.waitFor = draft.profileRequest.id;
-    return;
-  }
-  draft.profileAttempt = null;
-  draft.waitFor = startProfile(draft);
+function acceptHistory(draft: Draft, records: InvocationRecord[]) {
+  const id = draft.data.selectedInvocation;
+  const previous = recordFor(draft.data.invocations, id);
+  const next = recordFor(records, id);
+  const changed = JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
+  draft.data.invocations = records;
+  draft.data.invocationsError = null;
+  const detailMismatch =
+    next !== undefined &&
+    draft.data.detail !== null &&
+    draft.detail.running === null &&
+    draft.data.detailError === null &&
+    JSON.stringify(next) !== JSON.stringify(draft.data.detail.record);
+  if (changed || detailMismatch) refreshSavedFromHistory(draft);
 }
 
 function finishHistory(draft: Draft, requestId: number, result: Result<InvocationRecord[]>) {
-  const request = draft.historyRequest;
-  if (!request || request.id !== requestId) return;
+  const current = draft.historyRequest;
+  if (!current || current.id !== requestId) return;
   draft.historyRequest = null;
-  if (request.workspaceGeneration === draft.workspaceGeneration) {
-    if (result.ok) {
-      const unchanged =
-        JSON.stringify(result.value) === JSON.stringify(draft.data.invocations) &&
-        draft.data.invocationsError === null;
-      if (!unchanged) draft.data.invocations = result.value;
-      draft.data.invocationsError = null;
-      refreshSavedAfterHistory(draft);
-    } else {
-      draft.data.invocationsError = result.error;
-    }
+  if (current.valid) {
+    if (result.ok) acceptHistory(draft, result.value);
+    else draft.data.invocationsError = result.error;
   }
   if (draft.historyAgain) {
     draft.historyAgain = false;
-    draft.historyAttempt = null;
+    startHistory(draft);
   }
-  syncAll(draft);
+}
+
+function acceptSnapshot(draft: Draft, snapshot: TargetIndex | null) {
+  const previousFetchedAt = draft.data.snapshot?.meta.fetchedAt ?? null;
+  const selection = draft.data.selection;
+  const validTarget =
+    selection?.kind === "target" &&
+    snapshot?.targets.some((target) => target.label === selection.label);
+  const selectionInvalid =
+    selection?.kind === "package" || (selection?.kind === "target" && !validTarget);
+  draft.data.snapshot = snapshot;
+  draft.data.snapshotError = null;
+  if (draft.data.targetDetailError === TARGET_LIST_ERROR) {
+    draft.data.targetDetailError = null;
+  }
+  if (selectionInvalid) draft.data.selection = null;
+  if (previousFetchedAt !== (snapshot?.meta.fetchedAt ?? null) || selectionInvalid) {
+    resetTargetContext(draft);
+  }
+  resumeTargets(draft);
+}
+
+function failSnapshot(draft: Draft, error: string) {
+  draft.data.snapshotError = `Could not load the workspace snapshot: ${error}`;
+  if (draft.data.selection?.kind === "target") draft.data.targetDetailError = TARGET_LIST_ERROR;
 }
 
 function finishSnapshot(draft: Draft, requestId: number, result: Result<TargetIndex | null>) {
-  const request = draft.snapshotRequest;
-  if (!request || request.id !== requestId) return;
-  draft.snapshotRequest = null;
-  const oldTargetKey = targetKey(draft);
-  if (request.key === snapshotKey(draft)) {
-    if (result.ok) {
-      const selection = draft.data.selection;
-      const targetValid =
-        selection?.kind === "target" &&
-        result.value?.targets.some((target) => target.label === selection.label);
-      draft.data.snapshot = result.value;
-      draft.data.snapshotError = null;
-      if (draft.data.targetDetailError === TARGET_LIST_ERROR) draft.data.targetDetailError = null;
-      if (selection?.kind === "package" || (selection?.kind === "target" && !targetValid)) {
-        setSelection(draft, null);
-      }
-      resetTargetContext(draft, oldTargetKey);
-    } else {
-      draft.data.snapshotError = `Could not load the workspace snapshot: ${result.error}`;
-      if (draft.data.selection?.kind === "target") draft.data.targetDetailError = TARGET_LIST_ERROR;
-    }
+  if (draft.snapshotRequestId !== requestId) return;
+  draft.snapshotRequestId = null;
+  if (result.ok) acceptSnapshot(draft, result.value);
+  else failSnapshot(draft, result.error);
+}
+
+function acceptTargetDetail(draft: Draft, result: Result<TargetDetail>) {
+  const selection = draft.data.selection;
+  if (!result.ok) {
+    draft.data.targetDetailError = result.error;
+    return;
   }
-  syncAll(draft);
+  if (selection?.kind !== "target" || result.value.target.label !== selection.label) {
+    draft.data.targetDetailError = "Error: Target detail does not match the selected label";
+    return;
+  }
+  setData(draft, { targetDetail: result.value, targetDetailError: null });
+  if (
+    draft.data.targetOutputs === null &&
+    draft.data.targetOutputsError === null &&
+    draft.targetOutputs.wanted === null
+  ) {
+    draft.targetOutputs.wanted = nextId(draft);
+  }
+  startTargetOutputs(draft);
 }
 
 function finishTargetDetail(draft: Draft, requestId: number, result: Result<TargetDetail>) {
-  const request = draft.targetDetailRequest;
-  if (!request || request.id !== requestId) return;
-  draft.targetDetailRequest = null;
-  if (request.key === targetKey(draft)) {
-    if (result.ok && result.value.target.label === request.label) {
-      setData(draft, { targetDetail: result.value, targetDetailError: null });
-    } else {
-      draft.data.targetDetailError = result.ok
-        ? "Error: Target detail does not match the selected label"
-        : result.error;
-    }
+  if (draft.targetDetail.running !== requestId) return;
+  draft.targetDetail.running = null;
+  if (draft.targetDetail.wanted === requestId) {
+    draft.targetDetail.wanted = null;
+    acceptTargetDetail(draft, result);
   }
-  syncAll(draft);
+  startTargetDetail(draft);
 }
 
 function finishTargetOutputs(draft: Draft, requestId: number, result: Result<TargetOutputs>) {
-  const request = draft.targetOutputsRequest;
-  if (!request || request.id !== requestId) return;
-  draft.targetOutputsRequest = null;
-  if (request.key === targetKey(draft) && draft.data.targetDetail?.target.label === request.label) {
-    setData(draft, {
-      targetOutputs: result.ok ? result.value : null,
-      targetOutputsError: result.ok ? null : result.error,
-    });
-  }
-  syncAll(draft);
+  if (draft.targetOutputs.running !== requestId) return;
+  draft.targetOutputs.running = null;
+  if (draft.targetOutputs.wanted === requestId) acceptTargetOutputs(draft, result);
+  startTargetOutputs(draft);
 }
 
-function finishSavedDetail(draft: Draft, requestId: number, result: Result<InvocationDetail>) {
-  const request = draft.detailRequest;
-  if (!request || request.id !== requestId) return;
-  draft.detailRequest = null;
-  if (request.key === savedKey(draft) && savedEligible(draft)) {
-    if (result.ok) draft.data.detail = result.value;
-    draft.data.detailError = result.ok ? null : result.error;
+function acceptTargetOutputs(draft: Draft, result: Result<TargetOutputs>) {
+  draft.targetOutputs.wanted = null;
+  if (
+    draft.data.selection?.kind !== "target" ||
+    draft.data.targetDetail?.target.label !== draft.data.selection.label
+  ) {
+    return;
   }
-  syncAll(draft);
+  setData(draft, {
+    targetOutputs: result.ok ? result.value : null,
+    targetOutputsError: result.ok ? null : result.error,
+  });
+}
+
+function finishDetail(draft: Draft, requestId: number, result: Result<InvocationDetail>) {
+  if (draft.detail.running !== requestId) return;
+  draft.detail.running = null;
+  if (draft.detail.wanted === requestId) {
+    draft.detail.wanted = null;
+    if (savedEligible(draft)) {
+      if (result.ok) draft.data.detail = result.value;
+      draft.data.detailError = result.ok ? null : result.error;
+    }
+  }
+  startDetail(draft);
 }
 
 function finishProfile(draft: Draft, requestId: number, result: Result<Section<Profile>>) {
-  const request = draft.profileRequest;
-  if (!request || request.id !== requestId) return;
-  draft.profileRequest = null;
-  if (request.key === savedKey(draft) && savedEligible(draft)) {
-    if (result.ok) draft.data.profile = result.value;
-    draft.data.profileError = result.ok ? null : result.error;
+  if (draft.profile.running !== requestId) return;
+  draft.profile.running = null;
+  if (draft.profile.wanted === requestId) {
+    draft.profile.wanted = null;
+    if (savedEligible(draft)) {
+      if (result.ok) draft.data.profile = result.value;
+      draft.data.profileError = result.ok ? null : result.error;
+    }
   }
-  syncAll(draft);
+  startProfile(draft);
 }
 
 function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: string) {
   if (!canSend(sessionView(draft), pattern) || !draft.data.state?.workspace) return;
+  const wasEligible = savedEligible(draft);
   const request: StartRequest = {
     id: nextId(draft),
     workspace: draft.data.state.workspace,
     cmd,
     pattern,
-    argumentsText,
     previousExecution: draft.observedExecution,
     observedId: null,
     record: null,
   };
   draft.pendingStart = request;
   draft.data.error = null;
-  draft.effects.push({ type: "startInvocation", request });
-  syncAll(draft);
+  draft.effects.push({
+    type: "startInvocation",
+    id: request.id,
+    cmd,
+    pattern,
+    argumentsText,
+  });
+  savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
   draft.waitFor = request.id;
 }
 
@@ -869,17 +912,15 @@ function startResult(draft: Draft, requestId: number, result: Result<InvocationR
   if (!result.ok) {
     finishStart(draft, requestId);
     draft.data.error = result.error;
-    syncAll(draft);
     return;
   }
-  const record = result.value;
-  draft.pendingStart = { ...pending, record };
-  if (!draft.data.consoleOpen || draft.data.console?.id !== record.id) {
+  draft.pendingStart = { ...pending, record: result.value };
+  if (!draft.data.consoleOpen || draft.data.console?.id !== result.value.id) {
     setData(draft, {
-      console: { ...record, cmd: pending.cmd, pattern: pending.pattern },
+      console: { ...result.value, cmd: pending.cmd, pattern: pending.pattern },
       consoleOpen: true,
     });
-    setSelectedInvocation(draft, null);
+    selectSaved(draft, null);
   }
   const id = nextId(draft);
   draft.effects.push({
@@ -895,22 +936,21 @@ function startStateResult(
   draft: Draft,
   message: Extract<SessionMessage, { type: "startStateResult" }>,
 ) {
-  const pending = draft.pendingStart;
-  if (!pending || pending.id !== message.startId) return;
+  if (draft.pendingStart?.id !== message.startId) return;
   if (message.revision === draft.stateRevision) {
     if (message.result.ok) {
       applyAppState(draft, message.result.value);
     } else {
+      const wasEligible = savedEligible(draft);
       setData(draft, {
         ready: false,
         error: `The invocation started, but getting its state failed; waiting for the next update: ${message.result.error}`,
       });
+      savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
     }
   }
   finishStart(draft, message.startId);
-  draft.historyAttempt = null;
-  if (draft.historyRequest) draft.historyAgain = true;
-  syncAll(draft);
+  if (draft.data.ready) requestHistory(draft);
 }
 
 function openWorkspace(draft: Draft, path: string, scope: TargetScope) {
@@ -920,36 +960,52 @@ function openWorkspace(draft: Draft, path: string, scope: TargetScope) {
     draft.waitFor = id;
     return;
   }
-  const request = { id, path, scope, revision: draft.stateRevision };
-  draft.workspaceRequest = request;
-  draft.effects.push({ type: "openWorkspace", request });
-  draft.waitFor = request.id;
+  draft.workspaceRequest = { id, revision: draft.stateRevision };
+  draft.effects.push({ type: "openWorkspace", id, path, scope });
+  draft.waitFor = id;
 }
 
-function updateSelection(draft: Draft, selection: ExplorerSelection) {
-  const previousKey = targetKey(draft);
-  if (sameSelection(draft.data.selection, selection)) {
-    if (selection?.kind === "target" && draft.data.targetDetailError) {
-      draft.targetDetailAttempt = null;
-      draft.data.targetDetailError = null;
-      syncAll(draft);
-    }
+function initialStateResult(
+  draft: Draft,
+  message: Extract<SessionMessage, { type: "initialStateResult" }>,
+) {
+  if (message.revision !== draft.stateRevision) return;
+  if (message.result.ok) applyAppState(draft, message.result.value);
+  else if (!draft.data.ready) draft.data.error = `Could not connect: ${message.result.error}`;
+}
+
+function openConsole(draft: Draft, record: InvocationRecord) {
+  const expected = draft.data.state?.consoleInvocation ?? draft.data.state?.activeInvocation;
+  if (record.id !== expected) {
+    draft.data.consoleOpen = false;
+    selectSaved(draft, record.id, true);
     return;
   }
-  setSelection(draft, selection);
-  resetTargetContext(draft, previousKey);
-  syncAll(draft);
+  if (draft.data.consoleOpen && draft.data.console?.id === record.id) return;
+  selectSaved(draft, null);
+  setData(draft, { console: record, consoleOpen: true });
 }
 
-function updateSelectedInvocation(draft: Draft, id: string | null) {
-  const unchanged = id === draft.data.selectedInvocation;
-  setSelectedInvocation(draft, id);
-  draft.data.consoleOpen = false;
-  if (unchanged) {
-    forceDetail(draft);
-    forceProfile(draft);
-  }
-  syncAll(draft);
+function finishWorkspaceOpen(draft: Draft, requestId: number, result: Result<AppState>) {
+  const request = draft.workspaceRequest;
+  if (request?.id !== requestId) return;
+  draft.workspaceRequest = null;
+  if (result.ok && request.revision === draft.stateRevision) applyAppState(draft, result.value);
+  resumeTargets(draft);
+}
+
+function requestStop(draft: Draft) {
+  if (!canStop(sessionView(draft))) return;
+  const id = nextId(draft);
+  draft.effects.push({ type: "stop", id, workspace: draft.data.state?.workspace ?? null });
+  draft.waitFor = id;
+}
+
+function requestRefresh(draft: Draft) {
+  if (sessionBusy(sessionView(draft))) return;
+  const id = nextId(draft);
+  draft.effects.push({ type: "refresh", id, workspace: draft.data.state?.workspace ?? null });
+  draft.waitFor = id;
 }
 
 export function update(model: SessionModel, message: SessionMessage): SessionTransition {
@@ -959,28 +1015,21 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       next.data.error = `Could not connect: ${message.error}`;
       break;
     case "initialStateResult":
-      if (message.revision === next.stateRevision) {
-        if (message.result.ok) {
-          applyAppState(next, message.result.value);
-          syncAll(next, true);
-        } else if (!next.data.ready) {
-          next.data.error = `Could not connect: ${message.result.error}`;
-        }
-      }
+      initialStateResult(next, message);
       break;
     case "appState":
       applyAppState(next, message.state);
-      syncAll(next, true);
       break;
     case "historyChanged":
     case "loadInvocations":
-      loadHistory(next);
+      requestHistory(next);
+      next.waitFor = next.historyRequest?.id;
       break;
     case "invocationsResult":
       finishHistory(next, message.requestId, message.result);
       break;
     case "loadSnapshot":
-      loadSnapshot(next);
+      next.waitFor = next.snapshotRequestId ?? startSnapshot(next);
       break;
     case "snapshotResult":
       finishSnapshot(next, message.requestId, message.result);
@@ -992,33 +1041,28 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       finishTargetOutputs(next, message.requestId, message.result);
       break;
     case "detailResult":
-      finishSavedDetail(next, message.requestId, message.result);
+      finishDetail(next, message.requestId, message.result);
       break;
     case "profileResult":
       finishProfile(next, message.requestId, message.result);
       break;
     case "select":
-      updateSelection(next, message.selection);
+      selectTarget(next, message.selection);
       break;
     case "selectInvocation":
-      updateSelectedInvocation(next, message.id);
+      next.data.consoleOpen = false;
+      selectSaved(next, message.id, true);
       break;
-    case "openConsole": {
-      const expected = next.data.state?.consoleInvocation ?? next.data.state?.activeInvocation;
-      if (message.record.id !== expected) {
-        updateSelectedInvocation(next, message.record.id);
-      } else if (!next.data.consoleOpen || next.data.console?.id !== message.record.id) {
-        setSelectedInvocation(next, null);
-        setData(next, { console: message.record, consoleOpen: true });
-        syncAll(next);
-      }
+    case "openConsole":
+      openConsole(next, message.record);
       break;
-    }
     case "loadDetail":
-      forceDetail(next);
+      retryDetail(next);
+      next.waitFor = next.detail.running ?? next.detail.wanted ?? undefined;
       break;
     case "loadProfile":
-      forceProfile(next);
+      retryProfile(next);
+      next.waitFor = next.profile.running ?? next.profile.wanted ?? undefined;
       break;
     case "start":
       start(next, message.cmd, message.pattern, message.argumentsText);
@@ -1032,25 +1076,11 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "openWorkspace":
       openWorkspace(next, message.path, message.scope);
       break;
-    case "workspaceResult": {
-      const request = next.workspaceRequest;
-      if (request?.id === message.requestId) {
-        next.workspaceRequest = null;
-        if (message.result.ok && request.revision === next.stateRevision) {
-          applyAppState(next, message.result.value);
-          syncAll(next, true);
-        } else {
-          syncAll(next);
-        }
-      }
+    case "workspaceResult":
+      finishWorkspaceOpen(next, message.requestId, message.result);
       break;
-    }
     case "stop":
-      if (canStop(sessionView(next))) {
-        const id = nextId(next);
-        next.effects.push({ type: "stop", id, workspace: next.data.state?.workspace ?? null });
-        next.waitFor = id;
-      }
+      requestStop(next);
       break;
     case "stopResult":
       if (!message.result.ok && message.workspace === next.data.state?.workspace) {
@@ -1058,11 +1088,7 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       }
       break;
     case "refresh":
-      if (!sessionBusy(sessionView(next))) {
-        const id = nextId(next);
-        next.effects.push({ type: "refresh", id, workspace: next.data.state?.workspace ?? null });
-        next.waitFor = id;
-      }
+      requestRefresh(next);
       break;
     case "refreshResult":
       if (!message.result.ok && message.workspace === next.data.state?.workspace) {

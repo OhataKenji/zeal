@@ -39,10 +39,6 @@ async function resultOf<T>(operation: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-function effectId(effect: SessionEffect): number {
-  return "request" in effect ? effect.request.id : effect.id;
-}
-
 export function createSession(transport: Transport, changed: (view: SessionViewType) => void) {
   let model = initialModel();
   let view = sessionView(model);
@@ -87,7 +83,7 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
   }
 
   function launch(effect: SessionEffect) {
-    const id = effectId(effect);
+    const id = effect.id;
     if (operations.has(id)) return;
     let operation: Promise<void>;
     operation = runEffect(effect).finally(() => {
@@ -144,28 +140,34 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
       case "listInvocations":
         await settle(
           () => transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations),
-          (result) => ({ type: "invocationsResult", requestId: effect.request.id, result }),
+          (result) => ({ type: "invocationsResult", requestId: effect.id, result }),
         );
         return;
       case "getSnapshot":
         await settle(
           () => transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot),
-          (result) => ({ type: "snapshotResult", requestId: effect.request.id, result }),
+          (result) => ({ type: "snapshotResult", requestId: effect.id, result }),
         );
         return;
       case "getTargetDetail": {
-        const { label, fetchedAt } = effect.request;
         await settle(
-          () => transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, { label, fetchedAt }),
-          (result) => ({ type: "targetDetailResult", requestId: effect.request.id, result }),
+          () =>
+            transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
+              label: effect.label,
+              fetchedAt: effect.fetchedAt,
+            }),
+          (result) => ({ type: "targetDetailResult", requestId: effect.id, result }),
         );
         return;
       }
       case "getTargetOutputs": {
-        const { label, fetchedAt } = effect.request;
         await settle(
-          () => transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, { label, fetchedAt }),
-          (result) => ({ type: "targetOutputsResult", requestId: effect.request.id, result }),
+          () =>
+            transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
+              label: effect.label,
+              fetchedAt: effect.fetchedAt,
+            }),
+          (result) => ({ type: "targetOutputsResult", requestId: effect.id, result }),
         );
         return;
       }
@@ -173,36 +175,34 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
         await settle(
           () =>
             transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
-              id: effect.request.invocationId,
+              id: effect.invocationId,
             }),
-          (result) => ({ type: "detailResult", requestId: effect.request.id, result }),
+          (result) => ({ type: "detailResult", requestId: effect.id, result }),
         );
         return;
       case "getProfile":
         await settle(
           () =>
             transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
-              id: effect.request.invocationId,
+              id: effect.invocationId,
             }),
-          (result) => ({ type: "profileResult", requestId: effect.request.id, result }),
+          (result) => ({ type: "profileResult", requestId: effect.id, result }),
         );
         return;
-      case "startInvocation": {
-        const { request } = effect;
+      case "startInvocation":
         const wait = dispatch({
           type: "startResult",
-          requestId: request.id,
+          requestId: effect.id,
           result: await resultOf(() =>
             transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
-              cmd: request.cmd,
-              pattern: request.pattern,
-              arguments: request.argumentsText,
+              cmd: effect.cmd,
+              pattern: effect.pattern,
+              arguments: effect.argumentsText,
             }),
           ),
         });
         await waitFor(wait);
         return;
-      }
       case "getStartState":
         await settle(
           () => transport.invoke<AppState>(COMMANDS.getState),
@@ -214,28 +214,26 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
           }),
         );
         return;
-      case "openWorkspace": {
-        const { request } = effect;
+      case "openWorkspace":
         try {
           const state = await transport.invoke<AppState>(COMMANDS.openWorkspace, {
-            path: request.path,
-            scope: request.scope,
+            path: effect.path,
+            scope: effect.scope,
           });
           dispatch({
             type: "workspaceResult",
-            requestId: request.id,
+            requestId: effect.id,
             result: { ok: true, value: state },
           });
         } catch (error) {
           dispatch({
             type: "workspaceResult",
-            requestId: request.id,
+            requestId: effect.id,
             result: { ok: false, error: String(error) },
           });
           throw error;
         }
         return;
-      }
       case "rejectWorkspaceOpen":
         throw new Error(effect.message);
       case "stop":
