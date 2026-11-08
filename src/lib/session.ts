@@ -193,6 +193,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
   let invocationSlice: SliceRunner;
   let targetDetailSlice: SliceRunner;
   let targetDetailLoadedKey: string | null = null;
+  let detailRevision = 0;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
 
@@ -294,8 +295,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       update(statusPatch(slice, true), false);
       const patch = await slice.load(key);
       if (!disposed && accepts(slice, key, token, generation)) {
-        slice.onSuccess?.(key);
         update({ ...statusPatch(slice, false), ...patch }, false);
+        slice.onSuccess?.(key);
       }
     } catch (error) {
       if (!disposed && accepts(slice, key, token, generation)) {
@@ -417,6 +418,18 @@ export function createSession(transport: Transport, changed: (view: SessionView)
     invalidateOnChange: (previous, next) => !previous || previous[0] !== next[0],
     acceptStale: (request, current) => request[0] === current[0],
     status: { error: "invocationsError" },
+    onSuccess: () => {
+      const record = selectedRecord();
+      if (
+        record &&
+        view.detail &&
+        !view.detailLoading &&
+        view.detailError === null &&
+        JSON.stringify(record) !== JSON.stringify(view.detail.record)
+      ) {
+        detailRevision++;
+      }
+    },
     success: (invocations) => {
       if (
         JSON.stringify(invocations) === JSON.stringify(view.invocations) &&
@@ -527,6 +540,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       id,
       eligible,
       JSON.stringify(selectedRecord() ?? null),
+      detailRevision,
     ] as const;
   }
 

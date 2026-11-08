@@ -309,6 +309,43 @@ test("the next unchanged list refresh recovers completion during a detail read",
   assert.equal(requestCount(h, "get_invocation"), 2);
 });
 
+test("successful history reads reconcile a loaded stale detail without retrying in a loop", async () => {
+  const h = harness();
+  await h.session.init();
+  await selectRecord(h, [COMPLETED.record]);
+  const earlier = { ...COMPLETED, record: RECORD };
+  pendingRequest(h, "get_invocation").reply.resolve(earlier);
+  pendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
+  await settle();
+
+  h.emit("invocations-changed", undefined);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+
+  lastPendingRequest(h, "get_invocation").reply.resolve(earlier);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve({ status: "missing" });
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+
+  h.emit("invocations-changed", undefined);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  assert.equal(requestCount(h, "get_invocation_profile"), 3);
+
+  lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  const stable = h.session.loadInvocations();
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await stable;
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  assert.equal(requestCount(h, "get_invocation_profile"), 3);
+});
+
 test("a failed automatic detail refresh waits for explicit Retry", async () => {
   const h = harness();
   await h.session.init();
