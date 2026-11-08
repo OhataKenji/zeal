@@ -2,227 +2,203 @@
 
 _Devin_
 _Last update: 2026/11/08_
-_Status: Deprecated_
-
-後継: [必要な状態遷移だけを残す](./session-state-minimal.md)。本書は前段階の設計判断の記録として残す。
+_Status: Approved_
 
 ## Goal
 
-既存の画面操作と非同期処理の振る舞いを保ちながら、session の状態判断と副作用を分け、次の変更で読む必要があるコードを減らす。
-実装の単純さを最優先にし、Elm Architecture はそのために必要な部分だけ使う。
-機能要件は [PRD](../prd.md)、画面は [mock](../mock/) に従い、この変更では追加しない。
+既存の画面動作と非同期処理の安全性を保ち、操作を理解・変更するために読むコードを減らす。
+Svelte と Elm-style の純粋な状態遷移を維持するが、API の統一や Elm runtime の再現より実装の単純さを優先する。
+機能要件は [PRD](../prd.md)、画面は [mock](../mock/) に従い、この設計では追加しない。
 
 ### Non Goals
 
-- Svelte の置き換え、状態管理ライブラリの追加。
-- 汎用 Slice / Query engine、scheduler、event bus の開発。
-- backend の版管理プロトコル、SQLite schema、artifact 公開方式の変更。
-- 複数 Bazel 実行、キュー、自動再接続、新しい Console 操作の追加。
-- 全画面の状態を中央へ集めること、取得回数の最小化、将来用途の先回りした抽象化。
+- Rust / IPC / 保存形式の変更、新機能、Svelte の置換。
+- 汎用取得エンジン、scheduler、コマンド登録表、新しい状態管理ライブラリ。
+- 既存の JavaScript API の返り値の互換性、全操作の Promise 化。
+- 通知欠落からの自動回復、artifact の同時点整合性、不要な取得を一切しない保証。
+- 行数合わせの圧縮、機能・競合テストの削除、別ファイルへの移動を削減と数えること。
 
 ## Background
 
-**Session** は、Rust が報告するアプリ状態と利用者の選択を受け取り、必要なデータを取得して Svelte に表示状態を渡す frontend の処理である。
-現在は `src/lib/session.ts` が状態更新、IPC、古い応答の排除、Console の画面遷移を担っている。
+**Session** は、Rust の状態通知と UI の選択から、画面に必要な読み取りと表示状態を決める frontend の処理である。
+**Model / Message / Effect** は、それぞれ状態、出来事、実行すべき IPC の指示を指す。通常の遷移は純粋な `update(model, message)` が次の Model と Effect を返す。
 
-取得には用途固有の違いがある。履歴は通知をまとめ、snapshot は新しい取得を古い取得の完了まで待たず、target の outputs は detail の後に取得する。
-これらを同じ Slice に載せると、個別の規則に加えて共通エンジンの設定と内部状態も読む必要がある。
-揃ったインターフェースより、各動作を直接読める実装を選ぶ。
+状態更新と IPC が混在していた実装を純粋関数へ移し、全体同期・依存キー・Attempt を削除した中間版は 1,381 行となった。PR 分岐元の main は 760 行で、Svelte の接続部分、テスト、設計書はこの比較に含めない。
+中間版には公開 async API を維持するための Promise 管理と、判断の受け渡しが残っていた。本設計ではその不要な契約を削り、各用途の規則を直接表す。
+Elm-style 化やテスト通過だけでは、実装量の増加を正当化できない。
 
-設計の判断基準は [The Best Code is No Code At All](https://blog.codinghorror.com/the-best-code-is-no-code-at-all/) と、Richard Gabriel の _The Rise of “Worse is Better”_ に沿う。
-短く技巧的に書くことではなく、理解・維持する処理そのものを減らす。完全性や統一のためだけの仕組みは追加しない。
-
-採用する [Elm Architecture](https://guide.elm-lang.org/effects/) の要素は、**Model**（状態）、**Message**（操作や結果）、**update**（純粋な状態遷移）、**Effect**（実行すべき処理の指示）である。
-Elm の言語や runtime を再現することは目的にしない。
+判断基準は [The Best Code is No Code At All](https://blog.codinghorror.com/the-best-code-is-no-code-at-all/) と [The Rise of “Worse is Better”](https://www.jwz.org/doc/worse-is-better.html) である。
+前者からは「まず短く、必要性が分かった分だけ増やす」、後者からは「インターフェースの統一より実装の単純さ」を採る。
+既知の画面動作を壊す許可とは解釈しない。捨てるのは不要な内部契約と先回りした完全性である。
 
 ## Overview
 
 C4 の System Context は、開発者が Zeal を操作し、Zeal が Bazel に処理を依頼して結果を表示する関係である。
-Container は既存の WebView、Rust core、SQLite、観測ファイルから変更しない。全体の構成は [全体構成](./overview.md) を参照する。
-今回変更する WebView 内部だけを、次の Component 図で示す。
+Container は既存の WebView、Rust core、SQLite、観測ファイルから変更しない。全体は [全体構成](./overview.md) を参照する。
+WebView 内では Svelte が表示・入力、session の実行層が購読と IPC、純粋な core が状態遷移を担当する。図の箱は論理的な責務であり、それぞれを新しいクラスやファイルにする必要はない。
+Console の byte stream、offset、入力キュー、xterm / DOM handle は専用処理に残す。hover やメニュー開閉も Svelte の局所状態のままとする。
+通常の操作は Message を送るだけにし、完了は Model の loading / error / data として観測する。
+
+workspace を開く操作だけは、既存のダイアログが成功後に閉じ、失敗時に入力を残してエラーを表示するため、直接の async メソッドを残す。
+これは既存の初期化処理と同じく実行層が IPC を呼び、開始・結果を update に渡す限定的な経路とする。UI の状態更新経路を増やさない。
 
 ```mermaid
-flowchart TB
-    subgraph WebView["WebView — Container: Svelte / TypeScript"]
-        UI["Presentation<br/>Component: Svelte<br/>表示・入力・局所的な UI 状態"]
-        Session["Session execution<br/>Component: TypeScript / Tauri API<br/>状態の保持・dispatch・IPC・購読解除"]
-        Update["Session logic<br/>Component: Pure TypeScript<br/>Model・update・表示値の導出"]
-    end
-    Core["Rust core<br/>Container: Rust / Tauri<br/>既存の実行管理とデータ取得"]
-    UI -->|"利用者の操作を送る"| Session
-    Session -->|"現在状態と Message を渡す"| Update
-    Update -->|"次の状態と Effect を返す"| Session
-    Session -->|"表示状態を渡す"| UI
-    Session -->|"既存 commands を呼ぶ: Tauri IPC"| Core
-    Core -->|"応答と状態通知を返す: Tauri IPC"| Session
+flowchart TD
+  UI[Svelte: 通常の操作] -->|Message / 戻り値は void| Update[純粋な update]
+  Update -->|次の Model| View[表示値の導出]
+  View --> UI
+  Update -->|Effect| Runner[IPC 実行]
+  Runner -->|結果 Message| Update
+  Dialog[Workspace ダイアログ] -->|await openWorkspace| Open[直接の async 操作]
+  Open -->|開始・結果 Message| Update
+  Open -->|成功 / 失敗| Dialog
+  Runner --> Core[Rust core]
+  Open --> Core
 ```
-
-図の scope は session の制御経路。枠内の四角は論理的な Component、枠外は隣接 Container、矢印はラベルに記した呼び出し・データの方向である。
-IPC はプロセス間通信を指す。各箱を新しいクラスやファイルにする必要はない。Console の byte stream と DOM 描画はこの図の対象外で、既存の専用処理に残す。
-
-基本形は `update(model, message) → { model, effects }` とする。
-純粋な update が「何をするか」を決め、session の実行部分が既存 IPC を呼び、結果を Message に戻す。
-Svelte は表示と入力を担当し、別の状態更新経路を持たない。
 
 ## Detailed Design
 
-### 保存する状態を増やさない
+### 状態判断と実行の境界
 
-Model は既存のアプリ状態、選択、取得結果、現在の要求を表す。
-loading や選択中 record など、そこから求められる表示値は導出し、別々に更新しない。
-Promise、listener の解除関数、DOM handle は Model に入れず、実行部分に置く。
+`session_model.ts` の `update(model, message) → { model, effects }` は入力 Model を変更せず、同じ入力に同じ結果を返す。IPC、時刻取得、UUID 生成、DOM 操作は行わない。
+Model はアプリ状態・選択・取得結果・現在の要求を持ち、loading や選択中 record はそこから導出する。Rust の実行状態、frontend の起動要求、表示先は別の情報として扱う。
+Promise と listener の解除関数は `session.ts` に置く。結果 callback は表示状態を直接変更せず、Message を純粋な update に戻す。
+初期化は重複実行を防ぎ、dispose 後の結果を無視する。購読登録中に dispose された場合も、登録された listener を解除する。
 
-Rust の実行状態、frontend の起動要求、表示先は別の情報として扱う。
-振る舞いを変えない `completed` 状態や、同じ意味の flag は持たない。
-一方、取得中に来た履歴通知を覚える flag など、既存の振る舞いに必要な状態は残す。
+### API は利用側が必要な契約だけを持つ
 
-### 状態判断を純粋関数へ移す
+| API                                                            | 契約と理由                                                                   |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `select`, `selectInvocation`, `openConsole`                    | `void`。選択結果を View で観測する                                           |
+| `start`, `stop`, `refresh`                                     | `void`。UI は既に Promise を待たず、状態通知とエラー表示を使っている         |
+| `loadDetail`, `loadProfile`, `loadInvocations`, `loadSnapshot` | `void`。Retry の callback は返り値を使わない                                 |
+| `openWorkspace`                                                | `Promise<void>`。ダイアログの成功時 close と失敗時 error に必要              |
+| `init`, `dispose`                                              | 初期化・購読解除の既存責務を維持。`init` 内の重複初期化防止用 Promise は残す |
 
-利用者の操作、`app-state`、`invocations-changed`、IPC の成功・失敗を Message として扱う。
-update は入力を変更せず、次の Model と必要な Effect を返す。IPC、時刻取得、DOM 操作は行わない。
-Effect を返す遷移で要求中の状態も記録し、同じ状態通知だけでは重複取得を起こさない。
+`dispatch` は update → Model の置換 → publish → Effect の実行だけを行い、`void` を返す。
+`operations: Map<id, Promise>`、`waitFor`、Effect 完了から公開 API へ返す配送を削除する。
+Effect の重複は Model の取得中状態で防ぐ。実行層は二重に要求 ID を追跡しない。
+Effect の Promise は実行層で必ず処理し、失敗は結果 Message にする。fire-and-forget を未処理の rejection にしない。
 
-target、invocation、実行操作の判断は用途ごとの関数にまとめる。
-共通の状態を扱う普通の関数呼び出しで合成し、独立した store や動的な登録機構は作らない。
-純粋な判断は `session_model.ts`、購読・IPC・Promise は `session.ts` に置く。
-ファイル分割だけでは単純化したと判断しない。以下の遷移表と要求の表現を実装の基準にする。
+### workspace の一操作を汎用的な完了待ちにしない
 
-### 出来事から必要な取得へ直接つなぐ
+`openWorkspace(path, scope)` は実行層に一つだけ置く。
 
-全 Message の後で全取得を再評価する `syncAll` は置かない。
-通常の操作・応答は担当する用途だけを進め、複数用途に影響する `app-state` は変更内容を比較して必要な用途にだけ通知する。
+1. dispose 済みなら何もしない。既存の純粋な `sessionBusy` 判定が busy なら、既存と同じエラーで reject する。
+2. 現在の `stateRevision` を捕捉し、開始 Message を同期的に dispatch する。Model は `opening = true` にする。
+3. 既存 IPC を一度呼ぶ。成功・失敗を `Result` にして、捕捉した revision とともに結果 Message を dispatch する。
+4. update は `opening = false` にする。成功かつ revision が現在と同じなら state を受理し、止めていた target 読み取りを再開する。失敗・古い成功では state を上書きしないが、target の再開判定は行う。
+5. IPC が失敗したら呼び出し元へも reject する。成功なら resolve する。開始後の dispose は結果の dispatch を無効にし、IPC 自体は取り消さない。
 
-| 出来事                                 | 次に進める処理                                                                                                 |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 初期状態の受理・workspace 変更         | 履歴と利用可能な snapshot を取得する。旧 workspace の表示と要求の受理権を破棄する                              |
-| 履歴通知・active invocation の変更     | 履歴を取得する。取得中なら後続一回へまとめる                                                                   |
-| 履歴の受理                             | 選択中 record の変更、または idle・エラーなしの detail と履歴の不一致がある場合だけ、detail/profile を更新する |
-| scope・snapshot の版の変更             | target の表示と要求の受理権を破棄し、snapshot を取得する。保存済み invocation は触らない                       |
-| snapshot の受理                        | target/package 選択を検証し、待っている target detail だけを進める                                             |
-| target 選択                            | detail/outputs の旧要求を無効にし、最新の target detail を要求する。busy 中は最新の選択だけを残す              |
-| target detail の受理                   | その detail に対応する outputs を要求する                                                                      |
-| target outputs の受理                  | 結果を表示する。別の選択の要求が待っている場合だけ次の outputs を進める                                        |
-| saved invocation の選択                | detail/profile を独立に要求する。同じ選択の取得中要求は共有する                                                |
-| detail/profile の応答                  | 対応する結果を反映し、その読み取りで待っている要求だけを進める。履歴や targets は評価しない                    |
-| 実行・workspace 操作が busy でなくなる | その操作が止めていた target / saved 読み取りを再開する。取得済みデータは再取得しない                           |
-| start の再照合完了                     | 対応する Console の一度の遷移、履歴更新、待機していた読み取りの再開                                            |
-| 明示的 Retry                           | 対象の読み取りだけを要求する。取得中ならその要求を共有する                                                     |
+busy 判定と開始 dispatch の間に await を置かないため、同じ session の workspace 操作は重ならない。
+この操作には要求 ID / Promise resolver / waiter を Model に持たせず、単一の `opening` だけを持つ。状態通知では opening を解除しない。
+既存の `workspaceRequest` と `openWorkspace` / `rejectWorkspaceOpen` Effect を削除し、同じ処理を二経路に残さない。
 
-snapshot 取得失敗後の次の authoritative state 通知による retry は既存の例外として、state 受理時だけ扱う。
-他の取得完了を契機に retry したり、全体同期によって暗黙に取得を始めたりしない。
+この一操作の受付判定は、実行層から純粋な selector を呼ぶ。すべての受付を update の Effect に統一するための応答プロトコルは作らない。
+ダイアログに Session の Message や要求 ID を漏らさず、同じ Promise の使い方を保つ。初期化以外へ、この例外を横展開しない。
 
-### 要求の状態をそのまま表す
+### 必要な要求識別は残し、配送専用の ID は消す
 
-直列の detail/profile/target 読み取りには、**実行中の要求 ID** と **現在必要な要求 ID** の二つを持つ。
-ID は Model 内の単一カウンタから割り当てる。
+target detail / outputs / saved detail / profile は、各々 `{ running, wanted }` の要求 ID を持つ。
+選択・データ条件が変われば wanted を最新要求へ置き換え、古い IPC の running は応答が来るまで保持する。
+応答が wanted と一致するときだけ採用する。古い応答は worker を空け、その用途の最新要求だけを進める。
+同じ要求の重複 Retry は共有し、成功・失敗で wanted を完了させる。失敗後の無関係な通知では再試行しない。
 
-- 同じ取得を待つ操作では ID を変えず、要求を共有する。
-- 選択や取得条件が変わると、必要な要求 ID を置き換える。選択解除なら不要にする。
-- 実行中の IPC は取り消せないので、古い要求の実行中 ID は完了まで保持する。
-- 応答の ID が現在必要な ID と一致した場合だけ採用する。古い応答でも、その worker が空いたことは反映する。
-- worker が空き、必要な要求が残っていて、読み取り可能なら、その要求だけを発行する。
-- 成功・失敗とも処理した要求を完了させる。失敗後は Retry または実際のデータ変更まで再要求しない。
+要求 ID は Model の単一カウンタから割り当てる。合成 dependency key、Attempt、用途別 generation を重ねず、保留要求の引数は発行時に現在の選択から得る。
 
-これにより、合成 dependency key、`Attempt`、用途別 generation を併用しない。
-保留要求の引数は発行時に現在の選択から得る。各操作が必要な要求を更新する責任は上の遷移表で限定する。
-この小さな要求表現はデータであり、用途別設定を読む汎用 runner は作らない。
+履歴は実行中要求・workspace に対する有効性・後続一回の通知を持つ。同じ workspace の取得中通知は一回にまとめ、現在の応答も受理する。
+snapshot は現在の要求 ID だけを持つ。版の変更では古い取得を待たず新しく取得し、古い応答は捨てる。
+workspace A→B→A でも旧応答を採用しない。物理的に実行中の直列読み取りは、workspace を離れても完了まで占有を保持する。
 
-履歴と snapshot はこの直列規則に押し込まない。
-履歴は実行中要求と後続通知の有無を持ち、workspace を離れた要求だけを無効にする。同じ workspace の通知で古くなった履歴応答も一度反映してから後続を読む。
-snapshot は現在の要求 ID だけを持ち、新しい版では古い要求を待たずに置き換える。
+要求 ID は読み取りと start の識別にだけ使う。stop / refresh の Effect ID と、start 後の状態再取得の独立した Effect ID は削除する。
+start 後の状態再取得には既存の start ID と `stateRevision` を渡せば足りる。backend の新しい版管理は追加しない。
+workspace の opening、start の pending request、読み取りの要求状態以外に、同じ意味の loading flag は追加しない。
 
-### 取得の違いを直接書く
+### 出来事から必要な用途だけへ進む
 
-| 用途                        | 維持する規則                                                                                                      |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 履歴                        | 取得中の通知は一つの後続取得にまとめ、start 後にも一度更新する。workspace 切替前の応答は表示しない                |
-| Snapshot                    | 版が変われば古い取得を待たずに取得する。同じ版への重複要求を避ける                                                |
-| Target detail / outputs     | 選択・scope・snapshot に対応する detail を受理してから outputs を取得する。Bazel が busy なら最新の選択だけを待つ |
-| Invocation detail / profile | 選択と履歴更新に追従する。片方の失敗で他方を隠さない                                                              |
-| Retry                       | 失敗を表示し、既存の明示的な再試行を保つ。同じ条件で失敗を繰り返す自動ループは作らない                            |
+全 Message の後で全取得を再評価する `syncAll` は置かない。通常の操作・結果は担当用途だけを進め、複数用途に影響する state 通知では変更内容を比較する。
 
-これらは `mode` や `acceptStale` などの設定へ変換しない。
-必要な取得を各用途の update が決め、依存する次の取得は前の結果を受理した遷移から発行する。
+| 出来事                                                 | 必要な取得・状態変更                                                                                                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 初期 state / workspace 変更                            | 旧表示・旧要求の受理権を破棄し、履歴と利用可能な snapshot を読む                                                                                  |
+| 履歴通知 / active invocation の変更 / readiness の回復 | 履歴を要求し、取得中なら後続一回へまとめる                                                                                                        |
+| 履歴の受理                                             | 選択中 record の変更、または idle・エラーなしの detail と履歴の不一致に限り detail/profile を更新する。profile が取得中でも新しい必要性を記録する |
+| scope / snapshot の版の変更                            | target の旧取得を無効にして snapshot を読む。保存済み invocation は触らない                                                                       |
+| snapshot の受理                                        | target/package 選択を検証し、待っている target 取得だけを進める                                                                                   |
+| target 選択                                            | 最新の detail を必要とし、その detail を受理した後だけ outputs を必要とする                                                                       |
+| saved invocation 選択                                  | detail/profile を独立に要求する。同じ選択の取得中要求は共有する                                                                                   |
+| 読み取り結果                                           | 対応する結果を反映し、その用途の待機要求だけを再開する                                                                                            |
+| busy / start / workspace 操作の終了                    | それが止めていた読み取りだけを再開する。取得済みのデータは再取得しない                                                                            |
+| 明示 Retry                                             | 対象の読み取りだけを要求し、開始時にその error を消す                                                                                             |
 
-履歴と取得済み detail の不一致を検出して読み直す既存の動作も保つ。履歴一覧が前回と同じという理由だけで、この確認を省かない。
-現在の record 比較などが必要なら、その用途の場所に残してよい。JSON 比較を完全に排除することも、新しい revision を導入することも要件にしない。
-
-### 古い応答は frontend の要求の識別で捨てる
-
-frontend の要求 ID を使い、結果が現在の要求・選択に属するかを update で確認する。
-workspace を離れると以前の要求の受理権を失わせ、A→B→A でも以前の start 応答が画面を取り戻さないようにする。
-カウンタを使う場合は Model の値から進め、時刻や UUID の生成を状態判断に持ち込まない。
-
-初期状態取得や start 後の再照合では、要求後に新しい状態通知を受け取ったかを既存同様に判定する。
-遅い `get_state` の応答で、受信済みの状態通知を上書きしない。
-これは frontend が観測した順序の保護であり、backend 全体の版管理を追加するものではない。
+snapshot の失敗後は、次の authoritative state 通知または明示 Retry で再試行する既存の例外を保つ。他の取得完了から暗黙に retry しない。
+履歴一覧が前回と同じでも、取得済み detail との不一致を確認する。detail と profile は独立して完了・失敗を表示し、一方の失敗で他方を隠さない。
+record の比較はその用途に残し、JSON 比較の完全排除や backend revision の追加を要件にしない。
 
 ### Console の遷移を一度の出来事として扱う
 
-起動応答と実行状態通知の前後関係、起動失敗、起動直後の終了は、既存の再照合を使って扱う。
-失敗時には以前の表示を壊さず、再試行できる状態へ戻す。
+start 応答と実行状態通知はどちらが先でもよい。開始通知から先に Console を開く場合も、workspace と対応する実行の Console 所有権を確認する。
+初期状態取得と start 後の再照合では `stateRevision` を比較し、要求後に届いた状態通知を遅い `get_state` 応答で上書きしない。
+起動失敗、起動直後の終了、再照合失敗も既存の規則で扱う。start の再照合完了では state が idle のままでも履歴を更新する。公開 Promise の削除によって内部の再照合を省かない。
 
-実行終了を受け取ったとき、その invocation の Console を表示している場合だけ saved detail へ切り替える。
-単に「現在実行中でない」という条件を毎回評価して、別の選択を奪わない。
+実行終了時に、その invocation の Console をまだ見ている場合だけ保存済み詳細へ移る。単に「実行中でない」という条件の反復評価で別の選択を奪わない。
 同じ完了を繰り返し処理せず、既存 API の Console 再表示の振る舞いも保つ。新しい UI の入口は追加しない。
 
-Console の byte 列、offset、入力キュー、xterm の handle は既存の Console 処理に残す。
-hover やメニュー開閉なども Svelte の局所状態のままとし、session の Message にする必要はない。
+### 一つの判断は一か所で読み切れるようにする
 
-### 実行部分は判断を持たない
+target の取得可否は boolean ではなく、取得可能なら `{ label, fetchedAt }`、不可能なら `null` を返す用途固有の関数にする。
+選択、snapshot の一致、workspace、busy の検査はその中で一度行い、呼び出し元では同じ値を再検査しない。outputs 固有の「対応する detail がある」は outputs 側に残す。
 
-dispatch は update の結果を Model に反映してから Effect を実行する。
-IPC の成功・失敗は Message に変換するだけで、完了 callback が直接表示状態を書き換えない。
-共通の retry engine や同期ループは置かない。
+state 通知では用途ごとに変更を判定するが、元と新しい state に加えて多数の変更フラグを helper に渡さない。
+target の変更判定・無効化・次の要求を同じ用途内にまとめ、渡したフラグから元の条件を復元しないと読めない分割を解消する。
+小さな関数の数や lint の数値を目的に分割せず、全体同期に戻さない。
 
-購読登録、初期化、公開 API の Promise の完了、dispose は現在の session の実行部分で扱う。
-dispose 後の結果は無視し、登録途中に dispose された listener も解除する。
-既存の呼び出し契約を保ち、同じ判断を旧経路と新経路の両方へ残さない。
+既存の二ファイル（純粋な Model と実行層）を基本とし、これ以上の層を設計要件にしない。
+Result / Message / Effect の型と実行 switch は具体的なままにする。少量の反復は許容し、行数のための型レベル DSL や汎用 handler 登録を作らない。
+純粋性のためのコピーは残すが、新しい汎用 immutable-state 基盤は作らない。
 
 ## Alternatives Considered
 
-- **汎用 Slice の改良:** 見た目は揃うが、個別の違いと共通 runtime の両方を理解する負担が残るため採用しない。
-- **backend の revision / IPC 契約の拡張:** 強い整合性を定義できるが、今回の整理に必要だと確認できていない。保存・読取・通知へ変更を広げるため採用しない。
-- **Svelte の effect に取得を分散:** 記述量は減らせても、選択・取得・完了の関係が暗黙になる。DOM 連携には使い、session の制御には使わない。
-- **既存構造のまま競合だけ修正:** 最小の修正には適するが、状態判断と副作用の混在は残る。今回の分離が理解する処理を減らせなければ、こちらへ戻す。
+- **汎用 Slice / policy 設定表:** 個別の取得規則と共通 runtime の両方を読む負担が残るため、用途固有の関数を選ぶ。
+- **backend revision / IPC 契約の拡張:** 強い整合性を定義できるが、今回必要だと確認していない保証のために保存・読取・通知へ変更を広げない。
+- **Svelte の effect に取得を分散:** 記述量を減らせても、選択・取得・完了の関係が暗黙になる。DOM 連携に使い、session の制御には使わない。
+- **すべてを async API と Effect に統一する:** インターフェースは揃うが、UI が使わない完了待ちまで追跡する。今回削除する対象。
+- **workspace ダイアログも完全な Message/View 駆動にする:** 形式は統一できるが、局所的な close / busy / error を session へ移す追加設計が必要。直接的な await を残す方が小さい。
+- **Effect を関数の closure にする:** Effect union と switch を減らせるが、効果をデータとして比較するテストと引き換えになる。まず利用されない契約を消し、別方式への全面置換はしない。
+- **main の imperative 実装へ戻す:** 記述量は少ないが、純粋な遷移と副作用の分離を失う。main は費用比較の基準として使い、現状の増加を無条件には容認しない。
 
 ## Caveats
 
-この設計は、任意の通知欠落や backend 再起動、全 artifact の同時点 snapshot を保証しない。
-プロセス終了と保存済み観測の完成は別であり、欠損・不完全・終了不明を推測で補わない。
-既存 IPC の制約で問題が再現した場合は、その問題と最小の解決策を別途検討し、先回りして保証を増やさない。
-
-純粋関数へ移すこと自体が成功条件ではない。Message や Effect の変換が重複を増やすなら、関数の分け方を減らす。
-少量の重複は許容し、総行数の短縮のために分岐を隠す書き方はしない。
+これは Elm 言語ではなく、純粋な core と薄い実行層を用いる TypeScript の設計である。workspace 操作の限定的な非対称性を明示的に受け入れる。
+`void` に変わる API の Promise を待っていたテストは書き換える。表示上の完了・失敗・順序に関する assertion は減らさない。
+公開メソッドの戻り値は、処理完了・保存完了・関連する全取得完了の統一的な保証ではなくなる。
+backend の通知欠落・再起動、全 artifact の原子的読取、開始済み IPC の取消は保証しない。プロセス終了と保存済み観測の完成は別であり、欠損・不完全・終了不明を推測で補わない。
 
 ## Security Concerns
 
-プロセス停止、workspace 検証、ファイルアクセスの権限は既存の Rust core に残す。
-frontend が古い結果を捨てることを、副作用の取消や認可の代わりにしない。
-この変更では新しい IPC command や権限を追加しない。
+認可、workspace 検証、プロセス停止、ファイルアクセスの権限は Rust core に残す。frontend の stale 応答破棄を取消や認可と混同しない。
+新しい IPC command、権限、外部サービスは追加しない。
 
 ## Privacy Concerns
 
-新しい外部送信やイベント記録基盤は追加しない。
-Model / Message にパス・引数等が含まれ得るため、デバッグ目的でも全量 logging を導入しない。
+新しい外部送信・全 Message の logging は追加しない。Model に含まれるパス・引数等を診断用の公開成果物へ出さない。
 
 ## Test Plan
 
-既存の session テストを観測可能な振る舞いの基準とし、共通 Slice という実装方式への依存だけを外す。
-update のテストでは、待ち時間なしで Message 列と返された Effect を確認する。新しい網羅的テスト基盤は作らない。
+設計レビューの承認は、実装の正しさや削減量の実証とは分ける。変更時は次の順で確認する。
 
-- 選択変更・workspace A→B→A・dispose 後の古い応答が、現在の表示を書き換えない。
-- 履歴通知の集約、同一一覧と stale detail の再照合、snapshot の重複防止と版をまたぐ取得を保つ。
-- 正しい target detail の後にだけ outputs を取得し、失敗と明示的な retry を保つ。
-- start 応答と状態通知の順序を入れ替えても、既存の起動・終了・選択保持の動作を保つ。
-- 純粋な update が入力を変更せず、同じ入力で同じ状態と Effect を返す。
+1. API の Promise 待ちを、既存 harness の IPC 応答と状態観測による待ちに変更する。架空の時間経過ではなく、既存の `settle` と deferred reply を使う。
+2. workspace の成功・失敗・busy 拒否・新しい state 通知との競合・登録中/実行中の dispose を確認する。古い成功だけでなく失敗でも target が再開することを保つ。
+3. 既存の A→B→A、履歴集約・stale detail、snapshot overlap、detail→outputs、独立した retry、start/Console の順序・選択保持を維持する。
+4. update の入力不変・決定性と用途外 Effect が出ないテストを維持する。新しいテスト基盤は作らない。
+5. focused session tests、その後 `mise run check:frontend`。実機では workspace ダイアログ、Console、busy 後の target 再開を確認する。
 
-実装は既存の公開契約を保ったまま判断を移し、置換した Slice / lifecycle の不要部分を削除する。
-focused tests の後に `mise run check:frontend` を実行し、実アプリでは起動・停止・Console・選択切替を確認する。
-設計の受け入れ条件は次のとおり。テスト通過だけでは完了にしない。
+実装の受け入れには、テスト通過に加えて次を必要とする。
 
-- 全体同期、合成 dependency key、`Attempt`、用途別 generation が除去されている。
-- profile/detail/outputs の応答から、無関係な用途の取得判断へ到達しない。
-- 選択の変更、通知の集約、worker の解放が、上の表の対応する経路だけで説明できる。
-- main と比較し、production code とテスト・設計書を分けて増減を示す。途中で追加した抽象化の撤去を、main からの改善として数えない。
-- 行数のための圧縮、汎用 policy 設定、テストの削除で達成しない。増えた型や受け渡しに対して、消えた判断・管理状態を具体的に示す。
+- 全体同期、合成 dependency key、Attempt、用途別 generation、Promise Map、waitFor、workspace の二重経路、配送専用 ID、target 条件の二重検査が存在しない。
+- workspace の完了待ちのために同規模の resolver 管理や追加の UI 状態機械を作っていない。
+- profile 完了、target 選択、workspace open と、start 応答より先に終了通知が来る Console 遷移を変更前と読み比べる。不要な配送層が消え、残る順序判断が分散・悪化していないことを確認する。
+- production / tests / docs を分け、main 760 行と変更前 1,381 行の両方へ比較する。別ファイルへ移したコードも集計する。
+- 変更前より production code が減らない場合は単純化完了としない。減っても main 比の増分は責務ごとに説明し、必要性を説明できない部分は残さない。
+
+削減行数は実装前には確約しない。減少量やレビュー人数だけを、単純な設計の証明にしない。

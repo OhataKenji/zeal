@@ -614,7 +614,7 @@ function updateTargetsForState(draft: Draft, before: AppState | null, state: App
   if (state.snapshotFetchedAt === null || scopeChanged || workspaceChanged) {
     draft.data.snapshot = null;
   }
-  if (state.snapshotFetchedAt !== null) startSnapshot(draft);
+  startSnapshot(draft);
 }
 
 function applyAppState(draft: Draft, state: AppState) {
@@ -628,7 +628,7 @@ function applyAppState(draft: Draft, state: AppState) {
   if (!wasReady) draft.data.error = null;
   if (state.workspace !== before?.workspace) {
     resetWorkspaceData(draft, state);
-    if (!draft.historyRequest) startHistory(draft);
+    startHistory(draft);
   } else {
     updateExecutionState(draft, before, state);
     if (!wasReady || state.activeInvocation !== before?.activeInvocation) requestHistory(draft);
