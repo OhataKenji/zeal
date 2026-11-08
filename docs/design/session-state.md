@@ -4,17 +4,9 @@ _Devin_
 _Last update: 2026/11/08_
 _Status: Approved_
 
-**まず、下の「3つの決定」を確認する（約1分）。**
-
 ## Goal
 
 既存の動作を保ち、理解・変更するために読むコードを減らす。形式の統一より、実装の単純さを優先する。
-
-### 3つの決定
-
-1. **状態の更新は純粋な `update` に集める。** 現在の Model と Message から、次の Model と副作用の指示を返す。Svelte は表示、実行層は IPC を担当する。
-2. **通常操作は `void`。** 完了は画面の data / loading / error で見る。
-3. **workspace だけ `await` する。** 成功でダイアログを閉じ、失敗で入力とエラーを残すため。
 
 機能は [PRD](../prd.md)、画面は [mock](../mock/) に従う。
 
@@ -35,6 +27,9 @@ _Status: Approved_
 ## Overview
 
 **変更するのは WebView 内の session 制御だけ。** 開発者 → Zeal → Bazel の関係と、WebView / Rust core / SQLite / 観測ファイルの境界は維持する。[全体構成](./overview.md)を参照。
+
+状態の更新は純粋な `update` に集め、現在の Model と Message から、次の Model と副作用の指示を返す。Svelte は表示、実行層は IPC を担当する。
+通常操作は `void` とし、完了は画面の data / loading / error で表す。workspace だけは、成功でダイアログを閉じ、失敗で入力とエラーを残すため `await` する。
 
 ```mermaid
 flowchart TD
