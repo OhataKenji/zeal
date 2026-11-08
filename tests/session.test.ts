@@ -1819,7 +1819,7 @@ test("target outputs wait for current detail and discard stale responses", async
   assert.deepEqual(h.view.targetOutputs, outputs);
 });
 
-test("declared slice dependencies refresh only affected data", async () => {
+test("declared session dependencies refresh only affected data", async () => {
   const setup = async () => {
     const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
     await h.session.init();
