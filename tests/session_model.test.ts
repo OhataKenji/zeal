@@ -103,6 +103,77 @@ test("update is deterministic and leaves nested reader state untouched", () => {
   assert.deepEqual(model.data.state?.scope.include, ["//app/..."]);
 });
 
+test("workspace opening is a pure transition and controls its prompt through results", () => {
+  const model = freeze(update(initialModel(), { type: "appState", state: state(null) }).model);
+  const message = freeze({
+    type: "openWorkspace" as const,
+    path: "/other",
+    scope: { include: ["//..."] },
+  });
+  const opened = update(model, message);
+  assert.deepEqual(update(model, message), opened);
+  assert.equal(model.opening, false);
+  assert.equal(model.data.workspacePromptOpen, false);
+  assert.equal(opened.model.opening, true);
+  assert.equal(opened.model.data.workspacePromptOpen, true);
+  assert.deepEqual(opened.effects, [{ ...message, revision: model.stateRevision }]);
+
+  const closing = update(opened.model, { type: "workspacePrompt", open: false });
+  assert.equal(closing.model.data.workspacePromptOpen, true);
+  const duplicate = update(closing.model, message);
+  assert.deepEqual(duplicate.effects, []);
+  assert.equal(duplicate.model.opening, true);
+
+  const failed = update(opened.model, {
+    type: "workspaceResult",
+    revision: model.stateRevision,
+    result: { ok: false, error: "open failed" },
+  });
+  assert.equal(failed.model.opening, false);
+  assert.equal(failed.model.data.workspacePromptOpen, true);
+  assert.equal(failed.model.data.workspaceError, "open failed");
+  const retry = update(failed.model, message);
+  assert.equal(retry.model.data.workspaceError, null);
+  assert.equal(retry.model.opening, true);
+
+  const finished = update(retry.model, {
+    type: "workspaceResult",
+    revision: model.stateRevision,
+    result: { ok: true, value: { ...state(null), workspace: "/other" } },
+  });
+  assert.equal(finished.model.opening, false);
+  assert.equal(finished.model.data.workspacePromptOpen, false);
+  assert.equal(finished.model.data.workspaceError, null);
+
+  const cancelled = update(failed.model, { type: "workspacePrompt", open: false });
+  assert.equal(cancelled.model.data.workspacePromptOpen, false);
+  assert.equal(cancelled.model.data.workspaceError, null);
+  assert.deepEqual(cancelled.effects, []);
+});
+
+test("workspace state notifications do not close a pending initial prompt", () => {
+  const model = update(initialModel(), {
+    type: "appState",
+    state: { ...state(null), workspace: null },
+  }).model;
+  const opening = update(model, {
+    type: "openWorkspace",
+    path: "/workspace",
+    scope: state().scope,
+  });
+  const notified = update(opening.model, { type: "appState", state: state(null) });
+  assert.equal(notified.model.opening, true);
+  assert.equal(notified.model.data.workspacePromptOpen, true);
+  const failed = update(notified.model, {
+    type: "workspaceResult",
+    revision: model.stateRevision,
+    result: { ok: false, error: "open failed" },
+  });
+  assert.equal(failed.model.opening, false);
+  assert.equal(failed.model.data.workspacePromptOpen, true);
+  assert.equal(failed.model.data.workspaceError, "open failed");
+});
+
 test("accepted profile result emits no unrelated effects", () => {
   const initialized = update(initialModel(), { type: "appState", state: state(null) });
   const history = effect(initialized.effects, "listInvocations");

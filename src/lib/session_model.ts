@@ -10,6 +10,7 @@ import type {
   TargetDetail,
   TargetIndex,
   TargetOutputs,
+  TargetScope,
 } from "./types.ts";
 
 export interface SessionView {
@@ -27,6 +28,8 @@ export interface SessionView {
   ready: boolean;
   starting: boolean;
   opening: boolean;
+  workspacePromptOpen: boolean;
+  workspaceError: string | null;
   error: string | null;
   invocations: InvocationRecord[];
   invocationsError: string | null;
@@ -126,6 +129,12 @@ export type SessionEffect =
       readonly startId: number;
       readonly revision: number;
     }
+  | {
+      readonly type: "openWorkspace";
+      readonly path: string;
+      readonly scope: TargetScope;
+      readonly revision: number;
+    }
   | { readonly type: "stop"; readonly workspace: string | null }
   | { readonly type: "refresh"; readonly workspace: string | null };
 
@@ -158,7 +167,8 @@ export type SessionMessage =
       readonly startId: number;
       readonly revision: number;
     })
-  | { readonly type: "workspaceOpening" }
+  | { readonly type: "workspacePrompt"; readonly open: boolean }
+  | { readonly type: "openWorkspace"; readonly path: string; readonly scope: TargetScope }
   | (ResultMessage<"workspaceResult", AppState> & { readonly revision: number })
   | { readonly type: "stop" }
   | (ResultMessage<"stopResult", void> & { readonly workspace: string | null })
@@ -186,6 +196,8 @@ function emptyData(): SessionData {
     targetOutputs: null,
     targetOutputsError: null,
     ready: false,
+    workspacePromptOpen: false,
+    workspaceError: null,
     error: null,
     invocations: [],
     invocationsError: null,
@@ -904,8 +916,28 @@ function openConsole(draft: Draft, record: InvocationRecord) {
   setData(draft, { console: record, consoleOpen: true });
 }
 
+function setWorkspacePromptOpen(draft: Draft, open: boolean) {
+  if (draft.opening) return;
+  setData(draft, { workspacePromptOpen: open, workspaceError: null });
+}
+
+function requestWorkspaceOpen(draft: Draft, path: string, scope: TargetScope) {
+  if (sessionBusy(sessionView(draft))) {
+    draft.data.workspaceError =
+      "Wait for the current Bazel operation to finish before changing the workspace";
+    return;
+  }
+  setWorkspacePromptOpen(draft, true);
+  draft.opening = true;
+  draft.effects.push({ type: "openWorkspace", path, scope, revision: draft.stateRevision });
+}
+
 function finishWorkspaceOpen(draft: Draft, revision: number, result: Result<AppState>) {
   draft.opening = false;
+  setData(draft, {
+    workspacePromptOpen: !result.ok,
+    workspaceError: result.ok ? null : result.error,
+  });
   if (result.ok && revision === draft.stateRevision) applyAppState(draft, result.value);
   resumeTargets(draft);
 }
@@ -982,8 +1014,11 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "startStateResult":
       startStateResult(next, message);
       break;
-    case "workspaceOpening":
-      next.opening = true;
+    case "workspacePrompt":
+      setWorkspacePromptOpen(next, message.open);
+      break;
+    case "openWorkspace":
+      requestWorkspaceOpen(next, message.path, message.scope);
       break;
     case "workspaceResult":
       finishWorkspaceOpen(next, message.revision, message.result);

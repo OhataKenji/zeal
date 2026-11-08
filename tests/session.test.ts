@@ -1458,7 +1458,8 @@ test("Bazel-busy workspace switch is rejected before calling the backend", async
   const h = harness();
   await h.session.init();
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
-  await assert.rejects(h.session.openWorkspace("/other", IDLE.scope), /Bazel/);
+  h.session.openWorkspace("/other", IDLE.scope);
+  assert.match(h.view.workspaceError ?? "", /Bazel/);
   noPending(h, "open_workspace");
 });
 
@@ -1755,12 +1756,16 @@ test("workspace opening sends all target patterns to the core", async () => {
   const scope = {
     include: ["//services/payments/...", "//libs/money/...", "//tools:generator"],
   };
-  const opened = h.session.openWorkspace("/other", scope);
+  assert.equal(h.session.openWorkspace("/other", scope), undefined);
+  assert.equal(h.view.workspacePromptOpen, true);
+  assert.equal(h.view.opening, true);
   const request = pendingRequest(h, "open_workspace");
   assert.deepEqual(request.args, { path: "/other", scope });
   request.reply.resolve({ ...IDLE, workspace: "/other", scope });
-  await opened;
+  await settle();
   assert.deepEqual(h.view.state?.scope, scope);
+  assert.equal(h.view.workspacePromptOpen, false);
+  assert.equal(h.view.opening, false);
 });
 
 test("a failed workspace open resumes a target selected while opening", async () => {
@@ -1770,12 +1775,15 @@ test("a failed workspace open resumes a target selected while opening", async ()
   pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
   await settle();
 
-  const opening = h.session.openWorkspace("/other", IDLE.scope);
+  h.session.openWorkspace("/other", IDLE.scope);
   h.session.select({ kind: "target", label: "//app:first" });
   assert.equal(requestCount(h, "get_target_detail"), 0);
 
   pendingRequest(h, "open_workspace").reply.reject(new Error("open failed"));
-  await assert.rejects(opening, /open failed/);
+  await settle();
+  assert.equal(h.view.workspacePromptOpen, true);
+  assert.equal(h.view.opening, false);
+  assert.match(h.view.workspaceError ?? "", /open failed/);
   assert.equal(requestCount(h, "get_target_detail"), 1);
   assert.deepEqual(pendingRequest(h, "get_target_detail").args, {
     label: "//app:first",
@@ -1789,19 +1797,22 @@ test("workspace notifications keep opening exclusive and stale success resumes t
   pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
   await settle();
 
-  const opening = h.session.openWorkspace("/other", IDLE.scope);
+  h.session.openWorkspace("/other", IDLE.scope);
   const newerState = { ...IDLE, snapshotFetchedAt: 1, lastError: "newer state" };
   h.emit("app-state", newerState);
   h.session.select({ kind: "target", label: "//app:first" });
   assert.equal(h.view.opening, true);
   assert.equal(requestCount(h, "get_target_detail"), 0);
-  await assert.rejects(h.session.openWorkspace("/third", IDLE.scope), /Bazel/);
+  h.session.openWorkspace("/third", IDLE.scope);
+  assert.match(h.view.workspaceError ?? "", /Bazel/);
   assert.equal(requestCount(h, "open_workspace"), 1);
 
   pendingRequest(h, "open_workspace").reply.resolve({ ...IDLE, workspace: "/other" });
-  await opening;
+  await settle();
   assert.deepEqual(h.view.state, newerState);
   assert.equal(h.view.opening, false);
+  assert.equal(h.view.workspacePromptOpen, false);
+  assert.equal(h.view.workspaceError, null);
   assert.equal(requestCount(h, "get_target_detail"), 1);
 });
 
@@ -1809,20 +1820,18 @@ for (const fails of [false, true]) {
   test(`disposing while opening ignores a late ${fails ? "failure" : "success"}`, async () => {
     const h = harness();
     await h.session.init();
-    const opening = h.session.openWorkspace("/other", IDLE.scope);
+    h.session.openWorkspace("/other", IDLE.scope);
     const view = h.view;
     h.session.dispose();
     const request = pendingRequest(h, "open_workspace");
     if (fails) {
-      const error = new Error("open failed");
-      request.reply.reject(error);
-      await assert.rejects(opening, (caught) => caught === error);
+      request.reply.reject(new Error("open failed"));
     } else {
       request.reply.resolve({ ...IDLE, workspace: "/other" });
-      await opening;
     }
+    await settle();
     assert.equal(h.view, view);
-    await h.session.openWorkspace("/third", IDLE.scope);
+    h.session.openWorkspace("/third", IDLE.scope);
     assert.equal(requestCount(h, "open_workspace"), 1);
   });
 }

@@ -63,7 +63,7 @@
   let argumentsPanel = $state<HTMLDivElement>();
   let argumentsInput = $state<HTMLInputElement>();
   const argumentsConfigured = $derived(argumentsText.trim() !== "");
-  let switchingWs = $state(false);
+  const switchingWs = $derived(app.view.workspacePromptOpen);
   const busy = $derived(sessionBusy(app.view));
   const running = $derived(!!st?.activeInvocation);
   const actionLabel = $derived(
@@ -394,7 +394,7 @@
             aria-expanded={switchingWs}
             title="Switch workspace"
             disabled={busy}
-            onclick={() => (switchingWs = !switchingWs)}
+            onclick={() => getSession().setWorkspacePromptOpen(!switchingWs)}
           >
             <Gear size={14} />
           </button>
@@ -494,7 +494,7 @@
       <WorkspacePrompt
         initial={st.workspace ?? ""}
         initialScope={st.scope}
-        onclose={st.workspace ? () => (switchingWs = false) : undefined}
+        onclose={st.workspace ? () => getSession().setWorkspacePromptOpen(false) : undefined}
       />
       {#if st.workspace && st.bazel === null}
         <Notice tone="error">bazelisk / bazel not found on PATH</Notice>

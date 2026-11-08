@@ -1,7 +1,6 @@
 import { COMMANDS } from "./commands.ts";
 import {
   initialModel,
-  sessionBusy,
   sessionView,
   update,
   type Result,
@@ -198,6 +197,16 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
           }),
         );
         return;
+      case "openWorkspace":
+        await settle(
+          () =>
+            transport.invoke<AppState>(COMMANDS.openWorkspace, {
+              path: effect.path,
+              scope: effect.scope,
+            }),
+          (result) => ({ type: "workspaceResult", revision: effect.revision, result }),
+        );
+        return;
       case "stop":
         await settle(
           () => transport.invoke<void>(COMMANDS.stopInvocation),
@@ -211,25 +220,6 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
         );
         return;
     }
-  }
-
-  async function openWorkspace(path: string, scope: TargetScope): Promise<void> {
-    if (disposed) return;
-    if (sessionBusy(sessionView(model))) {
-      throw new Error(
-        "Wait for the current Bazel operation to finish before changing the workspace",
-      );
-    }
-    const revision = model.stateRevision;
-    dispatch({ type: "workspaceOpening" });
-    let state: AppState;
-    try {
-      state = await transport.invoke<AppState>(COMMANDS.openWorkspace, { path, scope });
-    } catch (error) {
-      dispatch({ type: "workspaceResult", revision, result: { ok: false, error: String(error) } });
-      throw error;
-    }
-    dispatch({ type: "workspaceResult", revision, result: { ok: true, value: state } });
   }
 
   function dispose() {
@@ -246,7 +236,9 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     start: (cmd: BazelCommand, pattern: string, argumentsText = "") =>
       dispatch({ type: "start", cmd, pattern, argumentsText }),
     stop: () => dispatch({ type: "stop" }),
-    openWorkspace,
+    openWorkspace: (path: string, scope: TargetScope) =>
+      dispatch({ type: "openWorkspace", path, scope }),
+    setWorkspacePromptOpen: (open: boolean) => dispatch({ type: "workspacePrompt", open }),
     refresh: () => dispatch({ type: "refresh" }),
     selectInvocation: (id: string | null) => dispatch({ type: "selectInvocation", id }),
     openConsole: (record: InvocationRecord) => dispatch({ type: "openConsole", record }),

@@ -29,19 +29,15 @@ _Status: Approved_
 **変更するのは WebView 内の session 制御だけ。** 開発者 → Zeal → Bazel の関係と、WebView / Rust core / SQLite / 観測ファイルの境界は維持する。[全体構成](./overview.md)を参照。
 
 状態の更新は純粋な `update` に集め、現在の Model と Message から、次の Model と副作用の指示を返す。Svelte は表示、実行層は IPC を担当する。
-通常操作は `void` とし、完了は画面の data / loading / error で表す。workspace だけは、成功でダイアログを閉じ、失敗で入力とエラーを残すため `await` する。
+workspace を含む UI 操作は `void` とし、完了は Model から導出する画面状態で表す。IPC の応答は実行層で await し、結果 Message として戻す。
 
 ```mermaid
 flowchart TD
-  UI[Svelte: 通常操作] -->|Message / void| Update[純粋な update]
+  UI[Svelte: workspace を含む UI 操作] -->|Message / void| Update[純粋な update]
   Update -->|Model から View を導出| UI
   Update -->|Effect| Runner[IPC 実行]
   Runner -->|結果 Message| Update
-  Dialog[Workspace ダイアログ] -->|await| Open[openWorkspace]
-  Open -->|開始・結果 Message| Update
-  Open -->|成功 / 失敗| Dialog
-  Runner --> Core[Rust core]
-  Open --> Core
+  Runner -->|await IPC| Core[Rust core]
 ```
 
 図は責務を示すもので、箱ごとにクラスやファイルを増やさない。
@@ -60,22 +56,22 @@ Console の byte stream・入力キュー・xterm は専用処理に残す。メ
 | `select`, `selectInvocation`, `openConsole`                    | `void`                   |
 | `start`, `stop`, `refresh`                                     | `void`                   |
 | `loadDetail`, `loadProfile`, `loadInvocations`, `loadSnapshot` | `void`                   |
-| `openWorkspace`                                                | `Promise<void>`          |
+| `openWorkspace`, `setWorkspacePromptOpen`                      | `void`                   |
 | `init` / `dispose`                                             | `Promise<void>` / `void` |
 
 Promise と listener 解除関数は実行層に置く。`init` は重複を防ぎ、`dispose` は結果を無視する。購読登録中の dispose でも、登録された listener を解除する。
 **Promise Map・`waitFor`・公開 API への完了配送は持たない。** Effect の重複防止は Model に任せる。
 
-### 2. workspace の完了待ちは、この操作だけに閉じる
+### 2. workspace も Message → update → Effect で扱う
 
-1. dispose 済みなら何もしない。`sessionBusy` が true なら既存のエラーで reject する。
-2. `stateRevision` を捕捉し、開始 Message で `opening = true` にする。ここまで await しない。
-3. 既存 IPC を一度呼び、成功・失敗を revision 付きの結果 Message にする。
-4. update で `opening = false` にする。成功かつ revision が一致する場合だけ state を受理する。**失敗・古い成功でも、待機 target の再開を判定する。**
-5. 呼び出し元には成功で resolve、IPC 失敗で reject する。開始後に dispose されても IPC は取り消さず、結果の反映だけを止める。
+1. `openWorkspace` Message を update で受ける。busy なら画面用のエラーを設定し、Effect は発行しない。
+2. ダイアログを開いたまま `opening = true` にし、古いエラーを消す。現在の `stateRevision` と入力を持つ Effect を発行する。
+3. 実行層が既存 IPC を一度呼び、成功・失敗を revision 付きの結果 Message にする。
+4. update で opening を解除する。成功ならダイアログを閉じ、revision が一致する場合だけ state を受理する。失敗ならダイアログと入力を残してエラーを表示する。**失敗・古い成功でも、待機 target の再開を判定する。**
 
-状態通知では opening を解除しないため、workspace 操作は重ならない。
-汎用 resolver、workspace 用 Effect、別の UI 状態機械は作らない。受付には実行層から純粋な selector を使い、ダイアログへ要求 ID を漏らさない。
+ダイアログの開閉・IPC 処理中・IPC エラーは Model に置き、Svelte は表示するだけにする。入力とフォルダ選択ダイアログの状態は UI に残す。
+状態通知では opening やダイアログを解除しないため、通知が応答より先に来ても処理は重ならず、入力も失わない。処理中の閉じる操作は無視する。
+dispose 後は Message を無視する。開始済み IPC は取り消さず、汎用 resolver や Promise Map は作らない。
 
 ### 3. 古い応答を捨てても、実行中の要求は忘れない
 
@@ -124,13 +120,13 @@ state 比較・無効化・次の要求は用途内でまとめ、多数の変�
 
 ## Alternatives Considered
 
-| 採らない案                                       | 理由                                                                                               |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| 汎用 Slice・policy 設定表                        | 個別規則に加えて共通 runtime も読む必要がある。                                                    |
-| 全操作を async / Effect に統一                   | 不要な完了追跡が増える。workspace を完全な Message/View 駆動にするとダイアログの状態管理も増える。 |
-| backend revision / IPC の拡張                    | 必要性を確認していない保証へ変更を広げることになる。                                               |
-| Svelte effect に分散・元の imperative 実装へ戻す | 記述量は減らせても、明示的で純粋な状態遷移を失う。                                                 |
-| Effect を closure にする                         | union / switch は減るが、Effect をデータとして比較するテストを失う。                               |
+| 採らない案                                       | 理由                                                                                        |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| 汎用 Slice・policy 設定表                        | 個別規則に加えて共通 runtime も読む必要がある。                                             |
+| 全公開操作の Promise 化                          | UI の完了追跡と Model の状態管理が二重になる。workspace も結果 Message で開閉を決められる。 |
+| backend revision / IPC の拡張                    | 必要性を確認していない保証へ変更を広げることになる。                                        |
+| Svelte effect に分散・元の imperative 実装へ戻す | 記述量は減らせても、明示的で純粋な状態遷移を失う。                                          |
+| Effect を closure にする                         | union / switch は減るが、Effect をデータとして比較するテストを失う。                        |
 
 ## Caveats
 
