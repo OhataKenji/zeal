@@ -163,7 +163,7 @@
       <p class="dim">Could not load actions: {actionsError}</p>
       <button class="chip more" onclick={onloadactions}>Retry</button>
     {:else if actions === null}
-      <button class="chip more" onclick={onloadactions}>Load actions</button>
+      <p class="dim">Waiting to load actions…</p>
     {:else if actions.length === 0}
       <p class="dim">No actions</p>
     {:else}

@@ -331,7 +331,7 @@
             actions={app.view.targetActions}
             actionsLoading={app.view.targetActionsLoading}
             actionsError={app.view.targetActionsError}
-            onloadactions={() => void getSession().loadTargetActions()}
+            onloadactions={() => void getSession().loadTargetActions(true)}
           />
         {/key}
       {:else if app.view.targetDetailError}

@@ -32,7 +32,7 @@ export interface SessionView {
   selection: ExplorerSelection;
   targetDetail: TargetDetail | null;
   targetDetailError: string | null;
-  /** Actions for the selected target; loaded on demand because aquery is heavy. */
+  /** Actions for the selected target; loaded automatically once its detail arrives because aquery is heavy. */
   targetActions: ActionEntry[] | null;
   targetActionsLoading: boolean;
   targetActionsError: string | null;
@@ -326,12 +326,13 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       } finally {
         targetRequestInFlight = false;
         if (generation !== targetGeneration) requestTargetDetail();
+        void loadTargetActions();
       }
     })();
   }
 
-  /** Loads the selected target's actions on demand; aquery is the slowest query. */
-  async function loadTargetActions() {
+  /** Loads the selected target's actions once its detail arrives; aquery is the slowest query. */
+  async function loadTargetActions(retry = false) {
     const selection = view.selection;
     const snapshot = view.snapshot;
     if (
@@ -341,6 +342,8 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       view.targetActions !== null ||
       view.targetActionsLoading ||
       actionsRequestInFlight ||
+      targetRequestInFlight ||
+      (!retry && view.targetActionsError !== null) ||
       targetBusy() ||
       snapshot.meta.fetchedAt !== view.state?.snapshotFetchedAt ||
       view.targetDetail?.target.label !== selection.label
@@ -586,6 +589,7 @@ export function createSession(transport: Transport, changed: (view: SessionView)
       void loadSnapshot();
     }
     requestTargetDetail();
+    void loadTargetActions();
   }
 
   // Defensive: the core drops its snapshot only on a workspace switch,

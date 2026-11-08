@@ -1657,3 +1657,123 @@ test("selecting the same package does not publish another view or query", async 
   assert.equal(h.view, selectedView);
   assert.equal(requestCount(h, "get_target_detail"), 0);
 });
+
+test("actions load automatically after target details", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.deepEqual(pendingRequest(h, "get_target_actions").args, {
+    label: "//app:first",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+  pendingRequest(h, "get_target_actions").reply.resolve([]);
+  await settle();
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 1);
+  assert.deepEqual(h.view.targetActions, []);
+});
+
+test("actions wait out a busy detail slot and load on the idle event", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  h.emit("app-state", {
+    ...IDLE,
+    snapshotFetchedAt: TARGETS.meta.fetchedAt,
+    detailQuery: "running",
+  });
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 1);
+  assert.deepEqual(pendingRequest(h, "get_target_actions").args, {
+    label: "//app:first",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+});
+
+test("a failed actions load waits for an explicit retry", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  pendingRequest(h, "get_target_actions").reply.reject(new Error("analysis failed"));
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 1);
+  assert.match(h.view.targetActionsError ?? "", /analysis failed/);
+
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  await settle();
+  void h.session.loadTargetActions();
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 1);
+  assert.match(h.view.targetActionsError ?? "", /analysis failed/);
+
+  const retry = h.session.loadTargetActions(true);
+  assert.equal(requestCount(h, "get_target_actions"), 2);
+  lastPendingRequest(h, "get_target_actions").reply.resolve([]);
+  await retry;
+  assert.equal(h.view.targetActionsError, null);
+  assert.deepEqual(h.view.targetActions, []);
+});
+
+test("a stale actions reply still auto-loads the new selection's actions", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 1);
+
+  h.emit("app-state", {
+    ...IDLE,
+    snapshotFetchedAt: TARGETS.meta.fetchedAt,
+    detailQuery: "running",
+  });
+  h.session.select({ kind: "target", label: "//app:second" });
+  h.emit("app-state", { ...IDLE, snapshotFetchedAt: TARGETS.meta.fetchedAt });
+  lastPendingRequest(h, "get_target_detail").reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+
+  pendingRequest(h, "get_target_actions").reply.resolve([
+    { owner: "//app:first", mnemonic: "Old", output: "old" },
+  ]);
+  await settle();
+
+  assert.equal(h.view.targetActions, null);
+  assert.equal(requestCount(h, "get_target_actions"), 2);
+  assert.deepEqual(lastPendingRequest(h, "get_target_actions").args, {
+    label: "//app:second",
+    fetchedAt: TARGETS.meta.fetchedAt,
+  });
+  lastPendingRequest(h, "get_target_actions").reply.resolve([]);
+  await settle();
+  assert.deepEqual(h.view.targetActions, []);
+  assert.equal(requestCount(h, "get_target_actions"), 2);
+});
+
+test("dispose while details are pending never auto-loads actions", async () => {
+  const h = harness();
+  await h.session.init();
+  await emitSnapshot(h, TARGETS);
+  h.session.select({ kind: "target", label: "//app:first" });
+  h.session.dispose();
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+});
