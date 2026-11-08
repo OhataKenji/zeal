@@ -3,6 +3,7 @@ import {
   initialModel,
   sessionView,
   update,
+  type Result,
   type SessionEffect,
   type SessionMessage,
   type SessionView as SessionViewType,
@@ -30,28 +31,43 @@ export interface Transport {
   listen<T>(event: string, callback: (payload: T) => void): Promise<() => void>;
 }
 
-function unexpected(effect: never): never {
-  throw new Error(`Unhandled session effect: ${JSON.stringify(effect)}`);
+async function resultOf<T>(operation: () => Promise<T>): Promise<Result<T>> {
+  try {
+    return { ok: true, value: await operation() };
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+}
+
+function effectId(effect: SessionEffect): number {
+  return "request" in effect ? effect.request.id : effect.id;
 }
 
 export function createSession(transport: Transport, changed: (view: SessionViewType) => void) {
   let model = initialModel();
   let view = sessionView(model);
   let disposed = false;
+  let subscribed = false;
+  let initializing: Promise<void> | undefined;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
   const operations = new Map<number, Promise<void>>();
 
   function publish() {
     const next = sessionView(model);
-    const keys = Object.keys(view) as Array<keyof SessionViewType>;
-    if (keys.every((key) => view[key] === next[key])) return;
+    if (
+      Object.keys(view).every(
+        (key) => view[key as keyof SessionViewType] === next[key as keyof SessionViewType],
+      )
+    ) {
+      return;
+    }
     view = next;
     changed(view);
   }
 
   function dispatch(message: SessionMessage): number | undefined {
-    if (disposed) return undefined;
+    if (disposed) return;
     const transition = update(model, message);
     model = transition.model;
     publish();
@@ -59,24 +75,28 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     return transition.waitFor;
   }
 
-  function waitFor(requestId: number | undefined): Promise<void> {
-    return requestId === undefined
-      ? Promise.resolve()
-      : (operations.get(requestId) ?? Promise.resolve());
+  async function settle<T>(
+    operation: () => Promise<T>,
+    message: (result: Result<T>) => SessionMessage,
+  ) {
+    dispatch(message(await resultOf(operation)));
+  }
+
+  function waitFor(id: number | undefined): Promise<void> {
+    return id === undefined ? Promise.resolve() : (operations.get(id) ?? Promise.resolve());
   }
 
   function launch(effect: SessionEffect) {
-    if (operations.has(effect.requestId)) return;
+    const id = effectId(effect);
+    if (operations.has(id)) return;
     let operation: Promise<void>;
     operation = runEffect(effect).finally(() => {
-      if (operations.get(effect.requestId) === operation) {
-        operations.delete(effect.requestId);
-      }
+      if (operations.get(id) === operation) operations.delete(id);
     });
-    operations.set(effect.requestId, operation);
+    operations.set(id, operation);
   }
 
-  async function subscribe(requestId: number) {
+  async function initialize() {
     try {
       const removeHistory = await transport.listen<void>("invocations-changed", () => {
         dispatch({ type: "historyChanged" });
@@ -94,239 +114,143 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
         return;
       }
       unlisten = removeState;
-      await waitFor(dispatch({ type: "subscriptionsReady", requestId }));
+      subscribed = true;
     } catch (error) {
       unlistenHistory?.();
       unlistenHistory = undefined;
-      if (!disposed) {
-        dispatch({
-          type: "subscriptionsFailed",
-          requestId,
-          error: String(error),
-        });
-      }
+      if (!disposed) dispatch({ type: "subscriptionsFailed", error: String(error) });
+      return;
     }
+
+    const revision = model.stateRevision;
+    dispatch({
+      type: "initialStateResult",
+      revision,
+      result: await resultOf(() => transport.invoke<AppState>(COMMANDS.getState)),
+    });
+  }
+
+  function init(): Promise<void> {
+    if (initializing) return initializing;
+    if (subscribed || disposed) return Promise.resolve();
+    initializing = initialize().finally(() => {
+      initializing = undefined;
+    });
+    return initializing;
   }
 
   async function runEffect(effect: SessionEffect): Promise<void> {
     switch (effect.type) {
-      case "subscribe": {
-        await subscribe(effect.requestId);
+      case "listInvocations":
+        await settle(
+          () => transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations),
+          (result) => ({ type: "invocationsResult", requestId: effect.request.id, result }),
+        );
         return;
-      }
-      case "getInitialState": {
-        try {
-          const state = await transport.invoke<AppState>(COMMANDS.getState);
-          dispatch({
-            type: "initialStateLoaded",
-            requestId: effect.requestId,
-            revision: effect.revision,
-            state,
-          });
-        } catch (error) {
-          dispatch({
-            type: "initialStateFailed",
-            requestId: effect.requestId,
-            revision: effect.revision,
-            error: String(error),
-          });
-        }
+      case "getSnapshot":
+        await settle(
+          () => transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot),
+          (result) => ({ type: "snapshotResult", requestId: effect.request.id, result }),
+        );
         return;
-      }
-      case "listInvocations": {
-        try {
-          const records = await transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations);
-          dispatch({ type: "invocationsLoaded", requestId: effect.requestId, records });
-        } catch (error) {
-          dispatch({
-            type: "invocationsFailed",
-            requestId: effect.requestId,
-            error: String(error),
-          });
-        }
-        return;
-      }
-      case "getSnapshot": {
-        try {
-          const snapshot = await transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot);
-          dispatch({ type: "snapshotLoaded", requestId: effect.requestId, snapshot });
-        } catch (error) {
-          dispatch({
-            type: "snapshotFailed",
-            requestId: effect.requestId,
-            error: String(error),
-          });
-        }
-        return;
-      }
       case "getTargetDetail": {
         const { label, fetchedAt } = effect.request;
-        try {
-          const detail = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
-            label,
-            fetchedAt,
-          });
-          dispatch({ type: "targetDetailLoaded", requestId: effect.requestId, detail });
-        } catch (error) {
-          dispatch({
-            type: "targetDetailFailed",
-            requestId: effect.requestId,
-            error: String(error),
-          });
-        }
+        await settle(
+          () => transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, { label, fetchedAt }),
+          (result) => ({ type: "targetDetailResult", requestId: effect.request.id, result }),
+        );
         return;
       }
       case "getTargetOutputs": {
         const { label, fetchedAt } = effect.request;
-        try {
-          const outputs = await transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
-            label,
-            fetchedAt,
-          });
-          dispatch({ type: "targetOutputsLoaded", requestId: effect.requestId, outputs });
-        } catch (error) {
-          dispatch({
-            type: "targetOutputsFailed",
-            requestId: effect.requestId,
-            error: String(error),
-          });
-        }
+        await settle(
+          () => transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, { label, fetchedAt }),
+          (result) => ({ type: "targetOutputsResult", requestId: effect.request.id, result }),
+        );
         return;
       }
-      case "getInvocation": {
-        try {
-          const detail = await transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
-            id: effect.request.invocationId,
-          });
-          dispatch({ type: "detailLoaded", requestId: effect.requestId, detail });
-        } catch (error) {
-          dispatch({
-            type: "detailFailed",
-            requestId: effect.requestId,
-            error: String(error),
-          });
-        }
-        return;
-      }
-      case "getProfile": {
-        try {
-          const profile = await transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
-            id: effect.request.invocationId,
-          });
-          dispatch({ type: "profileLoaded", requestId: effect.requestId, profile });
-        } catch (error) {
-          dispatch({
-            type: "profileFailed",
-            requestId: effect.requestId,
-            error: String(error),
-          });
-        }
-        return;
-      }
-      case "startInvocation": {
-        const request = effect.request;
-        try {
-          const record = await transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
-            cmd: request.cmd,
-            pattern: request.pattern,
-            arguments: request.argumentsText,
-          });
-          await waitFor(
-            dispatch({
-              type: "startReturned",
-              requestId: request.id,
-              token: request.token,
-              record,
+      case "getInvocation":
+        await settle(
+          () =>
+            transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
+              id: effect.request.invocationId,
             }),
-          );
-        } catch (error) {
-          dispatch({
-            type: "startFailed",
-            requestId: request.id,
-            token: request.token,
-            error: String(error),
-          });
-        }
+          (result) => ({ type: "detailResult", requestId: effect.request.id, result }),
+        );
+        return;
+      case "getProfile":
+        await settle(
+          () =>
+            transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
+              id: effect.request.invocationId,
+            }),
+          (result) => ({ type: "profileResult", requestId: effect.request.id, result }),
+        );
+        return;
+      case "startInvocation": {
+        const { request } = effect;
+        const wait = dispatch({
+          type: "startResult",
+          requestId: request.id,
+          result: await resultOf(() =>
+            transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
+              cmd: request.cmd,
+              pattern: request.pattern,
+              arguments: request.argumentsText,
+            }),
+          ),
+        });
+        await waitFor(wait);
         return;
       }
-      case "getStartState": {
-        try {
-          const state = await transport.invoke<AppState>(COMMANDS.getState);
-          dispatch({
-            type: "startStateLoaded",
-            requestId: effect.requestId,
-            startRequestId: effect.startRequestId,
-            token: effect.token,
+      case "getStartState":
+        await settle(
+          () => transport.invoke<AppState>(COMMANDS.getState),
+          (result) => ({
+            type: "startStateResult",
+            startId: effect.startId,
             revision: effect.revision,
-            state,
-          });
-        } catch (error) {
-          dispatch({
-            type: "startStateFailed",
-            requestId: effect.requestId,
-            startRequestId: effect.startRequestId,
-            token: effect.token,
-            revision: effect.revision,
-            error: String(error),
-          });
-        }
+            result,
+          }),
+        );
         return;
-      }
       case "openWorkspace": {
-        const request = effect.request;
+        const { request } = effect;
         try {
           const state = await transport.invoke<AppState>(COMMANDS.openWorkspace, {
             path: request.path,
             scope: request.scope,
           });
           dispatch({
-            type: "workspaceOpened",
+            type: "workspaceResult",
             requestId: request.id,
-            revision: request.revision,
-            state,
+            result: { ok: true, value: state },
           });
         } catch (error) {
-          dispatch({ type: "workspaceOpenFailed", requestId: request.id });
+          dispatch({
+            type: "workspaceResult",
+            requestId: request.id,
+            result: { ok: false, error: String(error) },
+          });
           throw error;
         }
         return;
       }
-      case "rejectWorkspaceOpen": {
+      case "rejectWorkspaceOpen":
         throw new Error(effect.message);
-      }
-      case "stop": {
-        try {
-          await transport.invoke(COMMANDS.stopInvocation);
-        } catch (error) {
-          dispatch({
-            type: "stopFailed",
-            workspace: effect.workspace,
-            error: String(error),
-          });
-        }
+      case "stop":
+        await settle(
+          () => transport.invoke<void>(COMMANDS.stopInvocation),
+          (result) => ({ type: "stopResult", workspace: effect.workspace, result }),
+        );
         return;
-      }
-      case "refresh": {
-        try {
-          await transport.invoke(COMMANDS.refresh);
-        } catch (error) {
-          dispatch({
-            type: "refreshFailed",
-            workspace: effect.workspace,
-            error: String(error),
-          });
-        }
+      case "refresh":
+        await settle(
+          () => transport.invoke<void>(COMMANDS.refresh),
+          (result) => ({ type: "refreshResult", workspace: effect.workspace, result }),
+        );
         return;
-      }
-      default: {
-        return unexpected(effect);
-      }
     }
-  }
-
-  function init(): Promise<void> {
-    const requestId = dispatch({ type: "init" }) ?? model.subscriptionRequestId ?? undefined;
-    return waitFor(requestId);
   }
 
   function dispose() {
@@ -337,64 +261,21 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     unlistenHistory = undefined;
   }
 
-  function loadInvocations(): Promise<void> {
-    return waitFor(dispatch({ type: "loadInvocations" }));
-  }
-
-  function loadSnapshot(): Promise<void> {
-    return waitFor(dispatch({ type: "loadSnapshot" }));
-  }
-
-  function loadDetail(): Promise<void> {
-    return waitFor(dispatch({ type: "loadDetail" }));
-  }
-
-  function loadProfile(): Promise<void> {
-    return waitFor(dispatch({ type: "loadProfile" }));
-  }
-
-  function start(cmd: BazelCommand, pattern: string, argumentsText = ""): Promise<void> {
-    const requestId = dispatch({ type: "start", cmd, pattern, argumentsText });
-    return waitFor(requestId);
-  }
-
-  function stop(): Promise<void> {
-    return waitFor(dispatch({ type: "stop" }));
-  }
-
-  function openWorkspace(path: string, scope: TargetScope): Promise<void> {
-    return waitFor(dispatch({ type: "openWorkspace", path, scope }));
-  }
-
-  function refresh(): Promise<void> {
-    return waitFor(dispatch({ type: "refresh" }));
-  }
-
-  function select(selection: ExplorerSelection) {
-    dispatch({ type: "select", selection });
-  }
-
-  function selectInvocation(id: string | null) {
-    dispatch({ type: "selectInvocation", id });
-  }
-
-  function openConsole(record: InvocationRecord) {
-    dispatch({ type: "openConsole", record });
-  }
-
   return {
     init,
     dispose,
-    start,
-    stop,
-    openWorkspace,
-    refresh,
-    selectInvocation,
-    openConsole,
-    loadDetail,
-    loadProfile,
-    loadInvocations,
-    loadSnapshot,
-    select,
+    start: (cmd: BazelCommand, pattern: string, argumentsText = "") =>
+      waitFor(dispatch({ type: "start", cmd, pattern, argumentsText })),
+    stop: () => waitFor(dispatch({ type: "stop" })),
+    openWorkspace: (path: string, scope: TargetScope) =>
+      waitFor(dispatch({ type: "openWorkspace", path, scope })),
+    refresh: () => waitFor(dispatch({ type: "refresh" })),
+    selectInvocation: (id: string | null) => dispatch({ type: "selectInvocation", id }),
+    openConsole: (record: InvocationRecord) => dispatch({ type: "openConsole", record }),
+    loadDetail: () => waitFor(dispatch({ type: "loadDetail" })),
+    loadProfile: () => waitFor(dispatch({ type: "loadProfile" })),
+    loadInvocations: () => waitFor(dispatch({ type: "loadInvocations" })),
+    loadSnapshot: () => waitFor(dispatch({ type: "loadSnapshot" })),
+    select: (selection: ExplorerSelection) => dispatch({ type: "select", selection }),
   };
 }

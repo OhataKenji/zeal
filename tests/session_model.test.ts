@@ -87,7 +87,7 @@ test("update is deterministic and leaves nested request state untouched", () => 
   assert.deepEqual(first, second);
   assert.equal(model.historyAgain, false);
   assert.equal(first.model.historyAgain, true);
-  assert.equal(model.historyRequest?.workspace, "/workspace");
+  assert.equal(model.historyRequest?.workspaceGeneration, 1);
   assert.deepEqual(model.data.state?.scope.include, ["//app/..."]);
 });
 
@@ -99,9 +99,9 @@ test("a delayed target detail only starts outputs for the latest selection", () 
     selection: { kind: "target", label: "//app:first" },
   });
   const snapshot = update(firstSelection.model, {
-    type: "snapshotLoaded",
-    requestId: snapshotRequest.requestId,
-    snapshot: TARGETS,
+    type: "snapshotResult",
+    requestId: snapshotRequest.request.id,
+    result: { ok: true, value: TARGETS },
   });
   const firstDetail = effect(snapshot.effects, "getTargetDetail");
   const secondSelection = update(snapshot.model, {
@@ -111,9 +111,9 @@ test("a delayed target detail only starts outputs for the latest selection", () 
 
   assert.equal(secondSelection.effects.length, 0);
   const stale = update(secondSelection.model, {
-    type: "targetDetailLoaded",
-    requestId: firstDetail.requestId,
-    detail: targetDetail("//app:first"),
+    type: "targetDetailResult",
+    requestId: firstDetail.request.id,
+    result: { ok: true, value: targetDetail("//app:first") },
   });
   const secondDetail = effect(stale.effects, "getTargetDetail");
   assert.equal(secondDetail.request.label, "//app:second");
@@ -123,16 +123,16 @@ test("a delayed target detail only starts outputs for the latest selection", () 
   );
 
   const loaded = update(stale.model, {
-    type: "targetDetailLoaded",
-    requestId: secondDetail.requestId,
-    detail: targetDetail("//app:second"),
+    type: "targetDetailResult",
+    requestId: secondDetail.request.id,
+    result: { ok: true, value: targetDetail("//app:second") },
   });
   const outputs = effect(loaded.effects, "getTargetOutputs");
   assert.equal(outputs.request.label, "//app:second");
   const finished = update(loaded.model, {
-    type: "targetOutputsLoaded",
-    requestId: outputs.requestId,
-    outputs: { paths: ["app/second.a"], truncated: false },
+    type: "targetOutputsResult",
+    requestId: outputs.request.id,
+    result: { ok: true, value: { paths: ["app/second.a"], truncated: false } },
   });
   assert.deepEqual(sessionView(finished.model).targetOutputs?.paths, ["app/second.a"]);
 });
@@ -143,9 +143,9 @@ test("same-history reconciliation refreshes stale saved data and coalesces notif
   const queuedOne = update(firstState.model, { type: "historyChanged" });
   const queuedTwo = update(queuedOne.model, { type: "historyChanged" });
   const historyAfterQueue = update(queuedTwo.model, {
-    type: "invocationsLoaded",
-    requestId: firstHistory.requestId,
-    records: [COMPLETED.record],
+    type: "invocationsResult",
+    requestId: firstHistory.request.id,
+    result: { ok: true, value: [COMPLETED.record] },
   });
   assert.equal(
     historyAfterQueue.effects.filter((item) => item.type === "listInvocations").length,
@@ -154,53 +154,53 @@ test("same-history reconciliation refreshes stale saved data and coalesces notif
 
   const followup = effect(historyAfterQueue.effects, "listInvocations");
   const listed = update(historyAfterQueue.model, {
-    type: "invocationsLoaded",
-    requestId: followup.requestId,
-    records: [COMPLETED.record],
+    type: "invocationsResult",
+    requestId: followup.request.id,
+    result: { ok: true, value: [COMPLETED.record] },
   });
   const selected = update(listed.model, { type: "selectInvocation", id: RECORD.id });
   const detailRequest = effect(selected.effects, "getInvocation");
   const profileRequest = effect(selected.effects, "getProfile");
   const staleDetail: InvocationDetail = { ...COMPLETED, record: RECORD };
   const loadedOld = update(selected.model, {
-    type: "detailLoaded",
-    requestId: detailRequest.requestId,
-    detail: staleDetail,
+    type: "detailResult",
+    requestId: detailRequest.request.id,
+    result: { ok: true, value: staleDetail },
   });
   const loadedProfile = update(loadedOld.model, {
-    type: "profileLoaded",
-    requestId: profileRequest.requestId,
-    profile: PROFILE,
+    type: "profileResult",
+    requestId: profileRequest.request.id,
+    result: { ok: true, value: PROFILE },
   });
 
   const refreshList = update(loadedProfile.model, { type: "historyChanged" });
   const listRequest = effect(refreshList.effects, "listInvocations");
   const refreshed = update(refreshList.model, {
-    type: "invocationsLoaded",
-    requestId: listRequest.requestId,
-    records: [COMPLETED.record],
+    type: "invocationsResult",
+    requestId: listRequest.request.id,
+    result: { ok: true, value: [COMPLETED.record] },
   });
   const detailRefresh = effect(refreshed.effects, "getInvocation");
   const profileRefresh = effect(refreshed.effects, "getProfile");
 
   const staleSuccess = update(refreshed.model, {
-    type: "detailLoaded",
-    requestId: detailRefresh.requestId,
-    detail: staleDetail,
+    type: "detailResult",
+    requestId: detailRefresh.request.id,
+    result: { ok: true, value: staleDetail },
   });
   const missingProfile = update(staleSuccess.model, {
-    type: "profileLoaded",
-    requestId: profileRefresh.requestId,
-    profile: PROFILE,
+    type: "profileResult",
+    requestId: profileRefresh.request.id,
+    result: { ok: true, value: PROFILE },
   });
   assert.equal(missingProfile.effects.length, 0);
 
   const nextHistory = update(missingProfile.model, { type: "historyChanged" });
   const nextListRequest = effect(nextHistory.effects, "listInvocations");
   const nextRefresh = update(nextHistory.model, {
-    type: "invocationsLoaded",
-    requestId: nextListRequest.requestId,
-    records: [COMPLETED.record],
+    type: "invocationsResult",
+    requestId: nextListRequest.request.id,
+    result: { ok: true, value: [COMPLETED.record] },
   });
   assert.equal(nextRefresh.effects.filter((item) => item.type === "getInvocation").length, 1);
   assert.equal(nextRefresh.effects.filter((item) => item.type === "getProfile").length, 1);

@@ -47,8 +47,6 @@ export type SessionData = Omit<
 
 interface HistoryRequest {
   readonly id: number;
-  readonly key: string;
-  readonly workspace: string;
   readonly workspaceGeneration: number;
 }
 
@@ -78,14 +76,12 @@ interface WorkspaceRequest {
 }
 
 interface ObservedExecution {
-  readonly workspace: string;
   readonly id: string;
   readonly active: boolean;
 }
 
 interface StartRequest {
   readonly id: number;
-  readonly token: number;
   readonly workspace: string;
   readonly cmd: BazelCommand;
   readonly pattern: string;
@@ -102,118 +98,67 @@ export interface SessionModel {
   readonly workspaceGeneration: number;
   readonly invocationGeneration: number;
   readonly selectionGeneration: number;
-  readonly startToken: number;
   readonly pendingStart: StartRequest | null;
   readonly observedExecution: ObservedExecution | null;
   readonly workspaceRequest: WorkspaceRequest | null;
-  readonly subscriptionRequestId: number | null;
-  readonly initialStateRequest: { readonly id: number; readonly revision: number } | null;
   readonly historyRequest: HistoryRequest | null;
   readonly historyAttempt: string | null;
   readonly historyAgain: boolean;
-  readonly snapshotRequests: SnapshotRequest[];
+  readonly snapshotRequest: SnapshotRequest | null;
   readonly snapshotAttempt: string | null;
   readonly targetDetailRequest: TargetRequest | null;
   readonly targetDetailAttempt: string | null;
-  readonly targetDetailFor: string | null;
   readonly targetOutputsRequest: TargetRequest | null;
-  readonly targetOutputsAttempt: string | null;
   readonly detailRequest: SavedRequest | null;
   readonly detailAttempt: string | null;
   readonly profileRequest: SavedRequest | null;
   readonly profileAttempt: string | null;
 }
 
+export type Result<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: string };
+
+type ResultMessage<T extends string, V> = {
+  readonly type: T;
+  readonly result: Result<V>;
+};
+type RequestResult<T extends string, V> = ResultMessage<T, V> & {
+  readonly requestId: number;
+};
+
 export type SessionEffect =
-  | { readonly type: "subscribe"; readonly requestId: number }
-  | { readonly type: "getInitialState"; readonly requestId: number; readonly revision: number }
-  | {
-      readonly type: "listInvocations";
-      readonly requestId: number;
-      readonly request: HistoryRequest;
-    }
-  | { readonly type: "getSnapshot"; readonly requestId: number; readonly request: SnapshotRequest }
-  | {
-      readonly type: "getTargetDetail";
-      readonly requestId: number;
-      readonly request: TargetRequest;
-    }
-  | {
-      readonly type: "getTargetOutputs";
-      readonly requestId: number;
-      readonly request: TargetRequest;
-    }
-  | { readonly type: "getInvocation"; readonly requestId: number; readonly request: SavedRequest }
-  | { readonly type: "getProfile"; readonly requestId: number; readonly request: SavedRequest }
-  | { readonly type: "startInvocation"; readonly requestId: number; readonly request: StartRequest }
+  | { readonly type: "listInvocations"; readonly request: HistoryRequest }
+  | { readonly type: "getSnapshot"; readonly request: SnapshotRequest }
+  | { readonly type: "getTargetDetail"; readonly request: TargetRequest }
+  | { readonly type: "getTargetOutputs"; readonly request: TargetRequest }
+  | { readonly type: "getInvocation"; readonly request: SavedRequest }
+  | { readonly type: "getProfile"; readonly request: SavedRequest }
+  | { readonly type: "startInvocation"; readonly request: StartRequest }
   | {
       readonly type: "getStartState";
-      readonly requestId: number;
-      readonly startRequestId: number;
-      readonly token: number;
+      readonly id: number;
+      readonly startId: number;
       readonly revision: number;
     }
-  | {
-      readonly type: "openWorkspace";
-      readonly requestId: number;
-      readonly request: WorkspaceRequest;
-    }
-  | { readonly type: "rejectWorkspaceOpen"; readonly requestId: number; readonly message: string }
-  | { readonly type: "stop"; readonly requestId: number; readonly workspace: string | null }
-  | { readonly type: "refresh"; readonly requestId: number; readonly workspace: string | null };
+  | { readonly type: "openWorkspace"; readonly request: WorkspaceRequest }
+  | { readonly type: "rejectWorkspaceOpen"; readonly id: number; readonly message: string }
+  | { readonly type: "stop"; readonly id: number; readonly workspace: string | null }
+  | { readonly type: "refresh"; readonly id: number; readonly workspace: string | null };
 
 export type SessionMessage =
-  | { readonly type: "init" }
-  | { readonly type: "subscriptionsReady"; readonly requestId: number }
-  | { readonly type: "subscriptionsFailed"; readonly requestId: number; readonly error: string }
-  | {
-      readonly type: "initialStateLoaded";
-      readonly requestId: number;
-      readonly revision: number;
-      readonly state: AppState;
-    }
-  | {
-      readonly type: "initialStateFailed";
-      readonly requestId: number;
-      readonly revision: number;
-      readonly error: string;
-    }
+  | { readonly type: "subscriptionsFailed"; readonly error: string }
+  | (ResultMessage<"initialStateResult", AppState> & { readonly revision: number })
   | { readonly type: "appState"; readonly state: AppState }
   | { readonly type: "historyChanged" }
   | { readonly type: "loadInvocations" }
-  | {
-      readonly type: "invocationsLoaded";
-      readonly requestId: number;
-      readonly records: InvocationRecord[];
-    }
-  | { readonly type: "invocationsFailed"; readonly requestId: number; readonly error: string }
+  | RequestResult<"invocationsResult", InvocationRecord[]>
   | { readonly type: "loadSnapshot" }
-  | {
-      readonly type: "snapshotLoaded";
-      readonly requestId: number;
-      readonly snapshot: TargetIndex | null;
-    }
-  | { readonly type: "snapshotFailed"; readonly requestId: number; readonly error: string }
-  | {
-      readonly type: "targetDetailLoaded";
-      readonly requestId: number;
-      readonly detail: TargetDetail;
-    }
-  | { readonly type: "targetDetailFailed"; readonly requestId: number; readonly error: string }
-  | {
-      readonly type: "targetOutputsLoaded";
-      readonly requestId: number;
-      readonly outputs: TargetOutputs;
-    }
-  | { readonly type: "targetOutputsFailed"; readonly requestId: number; readonly error: string }
-  | { readonly type: "detailLoaded"; readonly requestId: number; readonly detail: InvocationDetail }
-  | { readonly type: "detailFailed"; readonly requestId: number; readonly error: string }
-  | {
-      readonly type: "profileLoaded";
-      readonly requestId: number;
-      readonly profile: Section<Profile>;
-    }
-  | { readonly type: "profileFailed"; readonly requestId: number; readonly error: string }
+  | RequestResult<"snapshotResult", TargetIndex | null>
+  | RequestResult<"targetDetailResult", TargetDetail>
+  | RequestResult<"targetOutputsResult", TargetOutputs>
+  | RequestResult<"detailResult", InvocationDetail>
+  | RequestResult<"profileResult", Section<Profile>>
   | { readonly type: "select"; readonly selection: ExplorerSelection }
   | { readonly type: "selectInvocation"; readonly id: string | null }
   | { readonly type: "openConsole"; readonly record: InvocationRecord }
@@ -225,48 +170,19 @@ export type SessionMessage =
       readonly pattern: string;
       readonly argumentsText: string;
     }
-  | {
-      readonly type: "startReturned";
-      readonly requestId: number;
-      readonly token: number;
-      readonly record: InvocationRecord;
-    }
-  | {
-      readonly type: "startFailed";
-      readonly requestId: number;
-      readonly token: number;
-      readonly error: string;
-    }
-  | {
-      readonly type: "startStateLoaded";
-      readonly requestId: number;
-      readonly startRequestId: number;
-      readonly token: number;
+  | RequestResult<"startResult", InvocationRecord>
+  | (ResultMessage<"startStateResult", AppState> & {
+      readonly startId: number;
       readonly revision: number;
-      readonly state: AppState;
-    }
-  | {
-      readonly type: "startStateFailed";
-      readonly requestId: number;
-      readonly startRequestId: number;
-      readonly token: number;
-      readonly revision: number;
-      readonly error: string;
-    }
+    })
   | { readonly type: "openWorkspace"; readonly path: string; readonly scope: TargetScope }
-  | {
-      readonly type: "workspaceOpened";
-      readonly requestId: number;
-      readonly revision: number;
-      readonly state: AppState;
-    }
-  | { readonly type: "workspaceOpenFailed"; readonly requestId: number }
+  | RequestResult<"workspaceResult", AppState>
   | { readonly type: "stop" }
-  | { readonly type: "stopFailed"; readonly workspace: string | null; readonly error: string }
+  | (ResultMessage<"stopResult", void> & { readonly workspace: string | null })
   | { readonly type: "refresh" }
-  | { readonly type: "refreshFailed"; readonly workspace: string | null; readonly error: string };
+  | (ResultMessage<"refreshResult", void> & { readonly workspace: string | null });
 
-export interface SessionTransition {
+interface SessionTransition {
   readonly model: SessionModel;
   readonly effects: SessionEffect[];
   readonly waitFor?: number;
@@ -309,22 +225,17 @@ export function initialModel(): SessionModel {
     workspaceGeneration: 0,
     invocationGeneration: 0,
     selectionGeneration: 0,
-    startToken: 0,
     pendingStart: null,
     observedExecution: null,
     workspaceRequest: null,
-    subscriptionRequestId: null,
-    initialStateRequest: null,
     historyRequest: null,
     historyAttempt: null,
     historyAgain: false,
-    snapshotRequests: [],
+    snapshotRequest: null,
     snapshotAttempt: null,
     targetDetailRequest: null,
     targetDetailAttempt: null,
-    targetDetailFor: null,
     targetOutputsRequest: null,
-    targetOutputsAttempt: null,
     detailRequest: null,
     detailAttempt: null,
     profileRequest: null,
@@ -337,7 +248,7 @@ export function sessionView(model: SessionModel): SessionView {
   const eligible = savedEligible(model);
   return {
     ...model.data,
-    snapshotLoading: model.snapshotRequests.some((request) => request.key === snapshotKey(model)),
+    snapshotLoading: model.snapshotRequest?.key === snapshotKey(model),
     starting: model.pendingStart !== null,
     opening: model.workspaceRequest !== null,
     detailLoading: eligible && model.detailRequest?.key === key,
@@ -375,24 +286,31 @@ export function canStop(view: SessionView): boolean {
   return !!(view.ready && view.state?.activeInvocation && !view.state.stopping);
 }
 
-function result(
-  model: SessionModel,
-  effects: SessionEffect[] = [],
-  waitFor?: number,
-): SessionTransition {
+type Draft = { -readonly [K in keyof SessionModel]: SessionModel[K] } & {
+  effects: SessionEffect[];
+  waitFor?: number;
+};
+
+function draft(model: SessionModel): Draft {
+  // Only these fresh containers are mutable; nested requests and payloads stay shared.
+  return { ...model, data: { ...model.data }, effects: [] };
+}
+
+function finishDraft(draft: Draft): SessionTransition {
+  const { effects, waitFor, ...model } = draft;
   return { model, effects, waitFor };
+}
+
+function nextId(draft: Draft): number {
+  return draft.nextRequestId++;
+}
+
+function setData(draft: Draft, patch: Partial<SessionData>) {
+  Object.assign(draft.data, patch);
 }
 
 function unexpected(message: never): never {
   throw new Error(`Unhandled session message: ${JSON.stringify(message)}`);
-}
-
-function withData(model: SessionModel, patch: Partial<SessionData>): SessionModel {
-  return { ...model, data: { ...model.data, ...patch } };
-}
-
-function reserveId(model: SessionModel): { readonly id: number; readonly model: SessionModel } {
-  return { id: model.nextRequestId, model: { ...model, nextRequestId: model.nextRequestId + 1 } };
 }
 
 function scopeKey(state: AppState | null): string {
@@ -406,29 +324,22 @@ function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boole
   return left === null && right === null;
 }
 
-function setSelection(model: SessionModel, selection: ExplorerSelection): SessionModel {
-  if (sameSelection(model.data.selection, selection)) return model;
-  return {
-    ...model,
-    selectionGeneration: model.selectionGeneration + 1,
-    data: { ...model.data, selection },
-  };
+function setSelection(draft: Draft, selection: ExplorerSelection) {
+  if (sameSelection(draft.data.selection, selection)) return;
+  draft.selectionGeneration++;
+  draft.data.selection = selection;
 }
 
-function setSelectedInvocation(model: SessionModel, id: string | null): SessionModel {
-  if (model.data.selectedInvocation === id) return model;
-  return {
-    ...model,
-    invocationGeneration: model.invocationGeneration + 1,
-    data: {
-      ...model.data,
-      selectedInvocation: id,
-      detail: null,
-      detailError: null,
-      profile: null,
-      profileError: null,
-    },
-  };
+function setSelectedInvocation(draft: Draft, id: string | null) {
+  if (draft.data.selectedInvocation === id) return;
+  draft.invocationGeneration++;
+  Object.assign(draft.data, {
+    selectedInvocation: id,
+    detail: null,
+    detailError: null,
+    profile: null,
+    profileError: null,
+  });
 }
 
 function selectedRecord(model: SessionModel): InvocationRecord | undefined {
@@ -510,281 +421,199 @@ function targetReady(model: SessionModel): boolean {
   );
 }
 
-function resetTargetContext(model: SessionModel, previousKey: string): SessionModel {
-  if (previousKey === targetKey(model)) return model;
-  return {
-    ...model,
-    targetDetailAttempt: null,
-    targetDetailFor: null,
-    targetOutputsAttempt: null,
-    data: {
-      ...model.data,
+function resetTargetContext(draft: Draft, previousKey: string) {
+  if (previousKey === targetKey(draft)) return;
+  draft.targetDetailAttempt = null;
+  setData(draft, {
+    targetDetail: null,
+    targetDetailError: null,
+    targetOutputs: null,
+    targetOutputsError: null,
+  });
+}
+
+function syncHistory(draft: Draft): number | undefined {
+  const key = historyKey(draft);
+  if (draft.historyAttempt !== key) draft.historyAttempt = null;
+  if (!draft.data.state?.workspace || !draft.data.ready || draft.historyRequest) {
+    return draft.historyRequest?.id;
+  }
+  if (draft.historyAttempt === key) return;
+  const request = { id: nextId(draft), workspaceGeneration: draft.workspaceGeneration };
+  draft.historyRequest = request;
+  draft.historyAttempt = key;
+  draft.data.invocationsError = null;
+  draft.effects.push({ type: "listInvocations", request });
+  return request.id;
+}
+
+function syncSnapshot(draft: Draft, authoritative = false) {
+  const state = draft.data.state;
+  const key = snapshotKey(draft);
+  if (draft.snapshotAttempt !== key) {
+    draft.snapshotAttempt = null;
+    draft.data.snapshotError = null;
+  }
+  if (!state?.workspace || state.snapshotFetchedAt === null) return;
+  if (authoritative && draft.data.snapshotError !== null) draft.snapshotAttempt = null;
+  if (draft.snapshotRequest?.key === key || draft.snapshotAttempt === key) return;
+  const request = { id: nextId(draft), key };
+  draft.snapshotRequest = request;
+  draft.snapshotAttempt = key;
+  draft.data.snapshotError = null;
+  draft.effects.push({ type: "getSnapshot", request });
+}
+
+function startTargetDetail(draft: Draft) {
+  if (!targetReady(draft) || draft.targetDetailRequest) return;
+  const selection = draft.data.selection;
+  const fetchedAt = draft.data.state?.snapshotFetchedAt;
+  if (selection?.kind !== "target" || fetchedAt == null) return;
+  const key = targetKey(draft);
+  if (draft.targetDetailAttempt === key) return;
+  const request = { id: nextId(draft), key, label: selection.label, fetchedAt };
+  draft.targetDetailRequest = request;
+  draft.targetDetailAttempt = key;
+  draft.data.targetDetailError = null;
+  draft.effects.push({ type: "getTargetDetail", request });
+}
+
+function startTargetOutputs(draft: Draft) {
+  const selection = draft.data.selection;
+  const fetchedAt = draft.data.state?.snapshotFetchedAt;
+  if (
+    !targetReady(draft) ||
+    selection?.kind !== "target" ||
+    draft.data.targetDetail?.target.label !== selection.label ||
+    draft.targetOutputsRequest ||
+    draft.data.targetOutputs ||
+    draft.data.targetOutputsError !== null
+  ) {
+    return;
+  }
+  if (fetchedAt == null) return;
+  const request = { id: nextId(draft), key: targetKey(draft), label: selection.label, fetchedAt };
+  draft.targetOutputsRequest = request;
+  draft.data.targetOutputsError = null;
+  draft.effects.push({ type: "getTargetOutputs", request });
+}
+
+function startDetail(draft: Draft): number | undefined {
+  const key = savedKey(draft);
+  if (!savedEligible(draft)) return;
+  if (draft.detailRequest) return draft.detailRequest.id;
+  if (draft.detailAttempt === key) return;
+  const invocationId = draft.data.selectedInvocation;
+  if (!invocationId) return;
+  const request = { id: nextId(draft), key, invocationId };
+  draft.detailRequest = request;
+  draft.detailAttempt = key;
+  draft.data.detailError = null;
+  draft.effects.push({ type: "getInvocation", request });
+  return request.id;
+}
+
+function startProfile(draft: Draft): number | undefined {
+  const key = savedKey(draft);
+  if (!savedEligible(draft)) return;
+  if (draft.profileRequest) return draft.profileRequest.id;
+  if (draft.profileAttempt === key) return;
+  const invocationId = draft.data.selectedInvocation;
+  if (!invocationId) return;
+  const request = { id: nextId(draft), key, invocationId };
+  draft.profileRequest = request;
+  draft.profileAttempt = key;
+  draft.data.profileError = null;
+  draft.effects.push({ type: "getProfile", request });
+  return request.id;
+}
+
+function syncAll(draft: Draft, authoritative = false) {
+  syncHistory(draft);
+  syncSnapshot(draft, authoritative);
+  startTargetDetail(draft);
+  startTargetOutputs(draft);
+  syncSaved(draft);
+}
+
+function syncSaved(draft: Draft) {
+  const key = savedKey(draft);
+  if (draft.detailAttempt !== key) {
+    draft.detailAttempt = null;
+    draft.data.detailError = null;
+  }
+  if (draft.profileAttempt !== key) {
+    draft.profileAttempt = null;
+    draft.data.profileError = null;
+  }
+  startDetail(draft);
+  startProfile(draft);
+}
+
+function refreshSavedAfterHistory(draft: Draft) {
+  const record = selectedRecord(draft);
+  if (
+    record &&
+    draft.data.detail &&
+    !sessionView(draft).detailLoading &&
+    draft.data.detailError === null &&
+    JSON.stringify(record) !== JSON.stringify(draft.data.detail.record)
+  ) {
+    draft.detailAttempt = null;
+    draft.profileAttempt = null;
+    draft.data.profileError = null;
+  }
+}
+
+function applyAppState(draft: Draft, state: AppState) {
+  const before = draft.data.state;
+  const workspaceChanged = state.workspace !== before?.workspace;
+  const scopeChanged =
+    JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
+  const oldTargetKey = targetKey(draft);
+  const resumed = !draft.data.ready;
+  draft.stateRevision++;
+  draft.data.state = state;
+  draft.data.ready = true;
+  if (resumed) draft.data.error = null;
+
+  if (workspaceChanged) {
+    draft.workspaceGeneration++;
+    draft.pendingStart = null;
+    draft.historyAgain = false;
+    draft.observedExecution = state.activeInvocation
+      ? { id: state.activeInvocation, active: true }
+      : null;
+    draft.snapshotAttempt = null;
+    draft.snapshotRequest = null;
+    setData(draft, {
+      console: null,
+      consoleOpen: false,
+      snapshot: null,
+      snapshotError: null,
+      selection: null,
       targetDetail: null,
       targetDetailError: null,
       targetOutputs: null,
       targetOutputsError: null,
-    },
-  };
-}
-
-function syncHistory(model: SessionModel): SessionTransition {
-  const key = historyKey(model);
-  const prepared = model.historyAttempt !== key ? { ...model, historyAttempt: null } : model;
-  const workspace = model.data.state?.workspace;
-  if (!workspace || !prepared.data.ready || prepared.historyRequest) return result(prepared);
-  if (prepared.historyAttempt === key) return result(prepared);
-  const reserved = reserveId(prepared);
-  const request: HistoryRequest = {
-    id: reserved.id,
-    key,
-    workspace,
-    workspaceGeneration: model.workspaceGeneration,
-  };
-  const next = {
-    ...reserved.model,
-    historyRequest: request,
-    historyAttempt: key,
-    data: { ...reserved.model.data, invocationsError: null },
-  };
-  return result(next, [{ type: "listInvocations", requestId: request.id, request }]);
-}
-
-function syncSnapshot(model: SessionModel, authoritative = false): SessionTransition {
-  const state = model.data.state;
-  const key = snapshotKey(model);
-  let next = model;
-  if (next.snapshotAttempt !== key) {
-    next = { ...next, snapshotAttempt: null };
-    if (next.data.snapshotError !== null) next = withData(next, { snapshotError: null });
-  }
-  if (!state?.workspace || state.snapshotFetchedAt === null) return result(next);
-  if (authoritative && next.data.snapshotError !== null) {
-    next = { ...next, snapshotAttempt: null };
-  }
-  if (next.snapshotRequests.some((request) => request.key === key)) return result(next);
-  if (next.snapshotAttempt === key) return result(next);
-  const reserved = reserveId(next);
-  const request: SnapshotRequest = { id: reserved.id, key };
-  next = {
-    ...reserved.model,
-    snapshotRequests: [...reserved.model.snapshotRequests, request],
-    snapshotAttempt: key,
-    data: { ...reserved.model.data, snapshotError: null },
-  };
-  return result(next, [{ type: "getSnapshot", requestId: request.id, request }]);
-}
-
-function startTargetDetail(model: SessionModel): SessionTransition {
-  if (!targetReady(model) || model.targetDetailRequest) return result(model);
-  const selection = model.data.selection;
-  const fetchedAt = model.data.state?.snapshotFetchedAt;
-  if (selection?.kind !== "target" || fetchedAt === null || fetchedAt === undefined) {
-    return result(model);
-  }
-  const key = targetKey(model);
-  if (model.targetDetailAttempt === key) return result(model);
-  const reserved = reserveId(model);
-  const request: TargetRequest = { id: reserved.id, key, label: selection.label, fetchedAt };
-  const next = {
-    ...reserved.model,
-    targetDetailRequest: request,
-    targetDetailAttempt: key,
-    data: { ...reserved.model.data, targetDetailError: null },
-  };
-  return result(next, [{ type: "getTargetDetail", requestId: request.id, request }]);
-}
-
-function startTargetOutputs(model: SessionModel): SessionTransition {
-  const key = targetKey(model);
-  if (
-    !targetReady(model) ||
-    model.targetDetailFor !== key ||
-    model.targetOutputsRequest ||
-    model.targetOutputsAttempt === key
-  ) {
-    return result(model);
-  }
-  const selection = model.data.selection;
-  const fetchedAt = model.data.state?.snapshotFetchedAt;
-  if (selection?.kind !== "target" || fetchedAt === null || fetchedAt === undefined) {
-    return result(model);
-  }
-  const reserved = reserveId(model);
-  const request: TargetRequest = { id: reserved.id, key, label: selection.label, fetchedAt };
-  const next = {
-    ...reserved.model,
-    targetOutputsRequest: request,
-    targetOutputsAttempt: key,
-    data: { ...reserved.model.data, targetOutputsError: null },
-  };
-  return result(next, [{ type: "getTargetOutputs", requestId: request.id, request }]);
-}
-
-function startDetail(model: SessionModel): SessionTransition {
-  const key = savedKey(model);
-  if (!savedEligible(model) || model.detailRequest || model.detailAttempt === key) {
-    return result(model);
-  }
-  const invocationId = model.data.selectedInvocation;
-  if (!invocationId) return result(model);
-  const reserved = reserveId(model);
-  const request: SavedRequest = { id: reserved.id, key, invocationId };
-  const next = {
-    ...reserved.model,
-    detailRequest: request,
-    detailAttempt: key,
-    data: { ...reserved.model.data, detailError: null },
-  };
-  return result(next, [{ type: "getInvocation", requestId: request.id, request }]);
-}
-
-function startProfile(model: SessionModel): SessionTransition {
-  const key = savedKey(model);
-  if (!savedEligible(model) || model.profileRequest || model.profileAttempt === key) {
-    return result(model);
-  }
-  const invocationId = model.data.selectedInvocation;
-  if (!invocationId) return result(model);
-  const reserved = reserveId(model);
-  const request: SavedRequest = { id: reserved.id, key, invocationId };
-  const next = {
-    ...reserved.model,
-    profileRequest: request,
-    profileAttempt: key,
-    data: { ...reserved.model.data, profileError: null },
-  };
-  return result(next, [{ type: "getProfile", requestId: request.id, request }]);
-}
-
-function syncAll(model: SessionModel, authoritative = false): SessionTransition {
-  let next = model;
-  const effects: SessionEffect[] = [];
-  let transition = syncHistory(next);
-  next = transition.model;
-  effects.push(...transition.effects);
-  transition = syncSnapshot(next, authoritative);
-  next = transition.model;
-  effects.push(...transition.effects);
-  transition = startTargetDetail(next);
-  next = transition.model;
-  effects.push(...transition.effects);
-  transition = startTargetOutputs(next);
-  next = transition.model;
-  effects.push(...transition.effects);
-  transition = syncSaved(next);
-  next = transition.model;
-  effects.push(...transition.effects);
-  return result(next, effects);
-}
-
-function syncSaved(model: SessionModel): SessionTransition {
-  const key = savedKey(model);
-  let next = model;
-  if (next.detailAttempt !== key) {
-    next = {
-      ...next,
-      detailAttempt: null,
-      data: next.data.detailError === null ? next.data : { ...next.data, detailError: null },
-    };
-  }
-  if (next.profileAttempt !== key) {
-    next = {
-      ...next,
-      profileAttempt: null,
-      data: next.data.profileError === null ? next.data : { ...next.data, profileError: null },
-    };
-  }
-  let transition = startDetail(next);
-  next = transition.model;
-  const effects = [...transition.effects];
-  transition = startProfile(next);
-  next = transition.model;
-  effects.push(...transition.effects);
-  return result(next, effects);
-}
-
-function refreshSavedAfterHistory(model: SessionModel): SessionModel {
-  const record = selectedRecord(model);
-  if (
-    record &&
-    model.data.detail &&
-    !sessionView(model).detailLoading &&
-    model.data.detailError === null &&
-    JSON.stringify(record) !== JSON.stringify(model.data.detail.record)
-  ) {
-    return {
-      ...model,
-      detailAttempt: null,
-      profileAttempt: null,
-      data: { ...model.data, profileError: null },
-    };
-  }
-  return model;
-}
-
-function applyAppState(model: SessionModel, state: AppState): SessionModel {
-  const before = model.data.state;
-  const workspaceChanged = state.workspace !== before?.workspace;
-  const scopeChanged =
-    JSON.stringify(state.scope.include) !== JSON.stringify(before?.scope.include);
-  const oldTargetKey = targetKey(model);
-  const resumed = !model.data.ready;
-  let next: SessionModel = {
-    ...model,
-    stateRevision: model.stateRevision + 1,
-    data: {
-      ...model.data,
-      state,
-      ready: true,
-      ...(resumed ? { error: null } : {}),
-    },
-  };
-
-  if (workspaceChanged) {
-    next = {
-      ...next,
-      workspaceGeneration: next.workspaceGeneration + 1,
-      startToken: next.startToken + 1,
-      pendingStart: null,
-      historyAgain: false,
-      observedExecution: state.activeInvocation
-        ? { workspace: state.workspace ?? "", id: state.activeInvocation, active: true }
-        : null,
-      data: {
-        ...next.data,
-        console: null,
-        consoleOpen: false,
-        snapshot: null,
-        snapshotError: null,
-        selection: null,
-        targetDetail: null,
-        targetDetailError: null,
-        targetOutputs: null,
-        targetOutputsError: null,
-        invocations: [],
-        invocationsError: null,
-        detail: null,
-        detailError: null,
-        profile: null,
-        profileError: null,
-      },
-      snapshotAttempt: null,
-    };
-    next = setSelectedInvocation(next, null);
-    next = setSelection(next, null);
+      invocations: [],
+      invocationsError: null,
+      detail: null,
+      detailError: null,
+      profile: null,
+      profileError: null,
+    });
+    setSelectedInvocation(draft, null);
+    setSelection(draft, null);
   } else {
     if (scopeChanged || state.snapshotFetchedAt === null) {
-      next = setSelection(next, null);
-    }
-    if (scopeChanged || state.snapshotFetchedAt === null) {
-      next = {
-        ...next,
-        snapshotAttempt: null,
-        data: { ...next.data, snapshot: null, snapshotError: null },
-      };
+      setSelection(draft, null);
+      draft.snapshotAttempt = null;
+      draft.snapshotRequest = null;
+      setData(draft, { snapshot: null, snapshotError: null });
     }
 
-    const starting = next.pendingStart;
+    const starting = draft.pendingStart;
     if (starting) {
       if (
         starting.workspace === state.workspace &&
@@ -792,29 +621,22 @@ function applyAppState(model: SessionModel, state: AppState): SessionModel {
         state.consoleInvocation === state.activeInvocation &&
         starting.observedId !== state.activeInvocation
       ) {
-        next = {
-          ...next,
-          pendingStart: { ...starting, observedId: state.activeInvocation },
-          data: {
-            ...next.data,
-            console: { id: state.activeInvocation, cmd: starting.cmd, pattern: starting.pattern },
-            consoleOpen: true,
-          },
-        };
-        next = setSelectedInvocation(next, null);
+        draft.pendingStart = { ...starting, observedId: state.activeInvocation };
+        setData(draft, {
+          console: { id: state.activeInvocation, cmd: starting.cmd, pattern: starting.pattern },
+          consoleOpen: true,
+        });
+        setSelectedInvocation(draft, null);
       }
     } else {
-      const observed = next.observedExecution;
+      const observed = draft.observedExecution;
       const activeId = state.activeInvocation;
       let completedId: string | null = null;
       if (activeId) {
         if (observed && observed.active && before?.activeInvocation === observed.id) {
           if (observed.id !== activeId) completedId = observed.id;
         }
-        next = {
-          ...next,
-          observedExecution: { workspace: state.workspace ?? "", id: activeId, active: true },
-        };
+        draft.observedExecution = { id: activeId, active: true };
       } else {
         if (
           observed &&
@@ -823,637 +645,432 @@ function applyAppState(model: SessionModel, state: AppState): SessionModel {
         ) {
           completedId = observed.id;
         }
-        next = { ...next, observedExecution: null };
+        draft.observedExecution = null;
       }
-      if (completedId) next = completeConsole(next, completedId);
+      if (completedId) completeConsole(draft, completedId);
     }
   }
 
-  return resetTargetContext(next, oldTargetKey);
+  resetTargetContext(draft, oldTargetKey);
 }
 
-function completeConsole(model: SessionModel, id: string): SessionModel {
+function completeConsole(draft: Draft, id: string) {
   if (
-    model.pendingStart ||
-    model.data.state?.activeInvocation ||
-    !model.data.consoleOpen ||
-    model.data.console?.id !== id
+    draft.pendingStart ||
+    draft.data.state?.activeInvocation ||
+    !draft.data.consoleOpen ||
+    draft.data.console?.id !== id
   ) {
-    return model;
+    return;
   }
-  return setSelectedInvocation(withData(model, { consoleOpen: false }), id);
+  draft.data.consoleOpen = false;
+  setSelectedInvocation(draft, id);
 }
 
-function finishStart(model: SessionModel, requestId: number, token: number): SessionModel {
-  const current = model.pendingStart;
-  if (
-    !current ||
-    current.id !== requestId ||
-    current.token !== token ||
-    token !== model.startToken
-  ) {
-    return model;
-  }
+function finishStart(draft: Draft, requestId: number) {
+  const current = draft.pendingStart;
+  if (!current || current.id !== requestId) return;
   if (!current.record) {
-    return { ...model, pendingStart: null, observedExecution: current.previousExecution };
+    draft.pendingStart = null;
+    draft.observedExecution = current.previousExecution;
+    return;
   }
   const id = current.record.id;
-  let observedExecution: ObservedExecution | null = null;
-  let completed = false;
-  if (!model.data.ready) {
-    observedExecution = {
-      workspace: current.workspace,
-      id,
-      active: current.observedId === id,
-    };
-  } else if (model.data.state?.activeInvocation === id) {
-    observedExecution = { workspace: current.workspace, id, active: true };
-  } else if (!model.data.state?.activeInvocation) {
-    completed = true;
+  draft.pendingStart = null;
+  if (!draft.data.ready) {
+    draft.observedExecution = { id, active: current.observedId === id };
+  } else if (draft.data.state?.activeInvocation === id) {
+    draft.observedExecution = { id, active: true };
+  } else if (!draft.data.state?.activeInvocation) {
+    draft.observedExecution = null;
+    completeConsole(draft, id);
   } else {
-    observedExecution = {
-      workspace: model.data.state.workspace ?? current.workspace,
-      id: model.data.state.activeInvocation,
-      active: true,
-    };
+    draft.observedExecution = { id: draft.data.state.activeInvocation, active: true };
   }
-  let next: SessionModel = { ...model, pendingStart: null, observedExecution };
-  if (completed) next = completeConsole(next, id);
-  return next;
 }
 
-function loadHistory(model: SessionModel): SessionTransition {
-  if (!model.data.state?.workspace || !model.data.ready) return result(model);
-  if (model.historyRequest) {
-    return result(
-      model.historyAgain ? model : { ...model, historyAgain: true },
-      [],
-      model.historyRequest.id,
-    );
+function loadHistory(draft: Draft) {
+  if (!draft.data.state?.workspace || !draft.data.ready) return;
+  if (draft.historyRequest) {
+    draft.historyAgain = true;
+    draft.waitFor = draft.historyRequest.id;
+    return;
   }
-  const transition = syncHistory({ ...model, historyAttempt: null });
-  return result(transition.model, transition.effects, transition.model.historyRequest?.id);
+  draft.historyAttempt = null;
+  draft.waitFor = syncHistory(draft);
 }
 
-function loadSnapshot(model: SessionModel): SessionTransition {
-  const key = snapshotKey(model);
-  const inFlight = model.snapshotRequests.find((request) => request.key === key);
-  if (inFlight) return result(model, [], inFlight.id);
-  if (!model.data.state?.workspace || model.data.state.snapshotFetchedAt === null) {
-    return result(model);
+function loadSnapshot(draft: Draft) {
+  const key = snapshotKey(draft);
+  if (draft.snapshotRequest?.key === key) {
+    draft.waitFor = draft.snapshotRequest.id;
+    return;
   }
-  const transition = syncSnapshot({ ...model, snapshotAttempt: null });
-  return result(
-    transition.model,
-    transition.effects,
-    transition.model.snapshotRequests.find((request) => request.key === key)?.id,
-  );
+  if (!draft.data.state?.workspace || draft.data.state.snapshotFetchedAt === null) return;
+  draft.snapshotAttempt = null;
+  syncSnapshot(draft);
+  draft.waitFor = draft.snapshotRequest?.id;
 }
 
-function forceDetail(model: SessionModel): SessionTransition {
-  if (!savedEligible(model)) return result(model);
-  const key = savedKey(model);
-  if (model.detailRequest?.key === key) return result(model, [], model.detailRequest.id);
-  if (model.detailRequest) {
-    return result({ ...model, detailAttempt: null }, [], model.detailRequest.id);
+function forceDetail(draft: Draft) {
+  if (!savedEligible(draft)) return;
+  const key = savedKey(draft);
+  if (draft.detailRequest?.key === key) {
+    draft.waitFor = draft.detailRequest.id;
+    return;
   }
-  const transition = startDetail({ ...model, detailAttempt: null });
-  return result(transition.model, transition.effects, transition.model.detailRequest?.id);
+  if (draft.detailRequest) {
+    draft.detailAttempt = null;
+    draft.waitFor = draft.detailRequest.id;
+    return;
+  }
+  draft.detailAttempt = null;
+  draft.waitFor = startDetail(draft);
 }
 
-function forceProfile(model: SessionModel): SessionTransition {
-  if (!savedEligible(model)) return result(model);
-  const key = savedKey(model);
-  if (model.profileRequest?.key === key) return result(model, [], model.profileRequest.id);
-  if (model.profileRequest) {
-    return result({ ...model, profileAttempt: null }, [], model.profileRequest.id);
+function forceProfile(draft: Draft) {
+  if (!savedEligible(draft)) return;
+  const key = savedKey(draft);
+  if (draft.profileRequest?.key === key) {
+    draft.waitFor = draft.profileRequest.id;
+    return;
   }
-  const transition = startProfile({ ...model, profileAttempt: null });
-  return result(transition.model, transition.effects, transition.model.profileRequest?.id);
+  if (draft.profileRequest) {
+    draft.profileAttempt = null;
+    draft.waitFor = draft.profileRequest.id;
+    return;
+  }
+  draft.profileAttempt = null;
+  draft.waitFor = startProfile(draft);
 }
 
-function finishHistory(
-  model: SessionModel,
-  requestId: number,
-  records?: InvocationRecord[],
-  error?: string,
-): SessionTransition {
-  const request = model.historyRequest;
-  if (!request || request.id !== requestId) return result(model);
-  let next: SessionModel = { ...model, historyRequest: null };
-  const accepted =
-    request.workspaceGeneration === model.workspaceGeneration &&
-    request.workspace === model.data.state?.workspace;
-  if (accepted && records) {
-    const unchanged =
-      JSON.stringify(records) === JSON.stringify(model.data.invocations) &&
-      model.data.invocationsError === null;
-    next = withData(next, {
-      ...(unchanged ? {} : { invocations: records }),
-      invocationsError: null,
-    });
-    next = refreshSavedAfterHistory(next);
-  } else if (accepted && error !== undefined) {
-    next = withData(next, { invocationsError: error });
-  }
-  if (model.historyAgain) {
-    next = { ...next, historyAgain: false, historyAttempt: null };
-  }
-  return syncAll(next);
-}
-
-function finishSnapshot(
-  model: SessionModel,
-  requestId: number,
-  snapshot?: TargetIndex | null,
-  error?: string,
-): SessionTransition {
-  const request = model.snapshotRequests.find((item) => item.id === requestId);
-  if (!request) return result(model);
-  const oldTargetKey = targetKey(model);
-  let next: SessionModel = {
-    ...model,
-    snapshotRequests: model.snapshotRequests.filter((item) => item.id !== requestId),
-  };
-  if (request.key === snapshotKey(model) && snapshot !== undefined) {
-    const selection = next.data.selection;
-    const targetValid =
-      selection?.kind === "target" &&
-      snapshot?.targets.some((target) => target.label === selection.label);
-    next = withData(next, {
-      snapshot,
-      snapshotError: null,
-      ...(next.data.targetDetailError === TARGET_LIST_ERROR ? { targetDetailError: null } : {}),
-    });
-    if (selection?.kind === "package" || (selection?.kind === "target" && !targetValid)) {
-      next = setSelection(next, null);
-    }
-    next = resetTargetContext(next, oldTargetKey);
-  } else if (request.key === snapshotKey(model) && error !== undefined) {
-    next = withData(next, {
-      snapshotError: `Could not load the workspace snapshot: ${error}`,
-      ...(next.data.selection?.kind === "target" ? { targetDetailError: TARGET_LIST_ERROR } : {}),
-    });
-  }
-  return syncAll(next);
-}
-
-function finishTargetDetail(
-  model: SessionModel,
-  requestId: number,
-  detail?: TargetDetail,
-  error?: string,
-): SessionTransition {
-  const request = model.targetDetailRequest;
-  if (!request || request.id !== requestId) return result(model);
-  let next: SessionModel = { ...model, targetDetailRequest: null };
-  if (request.key === targetKey(model)) {
-    if (detail && detail.target.label === request.label) {
-      next = {
-        ...next,
-        targetDetailFor: request.key,
-        data: { ...next.data, targetDetail: detail, targetDetailError: null },
-      };
+function finishHistory(draft: Draft, requestId: number, result: Result<InvocationRecord[]>) {
+  const request = draft.historyRequest;
+  if (!request || request.id !== requestId) return;
+  draft.historyRequest = null;
+  if (request.workspaceGeneration === draft.workspaceGeneration) {
+    if (result.ok) {
+      const unchanged =
+        JSON.stringify(result.value) === JSON.stringify(draft.data.invocations) &&
+        draft.data.invocationsError === null;
+      if (!unchanged) draft.data.invocations = result.value;
+      draft.data.invocationsError = null;
+      refreshSavedAfterHistory(draft);
     } else {
-      next = withData(next, {
-        targetDetailError: error ?? "Error: Target detail does not match the selected label",
-      });
+      draft.data.invocationsError = result.error;
     }
   }
-  return syncAll(next);
+  if (draft.historyAgain) {
+    draft.historyAgain = false;
+    draft.historyAttempt = null;
+  }
+  syncAll(draft);
 }
 
-function finishTargetOutputs(
-  model: SessionModel,
-  requestId: number,
-  outputs?: TargetOutputs,
-  error?: string,
-): SessionTransition {
-  const request = model.targetOutputsRequest;
-  if (!request || request.id !== requestId) return result(model);
-  let next: SessionModel = { ...model, targetOutputsRequest: null };
-  if (request.key === targetKey(model) && model.targetDetailFor === request.key) {
-    next = withData(next, {
-      targetOutputs: outputs ?? null,
-      targetOutputsError: error ?? null,
+function finishSnapshot(draft: Draft, requestId: number, result: Result<TargetIndex | null>) {
+  const request = draft.snapshotRequest;
+  if (!request || request.id !== requestId) return;
+  draft.snapshotRequest = null;
+  const oldTargetKey = targetKey(draft);
+  if (request.key === snapshotKey(draft)) {
+    if (result.ok) {
+      const selection = draft.data.selection;
+      const targetValid =
+        selection?.kind === "target" &&
+        result.value?.targets.some((target) => target.label === selection.label);
+      draft.data.snapshot = result.value;
+      draft.data.snapshotError = null;
+      if (draft.data.targetDetailError === TARGET_LIST_ERROR) draft.data.targetDetailError = null;
+      if (selection?.kind === "package" || (selection?.kind === "target" && !targetValid)) {
+        setSelection(draft, null);
+      }
+      resetTargetContext(draft, oldTargetKey);
+    } else {
+      draft.data.snapshotError = `Could not load the workspace snapshot: ${result.error}`;
+      if (draft.data.selection?.kind === "target") draft.data.targetDetailError = TARGET_LIST_ERROR;
+    }
+  }
+  syncAll(draft);
+}
+
+function finishTargetDetail(draft: Draft, requestId: number, result: Result<TargetDetail>) {
+  const request = draft.targetDetailRequest;
+  if (!request || request.id !== requestId) return;
+  draft.targetDetailRequest = null;
+  if (request.key === targetKey(draft)) {
+    if (result.ok && result.value.target.label === request.label) {
+      setData(draft, { targetDetail: result.value, targetDetailError: null });
+    } else {
+      draft.data.targetDetailError = result.ok
+        ? "Error: Target detail does not match the selected label"
+        : result.error;
+    }
+  }
+  syncAll(draft);
+}
+
+function finishTargetOutputs(draft: Draft, requestId: number, result: Result<TargetOutputs>) {
+  const request = draft.targetOutputsRequest;
+  if (!request || request.id !== requestId) return;
+  draft.targetOutputsRequest = null;
+  if (request.key === targetKey(draft) && draft.data.targetDetail?.target.label === request.label) {
+    setData(draft, {
+      targetOutputs: result.ok ? result.value : null,
+      targetOutputsError: result.ok ? null : result.error,
     });
   }
-  return syncAll(next);
+  syncAll(draft);
 }
 
-function finishSavedDetail(
-  model: SessionModel,
-  requestId: number,
-  detail?: InvocationDetail,
-  error?: string,
-): SessionTransition {
-  const request = model.detailRequest;
-  if (!request || request.id !== requestId) return result(model);
-  let next: SessionModel = { ...model, detailRequest: null };
-  if (request.key === savedKey(model) && savedEligible(model)) {
-    next = withData(next, {
-      ...(detail ? { detail } : {}),
-      detailError: error ?? null,
-    });
+function finishSavedDetail(draft: Draft, requestId: number, result: Result<InvocationDetail>) {
+  const request = draft.detailRequest;
+  if (!request || request.id !== requestId) return;
+  draft.detailRequest = null;
+  if (request.key === savedKey(draft) && savedEligible(draft)) {
+    if (result.ok) draft.data.detail = result.value;
+    draft.data.detailError = result.ok ? null : result.error;
   }
-  return syncAll(next);
+  syncAll(draft);
 }
 
-function finishProfile(
-  model: SessionModel,
-  requestId: number,
-  profile?: Section<Profile>,
-  error?: string,
-): SessionTransition {
-  const request = model.profileRequest;
-  if (!request || request.id !== requestId) return result(model);
-  let next: SessionModel = { ...model, profileRequest: null };
-  if (request.key === savedKey(model) && savedEligible(model)) {
-    next = withData(next, {
-      ...(profile ? { profile } : {}),
-      profileError: error ?? null,
-    });
+function finishProfile(draft: Draft, requestId: number, result: Result<Section<Profile>>) {
+  const request = draft.profileRequest;
+  if (!request || request.id !== requestId) return;
+  draft.profileRequest = null;
+  if (request.key === savedKey(draft) && savedEligible(draft)) {
+    if (result.ok) draft.data.profile = result.value;
+    draft.data.profileError = result.ok ? null : result.error;
   }
-  return syncAll(next);
+  syncAll(draft);
 }
 
-function start(
-  cmd: BazelCommand,
-  pattern: string,
-  argumentsText: string,
-  model: SessionModel,
-): SessionTransition {
-  if (!canSend(sessionView(model), pattern)) return result(model);
-  const workspace = model.data.state?.workspace;
-  if (!workspace) return result(model);
-  const reserved = reserveId(model);
-  const token = reserved.model.startToken + 1;
+function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: string) {
+  if (!canSend(sessionView(draft), pattern) || !draft.data.state?.workspace) return;
   const request: StartRequest = {
-    id: reserved.id,
-    token,
-    workspace,
+    id: nextId(draft),
+    workspace: draft.data.state.workspace,
     cmd,
     pattern,
     argumentsText,
-    previousExecution: model.observedExecution,
+    previousExecution: draft.observedExecution,
     observedId: null,
     record: null,
   };
-  const next = withData(
-    { ...reserved.model, startToken: token, pendingStart: request },
-    { error: null },
-  );
-  const transition = syncAll(next);
-  return result(
-    transition.model,
-    [{ type: "startInvocation", requestId: request.id, request }, ...transition.effects],
-    request.id,
-  );
+  draft.pendingStart = request;
+  draft.data.error = null;
+  draft.effects.push({ type: "startInvocation", request });
+  syncAll(draft);
+  draft.waitFor = request.id;
 }
 
-function startReturned(
-  model: SessionModel,
-  requestId: number,
-  token: number,
-  record: InvocationRecord,
-): SessionTransition {
-  const pending = model.pendingStart;
-  if (
-    !pending ||
-    pending.id !== requestId ||
-    pending.token !== token ||
-    model.startToken !== token
-  ) {
-    return result(model);
+function startResult(draft: Draft, requestId: number, result: Result<InvocationRecord>) {
+  const pending = draft.pendingStart;
+  if (!pending || pending.id !== requestId) return;
+  if (!result.ok) {
+    finishStart(draft, requestId);
+    draft.data.error = result.error;
+    syncAll(draft);
+    return;
   }
-  let next: SessionModel = {
-    ...model,
-    pendingStart: { ...pending, record },
-  };
-  if (!next.data.consoleOpen || next.data.console?.id !== record.id) {
-    next = withData(next, {
+  const record = result.value;
+  draft.pendingStart = { ...pending, record };
+  if (!draft.data.consoleOpen || draft.data.console?.id !== record.id) {
+    setData(draft, {
       console: { ...record, cmd: pending.cmd, pattern: pending.pattern },
       consoleOpen: true,
     });
-    next = setSelectedInvocation(next, null);
+    setSelectedInvocation(draft, null);
   }
-  const reserved = reserveId(next);
-  return result(
-    reserved.model,
-    [
-      {
-        type: "getStartState",
-        requestId: reserved.id,
-        startRequestId: requestId,
-        token,
-        revision: next.stateRevision,
-      },
-    ],
-    reserved.id,
-  );
+  const id = nextId(draft);
+  draft.effects.push({
+    type: "getStartState",
+    id,
+    startId: requestId,
+    revision: draft.stateRevision,
+  });
+  draft.waitFor = id;
 }
 
-function openWorkspace(model: SessionModel, path: string, scope: TargetScope): SessionTransition {
-  const reserved = reserveId(model);
-  if (sessionBusy(sessionView(model))) {
-    return result(
-      reserved.model,
-      [
-        {
-          type: "rejectWorkspaceOpen",
-          requestId: reserved.id,
-          message: OPEN_WORKSPACE_ERROR,
-        },
-      ],
-      reserved.id,
-    );
-  }
-  const request: WorkspaceRequest = {
-    id: reserved.id,
-    path,
-    scope,
-    revision: model.stateRevision,
-  };
-  return result(
-    { ...reserved.model, workspaceRequest: request },
-    [{ type: "openWorkspace", requestId: request.id, request }],
-    request.id,
-  );
-}
-
-function updateSelection(model: SessionModel, selection: ExplorerSelection): SessionTransition {
-  const previousKey = targetKey(model);
-  if (sameSelection(model.data.selection, selection)) {
-    if (selection?.kind === "target" && model.data.targetDetailError) {
-      const next = {
-        ...model,
-        targetDetailAttempt: null,
-        data: { ...model.data, targetDetailError: null },
-      };
-      return syncAll(next);
+function startStateResult(
+  draft: Draft,
+  message: Extract<SessionMessage, { type: "startStateResult" }>,
+) {
+  const pending = draft.pendingStart;
+  if (!pending || pending.id !== message.startId) return;
+  if (message.revision === draft.stateRevision) {
+    if (message.result.ok) {
+      applyAppState(draft, message.result.value);
+    } else {
+      setData(draft, {
+        ready: false,
+        error: `The invocation started, but getting its state failed; waiting for the next update: ${message.result.error}`,
+      });
     }
-    return result(model);
   }
-  const next = resetTargetContext(setSelection(model, selection), previousKey);
-  return syncAll(next);
+  finishStart(draft, message.startId);
+  draft.historyAttempt = null;
+  if (draft.historyRequest) draft.historyAgain = true;
+  syncAll(draft);
 }
 
-function updateSelectedInvocation(model: SessionModel, id: string | null): SessionTransition {
-  const unchanged = id === model.data.selectedInvocation;
-  let next = setSelectedInvocation(model, id);
-  next = withData(next, { consoleOpen: false });
-  if (unchanged) {
-    next = { ...next, detailAttempt: null, profileAttempt: null };
+function openWorkspace(draft: Draft, path: string, scope: TargetScope) {
+  const id = nextId(draft);
+  if (sessionBusy(sessionView(draft))) {
+    draft.effects.push({ type: "rejectWorkspaceOpen", id, message: OPEN_WORKSPACE_ERROR });
+    draft.waitFor = id;
+    return;
   }
-  return syncAll(next);
+  const request = { id, path, scope, revision: draft.stateRevision };
+  draft.workspaceRequest = request;
+  draft.effects.push({ type: "openWorkspace", request });
+  draft.waitFor = request.id;
+}
+
+function updateSelection(draft: Draft, selection: ExplorerSelection) {
+  const previousKey = targetKey(draft);
+  if (sameSelection(draft.data.selection, selection)) {
+    if (selection?.kind === "target" && draft.data.targetDetailError) {
+      draft.targetDetailAttempt = null;
+      draft.data.targetDetailError = null;
+      syncAll(draft);
+    }
+    return;
+  }
+  setSelection(draft, selection);
+  resetTargetContext(draft, previousKey);
+  syncAll(draft);
+}
+
+function updateSelectedInvocation(draft: Draft, id: string | null) {
+  const unchanged = id === draft.data.selectedInvocation;
+  setSelectedInvocation(draft, id);
+  draft.data.consoleOpen = false;
+  if (unchanged) {
+    forceDetail(draft);
+    forceProfile(draft);
+  }
+  syncAll(draft);
 }
 
 export function update(model: SessionModel, message: SessionMessage): SessionTransition {
+  const next = draft(model);
   switch (message.type) {
-    case "init": {
-      if (model.subscriptionRequestId !== null) return result(model);
-      const reserved = reserveId(model);
-      const next = { ...reserved.model, subscriptionRequestId: reserved.id };
-      return result(next, [{ type: "subscribe", requestId: reserved.id }], reserved.id);
-    }
-    case "subscriptionsReady": {
-      if (message.requestId !== model.subscriptionRequestId) return result(model);
-      const reserved = reserveId(model);
-      const request = { id: reserved.id, revision: model.stateRevision };
-      const next = { ...reserved.model, initialStateRequest: request };
-      return result(
-        next,
-        [
-          {
-            type: "getInitialState",
-            requestId: request.id,
-            revision: request.revision,
-          },
-        ],
-        request.id,
-      );
-    }
-    case "subscriptionsFailed": {
-      if (message.requestId !== model.subscriptionRequestId) return result(model);
-      return result(
-        withData(
-          { ...model, subscriptionRequestId: null },
-          { error: `Could not connect: ${message.error}` },
-        ),
-      );
-    }
-    case "initialStateLoaded": {
-      const request = model.initialStateRequest;
-      if (!request || request.id !== message.requestId) return result(model);
-      let next: SessionModel = { ...model, initialStateRequest: null };
-      if (message.revision === model.stateRevision) {
-        next = applyAppState(next, message.state);
-        return syncAll(next, true);
+    case "subscriptionsFailed":
+      next.data.error = `Could not connect: ${message.error}`;
+      break;
+    case "initialStateResult":
+      if (message.revision === next.stateRevision) {
+        if (message.result.ok) {
+          applyAppState(next, message.result.value);
+          syncAll(next, true);
+        } else if (!next.data.ready) {
+          next.data.error = `Could not connect: ${message.result.error}`;
+        }
       }
-      return result(next);
-    }
-    case "initialStateFailed": {
-      const request = model.initialStateRequest;
-      if (!request || request.id !== message.requestId) return result(model);
-      const next = { ...model, initialStateRequest: null };
-      return result(
-        !model.data.ready && request.revision === message.revision
-          ? withData(next, { error: `Could not connect: ${message.error}` })
-          : next,
-      );
-    }
-    case "appState": {
-      return syncAll(applyAppState(model, message.state), true);
-    }
+      break;
+    case "appState":
+      applyAppState(next, message.state);
+      syncAll(next, true);
+      break;
     case "historyChanged":
-    case "loadInvocations": {
-      return loadHistory(model);
-    }
-    case "invocationsLoaded": {
-      return finishHistory(model, message.requestId, message.records);
-    }
-    case "invocationsFailed": {
-      return finishHistory(model, message.requestId, undefined, message.error);
-    }
-    case "loadSnapshot": {
-      return loadSnapshot(model);
-    }
-    case "snapshotLoaded": {
-      return finishSnapshot(model, message.requestId, message.snapshot);
-    }
-    case "snapshotFailed": {
-      return finishSnapshot(model, message.requestId, undefined, message.error);
-    }
-    case "targetDetailLoaded": {
-      return finishTargetDetail(model, message.requestId, message.detail);
-    }
-    case "targetDetailFailed": {
-      return finishTargetDetail(model, message.requestId, undefined, message.error);
-    }
-    case "targetOutputsLoaded": {
-      return finishTargetOutputs(model, message.requestId, message.outputs);
-    }
-    case "targetOutputsFailed": {
-      return finishTargetOutputs(model, message.requestId, undefined, message.error);
-    }
-    case "detailLoaded": {
-      return finishSavedDetail(model, message.requestId, message.detail);
-    }
-    case "detailFailed": {
-      return finishSavedDetail(model, message.requestId, undefined, message.error);
-    }
-    case "profileLoaded": {
-      return finishProfile(model, message.requestId, message.profile);
-    }
-    case "profileFailed": {
-      return finishProfile(model, message.requestId, undefined, message.error);
-    }
-    case "select": {
-      return updateSelection(model, message.selection);
-    }
-    case "selectInvocation": {
-      return updateSelectedInvocation(model, message.id);
-    }
+    case "loadInvocations":
+      loadHistory(next);
+      break;
+    case "invocationsResult":
+      finishHistory(next, message.requestId, message.result);
+      break;
+    case "loadSnapshot":
+      loadSnapshot(next);
+      break;
+    case "snapshotResult":
+      finishSnapshot(next, message.requestId, message.result);
+      break;
+    case "targetDetailResult":
+      finishTargetDetail(next, message.requestId, message.result);
+      break;
+    case "targetOutputsResult":
+      finishTargetOutputs(next, message.requestId, message.result);
+      break;
+    case "detailResult":
+      finishSavedDetail(next, message.requestId, message.result);
+      break;
+    case "profileResult":
+      finishProfile(next, message.requestId, message.result);
+      break;
+    case "select":
+      updateSelection(next, message.selection);
+      break;
+    case "selectInvocation":
+      updateSelectedInvocation(next, message.id);
+      break;
     case "openConsole": {
-      const expected = model.data.state?.consoleInvocation ?? model.data.state?.activeInvocation;
+      const expected = next.data.state?.consoleInvocation ?? next.data.state?.activeInvocation;
       if (message.record.id !== expected) {
-        return updateSelectedInvocation(model, message.record.id);
+        updateSelectedInvocation(next, message.record.id);
+      } else if (!next.data.consoleOpen || next.data.console?.id !== message.record.id) {
+        setSelectedInvocation(next, null);
+        setData(next, { console: message.record, consoleOpen: true });
+        syncAll(next);
       }
-      if (model.data.consoleOpen && model.data.console?.id === message.record.id) {
-        return result(model);
+      break;
+    }
+    case "loadDetail":
+      forceDetail(next);
+      break;
+    case "loadProfile":
+      forceProfile(next);
+      break;
+    case "start":
+      start(next, message.cmd, message.pattern, message.argumentsText);
+      break;
+    case "startResult":
+      startResult(next, message.requestId, message.result);
+      break;
+    case "startStateResult":
+      startStateResult(next, message);
+      break;
+    case "openWorkspace":
+      openWorkspace(next, message.path, message.scope);
+      break;
+    case "workspaceResult": {
+      const request = next.workspaceRequest;
+      if (request?.id === message.requestId) {
+        next.workspaceRequest = null;
+        if (message.result.ok && request.revision === next.stateRevision) {
+          applyAppState(next, message.result.value);
+          syncAll(next, true);
+        } else {
+          syncAll(next);
+        }
       }
-      const next = withData(setSelectedInvocation(model, null), {
-        console: message.record,
-        consoleOpen: true,
-      });
-      return syncAll(next);
+      break;
     }
-    case "loadDetail": {
-      return forceDetail(model);
-    }
-    case "loadProfile": {
-      return forceProfile(model);
-    }
-    case "start": {
-      return start(message.cmd, message.pattern, message.argumentsText, model);
-    }
-    case "startReturned": {
-      return startReturned(model, message.requestId, message.token, message.record);
-    }
-    case "startFailed": {
-      const pending = model.pendingStart;
-      if (
-        !pending ||
-        pending.id !== message.requestId ||
-        pending.token !== message.token ||
-        model.startToken !== message.token
-      ) {
-        return result(model);
+    case "stop":
+      if (canStop(sessionView(next))) {
+        const id = nextId(next);
+        next.effects.push({ type: "stop", id, workspace: next.data.state?.workspace ?? null });
+        next.waitFor = id;
       }
-      const next = withData(finishStart(model, message.requestId, message.token), {
-        error: message.error,
-      });
-      return syncAll(next);
-    }
-    case "startStateLoaded": {
-      const pending = model.pendingStart;
-      if (
-        !pending ||
-        pending.id !== message.startRequestId ||
-        pending.token !== message.token ||
-        model.startToken !== message.token
-      ) {
-        return result(model);
+      break;
+    case "stopResult":
+      if (!message.result.ok && message.workspace === next.data.state?.workspace) {
+        next.data.error = message.result.error;
       }
-      let next = model;
-      if (message.revision === model.stateRevision) {
-        next = applyAppState(next, message.state);
+      break;
+    case "refresh":
+      if (!sessionBusy(sessionView(next))) {
+        const id = nextId(next);
+        next.effects.push({ type: "refresh", id, workspace: next.data.state?.workspace ?? null });
+        next.waitFor = id;
       }
-      next = finishStart(next, message.startRequestId, message.token);
-      return syncAll(next);
-    }
-    case "startStateFailed": {
-      const pending = model.pendingStart;
-      if (
-        !pending ||
-        pending.id !== message.startRequestId ||
-        pending.token !== message.token ||
-        model.startToken !== message.token
-      ) {
-        return result(model);
+      break;
+    case "refreshResult":
+      if (!message.result.ok && message.workspace === next.data.state?.workspace) {
+        next.data.error = message.result.error;
       }
-      let next = model;
-      if (message.revision === model.stateRevision) {
-        next = withData(next, {
-          ready: false,
-          error: `The invocation started, but getting its state failed; waiting for the next update: ${message.error}`,
-        });
-      }
-      next = finishStart(next, message.startRequestId, message.token);
-      return syncAll(next);
-    }
-    case "openWorkspace": {
-      return openWorkspace(model, message.path, message.scope);
-    }
-    case "workspaceOpened": {
-      const request = model.workspaceRequest;
-      if (!request || request.id !== message.requestId) return result(model);
-      let next: SessionModel = { ...model, workspaceRequest: null };
-      if (request.revision === model.stateRevision) {
-        next = applyAppState(next, message.state);
-      }
-      return syncAll(next, true);
-    }
-    case "workspaceOpenFailed": {
-      if (model.workspaceRequest?.id !== message.requestId) return result(model);
-      return result({ ...model, workspaceRequest: null });
-    }
-    case "stop": {
-      if (!canStop(sessionView(model))) return result(model);
-      const reserved = reserveId(model);
-      return result(
-        reserved.model,
-        [
-          {
-            type: "stop",
-            requestId: reserved.id,
-            workspace: model.data.state?.workspace ?? null,
-          },
-        ],
-        reserved.id,
-      );
-    }
-    case "stopFailed": {
-      return result(
-        message.workspace === model.data.state?.workspace
-          ? withData(model, { error: message.error })
-          : model,
-      );
-    }
-    case "refresh": {
-      if (sessionBusy(sessionView(model))) return result(model);
-      const reserved = reserveId(model);
-      return result(
-        reserved.model,
-        [
-          {
-            type: "refresh",
-            requestId: reserved.id,
-            workspace: model.data.state?.workspace ?? null,
-          },
-        ],
-        reserved.id,
-      );
-    }
-    case "refreshFailed": {
-      return result(
-        message.workspace === model.data.state?.workspace
-          ? withData(model, { error: message.error })
-          : model,
-      );
-    }
-    default: {
-      return unexpected(message);
-    }
+      break;
+    default:
+      unexpected(message);
   }
+  return finishDraft(next);
 }

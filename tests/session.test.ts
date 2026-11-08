@@ -1060,6 +1060,41 @@ test("start response before the running event reconciles state without reading a
   h.emit("app-state", { ...IDLE, activeInvocation: RECORD.id });
 });
 
+test("reselecting an invocation shares its pending detail and profile reads", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+
+  h.session.selectInvocation(RECORD.id);
+  h.session.selectInvocation(RECORD.id);
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  assert.equal(h.view.detailLoading, false);
+  assert.equal(h.view.profileLoading, false);
+});
+
+test("start reconciliation refreshes history when state remains idle", async () => {
+  const h = harness();
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record]);
+  await settle();
+
+  const startedRecord = { ...RECORD, id: "run-b", startedAt: 2 };
+  const started = h.session.start("build", "//:app");
+  pendingRequest(h, "start_invocation").reply.resolve(startedRecord);
+  await started;
+
+  assert.equal(requestCount(h, "list_invocations"), 2);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED.record, startedRecord]);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), 2);
+});
+
 test("completion event during post-start reconciliation wins over its stale running response", async () => {
   const h = harness();
   await h.session.init();
@@ -1698,6 +1733,26 @@ test("workspace opening sends all target patterns to the core", async () => {
   request.reply.resolve({ ...IDLE, workspace: "/other", scope });
   await opened;
   assert.deepEqual(h.view.state?.scope, scope);
+});
+
+test("a failed workspace open resumes a target selected while opening", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([]);
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  const opening = h.session.openWorkspace("/other", IDLE.scope);
+  h.session.select({ kind: "target", label: "//app:first" });
+  assert.equal(requestCount(h, "get_target_detail"), 0);
+
+  pendingRequest(h, "open_workspace").reply.reject(new Error("open failed"));
+  await assert.rejects(opening, /open failed/);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  assert.deepEqual(pendingRequest(h, "get_target_detail").args, {
+    label: "//app:first",
+    fetchedAt: SNAPSHOT.meta.fetchedAt,
+  });
 });
 
 test("clearing the target selection rejects an older target detail", async () => {
