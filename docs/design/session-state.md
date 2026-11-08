@@ -6,7 +6,7 @@ _Status: Approved_
 
 ## Goal
 
-既存の動作を保ち、理解・変更するために読むコードを減らす。形式の統一より、実装の単純さを優先する。
+Elm-like Architecture を採用して UI 更新のコードを整理する。実装は単純に保つ。
 
 機能は [PRD](../prd.md)、画面は [mock](../mock/) に従う。
 
@@ -21,15 +21,15 @@ _Status: Approved_
 **Session** は、Rust の状態通知と UI の選択から、必要な取得と表示を決める処理。
 **Model** は状態、**Message** は操作・通知・結果、**Effect** は実行する IPC の指示を表す。
 
-以前の実装は、純粋関数化しても不要な Promise 管理と条件の受け渡しが残っていた。
-[Atwood](https://blog.codinghorror.com/the-best-code-is-no-code-at-all/) の「読むコードを減らす」と、[Worse is Better](https://www.jwz.org/doc/worse-is-better.html) の「統一より実装の単純さ」を基準に、それらを削る。
+状態更新を純粋な関数に集め、副作用の実行と分離する。既存の動作を保ちながら、不要な Promise 管理や条件の受け渡しを取り除く。
+[Atwood](https://blog.codinghorror.com/the-best-code-is-no-code-at-all/) と [Worse is Better](https://www.jwz.org/doc/worse-is-better.html) は、この構造を単純に実装するための参考とする。
 
 ## Overview
 
 **変更するのは WebView 内の session 制御だけ。** 開発者 → Zeal → Bazel の関係と、WebView / Rust core / SQLite / 観測ファイルの境界は維持する。[全体構成](./overview.md)を参照。
 
 状態の更新は純粋な `update` に集め、現在の Model と Message から、次の Model と副作用の指示を返す。Svelte は表示、実行層は IPC を担当する。
-workspace を含む UI 操作は `void` とし、完了は Model から導出する画面状態で表す。IPC の応答は実行層で await し、結果 Message として戻す。
+workspace を含む session の UI 操作は `void` とし、完了は Model から導出する画面状態で表す。IPC の応答は実行層で await し、結果 Message として戻す。
 
 ```mermaid
 flowchart TD
