@@ -10,7 +10,6 @@ import type {
   TargetDetail,
   TargetIndex,
   TargetOutputs,
-  TargetScope,
 } from "./types.ts";
 
 export interface SessionView {
@@ -55,11 +54,6 @@ interface HistoryRequest {
   valid: boolean;
 }
 
-interface WorkspaceRequest {
-  readonly id: number;
-  readonly revision: number;
-}
-
 interface ObservedExecution {
   readonly id: string;
   readonly active: boolean;
@@ -81,7 +75,7 @@ export interface SessionModel {
   readonly stateRevision: number;
   readonly pendingStart: StartRequest | null;
   readonly observedExecution: ObservedExecution | null;
-  readonly workspaceRequest: WorkspaceRequest | null;
+  readonly opening: boolean;
   readonly historyRequest: HistoryRequest | null;
   readonly historyAgain: boolean;
   readonly snapshotRequestId: number | null;
@@ -129,19 +123,11 @@ export type SessionEffect =
     }
   | {
       readonly type: "getStartState";
-      readonly id: number;
       readonly startId: number;
       readonly revision: number;
     }
-  | {
-      readonly type: "openWorkspace";
-      readonly id: number;
-      readonly path: string;
-      readonly scope: TargetScope;
-    }
-  | { readonly type: "rejectWorkspaceOpen"; readonly id: number; readonly message: string }
-  | { readonly type: "stop"; readonly id: number; readonly workspace: string | null }
-  | { readonly type: "refresh"; readonly id: number; readonly workspace: string | null };
+  | { readonly type: "stop"; readonly workspace: string | null }
+  | { readonly type: "refresh"; readonly workspace: string | null };
 
 export type SessionMessage =
   | { readonly type: "subscriptionsFailed"; readonly error: string }
@@ -172,8 +158,8 @@ export type SessionMessage =
       readonly startId: number;
       readonly revision: number;
     })
-  | { readonly type: "openWorkspace"; readonly path: string; readonly scope: TargetScope }
-  | RequestResult<"workspaceResult", AppState>
+  | { readonly type: "workspaceOpening" }
+  | (ResultMessage<"workspaceResult", AppState> & { readonly revision: number })
   | { readonly type: "stop" }
   | (ResultMessage<"stopResult", void> & { readonly workspace: string | null })
   | { readonly type: "refresh" }
@@ -182,13 +168,10 @@ export type SessionMessage =
 interface SessionTransition {
   readonly model: SessionModel;
   readonly effects: SessionEffect[];
-  readonly waitFor?: number;
 }
 
 const RUNNING_SLOTS = ["ingest", "detailQuery"] as const;
 const TARGET_LIST_ERROR = "Could not load the target list";
-const OPEN_WORKSPACE_ERROR =
-  "Wait for the current Bazel operation to finish before changing the workspace";
 
 function emptyData(): SessionData {
   return {
@@ -225,7 +208,7 @@ export function initialModel(): SessionModel {
     stateRevision: 0,
     pendingStart: null,
     observedExecution: null,
-    workspaceRequest: null,
+    opening: false,
     historyRequest: null,
     historyAgain: false,
     snapshotRequestId: null,
@@ -253,7 +236,7 @@ export function sessionView(model: SessionModel): SessionView {
     ...model.data,
     snapshotLoading: model.snapshotRequestId !== null,
     starting: model.pendingStart !== null,
-    opening: model.workspaceRequest !== null,
+    opening: model.opening,
     detailLoading:
       eligible && model.detail.running !== null && model.detail.running === model.detail.wanted,
     profileLoading:
@@ -293,7 +276,6 @@ export function canStop(view: SessionView): boolean {
 
 type Draft = { -readonly [K in keyof SessionModel]: SessionModel[K] } & {
   effects: SessionEffect[];
-  waitFor?: number;
 };
 
 function draft(model: SessionModel): Draft {
@@ -311,8 +293,8 @@ function draft(model: SessionModel): Draft {
 }
 
 function finishDraft(next: Draft): SessionTransition {
-  const { effects, waitFor, ...model } = next;
-  return { model, effects, waitFor };
+  const { effects, ...model } = next;
+  return { model, effects };
 }
 
 function nextId(draft: Draft): number {
@@ -342,7 +324,7 @@ function recordFor(records: InvocationRecord[], id: string | null): InvocationRe
   return records.find((record) => record.id === id);
 }
 
-function startHistory(draft: Draft): number | undefined {
+function startHistory(draft: Draft) {
   if (!draft.data.ready || !draft.data.state?.workspace || draft.historyRequest) {
     return;
   }
@@ -351,70 +333,59 @@ function startHistory(draft: Draft): number | undefined {
   draft.historyAgain = false;
   draft.data.invocationsError = null;
   draft.effects.push({ type: "listInvocations", id });
-  return id;
 }
 
 function requestHistory(draft: Draft) {
   if (draft.historyRequest) {
     draft.historyAgain = true;
-    return draft.historyRequest.id;
+  } else {
+    startHistory(draft);
   }
-  return startHistory(draft);
 }
 
-function startSnapshot(draft: Draft): number | undefined {
+function startSnapshot(draft: Draft) {
   const state = draft.data.state;
   if (!state?.workspace || state.snapshotFetchedAt === null) return;
-  if (draft.snapshotRequestId !== null) return draft.snapshotRequestId;
+  if (draft.snapshotRequestId !== null) return;
   const id = nextId(draft);
   draft.snapshotRequestId = id;
   draft.data.snapshotError = null;
   draft.effects.push({ type: "getSnapshot", id });
-  return id;
 }
 
-function targetCanRead(draft: Draft): boolean {
+function targetReadArgs(draft: Draft): { label: string; fetchedAt: number } | null {
   const selection = draft.data.selection;
   const state = draft.data.state;
   const snapshot = draft.data.snapshot;
   const view = sessionView(draft);
-  return !!(
-    selection?.kind === "target" &&
-    snapshot &&
-    snapshot.targets.some((target) => target.label === selection.label) &&
-    snapshot.meta.fetchedAt === state?.snapshotFetchedAt &&
-    workspaceReady(view) &&
-    !sessionBusy(view)
-  );
+  if (
+    selection?.kind !== "target" ||
+    !snapshot ||
+    !snapshot.targets.some((target) => target.label === selection.label) ||
+    snapshot.meta.fetchedAt !== state?.snapshotFetchedAt ||
+    !workspaceReady(view) ||
+    sessionBusy(view)
+  )
+    return null;
+  return { label: selection.label, fetchedAt: snapshot.meta.fetchedAt };
 }
 
 function startTargetDetail(draft: Draft) {
   if (draft.targetDetail.running !== null || draft.targetDetail.wanted === null) return;
-  if (!targetCanRead(draft)) return;
-  const selection = draft.data.selection;
-  const fetchedAt = draft.data.state?.snapshotFetchedAt;
-  if (selection?.kind !== "target" || fetchedAt === null || fetchedAt === undefined) return;
+  const args = targetReadArgs(draft);
+  if (!args) return;
   const id = draft.targetDetail.wanted;
   draft.targetDetail.running = id;
-  draft.effects.push({ type: "getTargetDetail", id, label: selection.label, fetchedAt });
+  draft.effects.push({ type: "getTargetDetail", id, ...args });
 }
 
 function startTargetOutputs(draft: Draft) {
   if (draft.targetOutputs.running !== null || draft.targetOutputs.wanted === null) return;
-  if (!targetCanRead(draft)) return;
-  const selection = draft.data.selection;
-  const fetchedAt = draft.data.state?.snapshotFetchedAt;
-  if (
-    selection?.kind !== "target" ||
-    fetchedAt === null ||
-    fetchedAt === undefined ||
-    draft.data.targetDetail?.target.label !== selection.label
-  ) {
-    return;
-  }
+  const args = targetReadArgs(draft);
+  if (!args || draft.data.targetDetail?.target.label !== args.label) return;
   const id = draft.targetOutputs.wanted;
   draft.targetOutputs.running = id;
-  draft.effects.push({ type: "getTargetOutputs", id, label: selection.label, fetchedAt });
+  draft.effects.push({ type: "getTargetOutputs", id, ...args });
 }
 
 function startDetail(draft: Draft) {
@@ -545,15 +516,6 @@ function selectTarget(draft: Draft, selection: ExplorerSelection) {
   resetTargetContext(draft);
 }
 
-function targetContextChanged(before: AppState | null, next: AppState): boolean {
-  return (
-    before === null ||
-    before.workspace !== next.workspace ||
-    !sameScope(before, next) ||
-    before.snapshotFetchedAt !== next.snapshotFetchedAt
-  );
-}
-
 function resetWorkspaceData(draft: Draft, state: AppState) {
   draft.pendingStart = null;
   draft.observedExecution = state.activeInvocation
@@ -629,23 +591,20 @@ function updateExecutionState(draft: Draft, before: AppState | null, state: AppS
   if (!applyPendingStartState(draft, state)) observeExecution(draft, before, state);
 }
 
-function updateHistoryForState(draft: Draft, workspaceChanged: boolean, shouldRefresh: boolean) {
-  if (workspaceChanged) {
-    if (!draft.historyRequest) startHistory(draft);
-  } else if (shouldRefresh) {
-    requestHistory(draft);
+function updateTargetsForState(draft: Draft, before: AppState | null, state: AppState) {
+  const workspaceChanged = state.workspace !== before?.workspace;
+  const scopeChanged = !sameScope(before, state);
+  const contextChanged =
+    before === null ||
+    workspaceChanged ||
+    scopeChanged ||
+    state.snapshotFetchedAt !== before.snapshotFetchedAt;
+  let selectionCleared = false;
+  if (!workspaceChanged && (scopeChanged || state.snapshotFetchedAt === null)) {
+    selectionCleared = draft.data.selection !== null;
+    draft.data.selection = null;
+    setData(draft, { snapshot: null, snapshotError: null });
   }
-}
-
-function updateTargetsForState(
-  draft: Draft,
-  before: AppState | null,
-  state: AppState,
-  workspaceChanged: boolean,
-  scopeChanged: boolean,
-  selectionCleared: boolean,
-) {
-  const contextChanged = targetContextChanged(before, state);
   if ((contextChanged && !workspaceChanged) || selectionCleared) resetTargetContext(draft);
   if (!contextChanged) {
     if (draft.data.snapshotError !== null) startSnapshot(draft);
@@ -658,48 +617,23 @@ function updateTargetsForState(
   if (state.snapshotFetchedAt !== null) startSnapshot(draft);
 }
 
-function applyStateContext(
-  draft: Draft,
-  before: AppState | null,
-  state: AppState,
-  workspaceChanged: boolean,
-  scopeChanged: boolean,
-) {
-  if (workspaceChanged) {
-    resetWorkspaceData(draft, state);
-    return;
-  }
-  if (scopeChanged || state.snapshotFetchedAt === null) {
-    draft.data.selection = null;
-    setData(draft, { snapshot: null, snapshotError: null });
-  }
-  updateExecutionState(draft, before, state);
-}
-
 function applyAppState(draft: Draft, state: AppState) {
   const before = draft.data.state;
   const wasReady = draft.data.ready;
   const wasSavedEligible = savedEligible(draft);
   const wasBusy = sessionBusy(sessionView(draft));
-  const workspaceChanged = state.workspace !== before?.workspace;
-  const scopeChanged = !sameScope(before, state);
-  const selectionCleared =
-    !workspaceChanged &&
-    (scopeChanged || state.snapshotFetchedAt === null) &&
-    draft.data.selection !== null;
-
   draft.stateRevision++;
   draft.data.state = state;
   draft.data.ready = true;
   if (!wasReady) draft.data.error = null;
-  applyStateContext(draft, before, state, workspaceChanged, scopeChanged);
-
-  updateHistoryForState(
-    draft,
-    workspaceChanged,
-    before === null || !wasReady || state.activeInvocation !== before?.activeInvocation,
-  );
-  updateTargetsForState(draft, before, state, workspaceChanged, scopeChanged, selectionCleared);
+  if (state.workspace !== before?.workspace) {
+    resetWorkspaceData(draft, state);
+    if (!draft.historyRequest) startHistory(draft);
+  } else {
+    updateExecutionState(draft, before, state);
+    if (!wasReady || state.activeInvocation !== before?.activeInvocation) requestHistory(draft);
+  }
+  updateTargetsForState(draft, before, state);
   savedEligibilityChanged(draft, wasSavedEligible, savedEligible(draft));
   if (wasBusy && sessionBusy(sessionView(draft)) === false) resumeTargets(draft);
 }
@@ -903,7 +837,6 @@ function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: 
     argumentsText,
   });
   savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
-  draft.waitFor = request.id;
 }
 
 function startResult(draft: Draft, requestId: number, result: Result<InvocationRecord>) {
@@ -922,14 +855,11 @@ function startResult(draft: Draft, requestId: number, result: Result<InvocationR
     });
     selectSaved(draft, null);
   }
-  const id = nextId(draft);
   draft.effects.push({
     type: "getStartState",
-    id,
     startId: requestId,
     revision: draft.stateRevision,
   });
-  draft.waitFor = id;
 }
 
 function startStateResult(
@@ -953,18 +883,6 @@ function startStateResult(
   if (draft.data.ready) requestHistory(draft);
 }
 
-function openWorkspace(draft: Draft, path: string, scope: TargetScope) {
-  const id = nextId(draft);
-  if (sessionBusy(sessionView(draft))) {
-    draft.effects.push({ type: "rejectWorkspaceOpen", id, message: OPEN_WORKSPACE_ERROR });
-    draft.waitFor = id;
-    return;
-  }
-  draft.workspaceRequest = { id, revision: draft.stateRevision };
-  draft.effects.push({ type: "openWorkspace", id, path, scope });
-  draft.waitFor = id;
-}
-
 function initialStateResult(
   draft: Draft,
   message: Extract<SessionMessage, { type: "initialStateResult" }>,
@@ -986,26 +904,20 @@ function openConsole(draft: Draft, record: InvocationRecord) {
   setData(draft, { console: record, consoleOpen: true });
 }
 
-function finishWorkspaceOpen(draft: Draft, requestId: number, result: Result<AppState>) {
-  const request = draft.workspaceRequest;
-  if (request?.id !== requestId) return;
-  draft.workspaceRequest = null;
-  if (result.ok && request.revision === draft.stateRevision) applyAppState(draft, result.value);
+function finishWorkspaceOpen(draft: Draft, revision: number, result: Result<AppState>) {
+  draft.opening = false;
+  if (result.ok && revision === draft.stateRevision) applyAppState(draft, result.value);
   resumeTargets(draft);
 }
 
 function requestStop(draft: Draft) {
   if (!canStop(sessionView(draft))) return;
-  const id = nextId(draft);
-  draft.effects.push({ type: "stop", id, workspace: draft.data.state?.workspace ?? null });
-  draft.waitFor = id;
+  draft.effects.push({ type: "stop", workspace: draft.data.state?.workspace ?? null });
 }
 
 function requestRefresh(draft: Draft) {
   if (sessionBusy(sessionView(draft))) return;
-  const id = nextId(draft);
-  draft.effects.push({ type: "refresh", id, workspace: draft.data.state?.workspace ?? null });
-  draft.waitFor = id;
+  draft.effects.push({ type: "refresh", workspace: draft.data.state?.workspace ?? null });
 }
 
 export function update(model: SessionModel, message: SessionMessage): SessionTransition {
@@ -1023,13 +935,12 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "historyChanged":
     case "loadInvocations":
       requestHistory(next);
-      next.waitFor = next.historyRequest?.id;
       break;
     case "invocationsResult":
       finishHistory(next, message.requestId, message.result);
       break;
     case "loadSnapshot":
-      next.waitFor = next.snapshotRequestId ?? startSnapshot(next);
+      startSnapshot(next);
       break;
     case "snapshotResult":
       finishSnapshot(next, message.requestId, message.result);
@@ -1058,11 +969,9 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       break;
     case "loadDetail":
       retryDetail(next);
-      next.waitFor = next.detail.running ?? next.detail.wanted ?? undefined;
       break;
     case "loadProfile":
       retryProfile(next);
-      next.waitFor = next.profile.running ?? next.profile.wanted ?? undefined;
       break;
     case "start":
       start(next, message.cmd, message.pattern, message.argumentsText);
@@ -1073,11 +982,11 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "startStateResult":
       startStateResult(next, message);
       break;
-    case "openWorkspace":
-      openWorkspace(next, message.path, message.scope);
+    case "workspaceOpening":
+      next.opening = true;
       break;
     case "workspaceResult":
-      finishWorkspaceOpen(next, message.requestId, message.result);
+      finishWorkspaceOpen(next, message.revision, message.result);
       break;
     case "stop":
       requestStop(next);

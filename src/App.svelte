@@ -86,9 +86,9 @@
 
   function submit() {
     if (running) {
-      void getSession().stop();
+      getSession().stop();
     } else {
-      void getSession().start(cmd, targetField, argumentsText);
+      getSession().start(cmd, targetField, argumentsText);
     }
   }
 

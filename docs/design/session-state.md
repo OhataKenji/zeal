@@ -2,7 +2,9 @@
 
 _Devin_
 _Last update: 2026/11/08_
-_Status: Approved_
+_Status: Deprecated_
+
+後継: [必要な状態遷移だけを残す](./session-state-minimal.md)。本書は前段階の設計判断の記録として残す。
 
 ## Goal
 

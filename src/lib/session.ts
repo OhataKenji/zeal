@@ -1,6 +1,7 @@
 import { COMMANDS } from "./commands.ts";
 import {
   initialModel,
+  sessionBusy,
   sessionView,
   update,
   type Result,
@@ -47,7 +48,6 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
   let initializing: Promise<void> | undefined;
   let unlisten: (() => void) | undefined;
   let unlistenHistory: (() => void) | undefined;
-  const operations = new Map<number, Promise<void>>();
 
   function publish() {
     const next = sessionView(model);
@@ -62,13 +62,12 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     changed(view);
   }
 
-  function dispatch(message: SessionMessage): number | undefined {
+  function dispatch(message: SessionMessage): void {
     if (disposed) return;
     const transition = update(model, message);
     model = transition.model;
     publish();
-    transition.effects.forEach(launch);
-    return transition.waitFor;
+    transition.effects.forEach((effect) => void runEffect(effect));
   }
 
   async function settle<T>(
@@ -76,20 +75,6 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     message: (result: Result<T>) => SessionMessage,
   ) {
     dispatch(message(await resultOf(operation)));
-  }
-
-  function waitFor(id: number | undefined): Promise<void> {
-    return id === undefined ? Promise.resolve() : (operations.get(id) ?? Promise.resolve());
-  }
-
-  function launch(effect: SessionEffect) {
-    const id = effect.id;
-    if (operations.has(id)) return;
-    let operation: Promise<void>;
-    operation = runEffect(effect).finally(() => {
-      if (operations.get(id) === operation) operations.delete(id);
-    });
-    operations.set(id, operation);
   }
 
   async function initialize() {
@@ -190,7 +175,7 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
         );
         return;
       case "startInvocation":
-        const wait = dispatch({
+        dispatch({
           type: "startResult",
           requestId: effect.id,
           result: await resultOf(() =>
@@ -201,7 +186,6 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
             }),
           ),
         });
-        await waitFor(wait);
         return;
       case "getStartState":
         await settle(
@@ -214,28 +198,6 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
           }),
         );
         return;
-      case "openWorkspace":
-        try {
-          const state = await transport.invoke<AppState>(COMMANDS.openWorkspace, {
-            path: effect.path,
-            scope: effect.scope,
-          });
-          dispatch({
-            type: "workspaceResult",
-            requestId: effect.id,
-            result: { ok: true, value: state },
-          });
-        } catch (error) {
-          dispatch({
-            type: "workspaceResult",
-            requestId: effect.id,
-            result: { ok: false, error: String(error) },
-          });
-          throw error;
-        }
-        return;
-      case "rejectWorkspaceOpen":
-        throw new Error(effect.message);
       case "stop":
         await settle(
           () => transport.invoke<void>(COMMANDS.stopInvocation),
@@ -251,6 +213,25 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     }
   }
 
+  async function openWorkspace(path: string, scope: TargetScope): Promise<void> {
+    if (disposed) return;
+    if (sessionBusy(sessionView(model))) {
+      throw new Error(
+        "Wait for the current Bazel operation to finish before changing the workspace",
+      );
+    }
+    const revision = model.stateRevision;
+    dispatch({ type: "workspaceOpening" });
+    let state: AppState;
+    try {
+      state = await transport.invoke<AppState>(COMMANDS.openWorkspace, { path, scope });
+    } catch (error) {
+      dispatch({ type: "workspaceResult", revision, result: { ok: false, error: String(error) } });
+      throw error;
+    }
+    dispatch({ type: "workspaceResult", revision, result: { ok: true, value: state } });
+  }
+
   function dispose() {
     disposed = true;
     unlisten?.();
@@ -263,17 +244,16 @@ export function createSession(transport: Transport, changed: (view: SessionViewT
     init,
     dispose,
     start: (cmd: BazelCommand, pattern: string, argumentsText = "") =>
-      waitFor(dispatch({ type: "start", cmd, pattern, argumentsText })),
-    stop: () => waitFor(dispatch({ type: "stop" })),
-    openWorkspace: (path: string, scope: TargetScope) =>
-      waitFor(dispatch({ type: "openWorkspace", path, scope })),
-    refresh: () => waitFor(dispatch({ type: "refresh" })),
+      dispatch({ type: "start", cmd, pattern, argumentsText }),
+    stop: () => dispatch({ type: "stop" }),
+    openWorkspace,
+    refresh: () => dispatch({ type: "refresh" }),
     selectInvocation: (id: string | null) => dispatch({ type: "selectInvocation", id }),
     openConsole: (record: InvocationRecord) => dispatch({ type: "openConsole", record }),
-    loadDetail: () => waitFor(dispatch({ type: "loadDetail" })),
-    loadProfile: () => waitFor(dispatch({ type: "loadProfile" })),
-    loadInvocations: () => waitFor(dispatch({ type: "loadInvocations" })),
-    loadSnapshot: () => waitFor(dispatch({ type: "loadSnapshot" })),
+    loadDetail: () => dispatch({ type: "loadDetail" }),
+    loadProfile: () => dispatch({ type: "loadProfile" }),
+    loadInvocations: () => dispatch({ type: "loadInvocations" }),
+    loadSnapshot: () => dispatch({ type: "loadSnapshot" }),
     select: (selection: ExplorerSelection) => dispatch({ type: "select", selection }),
   };
 }
