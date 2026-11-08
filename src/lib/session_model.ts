@@ -7,6 +7,7 @@ import type {
   InvocationRecord,
   Profile,
   Section,
+  TargetActions,
   TargetDetail,
   TargetIndex,
   TargetOutputs,
@@ -72,6 +73,7 @@ export interface SessionModel {
     };
     detail: Reader<TargetDetail>;
     outputs: Reader<TargetOutputs>;
+    actions: Reader<TargetActions>;
   };
   readonly history: {
     records: InvocationRecord[];
@@ -97,6 +99,8 @@ export interface SessionView {
   targetDetailError: string | null;
   targetOutputs: TargetOutputs | null;
   targetOutputsError: string | null;
+  targetActions: TargetActions | null;
+  targetActionsError: string | null;
   ready: boolean;
   starting: boolean;
   opening: boolean;
@@ -140,6 +144,12 @@ export type SessionEffect =
       readonly label: string;
       readonly fetchedAt: number;
     }
+  | {
+      readonly type: "getTargetActions";
+      readonly id: number;
+      readonly label: string;
+      readonly fetchedAt: number;
+    }
   | { readonly type: "getInvocation"; readonly id: number; readonly invocationId: string }
   | { readonly type: "getProfile"; readonly id: number; readonly invocationId: string }
   | {
@@ -174,6 +184,7 @@ export type SessionMessage =
   | RequestResult<"snapshotResult", TargetIndex | null>
   | RequestResult<"targetDetailResult", TargetDetail>
   | RequestResult<"targetOutputsResult", TargetOutputs>
+  | RequestResult<"targetActionsResult", TargetActions>
   | RequestResult<"detailResult", InvocationDetail>
   | RequestResult<"profileResult", Section<Profile>>
   | { readonly type: "select"; readonly selection: ExplorerSelection }
@@ -224,6 +235,7 @@ export function initialModel(page: WorkspacePage = "targets"): SessionModel {
       snapshot: { value: null, error: null, requestId: null },
       detail: emptyReader<TargetDetail>(),
       outputs: emptyReader<TargetOutputs>(),
+      actions: emptyReader<TargetActions>(),
     },
     history: { records: [], error: null, request: null },
     saved: {
@@ -269,6 +281,8 @@ export function sessionView(model: SessionModel): SessionView {
     targetDetailError: model.targets.detail.error,
     targetOutputs: model.targets.outputs.value,
     targetOutputsError: model.targets.outputs.error,
+    targetActions: model.targets.actions.value,
+    targetActionsError: model.targets.actions.error,
     ready: model.connection.ready,
     starting: model.execution.pendingStart !== null,
     opening: model.workspacePrompt.status === "opening",
@@ -338,6 +352,7 @@ function draft(model: SessionModel): Draft {
       snapshot: { ...model.targets.snapshot },
       detail: { ...model.targets.detail },
       outputs: { ...model.targets.outputs },
+      actions: { ...model.targets.actions },
     },
     history: {
       ...model.history,
@@ -428,21 +443,54 @@ function targetReadArgs(draft: Draft): { label: string; fetchedAt: number } | nu
 }
 
 function startTargetDetail(draft: Draft) {
-  if (draft.targets.detail.running !== null || draft.targets.detail.wanted === null) return;
+  const { detail, outputs, actions } = draft.targets;
+  if (
+    detail.running !== null ||
+    detail.wanted === null ||
+    outputs.running !== null ||
+    actions.running !== null
+  )
+    return;
   const args = targetReadArgs(draft);
   if (!args) return;
-  const id = draft.targets.detail.wanted;
-  draft.targets.detail.running = id;
+  const id = detail.wanted;
+  detail.running = id;
   draft.effects.push({ type: "getTargetDetail", id, ...args });
 }
 
 function startTargetOutputs(draft: Draft) {
-  if (draft.targets.outputs.running !== null || draft.targets.outputs.wanted === null) return;
+  const { detail, outputs, actions } = draft.targets;
+  if (
+    outputs.running !== null ||
+    outputs.wanted === null ||
+    detail.running !== null ||
+    actions.running !== null
+  )
+    return;
   const args = targetReadArgs(draft);
-  if (!args || draft.targets.detail.value?.target.label !== args.label) return;
-  const id = draft.targets.outputs.wanted;
-  draft.targets.outputs.running = id;
+  if (!args || detail.value?.target.label !== args.label) return;
+  const id = outputs.wanted;
+  outputs.running = id;
   draft.effects.push({ type: "getTargetOutputs", id, ...args });
+}
+
+function startTargetActions(draft: Draft) {
+  const { detail, outputs, actions } = draft.targets;
+  if (
+    actions.running !== null ||
+    actions.wanted === null ||
+    detail.running !== null ||
+    detail.wanted !== null ||
+    outputs.running !== null ||
+    outputs.wanted !== null ||
+    (outputs.value === null && outputs.error === null)
+  )
+    return;
+  const args = targetReadArgs(draft);
+  if (!args || detail.value?.target.label !== args.label) return;
+  const id = actions.wanted;
+  actions.running = id;
+  draft.effects.push({ type: "getTargetActions", id, ...args });
 }
 
 function startDetail(draft: Draft) {
@@ -478,6 +526,7 @@ function startProfile(draft: Draft) {
 function resumeTargets(draft: Draft) {
   startTargetDetail(draft);
   startTargetOutputs(draft);
+  startTargetActions(draft);
 }
 
 function resumeSaved(draft: Draft) {
@@ -565,10 +614,12 @@ function queueTargetDetail(draft: Draft) {
   if (draft.targets.selection?.kind !== "target") {
     draft.targets.detail.wanted = null;
     draft.targets.outputs.wanted = null;
+    draft.targets.actions.wanted = null;
     return;
   }
   draft.targets.detail.wanted = nextId(draft);
   draft.targets.outputs.wanted = null;
+  draft.targets.actions.wanted = null;
 }
 
 function resetTargetContext(draft: Draft) {
@@ -576,6 +627,8 @@ function resetTargetContext(draft: Draft) {
   draft.targets.detail.error = null;
   draft.targets.outputs.value = null;
   draft.targets.outputs.error = null;
+  draft.targets.actions.value = null;
+  draft.targets.actions.error = null;
   queueTargetDetail(draft);
   resumeTargets(draft);
 }
@@ -822,7 +875,15 @@ function acceptTargetDetail(draft: Draft, result: Result<TargetDetail>) {
   ) {
     draft.targets.outputs.wanted = nextId(draft);
   }
+  if (
+    draft.targets.actions.value === null &&
+    draft.targets.actions.error === null &&
+    draft.targets.actions.wanted === null
+  ) {
+    draft.targets.actions.wanted = nextId(draft);
+  }
   startTargetOutputs(draft);
+  startTargetActions(draft);
 }
 
 function finishTargetDetail(draft: Draft, requestId: number, result: Result<TargetDetail>) {
@@ -839,7 +900,14 @@ function finishTargetOutputs(draft: Draft, requestId: number, result: Result<Tar
   if (draft.targets.outputs.running !== requestId) return;
   draft.targets.outputs.running = null;
   if (draft.targets.outputs.wanted === requestId) acceptTargetOutputs(draft, result);
-  startTargetOutputs(draft);
+  resumeTargets(draft);
+}
+
+function finishTargetActions(draft: Draft, requestId: number, result: Result<TargetActions>) {
+  if (draft.targets.actions.running !== requestId) return;
+  draft.targets.actions.running = null;
+  if (draft.targets.actions.wanted === requestId) acceptTargetActions(draft, result);
+  resumeTargets(draft);
 }
 
 function acceptTargetOutputs(draft: Draft, result: Result<TargetOutputs>) {
@@ -852,6 +920,18 @@ function acceptTargetOutputs(draft: Draft, result: Result<TargetOutputs>) {
   }
   draft.targets.outputs.value = result.ok ? result.value : null;
   draft.targets.outputs.error = result.ok ? null : result.error;
+}
+
+function acceptTargetActions(draft: Draft, result: Result<TargetActions>) {
+  draft.targets.actions.wanted = null;
+  if (
+    draft.targets.selection?.kind !== "target" ||
+    draft.targets.detail.value?.target.label !== draft.targets.selection.label
+  ) {
+    return;
+  }
+  draft.targets.actions.value = result.ok ? result.value : null;
+  draft.targets.actions.error = result.ok ? null : result.error;
 }
 
 function finishDetail(draft: Draft, requestId: number, result: Result<InvocationDetail>) {
@@ -1028,6 +1108,9 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       break;
     case "targetOutputsResult":
       finishTargetOutputs(next, message.requestId, message.result);
+      break;
+    case "targetActionsResult":
+      finishTargetActions(next, message.requestId, message.result);
       break;
     case "detailResult":
       finishDetail(next, message.requestId, message.result);

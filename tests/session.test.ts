@@ -15,6 +15,7 @@ import type {
   InvocationRecord,
   Profile,
   Section,
+  TargetActions,
   TargetIndex,
   TargetOutputs,
 } from "../src/lib/types.ts";
@@ -65,6 +66,20 @@ const COMPLETED: InvocationDetail = {
   bep: { status: "missing" },
 };
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
+const TARGET_OUTPUTS: TargetOutputs = {
+  paths: ["bazel-out/k8-fastbuild/bin/app/first"],
+  truncated: false,
+};
+const TARGET_ACTIONS: TargetActions = {
+  actions: [
+    {
+      output: "bazel-out/k8-fastbuild/bin/app/first",
+      mnemonic: "Javac",
+      owner: "//app:first",
+    },
+  ],
+  truncated: false,
+};
 
 function deferred<T>() {
   // Promise constructors assign these callbacks before `promise` is returned.
@@ -833,6 +848,10 @@ test("a successful target-list retry resumes the selected detail", async () => {
   await emitSnapshot(h, TARGETS);
   h.session.select({ kind: "target", label: "//app:first" });
   pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  pendingRequest(h, "get_target_outputs").reply.resolve({ paths: [], truncated: false });
+  await settle();
+  pendingRequest(h, "get_target_actions").reply.resolve({ actions: [], truncated: false });
   await settle();
 
   h.emit("app-state", { ...IDLE, snapshotFetchedAt: 2 });
@@ -2088,4 +2107,80 @@ test("declared session dependencies refresh only affected data", async () => {
       assert.equal(requestCount(h, command), count, `${scenario.name}: ${command}`);
     }
   }
+});
+
+test("target actions load after outputs", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([]);
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  h.session.select({ kind: "target", label: "//app:first" });
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+  pendingRequest(h, "get_target_outputs").reply.resolve(TARGET_OUTPUTS);
+  await settle();
+  assert.equal(requestCount(h, "get_target_actions"), 1);
+  pendingRequest(h, "get_target_actions").reply.resolve(TARGET_ACTIONS);
+  await settle();
+  assert.deepEqual(h.view.targetActions, TARGET_ACTIONS);
+  assert.equal(h.view.targetActionsError, null);
+});
+
+test("a stale actions response cannot replace the new target's actions", async () => {
+  const h = harness(Promise.resolve({ ...IDLE, snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }));
+  await h.session.init();
+  pendingRequest(h, "list_invocations").reply.resolve([]);
+  pendingRequest(h, "get_snapshot").reply.resolve(TARGETS);
+  await settle();
+
+  h.session.select({ kind: "target", label: "//app:first" });
+  pendingRequest(h, "get_target_detail").reply.resolve(TARGET_DETAIL);
+  await settle();
+  pendingRequest(h, "get_target_outputs").reply.resolve(TARGET_OUTPUTS);
+  await settle();
+  const staleActions = pendingRequest(h, "get_target_actions");
+
+  h.session.select({ kind: "target", label: "//app:second" });
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  h.emit("app-state", {
+    ...IDLE,
+    snapshotFetchedAt: TARGETS.meta.fetchedAt,
+    detailQuery: "running",
+  });
+  h.emit("app-state", {
+    ...IDLE,
+    snapshotFetchedAt: TARGETS.meta.fetchedAt,
+    detailQuery: "idle",
+  });
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  staleActions.reply.resolve(TARGET_ACTIONS);
+  await settle();
+  assert.equal(requestCount(h, "get_target_detail"), 2);
+  assert.equal(h.view.targetActions, null);
+  assert.equal(h.view.targetActionsError, null);
+
+  lastPendingRequest(h, "get_target_detail").reply.resolve({
+    ...TARGET_DETAIL,
+    target: TARGETS.targets[1],
+  });
+  await settle();
+  lastPendingRequest(h, "get_target_outputs").reply.resolve(TARGET_OUTPUTS);
+  await settle();
+  const secondActions: TargetActions = {
+    actions: [
+      {
+        output: "bazel-out/k8-fastbuild/bin/app/second",
+        mnemonic: "Javac",
+        owner: "//app:second",
+      },
+    ],
+    truncated: false,
+  };
+  lastPendingRequest(h, "get_target_actions").reply.resolve(secondActions);
+  await settle();
+  assert.deepEqual(h.view.targetActions, secondActions);
 });

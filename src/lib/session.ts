@@ -17,6 +17,7 @@ import type {
   InvocationRecord,
   Profile,
   Section,
+  TargetActions,
   TargetDetail,
   TargetIndex,
   TargetOutputs,
@@ -154,6 +155,16 @@ export function createSession(
               fetchedAt: effect.fetchedAt,
             }),
           (result) => ({ type: "targetOutputsResult", requestId: effect.id, result }),
+        );
+      }
+      case "getTargetActions": {
+        return settle(
+          () =>
+            transport.invoke<TargetActions>(COMMANDS.getTargetActions, {
+              label: effect.label,
+              fetchedAt: effect.fetchedAt,
+            }),
+          (result) => ({ type: "targetActionsResult", requestId: effect.id, result }),
         );
       }
       case "getInvocation":

@@ -1,7 +1,12 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
   import { MagnifyingGlass, CaretDown, CaretUp } from "phosphor-svelte";
-  import type { TargetDetail, TargetIndex, TargetOutputs } from "./types";
+  import type {
+    TargetActions,
+    TargetDetail,
+    TargetIndex,
+    TargetOutputs,
+  } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
 
   let {
@@ -9,6 +14,8 @@
     detail,
     outputs,
     outputsError,
+    actions,
+    actionsError,
     wsRoot,
     onselect,
   }: {
@@ -16,6 +23,8 @@
     detail: TargetDetail;
     outputs: TargetOutputs | null;
     outputsError: string | null;
+    actions: TargetActions | null;
+    actionsError: string | null;
     wsRoot: string;
     onselect: (label: string) => void;
   } = $props();
@@ -156,3 +165,42 @@
       )}
     </dd>
   </dl>
+  <section class="target-actions">
+    <h2>
+      Actions{#if actions}
+        <span class="dim"
+          >{actions.actions.length}{actions.truncated ? "+" : ""}</span
+        >{/if}
+    </h2>
+    {#if actionsError}
+      <p class="dim">Could not load actions: {actionsError}</p>
+    {:else if actions === null}
+      <p class="dim">Loading actions…</p>
+    {:else if actions.actions.length === 0}
+      <p class="dim">None</p>
+    {:else}
+      <table>
+        <thead
+          ><tr
+            ><th scope="col">Action</th><th scope="col">Mnemonic</th><th
+              scope="col">Owner</th
+            ></tr
+          ></thead
+        >
+        <tbody>
+          {#each actions.actions as action}
+            <tr>
+              <td title={action.output}>{action.output}</td>
+              <td>{action.mnemonic}</td>
+              <td title={action.owner}
+                >{displayLabel(action.owner, target.pkg)}</td
+              >
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      {#if actions.truncated}
+        <span class="chip more" title="More actions not shown">…</span>
+      {/if}
+    {/if}
+  </section>

@@ -59,6 +59,17 @@ export interface TargetOutputs {
   truncated: boolean;
 }
 
+export interface TargetAction {
+  output: string;
+  mnemonic: string;
+  owner: string;
+}
+
+export interface TargetActions {
+  actions: TargetAction[];
+  truncated: boolean;
+}
+
 /** A user-facing summary for a failed core operation. */
 export interface IngestError {
   exitCode: number | null;

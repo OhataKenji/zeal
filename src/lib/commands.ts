@@ -6,6 +6,7 @@ export const COMMANDS = {
   getSnapshot: "get_snapshot",
   getTargetDetail: "get_target_detail",
   getTargetOutputs: "get_target_outputs",
+  getTargetActions: "get_target_actions",
   openWorkspace: "open_workspace",
   refresh: "refresh",
   listInvocations: "list_invocations",
