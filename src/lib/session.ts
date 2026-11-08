@@ -107,7 +107,7 @@ export function createSession(
       return;
     }
 
-    const revision = model.stateRevision;
+    const revision = model.connection.revision;
     dispatch({
       type: "initialStateResult",
       revision,

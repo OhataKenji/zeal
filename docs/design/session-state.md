@@ -51,9 +51,10 @@ Console の byte stream・入力キュー・xterm は専用処理に残す。メ
 - **`session.ts`：** update → Model の置換 → publish → Effect 実行。IPC の失敗も結果 Message にし、未処理の Promise rejection を残さない。
 - **Model に重複状態を持たせない。** loading は要求状態から導出する。Rust の実行状態、frontend の起動要求、表示先は区別する。
 
-表示先は `content` の union（targets / invocation / console / analytics / query）で表す。invocation ID はその表示先に含め、`consoleOpen`・`selectedInvocation`・Svelte の表示フラグの優先順位では画面を決めない。
+Model は `connection`・`workspacePrompt`・`execution`・`targets`・`history`・`saved` と `nextRequestId` に分ける。`SessionView` は Model から作る flat な表示用 projection とし、状態を重複して保存しない。
+表示先は `content` の union（targets / invocation / console / analytics / query）で表す。invocation ID と戻り先の page は invocation / console に含め、workspace page は `content.kind` 自体で表す。`consoleOpen`・`selectedInvocation`・別の `workspacePage`・Svelte の表示フラグの優先順位では画面を決めない。
 UI は target 選択など一つの操作を一つの Message で伝え、update が表示先・選択・取得要求をまとめて更新する。Query / Analytics の切替も同じ入口を通る。
-表示中でない target の選択や Console の記録は保持する。workspace を変えたときに戻るページは `workspacePage` として別に記憶する。
+表示中でない target の選択や Console の記録は保持する。
 
 `runEffect(effect): Promise<SessionMessage>` は IPC の成功・失敗を結果 Message として返し、呼び出し側が dispatch する。戻り値を必須にすることで、Effect を追加して処理を忘れると型エラーになる。採否や画面遷移は update が決める。継続的な通知の購読は一回限りの Effect と区別する。
 コードの配置と具体的な更新例は [frontend README](../../src/README.md) に置く。
@@ -72,17 +73,17 @@ Promise と listener 解除関数は実行層に置く。`init` は重複を防�
 ### 2. workspace も Message → update → Effect で扱う
 
 1. `openWorkspace` Message を update で受ける。busy なら画面用のエラーを設定し、Effect は発行しない。
-2. ダイアログを開いたまま `opening = true` にし、古いエラーを消す。現在の `stateRevision` と入力を持つ Effect を発行する。
+2. `workspacePrompt.status = "opening"` にし、古いエラーを消す。現在の `connection.revision` と入力を持つ Effect を発行する。
 3. 実行層が既存 IPC を一度呼び、成功・失敗を revision 付きの結果 Message にする。
-4. update で opening を解除する。成功ならダイアログを閉じ、revision が一致する場合だけ state を受理する。失敗ならダイアログと入力を残してエラーを表示する。**失敗・古い成功でも、待機 target の再開を判定する。**
+4. 成功なら status を `closed`、失敗なら `editing` にする。成功時は revision が一致する場合だけ state を受理する。失敗なら入力を残してエラーを表示する。**失敗・古い成功でも、待機 target の再開を判定する。**
 
-ダイアログの開閉・IPC 処理中・IPC エラーは Model に置き、Svelte は表示するだけにする。入力とフォルダ選択ダイアログの状態は UI に残す。
-状態通知では opening やダイアログを解除しないため、通知が応答より先に来ても処理は重ならず、入力も失わない。処理中の閉じる操作は無視する。
+`workspacePrompt.status`（`closed` / `editing` / `opening`）とエラーは Model に置き、表示用の開閉・処理中フラグはそこから導出する。入力とフォルダ選択ダイアログの状態は UI に残す。
+状態通知では status を変えないため、通知が応答より先に来ても処理は重ならず、入力も失わない。処理中の閉じる操作は無視する。
 dispose 後は Message を無視する。開始済み IPC は取り消さず、汎用 resolver や Promise Map は作らない。
 
 ### 3. 古い応答を捨てても、実行中の要求は忘れない
 
-target detail / outputs / saved detail / profile は、それぞれ次の2値を持つ。
+target detail / outputs / saved detail / profile は、それぞれ Reader として `value`・`error`・`running`・`wanted` を持つ。refresh が失敗しても前の `value` と `error` は共存する。
 
 - **running：** 実行中の要求 ID。応答まで worker を占有する。
 - **wanted：** 今必要な要求 ID。選択やデータ条件が変われば置き換える。
@@ -90,10 +91,10 @@ target detail / outputs / saved detail / profile は、それぞれ次の2値を
 応答が wanted と一致するときだけ採用する。古い応答でも worker を解放し、その用途の最新要求だけを進める。
 同じ要求への Retry は共有する。成功・失敗で要求を完了させ、無関係な通知で失敗を再試行しない。
 
-| 用途     | 別に残す規則                                                             |
-| -------- | ------------------------------------------------------------------------ |
-| 履歴     | 取得中の通知を後続1回にまとめる。同じ workspace の現在の応答も受理する。 |
-| snapshot | 版が変われば古い取得を待たず、新しく取得する。古い応答は捨てる。         |
+| 用途     | 別に残す規則                                                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 履歴     | request status は `current` / `refresh` / `invalidated`。通知を後続1回にまとめ、workspace 変更時は旧結果を捨てて worker 解放後に再取得する。 |
+| snapshot | 版が変われば古い取得を待たず、新しく取得する。古い応答は捨てる。                                                                             |
 
 workspace を離れると旧要求の受理権を失う。**A→B→A でも旧応答を採用しない。** 直列 worker の占有は応答まで維持する。
 ID は Model の単一カウンタで生成し、保留引数は発行時の選択から得る。読み取りと start の識別にだけ使い、stop / refresh に配送専用 ID を付けない。
@@ -122,7 +123,7 @@ state 比較・無効化・次の要求は用途内でまとめ、多数の変�
 ### 5. Console は対応する完了で一度だけ遷移する
 
 - **開始通知が start 応答より先でもよい。** workspace と Console 所有権を確認して開く。起動失敗・直後の終了・再照合失敗も扱う。
-- **遅い state 応答で通知を上書きしない。** 初期取得と start 後の再照合に `stateRevision` を使う。再照合は start ID で対応付け、idle のままでも完了時に履歴を更新する。
+- **遅い state 応答で通知を上書きしない。** 初期取得と start 後の再照合に `connection.revision` を使う。再照合は start ID で対応付け、idle のままでも完了時に履歴を更新する。
 - **別の選択を奪わない。** 終了した実行の Console をまだ見ている場合だけ保存済み詳細へ移る。同じ完了を繰り返し処理せず、既存 API の Console 再表示も保つ。
 
 ## Alternatives Considered

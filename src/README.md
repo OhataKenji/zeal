@@ -20,21 +20,29 @@ the result and requests outputs. The UI never has to close Console first.
 
 ## State ownership
 
+- The Model groups state by ownership: `connection`, `workspacePrompt`,
+  `execution`, `targets`, `history`, `saved`, and `nextRequestId`.
+  `SessionView` is a flat projection, not stored state.
 - `content` is the current destination: targets, invocation, Console, Analytics,
-  or Query. The invocation ID belongs to that destination, not a separate flag.
+  or Query. Invocation and Console destinations carry the workspace page to
+  return to; workspace-page destinations are authoritative on their own.
 - Target selection and the retained Console record are independent of visibility.
-  Hiding Console does not unmount its terminal. `workspacePage` remembers the
-  workspace page to show after changing workspace, even when an invocation was
-  displayed in between; it is not another visibility flag.
+  Hiding Console does not unmount its terminal.
 - Form input, focus, expanded panels, and the native folder picker stay local to
   Svelte. Console byte streams and terminal handles also stay outside the Model.
 
 ## Asynchronous results
 
-Each reader has `running` (the in-flight request ID) and `wanted` (the request ID
-whose result is still needed). Changing selection invalidates the wanted result,
-not the IPC operation. An old response releases `running` and starts the latest
-wanted request, but cannot restore obsolete data.
+Each Reader stores `value`, `error`, `running`, and `wanted`. A refresh failure
+can leave the previous value alongside an error. `running` is the in-flight
+request ID; `wanted` is the request ID whose result is still needed. Changing
+selection invalidates the wanted result, not the IPC operation. An old response
+releases `running` and starts the latest wanted request, but cannot restore
+obsolete data.
+
+History keeps one request with status `current`, `refresh`, or `invalidated`.
+Repeated notifications coalesce into one follow-up; a workspace change
+invalidates the in-flight result and still releases the worker when it returns.
 
 `update` never performs IPC. `runEffect` returns `Promise<SessionMessage>` and
 converts IPC failures to result Messages; it does not decide whether results are

@@ -95,15 +95,15 @@ test("selecting a target leaves Console in one transition and survives completio
     selection: { kind: "target", label: "//app:first" },
   });
 
-  assert.deepEqual(console.data.content, { kind: "console" });
-  assert.deepEqual(selected.model.data.content, { kind: "targets" });
-  assert.equal(selected.model.data.console?.id, RECORD.id);
-  assert.deepEqual(selected.model.data.selection, { kind: "target", label: "//app:first" });
+  assert.deepEqual(console.content, { kind: "console", page: "targets" });
+  assert.deepEqual(selected.model.content, { kind: "targets" });
+  assert.equal(selected.model.execution.console?.id, RECORD.id);
+  assert.deepEqual(selected.model.targets.selection, { kind: "target", label: "//app:first" });
   const completed = update(selected.model, {
     type: "appState",
     state: { ...active, activeInvocation: null },
   });
-  assert.deepEqual(completed.model.data.content, { kind: "targets" });
+  assert.deepEqual(completed.model.content, { kind: "targets" });
   assert.equal(effect(completed.effects, "getTargetDetail").label, "//app:first");
 });
 
@@ -117,45 +117,71 @@ test("workspace pages own navigation and reject a previous invocation's profile"
       requestId: profile.id,
       result: { ok: true, value: PROFILE },
     });
-    assert.deepEqual(selected.model.data.content, { kind: "invocation", id: RECORD.id });
-    assert.deepEqual(finished.model.data.content, { kind: page });
-    assert.equal(finished.model.data.profile, null);
-    assert.equal(finished.model.profile.running, null);
-    assert.equal(finished.model.profile.wanted, null);
+    assert.deepEqual(selected.model.content, {
+      kind: "invocation",
+      id: RECORD.id,
+      page: "targets",
+    });
+    assert.deepEqual(finished.model.content, { kind: page });
+    assert.equal(finished.model.saved.profile.value, null);
+    assert.equal(finished.model.saved.profile.running, null);
+    assert.equal(finished.model.saved.profile.wanted, null);
   }
 });
 
 test("initial and remembered workspace pages survive workspace changes", () => {
   for (const page of ["targets", "query", "analytics"] as const) {
     const initial = initialModel(page);
-    assert.deepEqual(initial.data.content, { kind: page });
-    const connected = update(initial, { type: "appState", state: state() }).model;
+    assert.deepEqual(initial.content, { kind: page });
+    const connected = update(initial, {
+      type: "appState",
+      state: { ...state(), activeInvocation: RECORD.id, consoleInvocation: RECORD.id },
+    }).model;
     const selected = update(connected, { type: "selectInvocation", id: RECORD.id }).model;
-    const switched = update(selected, {
+    assert.deepEqual(selected.content, { kind: "invocation", id: RECORD.id, page });
+    const console = update(selected, { type: "openConsole", record: RECORD }).model;
+    assert.deepEqual(console.content, { kind: "console", page });
+    const switched = update(console, {
       type: "appState",
       state: { ...state(), workspace: "/other" },
     });
-    assert.deepEqual(switched.model.data.content, { kind: page });
-    assert.equal(switched.model.data.console, null);
-    assert.equal(switched.model.data.selection, null);
+    assert.deepEqual(switched.model.content, { kind: page });
+    assert.equal(switched.model.execution.console, null);
+    assert.equal(switched.model.targets.selection, null);
   }
 });
 
-test("update is deterministic and leaves nested reader state untouched", () => {
-  const model = freeze(update(initialModel(), { type: "appState", state: state() }).model);
-  const message = freeze({
-    type: "select" as const,
-    selection: { kind: "target" as const, label: "//app:first" },
+test("update is deterministic and leaves nested result and history state untouched", () => {
+  const selected = freeze(
+    update(indexedModel(), {
+      type: "select",
+      selection: { kind: "target", label: "//app:first" },
+    }).model,
+  );
+  const detailRequest = selected.targets.detail.running;
+  assert.notEqual(detailRequest, null);
+  const detail = freeze({
+    type: "targetDetailResult" as const,
+    requestId: detailRequest!,
+    result: { ok: true as const, value: targetDetail("//app:first") },
   });
+  const first = update(selected, detail);
+  assert.deepEqual(first, update(selected, detail));
+  assert.equal(selected.targets.detail.value, null);
+  assert.equal(selected.targets.detail.running, detailRequest);
+  assert.deepEqual(first.model.targets.detail.value, targetDetail("//app:first"));
+  assert.equal(first.model.targets.detail.running, null);
+  assert.notEqual(first.model.targets.outputs.wanted, null);
 
-  const first = update(model, message);
-  const second = update(model, message);
-
-  assert.deepEqual(first, second);
-  assert.deepEqual(model.targetDetail, { running: null, wanted: null });
-  assert.equal(first.model.targetDetail.running, null);
-  assert.notEqual(first.model.targetDetail.wanted, null);
-  assert.deepEqual(model.data.state?.scope.include, ["//app/..."]);
+  const history = freeze(update(initialModel(), { type: "appState", state: state() }).model);
+  const workspaceChange = freeze({
+    type: "appState" as const,
+    state: { ...state(), workspace: "/other" },
+  });
+  const invalidated = update(history, workspaceChange);
+  assert.equal(history.history.request?.status, "current");
+  assert.equal(invalidated.model.history.request?.status, "invalidated");
+  assert.deepEqual(invalidated, update(history, workspaceChange));
 });
 
 test("workspace opening is a pure transition and controls its prompt through results", () => {
@@ -167,42 +193,38 @@ test("workspace opening is a pure transition and controls its prompt through res
   });
   const opened = update(model, message);
   assert.deepEqual(update(model, message), opened);
-  assert.equal(model.opening, false);
-  assert.equal(model.data.workspacePromptOpen, false);
-  assert.equal(opened.model.opening, true);
-  assert.equal(opened.model.data.workspacePromptOpen, true);
-  assert.deepEqual(opened.effects, [{ ...message, revision: model.stateRevision }]);
+  assert.equal(model.workspacePrompt.status, "closed");
+  assert.equal(opened.model.workspacePrompt.status, "opening");
+  assert.deepEqual(opened.effects, [{ ...message, revision: model.connection.revision }]);
 
   const closing = update(opened.model, { type: "workspacePrompt", open: false });
-  assert.equal(closing.model.data.workspacePromptOpen, true);
+  assert.equal(closing.model.workspacePrompt.status, "opening");
   const duplicate = update(closing.model, message);
   assert.deepEqual(duplicate.effects, []);
-  assert.equal(duplicate.model.opening, true);
+  assert.equal(duplicate.model.workspacePrompt.status, "opening");
 
   const failed = update(opened.model, {
     type: "workspaceResult",
-    revision: model.stateRevision,
+    revision: model.connection.revision,
     result: { ok: false, error: "open failed" },
   });
-  assert.equal(failed.model.opening, false);
-  assert.equal(failed.model.data.workspacePromptOpen, true);
-  assert.equal(failed.model.data.workspaceError, "open failed");
+  assert.equal(failed.model.workspacePrompt.status, "editing");
+  assert.equal(failed.model.workspacePrompt.error, "open failed");
   const retry = update(failed.model, message);
-  assert.equal(retry.model.data.workspaceError, null);
-  assert.equal(retry.model.opening, true);
+  assert.equal(retry.model.workspacePrompt.error, null);
+  assert.equal(retry.model.workspacePrompt.status, "opening");
 
   const finished = update(retry.model, {
     type: "workspaceResult",
-    revision: model.stateRevision,
+    revision: model.connection.revision,
     result: { ok: true, value: { ...state(null), workspace: "/other" } },
   });
-  assert.equal(finished.model.opening, false);
-  assert.equal(finished.model.data.workspacePromptOpen, false);
-  assert.equal(finished.model.data.workspaceError, null);
+  assert.equal(finished.model.workspacePrompt.status, "closed");
+  assert.equal(finished.model.workspacePrompt.error, null);
 
   const cancelled = update(failed.model, { type: "workspacePrompt", open: false });
-  assert.equal(cancelled.model.data.workspacePromptOpen, false);
-  assert.equal(cancelled.model.data.workspaceError, null);
+  assert.equal(cancelled.model.workspacePrompt.status, "closed");
+  assert.equal(cancelled.model.workspacePrompt.error, null);
   assert.deepEqual(cancelled.effects, []);
 });
 
@@ -217,16 +239,14 @@ test("workspace state notifications do not close a pending initial prompt", () =
     scope: state().scope,
   });
   const notified = update(opening.model, { type: "appState", state: state(null) });
-  assert.equal(notified.model.opening, true);
-  assert.equal(notified.model.data.workspacePromptOpen, true);
+  assert.equal(notified.model.workspacePrompt.status, "opening");
   const failed = update(notified.model, {
     type: "workspaceResult",
-    revision: model.stateRevision,
+    revision: model.connection.revision,
     result: { ok: false, error: "open failed" },
   });
-  assert.equal(failed.model.opening, false);
-  assert.equal(failed.model.data.workspacePromptOpen, true);
-  assert.equal(failed.model.data.workspaceError, "open failed");
+  assert.equal(failed.model.workspacePrompt.status, "editing");
+  assert.equal(failed.model.workspacePrompt.error, "open failed");
 });
 
 test("accepted profile result emits no unrelated effects", () => {
@@ -247,8 +267,8 @@ test("accepted profile result emits no unrelated effects", () => {
   });
 
   assert.deepEqual(finished.effects, []);
-  assert.notEqual(finished.model.detail.running, null);
-  assert.equal(finished.model.profile.running, null);
+  assert.notEqual(finished.model.saved.detail.running, null);
+  assert.equal(finished.model.saved.profile.running, null);
 });
 
 test("accepted target detail emits only its outputs request", () => {
@@ -343,4 +363,84 @@ test("history reconciliation refreshes saved readers but not targets", () => {
     "getProfile",
     "listInvocations",
   ]);
+});
+
+test("invalidated coalesced history discards its result and starts one follow-up", () => {
+  const initialized = update(initialModel(), { type: "appState", state: state(null) });
+  const firstHistory = effect(initialized.effects, "listInvocations");
+  const queued = update(initialized.model, { type: "historyChanged" });
+  assert.equal(queued.model.history.request?.status, "refresh");
+
+  const changedWorkspace = update(queued.model, {
+    type: "appState",
+    state: { ...state(null), workspace: "/other" },
+  });
+  assert.equal(changedWorkspace.model.history.request?.status, "invalidated");
+  const notified = update(changedWorkspace.model, { type: "historyChanged" });
+  assert.equal(notified.model.history.request?.status, "invalidated");
+  assert.deepEqual(notified.effects, []);
+
+  const completed = update(notified.model, {
+    type: "invocationsResult",
+    requestId: firstHistory.id,
+    result: { ok: true, value: [RECORD] },
+  });
+  assert.deepEqual(completed.model.history.records, []);
+  assert.deepEqual(
+    completed.effects.map((item) => item.type),
+    ["listInvocations"],
+  );
+  const followUp = effect(completed.effects, "listInvocations");
+  assert.notEqual(followUp.id, firstHistory.id);
+  assert.deepEqual(completed.model.history.request, { id: followUp.id, status: "current" });
+});
+
+test("failed saved refreshes retain cached detail and profile values", () => {
+  const initialized = update(initialModel(), { type: "appState", state: state(null) });
+  const firstHistory = effect(initialized.effects, "listInvocations");
+  const listed = update(initialized.model, {
+    type: "invocationsResult",
+    requestId: firstHistory.id,
+    result: { ok: true, value: [RECORD] },
+  });
+  const selected = update(listed.model, { type: "selectInvocation", id: RECORD.id });
+  const detailRequest = effect(selected.effects, "getInvocation");
+  const profileRequest = effect(selected.effects, "getProfile");
+  const cachedDetail: InvocationDetail = { ...COMPLETED, record: RECORD };
+  const cached = update(
+    update(selected.model, {
+      type: "detailResult",
+      requestId: detailRequest.id,
+      result: { ok: true, value: cachedDetail },
+    }).model,
+    {
+      type: "profileResult",
+      requestId: profileRequest.id,
+      result: { ok: true, value: PROFILE },
+    },
+  );
+  const refresh = update(cached.model, { type: "historyChanged" });
+  const refreshRequest = effect(refresh.effects, "listInvocations");
+  const newer = update(refresh.model, {
+    type: "invocationsResult",
+    requestId: refreshRequest.id,
+    result: { ok: true, value: [COMPLETED.record] },
+  });
+  const nextDetail = effect(newer.effects, "getInvocation");
+  const nextProfile = effect(newer.effects, "getProfile");
+  const detailFailure = update(newer.model, {
+    type: "detailResult",
+    requestId: nextDetail.id,
+    result: { ok: false, error: "detail refresh failed" },
+  });
+  const profileFailure = update(detailFailure.model, {
+    type: "profileResult",
+    requestId: nextProfile.id,
+    result: { ok: false, error: "profile refresh failed" },
+  });
+
+  assert.equal(profileFailure.model.saved.detail.value, cachedDetail);
+  assert.equal(profileFailure.model.saved.detail.error, "detail refresh failed");
+  assert.equal(profileFailure.model.saved.profile.value, PROFILE);
+  assert.equal(profileFailure.model.saved.profile.error, "profile refresh failed");
 });

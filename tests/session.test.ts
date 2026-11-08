@@ -261,7 +261,7 @@ test("history notification refreshes terminal details and missing timing after c
   assert.equal(requestCount(h, "get_invocation"), 2);
   assert.equal(h.view.detail, earlier);
   assert.equal(h.view.detailLoading, true);
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.equal(requestCount(h, "get_invocation_profile"), 2);
   assert.equal(h.view.profileLoading, true);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
@@ -505,7 +505,7 @@ test("a late profile response or error cannot replace a newer selection", async 
   assert.deepEqual(lastPendingRequest(h, "get_invocation_profile").args, { id: "run-c" });
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-c" });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-c", page: "targets" });
   assert.deepEqual(h.view.profile, PROFILE);
   assert.equal(h.view.profileError, null);
   assert.equal(h.view.profileLoading, false);
@@ -854,7 +854,7 @@ test("changing Scope preserves the selected invocation", async () => {
   await h.session.init();
   await selectRecord(h);
   h.emit("app-state", { ...IDLE, scope: { include: ["//other/..."] } });
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.deepEqual(h.view.invocations, [RECORD]);
 });
 
@@ -1021,7 +1021,7 @@ test("full artifacts are read only after the invocation finishes", async () => {
   noPending(h, "get_invocation", "get_invocation_profile");
   h.emit("app-state", IDLE);
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.deepEqual(h.view.detail, COMPLETED);
@@ -1040,7 +1040,7 @@ test("invocation completing before start response opens its detail after reconci
   await settle();
   assert.equal(h.view.state?.activeInvocation, null);
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.equal(h.view.console?.id, RECORD.id);
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: RECORD.id });
   assert.deepEqual(pendingRequest(h, "get_invocation_profile").args, { id: RECORD.id });
@@ -1150,7 +1150,7 @@ test("completion event during post-start reconciliation wins over its stale runn
   await settle();
   assert.equal(h.view.state?.activeInvocation, null);
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
@@ -1172,7 +1172,7 @@ test("failed state reconciliation waits for a later state event before opening c
   noPending(h, "get_invocation");
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.error, null);
@@ -1226,7 +1226,7 @@ test("a slow previous invocation detail cannot replace the selected invocation",
     record: { ...COMPLETED.record, id: "run-b" },
   });
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-b" });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-b", page: "targets" });
   assert.equal(h.view.detail?.record.id, "run-b");
 });
 
@@ -1251,7 +1251,7 @@ test("selecting another invocation during a read loads only the latest selection
   });
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-c" });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "run-c", page: "targets" });
   assert.equal(h.view.detail?.record.id, "run-c");
   assert.equal(h.view.detailError, null);
   assert.deepEqual(h.view.profile, PROFILE);
@@ -1531,7 +1531,7 @@ test("workspace page navigation is not stolen by Console completion", async () =
       consoleInvocation: RECORD.id,
     });
     h.session.openConsole(RECORD);
-    assert.deepEqual(h.view.content, { kind: "console" });
+    assert.deepEqual(h.view.content, { kind: "console", page: "targets" });
     h.session.showPage(page);
     h.emit("app-state", IDLE);
     assert.deepEqual(h.view.content, { kind: page });
@@ -1548,7 +1548,7 @@ test("process completion opens detail once and allows Console to stay reopened",
   await settle();
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.equal(h.view.console?.id, RECORD.id);
   assert.equal(canStop(h.view), false);
   h.session.openConsole({ id: RECORD.id });
@@ -1571,7 +1571,7 @@ test("successive invocations each open detail once after their own completion", 
   pendingRequest(h, "start_invocation").reply.resolve(RECORD);
   await settle();
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
-  assert.deepEqual({ ...h.view.content }, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual({ ...h.view.content }, { kind: "invocation", id: RECORD.id, page: "targets" });
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: RECORD.id });
   h.session.openConsole(RECORD);
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
@@ -1586,7 +1586,10 @@ test("successive invocations each open detail once after their own completion", 
   lastPendingRequest(h, "start_invocation").reply.resolve(secondRecord);
   await settle();
   h.emit("app-state", { ...IDLE, consoleInvocation: secondRecord.id });
-  assert.deepEqual({ ...h.view.content }, { kind: "invocation", id: secondRecord.id });
+  assert.deepEqual(
+    { ...h.view.content },
+    { kind: "invocation", id: secondRecord.id, page: "targets" },
+  );
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
@@ -1609,7 +1612,7 @@ test("process completion preserves another selected invocation", async () => {
   h.session.selectInvocation("saved-run");
   h.emit("app-state", { ...IDLE, consoleInvocation: RECORD.id });
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "saved-run" });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "saved-run", page: "targets" });
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: "saved-run" });
 });
 
@@ -1627,7 +1630,7 @@ test("completion during start reconciliation preserves a screen selected before 
   reconciled.resolve(IDLE);
   await settle();
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "saved-run" });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "saved-run", page: "targets" });
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { id: "saved-run" });
 });
 
@@ -1691,7 +1694,11 @@ test("an active invocation completes its reopened Console once after a workspace
     h.session.openConsole(RECORD);
     h.emit("app-state", { ...IDLE, workspace: scenario.workspace });
     assert.notEqual(h.view.content.kind, "console", scenario.name);
-    assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id }, scenario.name);
+    assert.deepEqual(
+      h.view.content,
+      { kind: "invocation", id: RECORD.id, page: "targets" },
+      scenario.name,
+    );
   }
 });
 
@@ -1738,7 +1745,7 @@ test("openConsole on a finished invocation lands on its detail view", async () =
   await h.session.init();
   h.session.openConsole(RECORD);
   assert.notEqual(h.view.content.kind, "console");
-  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: RECORD.id, page: "targets" });
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   await settle();
   assert.equal(h.view.detail?.record.id, RECORD.id);
