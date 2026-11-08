@@ -150,21 +150,3 @@ state 比較・無効化・次の要求は用途内でまとめ、多数の変�
 ## Privacy Concerns
 
 外部送信や全 Message の logging は追加しない。パス・引数を公開診断資料へ出さない。
-
-## Test Plan
-
-**まず既存テストで動作を確認し、その後に読みやすさを比較する。**
-
-1. deferred IPC 応答と `settle` で、workspace の成功・失敗・busy・通知競合・dispose を確認する。古い成功と失敗の両方で target の再開を確認する。
-2. A→B→A、履歴集約と stale detail、snapshot overlap、detail→outputs、独立 Retry、start/Console の順序と選択保持を確認する。
-3. update の入力不変・決定性・用途外 Effect が出ないことを確認する。
-4. focused session tests → `mise run check:frontend` の順で実行する。実機では workspace ダイアログ・Console・busy 後の target 再開を見る。
-5. profile 完了・target 選択・workspace open・start 応答前の終了の4経路を、変更前と読み比べる。
-
-**受け入れ条件**
-
-- Promise Map / waitFor、全体同期、合成 key / Attempt / 用途別 generation が復活していない。別名の resolver や汎用基盤にも置き換えていない。
-- production code は再設計前の1,381行より減る。元の main の760行との差も説明する。tests / docs は分け、移動を削減と数えない。
-- 動作の assertion を減らさない。行数や lint のために分岐を隠したり、層・型 DSL・handler 登録・immutable 基盤を増やしたりしない。
-
-**テスト通過・行数減少・設計承認だけでは、単純になった証明にはしない。**
