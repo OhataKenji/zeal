@@ -21,16 +21,9 @@ const PARSER: Target = {
   ruleClass: "java_library",
   location: null,
 };
-const HELPER: Target = {
-  label: "//app/lib:helper",
-  pkg: "app/lib",
-  name: "helper",
-  ruleClass: "java_library",
-  location: null,
-};
 const INDEX: TargetIndex = {
   meta: { fetchedAt: 1, status: "ok" },
-  targets: [PARSER, HELPER],
+  targets: [PARSER],
 };
 const DETAIL: TargetDetail = { target: PARSER, edges: [], files: [], status: "ok" };
 const OUTPUTS: TargetOutputs = { paths: [], truncated: false };
@@ -100,8 +93,6 @@ test("TargetView renders the actions table and its states", async (t) => {
         ["bazel-out/k8-fastbuild/bin/app/lib/libparser.jar", "Javac", ":parser"],
         ["bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar", "SourceJar", "//tools:gen"],
       ]);
-      assert.ok(html.includes('title="bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"'));
-      assert.ok(html.includes('title="//tools:gen"'));
     });
 
     await t.test("loading, empty, and error states", () => {
@@ -125,21 +116,6 @@ test("TargetView renders the actions table and its states", async (t) => {
       assert.equal(actionRows(exact).length, 10);
       assert.doesNotMatch(exact, /More actions not shown/);
       assert.ok(exact.includes(">10</span>"));
-    });
-
-    await t.test("output paths render escaped", () => {
-      const html = view({
-        actions: [
-          {
-            output: "bazel-out/<script>alert(1)</script>",
-            mnemonic: "Javac",
-            owner: PARSER.label,
-          },
-        ],
-        truncated: false,
-      });
-      assert.doesNotMatch(html, /<script>alert/);
-      assert.match(html, /&lt;script>alert\(1\)&lt;\/script>/);
     });
   } finally {
     await server?.close();

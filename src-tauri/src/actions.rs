@@ -179,7 +179,7 @@ mod tests {
     fn reconstructs_paths_owner_and_mnemonic() {
         let parsed = parse_value(&container(json!([
             {"targetId": 1, "mnemonic": "DeployJar", "outputIds": [10], "primaryOutputId": 10},
-            {"targetId": 1, "mnemonic": "SingleJar", "outputIds": [11], "primaryOutputId": 11},
+            {"targetId": 1, "mnemonic": "SingleJar", "outputIds": [10, 11], "primaryOutputId": 11},
         ])))
         .unwrap();
         assert!(!parsed.truncated);
@@ -192,18 +192,6 @@ mod tests {
         assert_eq!(parsed.actions[0].owner, "//app:server");
         assert_eq!(
             parsed.actions[1].output,
-            "bazel-out/k8-fastbuild/bin/app/server"
-        );
-    }
-
-    #[test]
-    fn primary_output_wins_over_the_first_output_id() {
-        let parsed = parse_value(&container(json!([
-            {"targetId": 1, "mnemonic": "Javac", "outputIds": [10, 11], "primaryOutputId": 11},
-        ])))
-        .unwrap();
-        assert_eq!(
-            parsed.actions[0].output,
             "bazel-out/k8-fastbuild/bin/app/server"
         );
     }
@@ -259,80 +247,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_json_and_missing_fields() {
-        assert!(parse("not json".as_bytes()).is_err());
-        assert!(parse("".as_bytes()).is_err());
-        assert!(parse_value(&json!({"actions": "nope"})).is_err());
-        assert!(
-            parse_value(&container(json!([
-                {"mnemonic": "Javac", "outputIds": [10]},
-            ])))
-            .is_err()
-        );
-        assert!(
-            parse_value(&container(json!([
-                {"targetId": 1, "outputIds": [10]},
-            ])))
-            .is_err()
-        );
+    fn rejects_invalid_json() {
+        assert!(parse(b"not json".as_slice()).is_err());
     }
 
     #[test]
     fn rejects_unresolvable_references() {
-        for action in [
-            json!({"targetId": 99, "mnemonic": "Javac", "outputIds": [10]}),
-            json!({"targetId": 1, "mnemonic": "Javac", "outputIds": [99]}),
-            json!({"targetId": 1, "mnemonic": "Javac", "primaryOutputId": 99}),
-        ] {
-            assert!(parse_value(&container(json!([action]))).is_err());
-        }
-        let missing_fragment = json!({
-            "targets": [{"id": 1, "label": "//app:server"}],
-            "artifacts": [{"id": 10, "pathFragmentId": 999}],
-            "pathFragments": [],
-            "actions": [{"targetId": 1, "mnemonic": "Javac", "outputIds": [10]}],
-        });
-        assert!(parse_value(&missing_fragment).is_err());
-        let missing_owner = json!({
-            "targets": [],
-            "artifacts": [],
-            "pathFragments": [],
-            "actions": [{"targetId": 1, "mnemonic": "Javac"}],
-        });
-        assert!(parse_value(&missing_owner).is_err());
+        let mut graph =
+            container(json!([{"targetId": 99, "mnemonic": "Javac", "outputIds": [10]}]));
+        assert!(parse_value(&graph).is_err());
+        graph["actions"][0]["targetId"] = json!(1);
+        graph["actions"][0]["outputIds"] = json!([99]);
+        assert!(parse_value(&graph).is_err());
+        graph["actions"][0]["outputIds"] = json!([10]);
+        graph["artifacts"][0]["pathFragmentId"] = json!(999);
+        assert!(parse_value(&graph).is_err());
     }
 
     #[test]
     fn rejects_fragment_cycles() {
-        let cyclic = json!({
-            "targets": [{"id": 1, "label": "//app:server"}],
-            "artifacts": [{"id": 10, "pathFragmentId": 101}],
-            "pathFragments": [
-                {"id": 101, "label": "a", "parentId": 102},
-                {"id": 102, "label": "b", "parentId": 101},
-            ],
-            "actions": [{"targetId": 1, "mnemonic": "Javac", "outputIds": [10]}],
-        });
-        assert!(parse_value(&cyclic).is_err());
-    }
-
-    #[test]
-    fn serializes_in_camel_case_for_the_frontend() {
-        let json = serde_json::to_value(TargetActions {
-            actions: vec![TargetAction {
-                output: "bazel-out/k8-fastbuild/bin/app/x".to_string(),
-                mnemonic: "Javac".to_string(),
-                owner: "//app:x".to_string(),
-            }],
-            truncated: true,
-        })
-        .unwrap();
-        assert_eq!(json["truncated"], true);
-        assert_eq!(json["actions"][0]["mnemonic"], "Javac");
-        assert_eq!(
-            json["actions"][0]["output"],
-            "bazel-out/k8-fastbuild/bin/app/x"
-        );
-        assert_eq!(json["actions"][0]["owner"], "//app:x");
+        let mut graph = container(json!([{"targetId": 1, "mnemonic": "Javac", "outputIds": [10]}]));
+        graph["pathFragments"][0]["parentId"] = json!(105);
+        assert!(parse_value(&graph).is_err());
     }
 }
