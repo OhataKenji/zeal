@@ -59,11 +59,12 @@
 <script lang="ts">
   import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { Bookmarks, CaretDown, Check, Copy } from "phosphor-svelte";
+  import { Bookmarks, CaretDown } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { app } from "./state.svelte";
   import { bazelBusyReason } from "./session";
   import { createIndex } from "./search";
+  import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
   import {
     applyExample,
@@ -133,7 +134,6 @@
   });
   onDestroy(() => {
     clearTimeout(fbTimer);
-    clearTimeout(copyTimer);
     vizWorker?.terminate();
     vizWorker = undefined;
     vizBusy = false;
@@ -343,22 +343,6 @@
     fbTimer = setTimeout(() => (feedback = ""), 3000);
   }
 
-  // The icon flips to a check for a moment, like GitHub code blocks.
-  let copied = $state<"command" | "output" | null>(null);
-  let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  async function copyToClipboard(text: string, which: "command" | "output") {
-    try {
-      await navigator.clipboard.writeText(text);
-      copied = which;
-      clearTimeout(copyTimer);
-      copyTimer = setTimeout(() => (copied = null), 1500);
-    } catch {
-      setFeedback(
-        "Clipboard access is unavailable — copy the displayed text manually.",
-      );
-    }
-  }
-
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       if (viewEl?.contains(e.target as Node) && canRun) {
@@ -479,18 +463,12 @@
         <div class="query-shared">
           <div class="query-command">
             <pre class="query-command-pre"><code>{command}</code></pre>
-            <button
-              type="button"
-              class="query-copy"
-              aria-label="Copy command line"
-              title="Copy command line"
+            <CopyButton
+              text={command}
+              label="Copy command line"
               disabled={!valid}
-              onclick={() => void copyToClipboard(command, "command")}
-            >
-              {#if copied === "command"}<Check size={14} />{:else}<Copy
-                  size={14}
-                />{/if}
-            </button>
+              onerror={setFeedback}
+            />
           </div>
           <div class="query-flags">
             <label class="query-check">
@@ -567,19 +545,11 @@
               {:else}
                 <div class="query-raw-wrap">
                   <pre class="query-raw">{rawShown.join("\n")}</pre>
-                  <button
-                    type="button"
-                    class="query-copy"
-                    aria-label="Copy output"
-                    title="Copy output"
-                    onclick={() => {
-                      if (stored) void copyToClipboard(stored.stdout, "output");
-                    }}
-                  >
-                    {#if copied === "output"}<Check size={14} />{:else}<Copy
-                        size={14}
-                      />{/if}
-                  </button>
+                  <CopyButton
+                    text={stored.stdout}
+                    label="Copy output"
+                    onerror={setFeedback}
+                  />
                 </div>
                 {#if rawMore > 0}
                   <p class="query-empty">

@@ -28,6 +28,7 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
     const { default: WorkspacePrompt } = await server.ssrLoadModule(
       "/src/lib/WorkspacePrompt.svelte",
     );
+    const { default: CopyButton } = await server.ssrLoadModule("/src/lib/CopyButton.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
     function output(initial: string, include = SCOPE.include, bazelAvailable = true): string {
@@ -64,6 +65,36 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
       assert.doesNotMatch(open, /disabled/);
       assert.doesNotMatch(html, /restart Zeal/);
+    });
+
+    await t.test("CLI recording settings have a non-submitting copy button", () => {
+      const html = render(WorkspacePrompt, {
+        props: { initial: "", initialScope: SCOPE, bazelAvailable: true },
+      }).body;
+      assert.match(
+        html,
+        /<pre[^>]*><code[^>]*>build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage<\/code><\/pre>/,
+      );
+      const button = tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>/);
+      assert.match(button, /type="button"/);
+      assert.match(button, /title="Copy \.bazelrc settings"/);
+      assert.doesNotMatch(button, /disabled/);
+      assert.match(
+        tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>[\s\S]*?<\/button>/),
+        /<svg/,
+      );
+    });
+
+    await t.test("copy button can be disabled", () => {
+      const html = render(CopyButton, {
+        props: {
+          text: "build //...",
+          label: "Copy settings",
+          disabled: true,
+          onerror: () => {},
+        },
+      }).body;
+      assert.match(tag(html, /<button[^>]*>/), /disabled/);
     });
 
     await t.test("the default workspace-wide scope shows an advisory warning", () => {
