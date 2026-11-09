@@ -9,10 +9,12 @@
   let {
     initial = "",
     initialScope,
+    bazelAvailable,
     onclose,
   }: {
     initial?: string;
     initialScope: TargetScope;
+    bazelAvailable: boolean;
     onclose?: () => void;
   } = $props();
 
@@ -23,7 +25,10 @@
   let choosing = $state(false);
   let copyError = $state("");
   const busy = $derived(choosing || app.view.opening);
-  const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
+  const canSubmit = $derived(
+    bazelAvailable && !busy && path.trim() !== "" && include.trim() !== "",
+  );
+  const wholeWorkspace = $derived(include.split("\n").some((pattern) => pattern.trim() === "//..."));
 
   async function selectWorkspace() {
     if (busy) return;
@@ -59,6 +64,12 @@ build --bes_timeout=5s
 build --experimental_collect_system_network_usage`;
 </script>
 
+{#if !bazelAvailable}
+  <Notice tone="error"
+    >Bazel or Bazelisk was not found on your PATH. Please install either tool
+    and add it to your PATH, then restart Zeal.</Notice
+  >
+{/if}
 <form
   class="ws-prompt"
   onsubmit={(e) => {
@@ -83,7 +94,7 @@ build --experimental_collect_system_network_usage`;
       bind:value={include}
       placeholder={"//services/payments/...\n//libs/money/...\n//tools:generator"}
       rows="4"
-      aria-describedby="scope-help"
+      aria-describedby={wholeWorkspace ? "scope-help scope-warning" : "scope-help"}
       disabled={busy}
       required
     ></textarea>
@@ -92,6 +103,12 @@ build --experimental_collect_system_network_usage`;
     One Bazel target pattern per line. Default: //... (all packages in the main
     repository). The target tree and search show matching rules.
   </p>
+  {#if wholeWorkspace}
+    <Notice tone="warning" id="scope-warning">
+      //... may be slow in large workspaces.
+      Consider using a narrower scope, like //app/....
+    </Notice>
+  {/if}
   <div class="ws-actions">
     <button
       class="button button-primary"

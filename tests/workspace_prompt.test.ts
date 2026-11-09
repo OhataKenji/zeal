@@ -31,10 +31,12 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
     const { default: CopyButton } = await server.ssrLoadModule("/src/lib/CopyButton.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
-    function output(initial: string): string {
+    function output(initial: string, include = SCOPE.include, bazelAvailable = true): string {
       return render(WorkspacePrompt, {
-        props: { initial, initialScope: SCOPE },
-      }).body;
+        props: { initial, initialScope: { include }, bazelAvailable },
+      })
+        .body.replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/\s+/g, " ");
     }
 
     function tag(html: string, pattern: RegExp): string {
@@ -62,10 +64,13 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       assert.match(html, /class="workspace-path"[^>]*>\/workspace<\/span>/);
       const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
       assert.doesNotMatch(open, /disabled/);
+      assert.doesNotMatch(html, /restart Zeal/);
     });
 
     await t.test("CLI recording settings have a non-submitting copy button", () => {
-      const html = output("");
+      const html = render(WorkspacePrompt, {
+        props: { initial: "", initialScope: SCOPE, bazelAvailable: true },
+      }).body;
       assert.match(
         html,
         /<pre[^>]*><code[^>]*>build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage<\/code><\/pre>/,
@@ -91,6 +96,50 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       }).body;
       assert.match(tag(html, /<button[^>]*>/), /disabled/);
     });
+
+    await t.test("the default workspace-wide scope shows an advisory warning", () => {
+      const html = output("/workspace");
+      assert.match(html, /id="scope-warning"/);
+      assert.match(html, /may be slow in large workspaces/);
+      assert.match(html, /Consider using a narrower scope/);
+      assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help scope-warning"/);
+      assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
+    });
+
+    for (const include of [[" \t//... \t"], ["//app/...", "", " //... ", "//tools:all"]]) {
+      await t.test(
+        `workspace-wide patterns warn after trimming: ${JSON.stringify(include)}`,
+        () => {
+          const html = output("/workspace", include);
+          assert.match(html, /id="scope-warning"/);
+          assert.match(
+            tag(html, /<textarea\b[^>]*>/),
+            /aria-describedby="scope-help scope-warning"/,
+          );
+          assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
+        },
+      );
+    }
+
+    for (const include of [["//app/..."], ["//app:all"], ["", " \t", ""]]) {
+      await t.test(`narrow or blank patterns do not warn: ${JSON.stringify(include)}`, () => {
+        const html = output("/workspace", include);
+        assert.doesNotMatch(html, /scope-warning/);
+        assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help"/);
+      });
+    }
+
+    await t.test(
+      "a missing bazel executable requires a restart but keeps the picker usable",
+      () => {
+        const html = output("/workspace", SCOPE.include, false);
+        assert.match(html, /Please install either tool and add it to your PATH, then restart Zeal/);
+        const choose = tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
+        assert.doesNotMatch(choose.slice(0, choose.indexOf(">") + 1), /disabled/);
+        const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
+        assert.match(open, /disabled/);
+      },
+    );
   } finally {
     await server?.close();
     await rm(cacheDir, { recursive: true, force: true });

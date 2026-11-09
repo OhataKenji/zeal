@@ -423,7 +423,6 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
             store::analytics::refresh_timezone();
             st.workspace = Some(ws.path);
             st.scope = ws.scope;
-            st.bazel = workspace::resolve_bazel();
         }
         let _ = ingest::request(app.handle().clone(), core);
     }
