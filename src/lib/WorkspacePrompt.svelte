@@ -88,9 +88,8 @@
   </p>
   {#if wholeWorkspace}
     <Notice tone="warning" id="scope-warning">
-      Using //... loads targets across all packages in the main repository and may
-      increase loading time and memory usage in large workspaces. Use a narrower
-      pattern, such as //app/..., to limit the scope.
+      //... may be slow in large workspaces.
+      Consider using a narrower scope, like //app/....
     </Notice>
   {/if}
   <div class="ws-actions">
