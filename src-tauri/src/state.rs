@@ -188,7 +188,7 @@ impl Core {
                 bes_endpoint: None,
                 workspace: None,
                 scope: crate::scope::Scope::default(),
-                bazel: None,
+                bazel: crate::workspace::resolve_bazel(),
                 snapshot: None,
                 last_error: None,
                 ingest_running: false,

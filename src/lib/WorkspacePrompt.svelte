@@ -8,10 +8,12 @@
   let {
     initial = "",
     initialScope,
+    bazelAvailable,
     onclose,
   }: {
     initial?: string;
     initialScope: TargetScope;
+    bazelAvailable: boolean;
     onclose?: () => void;
   } = $props();
 
@@ -21,7 +23,9 @@
   let error = $state<string | null>(null);
   let choosing = $state(false);
   const busy = $derived(choosing || app.view.opening);
-  const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
+  const canSubmit = $derived(
+    bazelAvailable && !busy && path.trim() !== "" && include.trim() !== "",
+  );
   const wholeWorkspace = $derived(include.split("\n").some((pattern) => pattern.trim() === "//..."));
 
   async function selectWorkspace() {
@@ -53,6 +57,12 @@
   }
 </script>
 
+{#if !bazelAvailable}
+  <Notice tone="error"
+    >Bazel or Bazelisk was not found on your PATH. Please install either tool
+    and add it to your PATH, then restart Zeal.</Notice
+  >
+{/if}
 <form
   class="ws-prompt"
   onsubmit={(e) => {

@@ -30,9 +30,9 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
     );
     const { render } = await server.ssrLoadModule("svelte/server");
 
-    function output(initial: string, include = SCOPE.include): string {
+    function output(initial: string, include = SCOPE.include, bazelAvailable = true): string {
       return render(WorkspacePrompt, {
-        props: { initial, initialScope: { include } },
+        props: { initial, initialScope: { include }, bazelAvailable },
       })
         .body.replace(/<!--[\s\S]*?-->/g, "")
         .replace(/\s+/g, " ");
@@ -63,6 +63,7 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       assert.match(html, /class="workspace-path"[^>]*>\/workspace<\/span>/);
       const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
       assert.doesNotMatch(open, /disabled/);
+      assert.doesNotMatch(html, /restart Zeal/);
     });
 
     await t.test("the default workspace-wide scope shows an advisory warning", () => {
@@ -96,6 +97,18 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
         assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help"/);
       });
     }
+
+    await t.test(
+      "a missing bazel executable requires a restart but keeps the picker usable",
+      () => {
+        const html = output("/workspace", SCOPE.include, false);
+        assert.match(html, /Please install either tool and add it to your PATH, then restart Zeal/);
+        const choose = tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
+        assert.doesNotMatch(choose.slice(0, choose.indexOf(">") + 1), /disabled/);
+        const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
+        assert.match(open, /disabled/);
+      },
+    );
   } finally {
     await server?.close();
     await rm(cacheDir, { recursive: true, force: true });

@@ -484,11 +484,9 @@
       <WorkspacePrompt
         initial={st.workspace ?? ""}
         initialScope={st.scope}
+        bazelAvailable={st.bazel !== null}
         onclose={st.workspace ? () => getSession().setWorkspacePromptOpen(false) : undefined}
       />
-      {#if st.workspace && st.bazel === null}
-        <Notice tone="error">bazelisk / bazel not found on PATH</Notice>
-      {/if}
     </div>
   {:else}
     <div class="win-body">
