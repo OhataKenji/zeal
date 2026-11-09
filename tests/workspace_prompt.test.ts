@@ -68,12 +68,8 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
     await t.test("the default workspace-wide scope shows an advisory warning", () => {
       const html = output("/workspace");
       assert.match(html, /id="scope-warning"/);
-      assert.match(
-        html,
-        /Using \/\/\.\.\. loads targets across all packages in the main repository/,
-      );
-      assert.match(html, /increase loading time and memory usage in large workspaces/);
-      assert.match(html, /Use a narrower pattern, such as \/\/app\/\.\.\., to limit the scope/);
+      assert.match(html, /may be slow in large workspaces/);
+      assert.match(html, /Consider using a narrower scope/);
       assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help scope-warning"/);
       assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
     });
