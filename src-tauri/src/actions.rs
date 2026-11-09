@@ -274,10 +274,13 @@ fn input_paths(
         let set = dep_sets
             .get(&id)
             .ok_or_else(|| "aquery action input references an unknown dep set".to_string())?;
-        for &artifact_id in &set.direct_artifact_ids {
-            if seen_artifacts.insert(artifact_id) {
-                paths.push(artifact_path(artifact_id, artifacts, fragments)?);
-            }
+        for artifact_id in set
+            .direct_artifact_ids
+            .iter()
+            .copied()
+            .filter(|id| seen_artifacts.insert(*id))
+        {
+            paths.push(artifact_path(artifact_id, artifacts, fragments)?);
         }
         stack.push((id, true));
         stack.extend(
