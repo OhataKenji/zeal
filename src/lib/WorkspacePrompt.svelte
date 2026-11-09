@@ -98,4 +98,14 @@
   {#if error ?? app.view.workspaceError}
     <Notice tone="error">{error ?? app.view.workspaceError}</Notice>
   {/if}
+  <Notice tone="neutral">
+    <p>
+      To also record CLI invocations, add these lines to your workspace's
+      <code>.bazelrc</code> and keep Zeal open while running Bazel:
+    </p>
+    <pre><code>{`build --bes_backend=grpc://127.0.0.1:4718
+build --experimental_build_event_upload_strategy=local
+build --bes_timeout=5s
+build --experimental_collect_system_network_usage`}</code></pre>
+  </Notice>
 </form>
