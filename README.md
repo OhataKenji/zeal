@@ -36,7 +36,7 @@ View logs, results, details, and available timing data.
 
 ### Compare Invocations
 
-Compare two completed invocations side by side. See differences in commands, target patterns, exit codes, durations, and recorded command-line and startup options. Missing data is marked as **Not recorded**, not treated as a match.
+Compare commands, options, and outcomes of two invocations side by side.
 
 ![Invocation comparison highlighting changed fields and distinguishing unrecorded options](docs/screenshots/invocation-comparison.jpg)
 
