@@ -471,32 +471,6 @@
   overflow-x: auto;
 }
 
-.query-copy {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-
-.query-copy:hover:not(:disabled) {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.query-copy:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .query-shared {
   margin-top: 12px;
 }

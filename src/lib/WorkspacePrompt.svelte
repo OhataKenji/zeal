@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { app, getSession, openWorkspace } from "./state.svelte";
+  import CopyButton from "./CopyButton.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
 
@@ -20,7 +21,7 @@
   let include = $state(untrack(() => initialScope.include.join("\n")));
   let error = $state<string | null>(null);
   let choosing = $state(false);
-  let copyState = $state<"idle" | "copied" | "failed">("idle");
+  let copyError = $state("");
   const busy = $derived(choosing || app.view.opening);
   const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
 
@@ -56,15 +57,6 @@
 build --experimental_build_event_upload_strategy=local
 build --bes_timeout=5s
 build --experimental_collect_system_network_usage`;
-
-  async function copyBazelrc() {
-    try {
-      await navigator.clipboard.writeText(BAZELRC);
-      copyState = "copied";
-    } catch {
-      copyState = "failed";
-    }
-  }
 </script>
 
 <form
@@ -119,23 +111,13 @@ build --experimental_collect_system_network_usage`;
       <code>.bazelrc</code> and keep Zeal open while running Bazel:
     </p>
     <div class="cli-recording-code">
-      <div class="cli-recording-code-header">
-        <span>.bazelrc</span>
-        <button
-          class="button button-ghost"
-          type="button"
-          aria-label="Copy .bazelrc settings"
-          onclick={copyBazelrc}>Copy</button
-        >
-      </div>
       <pre><code>{BAZELRC}</code></pre>
+      <CopyButton
+        text={BAZELRC}
+        label="Copy .bazelrc settings"
+        onerror={(message) => (copyError = message)}
+      />
     </div>
-    {#if copyState !== "idle"}
-      <p role="status">
-        {copyState === "copied"
-          ? "Copied"
-          : "Clipboard access is unavailable — copy the displayed text manually."}
-      </p>
-    {/if}
+    {#if copyError}<p role="status">{copyError}</p>{/if}
   </div>
 </form>
