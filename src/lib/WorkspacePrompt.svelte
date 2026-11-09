@@ -20,6 +20,7 @@
   let include = $state(untrack(() => initialScope.include.join("\n")));
   let error = $state<string | null>(null);
   let choosing = $state(false);
+  let copyState = $state<"idle" | "copied" | "failed">("idle");
   const busy = $derived(choosing || app.view.opening);
   const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
 
@@ -49,6 +50,20 @@
     openWorkspace(path.trim(), {
       include: include.split("\n"),
     });
+  }
+
+  const BAZELRC = `build --bes_backend=grpc://127.0.0.1:4718
+build --experimental_build_event_upload_strategy=local
+build --bes_timeout=5s
+build --experimental_collect_system_network_usage`;
+
+  async function copyBazelrc() {
+    try {
+      await navigator.clipboard.writeText(BAZELRC);
+      copyState = "copied";
+    } catch {
+      copyState = "failed";
+    }
   }
 </script>
 
@@ -103,29 +118,24 @@
       To also record CLI invocations, add these lines to your workspace's
       <code>.bazelrc</code> and keep Zeal open while running Bazel:
     </p>
-    <pre><code>{`build --bes_backend=grpc://127.0.0.1:4718
-build --experimental_build_event_upload_strategy=local
-build --bes_timeout=5s
-build --experimental_collect_system_network_usage`}</code></pre>
+    <div class="cli-recording-code">
+      <div class="cli-recording-code-header">
+        <span>.bazelrc</span>
+        <button
+          class="button button-ghost"
+          type="button"
+          aria-label="Copy .bazelrc settings"
+          onclick={copyBazelrc}>Copy</button
+        >
+      </div>
+      <pre><code>{BAZELRC}</code></pre>
+    </div>
+    {#if copyState !== "idle"}
+      <p role="status">
+        {copyState === "copied"
+          ? "Copied"
+          : "Clipboard access is unavailable — copy the displayed text manually."}
+      </p>
+    {/if}
   </div>
 </form>
-
-<style>
-  .cli-recording-help {
-    margin-top: 8px;
-    min-width: 0;
-    font-size: 12px;
-    color: var(--muted-foreground);
-  }
-
-  .cli-recording-help p {
-    margin: 0;
-  }
-
-  .cli-recording-help pre {
-    margin: 6px 0 0;
-    font: 11.5px/1.5 var(--mono);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-</style>

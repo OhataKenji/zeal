@@ -62,6 +62,17 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
       assert.doesNotMatch(open, /disabled/);
     });
+
+    await t.test("CLI recording settings have a non-submitting copy button", () => {
+      const html = output("");
+      assert.match(
+        html,
+        /<pre[^>]*><code[^>]*>build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage<\/code><\/pre>/,
+      );
+      const button = tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>/);
+      assert.match(button, /type="button"/);
+      assert.doesNotMatch(button, /disabled/);
+    });
   } finally {
     await server?.close();
     await rm(cacheDir, { recursive: true, force: true });
