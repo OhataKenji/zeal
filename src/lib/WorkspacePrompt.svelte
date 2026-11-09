@@ -105,13 +105,13 @@ build --experimental_collect_system_network_usage`;
   {#if error ?? app.view.workspaceError}
     <Notice tone="error">{error ?? app.view.workspaceError}</Notice>
   {/if}
-  <div class="cli-recording-help">
-    <p>
+  <div class="scope-help">
+    <p class="scope-help">
       To also record CLI invocations, add these lines to your workspace's
       <code>.bazelrc</code> and keep Zeal open while running Bazel:
     </p>
-    <div class="cli-recording-code">
-      <pre><code>{BAZELRC}</code></pre>
+    <div class="query-command">
+      <pre class="query-command-pre"><code>{BAZELRC}</code></pre>
       <CopyButton
         text={BAZELRC}
         label="Copy .bazelrc settings"

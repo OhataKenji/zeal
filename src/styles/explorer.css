@@ -292,33 +292,6 @@ details[open] .action-mnemonic::before {
   gap: 8px;
 }
 
-.cli-recording-help {
-  margin-top: 8px;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-
-.cli-recording-help p {
-  margin: 0;
-}
-
-.cli-recording-code {
-  position: relative;
-  margin-top: 6px;
-  padding: 12px 44px 12px 16px;
-  border-radius: var(--radius-md);
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.cli-recording-code pre {
-  margin: 0;
-  font: 11.5px/1.5 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .tree .row svg {
   flex-shrink: 0;
   color: var(--muted-foreground);

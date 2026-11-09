@@ -50,3 +50,31 @@
 >
   {#if copied}<Check size={14} />{:else}<Copy size={14} />{/if}
 </button>
+
+<style>
+  .copy-button {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+  }
+
+  .copy-button:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--foreground);
+  }
+
+  .copy-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+</style>

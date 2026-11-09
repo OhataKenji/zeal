@@ -28,6 +28,7 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
     const { default: WorkspacePrompt } = await server.ssrLoadModule(
       "/src/lib/WorkspacePrompt.svelte",
     );
+    const { default: CopyButton } = await server.ssrLoadModule("/src/lib/CopyButton.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
     function output(initial: string): string {
@@ -71,7 +72,24 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       );
       const button = tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>/);
       assert.match(button, /type="button"/);
+      assert.match(button, /title="Copy \.bazelrc settings"/);
       assert.doesNotMatch(button, /disabled/);
+      assert.match(
+        tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>[\s\S]*?<\/button>/),
+        /<svg/,
+      );
+    });
+
+    await t.test("copy button can be disabled", () => {
+      const html = render(CopyButton, {
+        props: {
+          text: "build //...",
+          label: "Copy settings",
+          disabled: true,
+          onerror: () => {},
+        },
+      }).body;
+      assert.match(tag(html, /<button[^>]*>/), /disabled/);
     });
   } finally {
     await server?.close();
