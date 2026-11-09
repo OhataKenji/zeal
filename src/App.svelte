@@ -479,6 +479,14 @@
 
   {#if st === null}
     <div class="content dim">loading…</div>
+  {:else if st.bazel === null}
+    <div class="content">
+      <Notice tone="error"
+        >Bazel or Bazelisk was not found on your PATH. Install Bazel or
+        Bazelisk and make sure it is available on your PATH. Then restart
+        Zeal.</Notice
+      >
+    </div>
   {:else if st.workspace === null || switchingWs}
     <div class="content">
       <WorkspacePrompt
@@ -486,9 +494,6 @@
         initialScope={st.scope}
         onclose={st.workspace ? () => getSession().setWorkspacePromptOpen(false) : undefined}
       />
-      {#if st.workspace && st.bazel === null}
-        <Notice tone="error">bazelisk / bazel not found on PATH</Notice>
-      {/if}
     </div>
   {:else}
     <div class="win-body">

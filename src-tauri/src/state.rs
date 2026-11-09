@@ -188,7 +188,7 @@ impl Core {
                 bes_endpoint: None,
                 workspace: None,
                 scope: crate::scope::Scope::default(),
-                bazel: None,
+                bazel: crate::workspace::resolve_bazel(),
                 snapshot: None,
                 last_error: None,
                 ingest_running: false,
@@ -254,6 +254,9 @@ impl Default for Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
 
     #[test]
     fn dto_reports_bes_readiness_independently_of_its_message() {
@@ -354,5 +357,82 @@ mod tests {
             "the event names the snapshot; its data goes through get_snapshot"
         );
         assert!(json.get("snapshot").is_none());
+    }
+
+    struct PathFixture(PathBuf);
+
+    impl PathFixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("zeal-state-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for PathFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn executable(dir: &Path, name: &str) {
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn core_new_discovers_bazel_without_a_workspace() {
+        let fixture = PathFixture::new();
+        let both = fixture.path().join("both");
+        let bazel_only = fixture.path().join("bazel-only");
+        let empty = fixture.path().join("empty");
+        for dir in [&both, &bazel_only, &empty] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        executable(&both, "bazelisk");
+        executable(&both, "bazel");
+        executable(&bazel_only, "bazel");
+
+        for (dir, expected) in [
+            (both.as_path(), Some(both.join("bazelisk"))),
+            (bazel_only.as_path(), Some(bazel_only.join("bazel"))),
+            (empty.as_path(), None),
+        ] {
+            let expected = expected
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "none".to_string());
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "state::tests::bazel_discovery_probe",
+                    "--exact",
+                    "--ignored",
+                ])
+                .env("PATH", dir)
+                .env("ZEAL_TEST_EXPECT_BAZEL", expected)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{dir:?}: {output:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "invoked with an isolated PATH by core_new_discovers_bazel_without_a_workspace"]
+    fn bazel_discovery_probe() {
+        let core = Core::new();
+        let st = core.state.lock().unwrap();
+        assert!(st.workspace.is_none());
+        match std::env::var("ZEAL_TEST_EXPECT_BAZEL").unwrap().as_str() {
+            "none" => assert!(
+                st.bazel.is_none(),
+                "expected no bazel, found {:?}",
+                st.bazel
+            ),
+            expected => assert_eq!(st.bazel.as_deref(), Some(Path::new(expected))),
+        }
     }
 }
