@@ -23,9 +23,9 @@ const BASE: AppState = {
 };
 
 const NOTICE =
-  /Bazel or Bazelisk was not found on your PATH\. Install Bazel or Bazelisk and make sure it is available on your PATH\. Then restart Zeal\./;
+  /Bazel or Bazelisk was not found on your PATH\. Please install either tool and add it to your PATH\./;
 
-test("App shows the Bazel install notice instead of the workspace picker when no executable is found", async (t) => {
+test("App shows missing Bazel instructions above the workspace picker", async (t) => {
   const cacheDir = await mkdtemp(join(tmpdir(), "zeal-app-"));
   let server: ViteDevServer | undefined;
   try {
@@ -59,18 +59,23 @@ test("App shows the Bazel install notice instead of the workspace picker when no
       assert.doesNotMatch(html, /ws-prompt/);
     });
 
-    await t.test("no workspace and no bazel shows the install notice without the picker", () => {
+    await t.test("no workspace and no bazel shows the instructions above the picker", () => {
       const html = output({ ...BASE });
       assert.match(html, NOTICE);
-      assert.doesNotMatch(html, /Choose folder/);
-      assert.doesNotMatch(html, /ws-prompt/);
+      assert.match(html, /Choose folder/);
+      assert.match(html, /ws-prompt/);
+      assert.ok(
+        html.indexOf("Bazel or Bazelisk was not found") < html.indexOf('class="ws-prompt"'),
+      );
+      assert.doesNotMatch(html, /restart Zeal/);
     });
 
-    await t.test("a saved workspace without bazel still shows the install notice", () => {
+    await t.test("a saved workspace without bazel keeps the workspace body", () => {
       const html = output({ ...BASE, workspace: "/workspace" });
-      assert.match(html, NOTICE);
+      assert.doesNotMatch(html, NOTICE);
       assert.doesNotMatch(html, /Choose folder/);
       assert.doesNotMatch(html, /ws-prompt/);
+      assert.match(html, /class="win-body"/);
     });
 
     await t.test("no workspace with a bazel executable shows the folder picker", () => {

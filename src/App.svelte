@@ -479,16 +479,14 @@
 
   {#if st === null}
     <div class="content dim">loading…</div>
-  {:else if st.bazel === null}
-    <div class="content">
-      <Notice tone="error"
-        >Bazel or Bazelisk was not found on your PATH. Install Bazel or
-        Bazelisk and make sure it is available on your PATH. Then restart
-        Zeal.</Notice
-      >
-    </div>
   {:else if st.workspace === null || switchingWs}
     <div class="content">
+      {#if st.bazel === null}
+        <Notice tone="error"
+          >Bazel or Bazelisk was not found on your PATH. Please install either
+          tool and add it to your PATH.</Notice
+        >
+      {/if}
       <WorkspacePrompt
         initial={st.workspace ?? ""}
         initialScope={st.scope}
