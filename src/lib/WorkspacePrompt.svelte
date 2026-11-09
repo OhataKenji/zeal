@@ -98,7 +98,7 @@
   {#if error ?? app.view.workspaceError}
     <Notice tone="error">{error ?? app.view.workspaceError}</Notice>
   {/if}
-  <Notice tone="neutral">
+  <div class="cli-recording-help">
     <p>
       To also record CLI invocations, add these lines to your workspace's
       <code>.bazelrc</code> and keep Zeal open while running Bazel:
@@ -107,5 +107,25 @@
 build --experimental_build_event_upload_strategy=local
 build --bes_timeout=5s
 build --experimental_collect_system_network_usage`}</code></pre>
-  </Notice>
+  </div>
 </form>
+
+<style>
+  .cli-recording-help {
+    margin-top: 8px;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+
+  .cli-recording-help p {
+    margin: 0;
+  }
+
+  .cli-recording-help pre {
+    margin: 6px 0 0;
+    font: 11.5px/1.5 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+</style>
