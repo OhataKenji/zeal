@@ -59,10 +59,31 @@ export interface TargetOutputs {
   truncated: boolean;
 }
 
+/** A key/value pair carried by an action, such as an environment variable. */
+export interface ActionKeyValue {
+  key: string;
+  value: string;
+}
+
+/** Public metadata of the configuration an action runs under. */
+export interface ActionConfiguration {
+  mnemonic: string;
+  platformName: string;
+  checksum: string;
+  isTool: boolean;
+}
+
+/** One action from `bazel aquery`, with its command line and file sets. */
 export interface TargetAction {
   output: string;
   mnemonic: string;
   owner: string;
+  arguments: string[];
+  inputs: string[];
+  outputs: string[];
+  environmentVariables: ActionKeyValue[];
+  configuration: ActionConfiguration | null;
+  executionPlatform: string;
 }
 
 export interface TargetActions {

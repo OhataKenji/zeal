@@ -191,7 +191,7 @@ pub fn target_actions(
         .arg(format!("\"{pattern}\""))
         .args([
             "--output=jsonproto",
-            "--noinclude_commandline",
+            "--include_commandline",
             "--include_artifacts",
         ])
         .current_dir(&ws);
