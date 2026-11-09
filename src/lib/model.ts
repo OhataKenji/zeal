@@ -20,6 +20,21 @@ export function displayPath(path: string, pkg: string): string {
   return pkg !== "" && path.startsWith(pkg + "/") ? path.slice(pkg.length + 1) : path;
 }
 
+/** POSIX single-quote escaping; arguments of safe characters stay bare. */
+export function shellQuote(argument: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(argument)) return argument;
+  return `'${argument.replaceAll("'", `'\\''`)}'`;
+}
+
+/** An action's arguments joined into one shell-readable command line. */
+export function commandLine(action: { arguments: string[] }): string {
+  return action.arguments
+    .map((argument, index) =>
+      index === 0 ? `'${argument.replaceAll("'", `'\\''`)}'` : shellQuote(argument),
+    )
+    .join(" ");
+}
+
 /** Returns the final slash-delimited segment of a path. */
 export function basename(path: string): string {
   return path.split("/").pop() ?? path;

@@ -56,6 +56,11 @@
   font-weight: 600;
 }
 
+.actions-scroll {
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
 .target-actions table {
   width: 100%;
   border-collapse: collapse;
@@ -65,8 +70,12 @@
 }
 
 .target-actions th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
+  background: var(--background);
   color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 600;
@@ -82,15 +91,134 @@
 }
 
 .target-actions th:nth-child(1) {
-  width: 68%;
+  width: 32%;
 }
 
 .target-actions th:nth-child(2) {
-  width: 18%;
+  width: 68%;
 }
 
-.target-actions th:nth-child(3) {
-  width: 14%;
+.target-actions .action-cell {
+  padding: 0;
+  overflow: visible;
+  white-space: normal;
+}
+
+.action-summary {
+  display: grid;
+  grid-template-columns: 32% minmax(0, 1fr);
+  padding: 6px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.action-summary::-webkit-details-marker {
+  display: none;
+}
+
+.action-mnemonic,
+.action-output {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-mnemonic::before {
+  content: "▸";
+  margin-right: 6px;
+  color: var(--muted-foreground);
+}
+
+details[open] .action-mnemonic::before {
+  content: "▾";
+}
+
+.action-summary:hover .action-mnemonic {
+  text-decoration: underline;
+}
+
+.action-extra {
+  margin-left: 6px;
+}
+
+.action-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 24px;
+  padding: 2px 8px 12px;
+}
+
+.action-section h3 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+
+.action-section p {
+  margin: 0;
+}
+
+.action-command-section {
+  grid-column: 1 / -1;
+}
+
+.action-command-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.action-command {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  margin: 0;
+  max-height: 9rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.action-copy {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.action-paths {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.action-paths li {
+  padding: 1px 0;
+}
+
+.action-paths code,
+.action-platform {
+  overflow-wrap: anywhere;
+}
+
+.action-config {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 0;
+}
+
+.action-config dt {
+  color: var(--muted-foreground);
+}
+
+.action-config dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .attributes-head {

@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ancestorsOf, buildTree, flatten, relations, splitLabel } from "../src/lib/model.ts";
+import {
+  ancestorsOf,
+  buildTree,
+  commandLine,
+  flatten,
+  relations,
+  shellQuote,
+  splitLabel,
+} from "../src/lib/model.ts";
 import type { TargetDetail, TargetIndex } from "../src/lib/types.ts";
 
 test("target tree lists packages and targets without input or output files", () => {
@@ -87,6 +95,33 @@ test("forward attributes retain target and file inputs under their original name
     result?.outputs.map((file) => file.path),
     ["app/generated.txt"],
   );
+});
+
+test("shellQuote keeps safe arguments bare and quotes the rest", () => {
+  assert.equal(shellQuote("javac"), "javac");
+  assert.equal(shellQuote("-classpath"), "-classpath");
+  assert.equal(shellQuote("app/lib/parser.jar"), "app/lib/parser.jar");
+  assert.equal(shellQuote("a=b,c:d@e%f+g"), "a=b,c:d@e%f+g");
+  assert.equal(shellQuote("two words"), "'two words'");
+  assert.equal(shellQuote(""), "''");
+  assert.equal(shellQuote("it's"), `'it'\\''s'`);
+  assert.equal(shellQuote('a;b|c&d>e<f(g)h$i`j"k\\l\nm\to'), "'a;b|c&d>e<f(g)h$i`j\"k\\l\nm\to'");
+  assert.equal(shellQuote("#hash"), "'#hash'");
+  assert.equal(shellQuote("~/home"), "'~/home'");
+  assert.equal(shellQuote("*.{cc,h}"), "'*.{cc,h}'");
+});
+
+test("commandLine joins quoted arguments with spaces", () => {
+  assert.equal(commandLine({ arguments: [] }), "");
+  assert.equal(
+    commandLine({ arguments: ["gcc", "-DFOO=bar baz", "it's.h", "-o", "out.o"] }),
+    `'gcc' '-DFOO=bar baz' 'it'\\''s.h' -o out.o`,
+  );
+  // argv[0] is always quoted so reserved words and assignments cannot be
+  // reinterpreted as shell syntax.
+  assert.equal(commandLine({ arguments: ["FOO=bar", "sh"] }), "'FOO=bar' sh");
+  assert.equal(commandLine({ arguments: ["if", "x"] }), "'if' x");
+  assert.equal(commandLine({ arguments: ["it's", "x"] }), `'it'\\''s' x`);
 });
 
 test("tree distinguishes selectable packages from grouping directories", () => {

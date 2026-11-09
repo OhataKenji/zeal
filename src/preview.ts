@@ -439,14 +439,41 @@ export function installPreview() {
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
+      const inputs = FULL_DATA.files
+        .filter((file) => file.owner === label && file.role === "srcs")
+        .map((file) => file.path);
       const actions = FULL_DATA.files
         .filter((file) => file.owner === label && file.role === "out")
-        .map((file) => ({
-          output: `bazel-out/k8-fastbuild/bin/${file.path}`,
-          mnemonic: actionMnemonic(file.path),
-          owner: file.owner,
-        }));
-      return { actions: actions.slice(0, 10), truncated: actions.length > 10 };
+        .map((file) => {
+          const output = `bazel-out/k8-fastbuild/bin/${file.path}`;
+          const mnemonic = actionMnemonic(file.path);
+          return {
+            output,
+            mnemonic,
+            owner: file.owner,
+            arguments: [
+              mnemonic.toLowerCase(),
+              "--output",
+              output,
+              "--define=GREETING=hello world",
+              ...inputs.slice(0, 2),
+            ],
+            inputs,
+            outputs: [output],
+            environmentVariables: [
+              { key: "PATH", value: "/usr/bin:/bin" },
+              { key: "LC_ALL", value: "C" },
+            ],
+            configuration: {
+              mnemonic: "k8-fastbuild",
+              platformName: "@local_config_platform//:host",
+              checksum: "0f3c9a1e7b2d4f60",
+              isTool: false,
+            },
+            executionPlatform: "@local_config_platform//:host",
+          };
+        });
+      return { actions: actions.slice(0, 100), truncated: actions.length > 100 };
     },
     list_invocations: () => structuredClone(records),
     read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
