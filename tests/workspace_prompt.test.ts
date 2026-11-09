@@ -30,10 +30,12 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
     );
     const { render } = await server.ssrLoadModule("svelte/server");
 
-    function output(initial: string): string {
+    function output(initial: string, include = SCOPE.include): string {
       return render(WorkspacePrompt, {
-        props: { initial, initialScope: SCOPE },
-      }).body;
+        props: { initial, initialScope: { include } },
+      })
+        .body.replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/\s+/g, " ");
     }
 
     function tag(html: string, pattern: RegExp): string {
@@ -62,6 +64,38 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
       assert.doesNotMatch(open, /disabled/);
     });
+
+    await t.test("the default workspace-wide scope shows an advisory warning", () => {
+      const html = output("/workspace");
+      assert.match(html, /id="scope-warning"/);
+      assert.match(html, /may be slow in large workspaces/);
+      assert.match(html, /Consider using a narrower scope/);
+      assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help scope-warning"/);
+      assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
+    });
+
+    for (const include of [[" \t//... \t"], ["//app/...", "", " //... ", "//tools:all"]]) {
+      await t.test(
+        `workspace-wide patterns warn after trimming: ${JSON.stringify(include)}`,
+        () => {
+          const html = output("/workspace", include);
+          assert.match(html, /id="scope-warning"/);
+          assert.match(
+            tag(html, /<textarea\b[^>]*>/),
+            /aria-describedby="scope-help scope-warning"/,
+          );
+          assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
+        },
+      );
+    }
+
+    for (const include of [["//app/..."], ["//app:all"], ["", " \t", ""]]) {
+      await t.test(`narrow or blank patterns do not warn: ${JSON.stringify(include)}`, () => {
+        const html = output("/workspace", include);
+        assert.doesNotMatch(html, /scope-warning/);
+        assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help"/);
+      });
+    }
   } finally {
     await server?.close();
     await rm(cacheDir, { recursive: true, force: true });

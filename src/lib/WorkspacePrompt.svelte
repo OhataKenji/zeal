@@ -22,6 +22,7 @@
   let choosing = $state(false);
   const busy = $derived(choosing || app.view.opening);
   const canSubmit = $derived(!busy && path.trim() !== "" && include.trim() !== "");
+  const wholeWorkspace = $derived(include.split("\n").some((pattern) => pattern.trim() === "//..."));
 
   async function selectWorkspace() {
     if (busy) return;
@@ -76,7 +77,7 @@
       bind:value={include}
       placeholder={"//services/payments/...\n//libs/money/...\n//tools:generator"}
       rows="4"
-      aria-describedby="scope-help"
+      aria-describedby={wholeWorkspace ? "scope-help scope-warning" : "scope-help"}
       disabled={busy}
       required
     ></textarea>
@@ -85,6 +86,12 @@
     One Bazel target pattern per line. Default: //... (all packages in the main
     repository). The target tree and search show matching rules.
   </p>
+  {#if wholeWorkspace}
+    <Notice tone="warning" id="scope-warning">
+      //... may be slow in large workspaces.
+      Consider using a narrower scope, like //app/....
+    </Notice>
+  {/if}
   <div class="ws-actions">
     <button
       class="button button-primary"
