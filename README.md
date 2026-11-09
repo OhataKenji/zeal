@@ -12,7 +12,7 @@
   <a href="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml"><img src="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-![Zeal target explorer showing source files, dependencies, and invocation history](docs/screenshots/overview.jpg)
+![Zeal target explorer showing resolved outputs, attributes, and invocation history](docs/screenshots/overview.jpg)
 
 ## Features
 
@@ -33,6 +33,12 @@ Build Bazel queries visually from preset examples or from scratch. View results 
 View logs, results, details, and available timing data.
 
 ![Invocation Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
+
+### Compare Invocations
+
+Compare two completed invocations side by side. See differences in commands, target patterns, exit codes, durations, and recorded command-line and startup options. Missing data is marked as **Not recorded**, not treated as a match.
+
+![Invocation comparison highlighting changed fields and distinguishing unrecorded options](docs/screenshots/invocation-comparison.jpg)
 
 ### Analytics Page
 
