@@ -27,7 +27,9 @@
 
 #### Option 1: Download a release
 
-Download the app for your platform from [GitHub Releases](https://github.com/OhataKenji/zeal/releases).
+Prebuilt releases currently support **macOS (Apple Silicon) only**.
+
+Download the app from [GitHub Releases](https://github.com/OhataKenji/zeal/releases).
 
 #### Option 2: Build from source
 
