@@ -107,16 +107,6 @@ mod tests {
         }
     }
 
-    fn has_temporary_files(dir: &Path) -> bool {
-        std::fs::read_dir(dir)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .any(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                name.starts_with(".workspace-") && name.ends_with(".tmp")
-            })
-    }
-
     #[test]
     fn persisted_scope_survives_reopening() {
         let dir = TempDir::new();
@@ -176,7 +166,7 @@ mod tests {
         let saved = load_saved(dir.path()).unwrap();
         assert_eq!(saved.path, Path::new("/second"));
         assert_eq!(saved.scope, second);
-        assert!(!has_temporary_files(dir.path()));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[cfg(unix)]
@@ -230,6 +220,6 @@ mod tests {
         std::fs::create_dir(dir.path().join(SAVED_FILE)).unwrap();
         save(dir.path(), Path::new("/workspace"), &Scope::default());
         assert!(load_saved(dir.path()).is_none());
-        assert!(!has_temporary_files(dir.path()));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
