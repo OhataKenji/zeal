@@ -60,7 +60,7 @@
   font: 11px var(--mono);
 }
 
-.invocation-row .invocation-label time {
+.invocation-row .invocation-time {
   margin-left: auto;
   font: 11px var(--font-sans);
   color: var(--muted-foreground);
