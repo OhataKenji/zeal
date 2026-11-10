@@ -3,6 +3,7 @@
 
 use crate::scope::Scope;
 use serde::Deserialize;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// A directory is a Bazel workspace root if it has MODULE.bazel or
@@ -64,7 +65,22 @@ pub fn save(data_dir: &Path, ws: &Path, scope: &Scope) {
         return;
     }
     let body = serde_json::json!({ "path": ws.to_string_lossy(), "scope": scope });
-    let _ = std::fs::write(data_dir.join(SAVED_FILE), body.to_string());
+    let temporary = data_dir.join(format!(".workspace-{}.tmp", uuid::Uuid::new_v4()));
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+    else {
+        return;
+    };
+    let result = file
+        .write_all(body.to_string().as_bytes())
+        .and_then(|()| file.sync_all());
+    drop(file);
+    if result.is_ok() {
+        let _ = std::fs::rename(&temporary, data_dir.join(SAVED_FILE));
+    }
+    let _ = std::fs::remove_file(&temporary);
 }
 
 #[cfg(test)]
@@ -89,6 +105,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn has_temporary_files(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with(".workspace-") && name.ends_with(".tmp")
+            })
     }
 
     #[test]
@@ -134,5 +160,76 @@ mod tests {
         let saved = load_saved(dir.path()).unwrap();
         assert_eq!(saved.scope.include, ["//app/..."]);
         assert_eq!(saved.scope.rules_query(), "kind(\"rule\", (\"//app/...\"))");
+    }
+
+    #[test]
+    fn repeated_saves_replace_path_and_scope() {
+        let dir = TempDir::new();
+        let first = Scope {
+            include: vec!["//app/...".into()],
+        };
+        let second = Scope {
+            include: vec!["//lib/...".into()],
+        };
+        save(dir.path(), Path::new("/first"), &first);
+        save(dir.path(), Path::new("/second"), &second);
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.path, Path::new("/second"));
+        assert_eq!(saved.scope, second);
+        assert!(!has_temporary_files(dir.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_a_read_only_workspace_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new();
+        let first = Scope {
+            include: vec!["//app/...".into()],
+        };
+        let second = Scope {
+            include: vec!["//lib/...".into()],
+        };
+        save(dir.path(), Path::new("/first"), &first);
+        std::fs::set_permissions(
+            dir.path().join(SAVED_FILE),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+        save(dir.path(), Path::new("/second"), &second);
+        std::fs::set_permissions(
+            dir.path().join(SAVED_FILE),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.path, Path::new("/second"));
+        assert_eq!(saved.scope, second);
+    }
+
+    #[test]
+    fn unfinished_temporary_file_does_not_affect_load_saved() {
+        let dir = TempDir::new();
+        let scope = Scope {
+            include: vec!["//app/...".into()],
+        };
+        save(dir.path(), Path::new("/workspace"), &scope);
+        let stray = dir
+            .path()
+            .join(format!(".workspace-{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::write(&stray, r#"{"path":"/interrupted""#).unwrap();
+        let saved = load_saved(dir.path()).unwrap();
+        assert_eq!(saved.path, Path::new("/workspace"));
+        assert_eq!(saved.scope, scope);
+    }
+
+    #[test]
+    fn failed_rename_leaves_no_temporary_file() {
+        let dir = TempDir::new();
+        std::fs::create_dir(dir.path().join(SAVED_FILE)).unwrap();
+        save(dir.path(), Path::new("/workspace"), &Scope::default());
+        assert!(load_saved(dir.path()).is_none());
+        assert!(!has_temporary_files(dir.path()));
     }
 }
