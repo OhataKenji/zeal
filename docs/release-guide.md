@@ -25,20 +25,12 @@ Apple Developer Programへの加入やSecretsの登録は不要です。
 詳細は[Tauriのad-hoc署名ガイド](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing)を参照してください。
 Releaseの説明にも、公証がないことを残してください。
 
-### 実Bazelで確認する
-
 Draft ReleaseのDMGをApplicationsへコピーし、Finderから起動します。
-信頼できるworkspaceを開き、実際のBazelで次を確認します。
+信頼できるworkspaceで、実Bazelを使って確認します。
 
-- targetを検索し、アプリからbuildとtestを実行して、成功結果とログを確認する。
-- 実行中のbuildをキャンセルし、停止後にもう一度buildできる。
-  キャンセル前に完了した場合は、十分に時間のかかるtargetでやり直す。
-- アプリを再起動してもworkspaceとscopeが復元され、履歴と結果を閲覧できる。
+- buildとtestが成功し、結果とログを見られる。
+- 実行中のbuildをキャンセルでき、その後もbuildできる。
+- 再起動後もworkspace、scope、履歴が残る。
 
-Draft Releaseの説明に、確認したDMGとcommit、macOSとBazelのバージョン、workspaceのrevisionと使用したtarget、各項目の結果を短く記録します。
-Bazeliskを使う場合も、対象workspaceで実行されたBazelのバージョンを記録します。
-必要に応じてログや画像を添え、非公開情報は載せません。
-
-すべて確認できたDMGをそのまま公開します。
-未確認や失敗があれば公開せず、DMGを差し替えた場合は再確認します。
+Releaseの説明にBazelのバージョン、使用したworkspaceとtarget、各項目の結果を記録し、すべて確認したDMGを公開します。
 更新は新版DMGの手動インストールです。
