@@ -109,6 +109,18 @@
       {/if}
     </div>
     <label
+      >Workspace <select
+        aria-label="Workspace path"
+        value={view.filter.workspaceId ?? ""}
+        onchange={(e) =>
+          filter({ workspaceId: e.currentTarget.value || null })}
+      >
+        <option value="">All workspaces</option>{#each data?.workspaces ?? [] as option (option.id)}<option
+            value={option.id}>{option.path}</option
+          >{/each}
+      </select></label
+    >
+    <label
       >Command <input
         type="text"
         aria-label="Command"

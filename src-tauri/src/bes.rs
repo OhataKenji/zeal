@@ -371,6 +371,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finish_acknowledges_and_persists_history_for_a_non_git_workspace() {
+        let fixture = Fixture::new();
+        let receiver = silent_receiver(fixture.data.clone());
+        let stream = Stream {
+            receipt: None,
+            _permit: receiver.admit().unwrap(),
+            invocations_changed: receiver.invocations_changed.clone(),
+        };
+        let stream = stream
+            .append(fixture.data.clone(), fixture.ordered(1, fixture.started()))
+            .await
+            .unwrap();
+        let stream = stream
+            .append(fixture.data.clone(), fixture.ordered(2, fixture.finished()))
+            .await
+            .unwrap();
+        let (_stream, range) = stream.finish().await.unwrap();
+        assert_eq!((range.first, range.last), (1, 2));
+        let invocations = store::list(&fixture.data, &fixture.ws).unwrap();
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].id, fixture.stream.invocation_id);
+    }
+
+    #[tokio::test]
     async fn history_notifies_after_partial_save_but_not_invalid_input() {
         let fixture = Fixture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));

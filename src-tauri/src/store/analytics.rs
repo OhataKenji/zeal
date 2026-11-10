@@ -3,7 +3,9 @@
 use super::{ErrorKind, Store, StoreError};
 use rusqlite::{Connection, named_params, params};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -15,6 +17,7 @@ pub struct Filter {
     /// Exact `target_pattern` match. Restricts the daily series only; the
     /// pattern ranking always reflects every pattern in the filtered period.
     pub pattern: Option<String>,
+    pub workspace_id: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,11 +47,17 @@ pub struct PatternDuration {
     pub p95_ms: i64,
 }
 #[derive(Debug, Serialize)]
+pub struct Workspace {
+    pub id: String,
+    pub path: String,
+}
+#[derive(Debug, Serialize)]
 pub struct Analytics {
     pub filter: Filter,
     pub today: String,
     pub days: Vec<Day>,
     pub patterns: Vec<PatternDuration>,
+    pub workspaces: Vec<Workspace>,
 }
 
 // Local-date and outcome rules apply to the common invocation table.
@@ -58,6 +67,12 @@ const MATCH: &str = "started_at_ms >= :start AND started_at_ms < :end
         CASE WHEN exit_code IS NULL THEN 'unknown' WHEN exit_code=0 THEN 'ok' WHEN exit_code=8 THEN 'interrupted'
         ELSE 'failed' END = :outcome)
     AND date(started_at_ms / 1000,'unixepoch','localtime') BETWEEN :first_day AND :last_day";
+
+const SCOPE: &str = "workspace_id IN (
+    SELECT id FROM workspace
+    WHERE (id=:workspace OR repo_url=(SELECT repo_url FROM workspace WHERE id=:workspace))
+      AND (:selected_workspace IS NULL OR id=:selected_workspace)
+)";
 
 fn valid_day(conn: &Connection, day: &str) -> Result<(), StoreError> {
     if day.len() != 10
@@ -152,6 +167,12 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
             |r| r.get(0),
         )
         .optional()?;
+    let workspaces = workspace_candidates(&tx, ws_id.as_ref())?;
+    if let Some(selected) = &filter.workspace_id
+        && !workspaces.iter().any(|workspace| &workspace.id == selected)
+    {
+        return Err(super::fail(ErrorKind::Invalid));
+    }
     let days: Vec<Day> = tx
         .prepare(
             "WITH RECURSIVE calendar(day) AS (
@@ -179,7 +200,29 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         today,
         days,
         patterns,
+        workspaces,
     })
+}
+
+fn workspace_candidates(
+    tx: &Connection,
+    ws_id: Option<&String>,
+) -> Result<Vec<Workspace>, StoreError> {
+    let mut statement = tx.prepare(
+        "SELECT id,canonical_path FROM workspace
+         WHERE id=:workspace OR repo_url=(SELECT repo_url FROM workspace WHERE id=:workspace)
+         ORDER BY canonical_path,id",
+    )?;
+    let rows = statement.query_map(named_params![":workspace": ws_id], |row| {
+        let path: Vec<u8> = row.get(1)?;
+        Ok(Workspace {
+            id: row.get(0)?,
+            path: PathBuf::from(OsString::from_vec(path))
+                .to_string_lossy()
+                .into_owned(),
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Runs the aggregate queries and merges the daily rows into the zero-filled
@@ -199,7 +242,7 @@ fn aggregate(
             ":workspace":ws_id, ":start":from, ":end":until,
             ":first_day":start, ":last_day":end,
             ":cmd":filter.cmd, ":outcome":filter.outcome,
-            ":pattern":filter.pattern,
+            ":pattern":filter.pattern, ":selected_workspace":filter.workspace_id,
         },
         |r| {
             Ok(Day {
@@ -230,6 +273,7 @@ fn aggregate(
                 ":workspace":ws_id, ":start":from, ":end":until,
                 ":first_day":start, ":last_day":end,
                 ":cmd":filter.cmd, ":outcome":filter.outcome,
+                ":selected_workspace":filter.workspace_id,
             },
             |r| {
                 Ok(PatternDuration {
@@ -264,7 +308,7 @@ fn days_sql() -> String {
         "WITH matched AS MATERIALIZED (
             SELECT date(started_at_ms / 1000,'unixepoch','localtime') AS day,exit_code,
                 MAX(finished_at_ms - started_at_ms,0) AS ms
-            FROM invocation WHERE workspace_id=:workspace AND {MATCH}
+            FROM invocation WHERE {SCOPE} AND {MATCH}
                 AND (:pattern IS NULL OR target_pattern=:pattern)
         ),
         daily AS (
@@ -301,7 +345,7 @@ fn patterns_sql() -> String {
         "WITH matched AS MATERIALIZED (
             SELECT target_pattern AS pattern,
                 MAX(finished_at_ms - started_at_ms,0) AS ms
-            FROM invocation WHERE workspace_id=:workspace AND {MATCH}
+            FROM invocation WHERE {SCOPE} AND {MATCH}
                 AND target_pattern<>''
         ),
         top AS (
@@ -416,6 +460,68 @@ mod tests {
                     params![millis, id],
                 )
                 .unwrap();
+        }
+        fn extra(&self, name: &str) -> PathBuf {
+            let ws = self.root.join(name);
+            fs::create_dir(&ws).unwrap();
+            self.register(&ws);
+            ws
+        }
+        fn ws_id(&self, ws: &Path) -> String {
+            Store::open(&self.data)
+                .unwrap()
+                .conn
+                .query_row(
+                    "SELECT id FROM workspace WHERE canonical_path=?1",
+                    [ws.canonicalize().unwrap().as_os_str().as_encoded_bytes()],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        }
+        fn set_repo_url(&self, ws: &Path, repo_url: Option<&str>) {
+            Store::open(&self.data)
+                .unwrap()
+                .conn
+                .execute(
+                    "UPDATE workspace SET repo_url=?1 WHERE canonical_path=?2",
+                    params![
+                        repo_url,
+                        ws.canonicalize().unwrap().as_os_str().as_encoded_bytes()
+                    ],
+                )
+                .unwrap();
+        }
+        fn insert_ms(
+            &self,
+            ws: &Path,
+            started_ms: i64,
+            finished_ms: Option<i64>,
+            code: Option<i32>,
+            pattern: &str,
+        ) -> String {
+            let ws_id = self.ws_id(ws);
+            let store = Store::open(&self.data).unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO invocation(id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code)
+                VALUES(?1,?2,'build',?3,?4,?5,?6)",
+                    params![id, ws_id, pattern, started_ms, finished_ms, code],
+                )
+                .unwrap();
+            id
+        }
+        fn noon_ms(&self) -> i64 {
+            Store::open(&self.data)
+                .unwrap()
+                .conn
+                .query_row(
+                    "SELECT unixepoch('2026-03-08 12:00:00','utc')*1000",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
         }
 
         fn filter(&self) -> Filter {
@@ -964,6 +1070,192 @@ mod tests {
         });
         assert_eq!(total(&selected), 2);
     }
+    const SHARED_URL: &str = "git@example.com:org/shared.git";
+    const OTHER_URL: &str = "git@example.com:org/other.git";
+
+    fn grouped() -> Fixture {
+        let f = Fixture::new();
+        let second = f.extra("second");
+        let third = f.extra("third");
+        let other = f.extra("other-repo");
+        let plain = f.extra("plain");
+        f.set_repo_url(&f.ws, Some(SHARED_URL));
+        f.set_repo_url(&second, Some(SHARED_URL));
+        f.set_repo_url(&third, Some(SHARED_URL));
+        f.set_repo_url(&other, Some(OTHER_URL));
+        let start = f.noon_ms();
+        f.insert_ms(&f.ws, start, Some(start + 100), Some(0), "//a:x");
+        f.insert_ms(&second, start, Some(start + 200), Some(1), "//b:y");
+        f.insert_ms(&third, start, Some(start + 900), Some(0), "//a:x");
+        f.insert_ms(&other, start, Some(start + 5000), Some(0), "//d:x");
+        f.insert_ms(&plain, start, Some(start + 7000), Some(0), "//n:x");
+        f
+    }
+
+    fn assert_invalid_selection(f: &Fixture, workspace_id: String) {
+        assert_eq!(
+            query(
+                &f.data,
+                &f.ws,
+                Filter {
+                    workspace_id: Some(workspace_id),
+                    ..f.filter()
+                }
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Invalid
+        );
+    }
+
+    #[test]
+    fn repo_url_groups_the_candidate_workspaces() {
+        let f = grouped();
+        let result = f.query(f.filter());
+        let second = f.root.join("second");
+        let third = f.root.join("third");
+        let mut expected: Vec<(String, String)> = [&f.ws, &second, &third]
+            .into_iter()
+            .map(|ws| {
+                (
+                    f.ws_id(ws),
+                    ws.canonicalize().unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        expected.sort();
+        let mut actual: Vec<(String, String)> = result
+            .workspaces
+            .iter()
+            .map(|w| (w.id.clone(), w.path.clone()))
+            .collect();
+        actual.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn repo_url_scopes_daily_aggregates() {
+        let f = grouped();
+        let result = f.query(f.filter());
+        assert_eq!(total(&result), 3);
+        let days: Vec<_> = result.days.iter().filter(|day| day.count > 0).collect();
+        assert_eq!(days.len(), 1);
+        let day = days[0];
+        assert_eq!(
+            (
+                day.count,
+                day.timed,
+                day.total_ms,
+                day.p50_ms,
+                day.p95_ms,
+                day.ok,
+                day.failed,
+                day.interrupted,
+                day.unknown
+            ),
+            (3, 3, 1200, 200, 900, 2, 1, 0, 0)
+        );
+    }
+
+    #[test]
+    fn repo_url_scopes_pattern_aggregates() {
+        let f = grouped();
+        let result = f.query(f.filter());
+        let patterns: Vec<(&str, i64, i64, i64, i64)> = result
+            .patterns
+            .iter()
+            .map(|p| {
+                (
+                    p.pattern.as_str(),
+                    p.invocations,
+                    p.total_ms,
+                    p.p50_ms,
+                    p.p95_ms,
+                )
+            })
+            .collect();
+        assert_eq!(
+            patterns,
+            [("//a:x", 2, 1000, 100, 900), ("//b:y", 1, 200, 200, 200)]
+        );
+    }
+
+    #[test]
+    fn selected_workspace_limits_scope_and_rejects_outsiders() {
+        let f = grouped();
+        let id_b = f.ws_id(&f.root.join("second"));
+
+        let selected = f.query(Filter {
+            workspace_id: Some(id_b.clone()),
+            ..f.filter()
+        });
+        assert_eq!(total(&selected), 1);
+        let day = selected.days.iter().find(|day| day.count > 0).unwrap();
+        assert_eq!(
+            (day.count, day.timed, day.total_ms, day.p50_ms, day.p95_ms),
+            (1, 1, 200, 200, 200)
+        );
+        assert_eq!(selected.patterns.len(), 1);
+        assert_eq!(selected.patterns[0].pattern, "//b:y");
+        assert_eq!(selected.workspaces.len(), 3);
+
+        let narrow = f.query(Filter {
+            cmd: Some("nonexistent".into()),
+            workspace_id: Some(id_b),
+            ..f.filter()
+        });
+        assert_eq!(narrow.workspaces.len(), 3);
+        assert_eq!(total(&narrow), 0);
+
+        assert_invalid_selection(&f, f.ws_id(&f.root.join("other-repo")));
+        assert_invalid_selection(&f, uuid::Uuid::new_v4().to_string());
+    }
+
+    #[test]
+    fn workspaces_without_repo_url_only_scope_to_themselves() {
+        let f = Fixture::new();
+        let other = f.extra("other-plain");
+        let id_a = f.ws_id(&f.ws);
+        let id_b = f.ws_id(&other);
+
+        let start = f.noon_ms();
+        f.insert_ms(&f.ws, start, Some(start + 100), Some(0), "//a:x");
+        f.insert_ms(&other, start, Some(start + 900), Some(0), "//b:y");
+
+        let result = f.query(f.filter());
+        assert_eq!(result.workspaces.len(), 1);
+        assert_eq!(result.workspaces[0].id, id_a);
+        assert_eq!(total(&result), 1);
+
+        let from_other = query(&f.data, &other, f.filter()).unwrap();
+        assert_eq!(from_other.workspaces.len(), 1);
+        assert_eq!(from_other.workspaces[0].id, id_b);
+        assert_eq!(total(&from_other), 1);
+        let day = from_other.days.iter().find(|day| day.count > 0).unwrap();
+        assert_eq!(day.total_ms, 900);
+    }
+
+    #[test]
+    fn refresh_workspace_groups_existing_history_without_new_invocations() {
+        let f = Fixture::new();
+        let other = f.extra("other");
+        let start = f.noon_ms();
+        f.insert_ms(&f.ws, start, Some(start + 100), Some(0), "//a:x");
+        f.insert_ms(&other, start, Some(start + 200), Some(0), "//b:y");
+        assert_eq!(total(&f.query(f.filter())), 1);
+
+        crate::workspace::test_support::repo(&f.ws, SHARED_URL);
+        crate::workspace::test_support::repo(&other, SHARED_URL);
+        crate::store::refresh_workspace(&f.data, &f.ws).unwrap();
+        crate::store::refresh_workspace(&f.data, &other).unwrap();
+
+        let result = f.query(f.filter());
+        assert_eq!(total(&result), 2);
+        assert_eq!(result.workspaces.len(), 2);
+        let day = result.days.iter().find(|day| day.count > 0).unwrap();
+        assert_eq!((day.count, day.timed, day.total_ms), (2, 2, 300));
+    }
+
     #[test]
     #[ignore = "manual synthetic 5,000-record measurement; run with --ignored --nocapture"]
     fn measure_5000_records() {

@@ -8,6 +8,7 @@ export interface AnalyticsFilter {
   cmd: string | null;
   outcome: "ok" | "failed" | "interrupted" | "unknown" | null;
   pattern: string | null;
+  workspaceId: string | null;
 }
 /** Daily and per-pattern-list aggregates returned by the core. */
 export interface DailyAnalytics {
@@ -32,6 +33,7 @@ export interface DailyAnalytics {
     p50Ms: number;
     p95Ms: number;
   }>;
+  workspaces: Array<{ id: string; path: string }>;
 }
 /** Query state shown by the analytics view. */
 export interface AnalyticsView {
@@ -43,7 +45,14 @@ export interface AnalyticsView {
 /** Creates the empty state before the first analytics query. */
 export function emptyAnalytics(): AnalyticsView {
   return {
-    filter: { start: null, end: null, cmd: null, outcome: null, pattern: null },
+    filter: {
+      start: null,
+      end: null,
+      cmd: null,
+      outcome: null,
+      pattern: null,
+      workspaceId: null,
+    },
     data: null,
     loading: false,
     error: null,

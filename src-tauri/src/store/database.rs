@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::File;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -157,7 +157,8 @@ impl Store {
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         if !exists {
             let tx = conn.transaction()?;
-            tx.execute_batch("CREATE TABLE workspace(id TEXT NOT NULL PRIMARY KEY,canonical_path BLOB NOT NULL UNIQUE);
+            tx.execute_batch("CREATE TABLE workspace(id TEXT NOT NULL PRIMARY KEY,canonical_path BLOB NOT NULL UNIQUE,repo_url TEXT);
+                CREATE INDEX workspace_repo_url ON workspace(repo_url);
                 CREATE TABLE invocation(id TEXT NOT NULL PRIMARY KEY,workspace_id TEXT REFERENCES workspace(id),
                     cmd TEXT,target_pattern TEXT,started_at_ms INTEGER,finished_at_ms INTEGER,exit_code INTEGER,
                     attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt>=0),
@@ -169,7 +170,7 @@ impl Store {
             root.sync()?;
         }
         conn.prepare("SELECT id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code,attempt,received_complete FROM invocation LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
-        conn.prepare("SELECT id,canonical_path FROM workspace LIMIT 0")
+        conn.prepare("SELECT id,canonical_path,repo_url FROM workspace LIMIT 0")
             .map_err(|_| fail(ErrorKind::Corrupt))?;
         Ok(Self {
             conn,
@@ -203,10 +204,10 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code FROM invocation r JOIN workspace w ON w.id=r.workspace_id WHERE w.canonical_path=?1";
+const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,w.canonical_path FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 WHERE (w.id=current.id OR w.repo_url=current.repo_url)";
 /// [`list`] returns at most this many records, newest first.
 pub const LIST_LIMIT: usize = 100;
-fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<InvocationRecord> {
+fn row_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRecord> {
     fn time(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Option<u64>> {
         row.get::<_, Option<i64>>(column)?
             .map(|v| {
@@ -215,6 +216,8 @@ fn row_record(row: &rusqlite::Row<'_>, ws: &Path) -> rusqlite::Result<Invocation
             })
             .transpose()
     }
+    let path: Vec<u8> = row.get(6)?;
+    let ws = PathBuf::from(std::ffi::OsString::from_vec(path));
     Ok(InvocationRecord {
         id: row.get(0)?,
         workspace: Some(ws.to_string_lossy().into_owned()),
@@ -235,7 +238,7 @@ pub fn read_record(
     Ok(store.conn.query_row(
         &format!("{SELECT} AND r.id=?2"),
         params![ws.as_os_str().as_bytes(), id(invocation_id)?],
-        |r| row_record(r, &ws),
+        row_record,
     )?)
 }
 pub fn list(data: &Path, ws: &Path) -> Result<Vec<InvocationRecord>, StoreError> {
@@ -246,13 +249,41 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<InvocationRecord>, StoreError>
         .prepare(&format!(
             "{SELECT} ORDER BY r.started_at_ms DESC,r.id LIMIT {LIST_LIMIT}"
         ))?
-        .query_map([ws.as_os_str().as_bytes()], |r| row_record(r, &ws))?
+        .query_map([ws.as_os_str().as_bytes()], row_record)?
         .collect::<Result<_, _>>()?)
 }
 pub fn artifact(data: &Path, ws: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
     attempt_artifact(data, ws, invocation_id, name)
         .map(|(file, _)| file)
         .map_err(Into::into)
+}
+
+pub fn refresh_workspace(data: &Path, ws: &Path) -> Result<(), StoreError> {
+    let ws = workspace_path(ws)?;
+    let repo_url = crate::workspace::repo_url(&ws);
+    let mut store = Store::open(data)?;
+    let tx = store
+        .conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    save_workspace(&tx, ws.as_os_str().as_bytes(), repo_url.as_deref())?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(super) fn save_workspace(
+    tx: &rusqlite::Transaction<'_>,
+    path: &[u8],
+    repo_url: Option<&str>,
+) -> Result<String, StoreError> {
+    tx.execute(
+        "INSERT INTO workspace(id,canonical_path,repo_url) VALUES(?1,?2,?3) ON CONFLICT(canonical_path) DO UPDATE SET repo_url=excluded.repo_url",
+        params![uuid::Uuid::new_v4().to_string(), path, repo_url],
+    )?;
+    Ok(tx.query_row(
+        "SELECT id FROM workspace WHERE canonical_path=?1",
+        [path],
+        |r| r.get(0),
+    )?)
 }
 
 pub(crate) fn event_artifact(
@@ -395,18 +426,36 @@ mod tests {
     #[test]
     fn list_returns_at_most_list_limit_newest_records() {
         let f = Fixture::new();
+        let mut sibling = Fixture::new();
+        sibling.data = f.data.clone();
+        crate::workspace::test_support::repo(&f.ws, "https://example.com/shared.git");
+        crate::workspace::test_support::repo(&sibling.ws, "https://example.com/shared.git");
+        crate::store::refresh_workspace(&f.data, &sibling.ws).unwrap();
         f.complete();
         let store = Store::open(&f.data).unwrap();
-        let ws_id: String = store
-            .conn
-            .query_row("SELECT id FROM workspace", [], |r| r.get(0))
-            .unwrap();
+        let ws_id = |ws: &Path| -> String {
+            store
+                .conn
+                .query_row(
+                    "SELECT id FROM workspace WHERE canonical_path=?1",
+                    [ws.canonicalize().unwrap().as_os_str().as_bytes()],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let first_id = ws_id(&f.ws);
+        let second_id = ws_id(&sibling.ws);
+        let ids = [first_id, second_id];
         for i in 0..LIST_LIMIT {
             store
                 .conn
                 .execute(
                     "INSERT INTO invocation(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
-                    params![uuid::Uuid::new_v4().to_string(), ws_id, 2000 + i as i64],
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        &ids[i % 2],
+                        2000 + i as i64
+                    ],
                 )
                 .unwrap();
         }
@@ -421,6 +470,129 @@ mod tests {
             invocations
                 .iter()
                 .all(|invocation| invocation.id != f.stream.invocation_id)
+        );
+        let sibling_path = sibling
+            .ws
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            invocations.iter().any(|invocation| {
+                invocation.workspace.as_deref() == Some(sibling_path.as_str())
+            })
+        );
+    }
+
+    fn shared_repo_pair() -> (Fixture, Fixture) {
+        let f = Fixture::new();
+        let mut sibling = Fixture::new();
+        sibling.data = f.data.clone();
+        crate::workspace::test_support::repo(&f.ws, "https://example.com/shared.git");
+        crate::workspace::test_support::repo(&sibling.ws, "https://example.com/shared.git");
+        f.complete();
+        sibling.complete();
+        (f, sibling)
+    }
+
+    #[test]
+    fn same_repo_invocations_are_listed_across_workspaces() {
+        let (f, sibling) = shared_repo_pair();
+        let own_id = f.stream.invocation_id.clone();
+        let sibling_id = sibling.stream.invocation_id.clone();
+        let own_path = f.ws.canonicalize().unwrap().to_string_lossy().into_owned();
+        let sibling_path = sibling
+            .ws
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let from_first = list(&f.data, &f.ws).unwrap();
+        let from_second = list(&f.data, &sibling.ws).unwrap();
+        assert_eq!(from_first, from_second);
+        assert_eq!(from_first.len(), 2);
+        assert_eq!(
+            from_first
+                .iter()
+                .find(|record| record.id == own_id)
+                .unwrap()
+                .workspace
+                .as_deref(),
+            Some(own_path.as_str())
+        );
+        assert_eq!(
+            from_first
+                .iter()
+                .find(|record| record.id == sibling_id)
+                .unwrap()
+                .workspace
+                .as_deref(),
+            Some(sibling_path.as_str())
+        );
+    }
+
+    #[test]
+    fn same_repo_records_artifacts_and_details_cross_workspaces() {
+        let (f, sibling) = shared_repo_pair();
+        let sibling_id = sibling.stream.invocation_id.clone();
+        let sibling_path = sibling
+            .ws
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let record = read_record(&f.data, &f.ws, &sibling_id).unwrap();
+        assert_eq!(record.workspace.as_deref(), Some(sibling_path.as_str()));
+        assert!(artifact(&f.data, &f.ws, &sibling_id, "bep.binpb.gz").is_ok());
+
+        let detail = crate::detail::invocation_detail(&f.data, &f.ws, &sibling_id).unwrap();
+        assert!(matches!(detail.bep, crate::detail::Section::Ok { .. }));
+        let profile = crate::detail::invocation_profile(&f.data, &f.ws, &sibling_id).unwrap();
+        assert!(matches!(profile, crate::detail::Section::Missing));
+    }
+
+    #[test]
+    fn different_repo_invocations_stay_invisible() {
+        let (f, _sibling) = shared_repo_pair();
+        let mut other = Fixture::new();
+        other.data = f.data.clone();
+        crate::workspace::test_support::repo(&other.ws, "https://example.com/other.git");
+        other.complete();
+        let other_id = other.stream.invocation_id.clone();
+
+        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 2);
+        assert_eq!(
+            read_record(&f.data, &f.ws, &other_id).unwrap_err().kind,
+            ErrorKind::Missing
+        );
+        assert!(artifact(&f.data, &f.ws, &other_id, "bep.binpb.gz").is_err());
+        assert!(crate::detail::invocation_detail(&f.data, &f.ws, &other_id).is_err());
+        assert!(crate::detail::invocation_profile(&f.data, &f.ws, &other_id).is_err());
+    }
+
+    #[test]
+    fn workspaces_without_repo_url_only_see_themselves() {
+        let f = Fixture::new();
+        let mut plain = Fixture::new();
+        plain.data = f.data.clone();
+        let mut other_plain = Fixture::new();
+        other_plain.data = f.data.clone();
+        crate::workspace::test_support::repo(&f.ws, "https://example.com/shared.git");
+        f.complete();
+        plain.complete();
+        other_plain.complete();
+
+        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
+        let plain_list = list(&f.data, &plain.ws).unwrap();
+        assert_eq!(plain_list.len(), 1);
+        assert_eq!(plain_list[0].id, plain.stream.invocation_id);
+        assert_eq!(
+            read_record(&f.data, &plain.ws, &other_plain.stream.invocation_id)
+                .unwrap_err()
+                .kind,
+            ErrorKind::Missing
         );
     }
     #[test]

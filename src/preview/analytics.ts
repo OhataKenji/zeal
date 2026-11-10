@@ -5,6 +5,7 @@ type AnalyticsRecord = Pick<InvocationRecord, "exitCode" | "finishedAt"> & {
   cmd: string;
   pattern: string;
   startedAt: number;
+  workspace?: string;
 };
 type ResolvedFilter = Partial<AnalyticsFilter> & { start: string; end: string };
 type Outcome = "ok" | "failed" | "interrupted" | "unknown";
@@ -74,7 +75,8 @@ function matchesPeriod(inv: AnalyticsRecord, filter: ResolvedFilter): boolean {
     day >= filter.start &&
     day <= filter.end &&
     (filter.cmd == null || inv.cmd === filter.cmd) &&
-    (filter.outcome == null || outcome(inv) === filter.outcome)
+    (filter.outcome == null || outcome(inv) === filter.outcome) &&
+    (filter.workspaceId == null || inv.workspace === filter.workspaceId)
   );
 }
 
@@ -167,6 +169,16 @@ export function previewAnalytics(
   now: number,
 ): Omit<DailyAnalytics, "filter"> & { filter: ResolvedFilter } {
   const { filter, first, spanDays } = resolveFilter(requested, now);
+  const workspaces = [
+    ...new Set(
+      records
+        .map((inv) => inv.workspace)
+        .filter((workspace): workspace is string => workspace !== undefined),
+    ),
+  ].map((path) => ({ id: path, path }));
+  if (filter.workspaceId != null && !workspaces.some((w) => w.id === filter.workspaceId)) {
+    throw new Error("invalid analytics filter");
+  }
   const invocations = records.filter((inv) => matchesPeriod(inv, filter));
   return {
     filter,
@@ -174,5 +186,6 @@ export function previewAnalytics(
     days: dailyAnalytics(invocations, filter, first, spanDays),
     // The ranking intentionally ignores the selected pattern list.
     patterns: patternAnalytics(invocations),
+    workspaces,
   };
 }
