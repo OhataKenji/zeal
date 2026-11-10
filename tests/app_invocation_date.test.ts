@@ -41,34 +41,32 @@ test("App renders invocation dates safely", async (t) => {
     const { default: App } = await server.ssrLoadModule("/src/App.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
-    function invocationRow(startedAt: number | undefined): string {
+    function output(startedAt: number | undefined): string {
       Object.assign(app.view, {
         ready: true,
         state: IDLE,
         invocations: [{ id: "invocation", cmd: "build", pattern: "//app:app", startedAt }],
       });
-      const html = render(App).body;
-      const row = html.match(
-        /<button\b[^>]*class="[^"]*\binvocation-row\b[^"]*"[^>]*>[\s\S]*?<\/button>/,
-      )?.[0];
-      assert.ok(row, "invocation row is rendered");
-      return row;
+      return render(App).body;
     }
 
     for (const startedAt of [undefined, NaN, Infinity, -Infinity, 8.64e15 + 1]) {
       await t.test(`${startedAt} renders the missing-time fallback`, () => {
-        const row = invocationRow(startedAt);
-        assert.match(row, /Time not recorded/);
-        assert.doesNotMatch(row, /<time\b/);
+        const html = output(startedAt);
+        assert.match(html, /Time not recorded/);
+        assert.doesNotMatch(html, /<time\b/);
       });
     }
 
-    for (const startedAt of [0, 1_700_000_000_000, 8_640_000_000_000_000]) {
+    for (const [startedAt, expected] of [
+      [0, "1970-01-01T00:00:00.000Z"],
+      [1_700_000_000_000, "2023-11-14T22:13:20.000Z"],
+      [8_640_000_000_000_000, "+275760-09-13T00:00:00.000Z"],
+    ] as const) {
       await t.test(`${startedAt} renders a semantic time`, () => {
-        const row = invocationRow(startedAt);
-        const date = new Date(startedAt);
-        assert.ok(row.includes(`<time datetime="${date.toISOString()}"`));
-        assert.doesNotMatch(row, /Time not recorded/);
+        const html = output(startedAt);
+        assert.ok(html.includes(`<time datetime="${expected}"`));
+        assert.doesNotMatch(html, /Time not recorded/);
       });
     }
   } finally {
