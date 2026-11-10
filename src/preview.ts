@@ -150,7 +150,7 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
     const startedAt = dayDate.getTime() - invocationIndex * 600000;
     return {
       id: `preview-${dayIndex}-${invocationIndex}`,
-      workspace: WORKSPACE,
+      workspace: (dayIndex + invocationIndex) % 2 === 0 ? WORKSPACE : `${WORKSPACE}-worktree`,
       cmd: invocationIndex % 3 === 1 ? "test" : "build",
       pattern: PREVIEW_TARGETS[(dayIndex + invocationIndex) % PREVIEW_TARGETS.length],
       startedAt,
