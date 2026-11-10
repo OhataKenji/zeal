@@ -36,7 +36,14 @@ function harness() {
   };
 }
 const RESULT: DailyAnalytics = {
-  filter: { start: "2026-03-01", end: "2026-03-30", cmd: null, outcome: null, pattern: null },
+  filter: {
+    start: "2026-03-01",
+    end: "2026-03-30",
+    cmd: null,
+    outcome: null,
+    pattern: null,
+    workspaceId: null,
+  },
   today: "2026-03-30",
   days: [
     {
@@ -53,6 +60,7 @@ const RESULT: DailyAnalytics = {
     },
   ],
   patterns: [],
+  workspaces: [],
 };
 function day(count: number, extra: Partial<DailyAnalytics["days"][number]> = {}) {
   return {
@@ -73,7 +81,14 @@ test("default request uses core calendar and refresh retains all filters", async
   const h = harness();
   const initial = h.model.load();
   assert.deepEqual(h.calls[0].args, {
-    filter: { start: null, end: null, cmd: null, outcome: null, pattern: null },
+    filter: {
+      start: null,
+      end: null,
+      cmd: null,
+      outcome: null,
+      pattern: null,
+      workspaceId: null,
+    },
   });
   h.calls[0].resolve(RESULT);
   await initial;
@@ -236,4 +251,42 @@ test("correcting either reversed endpoint clears validation and resumes loading"
   assert.equal(h.view.error, null);
   assert.equal(h.view.loading, false);
   assert.equal(h.view.data?.days[0].count, 2);
+});
+test("workspace selection is sent, retained on refresh, and candidates survive responses", async () => {
+  const h = harness();
+  const workspaces = [
+    { id: "ws-1", path: "/one" },
+    { id: "ws-2", path: "/two" },
+  ];
+  const initial = h.model.load();
+  h.calls[0].resolve({ ...RESULT, workspaces });
+  await initial;
+  assert.deepEqual(h.view.data?.workspaces, workspaces);
+
+  const selected = { ...h.view.filter, workspaceId: "ws-2" };
+  const changed = h.model.load(selected);
+  assert.deepEqual(h.calls[1].args, { filter: selected });
+  h.calls[1].resolve({ ...RESULT, filter: selected, workspaces });
+  await changed;
+  const refreshed = h.model.load();
+  assert.deepEqual(h.calls[2].args, { filter: selected });
+  h.calls[2].resolve({ ...RESULT, filter: selected, workspaces });
+  await refreshed;
+  assert.equal(h.view.filter.workspaceId, "ws-2");
+  assert.deepEqual(h.view.data?.workspaces, workspaces);
+
+  const next = harness();
+  const fresh = next.model.load();
+  assert.deepEqual(next.calls[0].args, {
+    filter: {
+      start: null,
+      end: null,
+      cmd: null,
+      outcome: null,
+      pattern: null,
+      workspaceId: null,
+    },
+  });
+  next.calls[0].resolve({ ...RESULT, workspaces });
+  await fresh;
 });

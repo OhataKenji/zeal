@@ -40,6 +40,26 @@ fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 
+#[must_use]
+pub fn repo_url(ws: &Path) -> Option<String> {
+    repo_url_from(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(ws)
+            .args(["remote", "get-url", "origin"]),
+    )
+}
+
+fn repo_url_from(command: &mut std::process::Command) -> Option<String> {
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let url = String::from_utf8(output.stdout).ok()?;
+    let url = url.trim_end_matches(['\r', '\n']);
+    (!url.is_empty()).then(|| url.to_owned())
+}
+
 const SAVED_FILE: &str = "workspace.json";
 
 /// The last workspace and its explicitly selected discovery scope.
@@ -65,6 +85,51 @@ pub fn save(data_dir: &Path, ws: &Path, scope: &Scope) {
     }
     let body = serde_json::json!({ "path": ws.to_string_lossy(), "scope": scope });
     let _ = std::fs::write(data_dir.join(SAVED_FILE), body.to_string());
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::Path;
+    use std::process::{Command, Output};
+
+    pub fn git(dir: &Path, args: &[&str]) -> Output {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    pub fn init(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "--quiet"]);
+        git(
+            dir,
+            &[
+                "-c",
+                "user.email=zeal@example.com",
+                "-c",
+                "user.name=zeal",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+    }
+
+    pub fn repo(dir: &Path, origin: &str) {
+        init(dir);
+        git(dir, &["remote", "add", "origin", origin]);
+    }
 }
 
 #[cfg(test)]
@@ -134,5 +199,71 @@ mod tests {
         let saved = load_saved(dir.path()).unwrap();
         assert_eq!(saved.scope.include, ["//app/..."]);
         assert_eq!(saved.scope.rules_query(), "kind(\"rule\", (\"//app/...\"))");
+    }
+
+    #[test]
+    fn repo_url_returns_the_origin_literal_without_its_trailing_newline() {
+        let dir = TempDir::new();
+        let repo = dir.path().join("repo");
+        test_support::repo(&repo, "git@example.com:2222/org/re.po.git");
+        assert_eq!(
+            repo_url(&repo).as_deref(),
+            Some("git@example.com:2222/org/re.po.git")
+        );
+    }
+
+    #[test]
+    fn clones_and_worktrees_share_the_same_literal_origin() {
+        let dir = TempDir::new();
+        let origin = "https://example.com/org/shared.git";
+        let source = dir.path().join("source");
+        test_support::repo(&source, origin);
+        let clone = dir.path().join("clone");
+        test_support::git(
+            dir.path(),
+            &[
+                "clone",
+                "--quiet",
+                source.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        test_support::git(&clone, &["remote", "set-url", "origin", origin]);
+        let worktree = dir.path().join("worktree");
+        test_support::git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        for ws in [&source, &clone, &worktree] {
+            assert_eq!(repo_url(ws).as_deref(), Some(origin), "{ws:?}");
+        }
+    }
+
+    #[test]
+    fn repo_url_is_none_without_origin_or_repository() {
+        let dir = TempDir::new();
+        let no_origin = dir.path().join("no-origin");
+        test_support::init(&no_origin);
+        assert_eq!(repo_url(&no_origin), None);
+        let plain = dir.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        assert_eq!(repo_url(&plain), None);
+        assert_eq!(repo_url(&dir.path().join("missing")), None);
+    }
+
+    #[test]
+    fn repo_url_is_none_when_git_cannot_run() {
+        let mut command = std::process::Command::new("/nonexistent/zeal-git");
+        command
+            .arg("-C")
+            .arg("/")
+            .args(["remote", "get-url", "origin"]);
+        assert_eq!(repo_url_from(&mut command), None);
     }
 }

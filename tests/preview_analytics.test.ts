@@ -157,3 +157,40 @@ test("unsupported filters and patterns exceeding the UTF-8 byte limit are reject
   );
   assert.equal(previewAnalytics([], { ...PERIOD, pattern: "é".repeat(32768) }, NOW).days.length, 2);
 });
+
+test("workspace selection limits records to the chosen workspace", () => {
+  const records = [
+    {
+      workspace: "/one",
+      cmd: "build",
+      pattern: "//:a",
+      startedAt: NOW,
+      finishedAt: NOW + 100,
+      exitCode: 0,
+    },
+    {
+      workspace: "/two",
+      cmd: "build",
+      pattern: "//:b",
+      startedAt: NOW,
+      finishedAt: NOW + 900,
+      exitCode: 0,
+    },
+  ];
+  const all = previewAnalytics(records, PERIOD, NOW);
+  assert.deepEqual(all.workspaces, [
+    { id: "/one", path: "/one" },
+    { id: "/two", path: "/two" },
+  ]);
+  assert.equal(all.days[0].count, 2);
+  const selected = previewAnalytics(records, { ...PERIOD, workspaceId: "/two" }, NOW);
+  assert.equal(selected.days[0].count, 1);
+  assert.deepEqual(
+    selected.patterns.map((row) => row.pattern),
+    ["//:b"],
+  );
+  assert.throws(
+    () => previewAnalytics(records, { ...PERIOD, workspaceId: "/missing" }, NOW),
+    /invalid analytics filter/,
+  );
+});

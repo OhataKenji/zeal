@@ -173,6 +173,7 @@ fn open_workspace(
         st.invocation_note = None;
     }
     if let Ok(dir) = app.path().app_data_dir() {
+        let _ = store::refresh_workspace(&dir, &ws);
         workspace::save(&dir, &ws, &scope);
     }
     ingest::request(app.clone(), core.inner().clone())?;
@@ -418,6 +419,7 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
     if let Ok(dir) = app.path().app_data_dir()
         && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(&w.path))
     {
+        let _ = store::refresh_workspace(&dir, &ws.path);
         {
             let mut st = core.state.lock().expect("application state lock poisoned");
             store::analytics::refresh_timezone();

@@ -157,7 +157,8 @@ impl Store {
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
         if !exists {
             let tx = conn.transaction()?;
-            tx.execute_batch("CREATE TABLE workspace(id TEXT NOT NULL PRIMARY KEY,canonical_path BLOB NOT NULL UNIQUE);
+            tx.execute_batch("CREATE TABLE workspace(id TEXT NOT NULL PRIMARY KEY,canonical_path BLOB NOT NULL UNIQUE,repo_url TEXT);
+                CREATE INDEX workspace_repo_url ON workspace(repo_url);
                 CREATE TABLE invocation(id TEXT NOT NULL PRIMARY KEY,workspace_id TEXT REFERENCES workspace(id),
                     cmd TEXT,target_pattern TEXT,started_at_ms INTEGER,finished_at_ms INTEGER,exit_code INTEGER,
                     attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt>=0),
@@ -169,7 +170,7 @@ impl Store {
             root.sync()?;
         }
         conn.prepare("SELECT id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code,attempt,received_complete FROM invocation LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
-        conn.prepare("SELECT id,canonical_path FROM workspace LIMIT 0")
+        conn.prepare("SELECT id,canonical_path,repo_url FROM workspace LIMIT 0")
             .map_err(|_| fail(ErrorKind::Corrupt))?;
         Ok(Self {
             conn,
@@ -253,6 +254,34 @@ pub fn artifact(data: &Path, ws: &Path, invocation_id: &str, name: &str) -> io::
     attempt_artifact(data, ws, invocation_id, name)
         .map(|(file, _)| file)
         .map_err(Into::into)
+}
+
+pub fn refresh_workspace(data: &Path, ws: &Path) -> Result<(), StoreError> {
+    let ws = workspace_path(ws)?;
+    let repo_url = crate::workspace::repo_url(&ws);
+    let mut store = Store::open(data)?;
+    let tx = store
+        .conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    save_workspace(&tx, ws.as_os_str().as_bytes(), repo_url.as_deref())?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(super) fn save_workspace(
+    tx: &rusqlite::Transaction<'_>,
+    path: &[u8],
+    repo_url: Option<&str>,
+) -> Result<String, StoreError> {
+    tx.execute(
+        "INSERT INTO workspace(id,canonical_path,repo_url) VALUES(?1,?2,?3) ON CONFLICT(canonical_path) DO UPDATE SET repo_url=excluded.repo_url",
+        params![uuid::Uuid::new_v4().to_string(), path, repo_url],
+    )?;
+    Ok(tx.query_row(
+        "SELECT id FROM workspace WHERE canonical_path=?1",
+        [path],
+        |r| r.get(0),
+    )?)
 }
 
 pub(crate) fn event_artifact(

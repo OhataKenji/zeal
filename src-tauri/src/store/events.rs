@@ -9,7 +9,7 @@ use bep::build_event_id::Id;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use prost::Message;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use rustix::fs::{Mode, OFlags};
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Write};
@@ -23,6 +23,7 @@ pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 #[derive(Default)]
 struct Facts {
     workspace: Option<PathBuf>,
+    repo_url: Option<String>,
     cmd: Option<String>,
     pattern: Option<String>,
     started: Option<i64>,
@@ -182,6 +183,11 @@ impl Receipt {
         self.facts.workspace = Some(database::workspace_path(Path::new(
             &started.workspace_directory,
         ))?);
+        self.facts.repo_url = self
+            .facts
+            .workspace
+            .as_deref()
+            .and_then(crate::workspace::repo_url);
         self.facts.cmd = Some(started.command.clone());
         self.facts.pattern = Some(pattern);
         self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
@@ -258,7 +264,9 @@ impl Receipt {
         if !current {
             return Err(fail(ErrorKind::Conflict));
         }
-        let ws_id = save_workspace(tx, path)?;
+        let ws_id = path
+            .map(|path| database::save_workspace(tx, path, self.facts.repo_url.as_deref()))
+            .transpose()?;
         // Missing retry facts must not erase facts already reported for this
         // invocation.
         let updated = tx.execute(
@@ -373,26 +381,6 @@ fn target_patterns(children: &[bep::BuildEventId]) -> Result<String, StoreError>
         joined.push_str(pattern);
     }
     Ok(joined)
-}
-
-fn save_workspace(
-    tx: &rusqlite::Transaction<'_>,
-    path: Option<&[u8]>,
-) -> Result<Option<String>, StoreError> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    tx.execute(
-        "INSERT INTO workspace(id,canonical_path) VALUES(?1,?2) ON CONFLICT(canonical_path) DO NOTHING",
-        params![uuid::Uuid::new_v4().to_string(), path],
-    )?;
-    Ok(tx
-        .query_row(
-            "SELECT id FROM workspace WHERE canonical_path=?1",
-            [path],
-            |r| r.get(0),
-        )
-        .optional()?)
 }
 
 fn millis(time: Option<&prost_types::Timestamp>, fallback: i64) -> Option<i64> {
@@ -948,5 +936,59 @@ mod tests {
             (record.started_at, record.finished_at, record.exit_code),
             (None, None, Some(0))
         );
+    }
+
+    fn sibling(f: &Fixture) -> Fixture {
+        let mut sibling = Fixture::new();
+        sibling.data = f.data.clone();
+        sibling.ws = f.ws.clone();
+        sibling.stream.invocation_id = uuid::Uuid::new_v4().to_string();
+        sibling
+    }
+
+    fn stored_repo_url(data: &Path) -> Option<String> {
+        Store::open(data)
+            .unwrap()
+            .conn
+            .query_row("SELECT repo_url FROM workspace", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn started_records_and_each_invocation_refreshes_the_workspace_repo_url() {
+        let f = Fixture::new();
+        crate::workspace::test_support::repo(&f.ws, "https://example.com/one.git");
+        f.complete();
+        assert_eq!(
+            stored_repo_url(&f.data).as_deref(),
+            Some("https://example.com/one.git")
+        );
+
+        crate::workspace::test_support::git(
+            &f.ws,
+            &["remote", "set-url", "origin", "https://example.com/two.git"],
+        );
+        sibling(&f).complete();
+        assert_eq!(
+            stored_repo_url(&f.data).as_deref(),
+            Some("https://example.com/two.git")
+        );
+
+        crate::workspace::test_support::git(&f.ws, &["remote", "remove", "origin"]);
+        sibling(&f).complete();
+        assert_eq!(stored_repo_url(&f.data), None);
+    }
+
+    #[test]
+    fn a_workspace_without_origin_still_acknowledges_and_persists() {
+        let f = Fixture::new();
+        crate::workspace::test_support::init(&f.ws);
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        receipt.append(&f.ordered(1, f.started())).unwrap();
+        receipt.append(&f.ordered(2, f.finished())).unwrap();
+        let ack = receipt.finish().unwrap();
+        assert_eq!((ack.first, ack.last), (1, 2));
+        assert!(read_record(&f.data, &f.ws, &f.stream.invocation_id).is_ok());
+        assert_eq!(stored_repo_url(&f.data), None);
     }
 }
