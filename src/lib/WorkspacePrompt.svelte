@@ -40,7 +40,7 @@
         directory: true,
         multiple: false,
         title: "Select Bazel workspace",
-        defaultPath: path || undefined,
+        defaultPath: path.trim() || undefined,
       });
       if (selected !== null) path = selected;
     } catch (e) {
@@ -78,10 +78,18 @@ build --experimental_collect_system_network_usage`;
   }}
 >
   <div class="workspace-folder">
-    <div class="workspace-selection">
+    <label class="workspace-selection">
       <span>Workspace</span>
-      <span class="workspace-path">{path || "No folder selected"}</span>
-    </div>
+      <input
+        class="input workspace-path"
+        type="text"
+        bind:value={path}
+        placeholder="/path/to/workspace"
+        spellcheck={false}
+        disabled={busy}
+        required
+      />
+    </label>
     <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
       Choose folder…
     </button>

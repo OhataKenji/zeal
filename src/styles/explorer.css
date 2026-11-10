@@ -271,7 +271,6 @@ details[open] .action-mnemonic::before {
 
 .ws-prompt .workspace-path {
   color: var(--foreground);
-  overflow-wrap: anywhere;
 }
 
 .ws-prompt .scope-patterns {

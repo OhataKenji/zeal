@@ -43,7 +43,7 @@ On macOS and Linux, Zeal loads your login shell's `PATH`.
 
 Open only trusted repositories.
 
-1. Choose your Bazel workspace root with **Choose folder…**.
+1. Enter your Bazel workspace root path or select it with **Choose folder…**.
 2. Keep **target patterns** as `//...` for all packages in the main repository. To narrow the scope, use a pattern such as `//app/...`.
 3. Select **open**.
 4. Select a target and run `build`, `test`, or `run`.

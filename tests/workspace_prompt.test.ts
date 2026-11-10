@@ -10,7 +10,7 @@ import type { TargetScope } from "../src/lib/types.ts";
 
 const SCOPE: TargetScope = { include: ["//..."] };
 
-test("WorkspacePrompt picks a workspace folder instead of typing a path", async (t) => {
+test("WorkspacePrompt supports direct path input and folder picking", async (t) => {
   const cacheDir = await mkdtemp(join(tmpdir(), "zeal-workspace-prompt-"));
   let server: ViteDevServer | undefined;
   try {
@@ -45,27 +45,70 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       return match[0];
     }
 
-    await t.test("an empty workspace shows a picker without a path input and disables open", () => {
+    function workspaceField(html: string): string {
+      const label = tag(
+        html,
+        /<label\b[^>]*class="[^"]*workspace-selection[^"]*"[^>]*>[\s\S]*?<\/label>/,
+      );
+      return tag(label, /<input\b[^>]*>/);
+    }
+
+    function chooseButton(html: string): string {
+      return tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
+    }
+
+    function submitButton(html: string): string {
+      return tag(html, /<button[^>]*type="submit"[^>]*>/);
+    }
+
+    await t.test("an empty workspace accepts a typed path and disables open", () => {
       const html = output("");
-      assert.doesNotMatch(html, /<input\b/);
-      assert.match(html, /No folder selected/);
-      const choose = tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
+      const input = workspaceField(html);
+      assert.doesNotMatch(input, /\bdisabled\b|\breadonly\b/);
+      const choose = chooseButton(html);
       assert.match(choose, /type="button"/);
-      const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
-      assert.match(open, /disabled/);
+      assert.doesNotMatch(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
+      assert.match(submitButton(html), /\bdisabled\b/);
       assert.match(html, /Do not open an untrusted repository\./);
       assert.match(html, /target patterns/);
       assert.match(html, /scope-patterns/);
     });
 
-    await t.test("an initial workspace is displayed as text and enables open", () => {
+    await t.test("an initial workspace fills the path input and enables open", () => {
       const html = output("/workspace");
-      assert.doesNotMatch(html, /<input\b/);
-      assert.match(html, /class="workspace-path"[^>]*>\/workspace<\/span>/);
-      const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
-      assert.doesNotMatch(open, /disabled/);
+      const input = workspaceField(html);
+      assert.match(input, /value="\/workspace"/);
+      assert.doesNotMatch(input, /\bdisabled\b|\breadonly\b/);
+      assert.doesNotMatch(submitButton(html), /\bdisabled\b/);
       assert.doesNotMatch(html, /restart Zeal/);
     });
+
+    await t.test("a whitespace-only path disables open but stays editable", () => {
+      const html = output("   ");
+      const input = workspaceField(html);
+      assert.match(input, /\bvalue=" +"/);
+      assert.doesNotMatch(input, /\bdisabled\b|\breadonly\b/);
+      assert.match(submitButton(html), /\bdisabled\b/);
+    });
+
+    await t.test(
+      "an in-flight workspace open disables the path input, picker, and submit",
+      async () => {
+        const { app } = await server!.ssrLoadModule("/src/lib/state.svelte.ts");
+        const opening = app.view.opening;
+        Object.assign(app.view, { opening: true });
+        try {
+          const html = output("/workspace");
+          const input = workspaceField(html);
+          assert.match(input, /\bdisabled\b/);
+          const choose = chooseButton(html);
+          assert.match(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
+          assert.match(submitButton(html), /\bdisabled\b/);
+        } finally {
+          Object.assign(app.view, { opening });
+        }
+      },
+    );
 
     await t.test("CLI recording settings have a non-submitting copy button", () => {
       const html = render(WorkspacePrompt, {
@@ -103,7 +146,7 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       assert.match(html, /may be slow in large workspaces/);
       assert.match(html, /Consider using a narrower scope/);
       assert.match(tag(html, /<textarea\b[^>]*>/), /aria-describedby="scope-help scope-warning"/);
-      assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
+      assert.doesNotMatch(submitButton(html), /\bdisabled\b/);
     });
 
     for (const include of [[" \t//... \t"], ["//app/...", "", " //... ", "//tools:all"]]) {
@@ -116,7 +159,7 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
             tag(html, /<textarea\b[^>]*>/),
             /aria-describedby="scope-help scope-warning"/,
           );
-          assert.doesNotMatch(tag(html, /<button[^>]*type="submit"[^>]*>/), /disabled/);
+          assert.doesNotMatch(submitButton(html), /\bdisabled\b/);
         },
       );
     }
@@ -129,17 +172,16 @@ test("WorkspacePrompt picks a workspace folder instead of typing a path", async 
       });
     }
 
-    await t.test(
-      "a missing bazel executable requires a restart but keeps the picker usable",
-      () => {
-        const html = output("/workspace", SCOPE.include, false);
-        assert.match(html, /Please install either tool and add it to your PATH, then restart Zeal/);
-        const choose = tag(html, /<button[^>]*>[\s\S]*?Choose folder…[\s\S]*?<\/button>/);
-        assert.doesNotMatch(choose.slice(0, choose.indexOf(">") + 1), /disabled/);
-        const open = tag(html, /<button[^>]*type="submit"[^>]*>/);
-        assert.match(open, /disabled/);
-      },
-    );
+    await t.test("missing bazel keeps path input and picker usable", () => {
+      const html = output("/workspace", SCOPE.include, false);
+      assert.match(html, /Please install either tool and add it to your PATH, then restart Zeal/);
+      const input = workspaceField(html);
+      assert.doesNotMatch(input, /\bdisabled\b|\breadonly\b/);
+      assert.match(input, /\bvalue="\/workspace"/);
+      const choose = chooseButton(html);
+      assert.doesNotMatch(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
+      assert.match(submitButton(html), /\bdisabled\b/);
+    });
   } finally {
     await server?.close();
     await rm(cacheDir, { recursive: true, force: true });
