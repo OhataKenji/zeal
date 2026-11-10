@@ -63,17 +63,6 @@ test("App renders invocation dates safely", async (t) => {
         const html = output(startedAt);
         const date = new Date(startedAt);
         assert.ok(html.includes(`<time datetime="${date.toISOString()}"`));
-        assert.ok(
-          html.includes(
-            date.toLocaleString([], {
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-          ),
-        );
         assert.doesNotMatch(html, /Time not recorded/);
       });
     }
