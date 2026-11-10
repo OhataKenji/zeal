@@ -12,7 +12,41 @@
   <a href="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml"><img src="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-![Zeal target explorer showing resolved outputs, attributes, and invocation history](docs/screenshots/overview.jpg)
+[![Watch the Zeal demo on YouTube](docs/screenshots/overview.jpg)](https://youtu.be/Kkmc5_eOLA0)
+
+<p align="center">
+  <a href="https://youtu.be/Kkmc5_eOLA0">Watch on YouTube</a>
+</p>
+
+## Getting Started
+
+> [!WARNING]
+> Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
+
+### Step1: Install
+
+#### Option 1: Download a release
+
+Download the app for your platform from [GitHub Releases](https://github.com/OhataKenji/zeal/releases).
+
+#### Option 2: Build from source
+
+Follow the [Development guide](docs/development.md#getting-started).
+
+### Step2: Open a repository
+
+**Requires:** Bazelisk or Bazel on your `PATH`.
+
+On macOS and Linux, Zeal loads your login shell's `PATH`.
+
+Open only trusted repositories.
+
+1. Choose your Bazel workspace root with **Choose folder…**.
+2. Keep **target patterns** as `//...` for all packages in the main repository. To narrow the scope, use a pattern such as `//app/...`.
+3. Select **open**.
+4. Select a target and run `build`, `test`, or `run`.
+
+![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
 
 ## Features
 
@@ -45,28 +79,6 @@ Compare commands, options, and outcomes of two invocations side by side.
 Filter build and test history from Zeal and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
 
 ![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
-
-## Getting Started
-
-> [!WARNING]
-> Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
-
-Run Zeal from source: [Development guide](docs/development.md#getting-started).
-
-### Open a repository
-
-**Requires:** Bazelisk or Bazel on your `PATH`.
-
-On macOS and Linux, Zeal loads your login shell's `PATH`.
-
-Open only trusted repositories.
-
-1. Choose your Bazel workspace root with **Choose folder…**.
-2. Keep **target patterns** as `//...` for all packages in the main repository. To narrow the scope, use a pattern such as `//app/...`.
-3. Select **open**.
-4. Select a target and run `build`, `test`, or `run`.
-
-![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
 
 ## Record terminal invocations
 
