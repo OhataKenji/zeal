@@ -238,7 +238,7 @@
                     >{inv.cmd ?? "?"}</span
                   >
                   {#if Number.isFinite(startedAt.getTime())}
-                  <time datetime={startedAt.toISOString()}
+                  <time class="invocation-time" datetime={startedAt.toISOString()}
                     >{startedAt.toLocaleString([], {
                       year: "numeric",
                       month: "2-digit",
@@ -246,7 +246,7 @@
                       hour: "2-digit",
                       minute: "2-digit",
                     })}</time
-                  >{:else}<span>Time not recorded</span>{/if}</span
+                  >{:else}<span class="invocation-time">Time not recorded</span>{/if}</span
                 >
                 <span class="invocation-pattern">{inv.pattern ?? inv.id}</span>
               </button>

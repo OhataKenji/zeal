@@ -53,7 +53,7 @@ test("App renders invocation dates safely", async (t) => {
     for (const startedAt of [undefined, NaN, Infinity, -Infinity, 8.64e15 + 1]) {
       await t.test(`${startedAt} renders the missing-time fallback`, () => {
         const html = output(startedAt);
-        assert.match(html, /Time not recorded/);
+        assert.ok(html.includes('<span class="invocation-time">Time not recorded</span>'));
         assert.doesNotMatch(html, /<time\b/);
       });
     }
@@ -65,7 +65,7 @@ test("App renders invocation dates safely", async (t) => {
     ] as const) {
       await t.test(`${startedAt} renders a semantic time`, () => {
         const html = output(startedAt);
-        assert.ok(html.includes(`<time datetime="${expected}"`));
+        assert.ok(html.includes(`<time class="invocation-time" datetime="${expected}"`));
         assert.doesNotMatch(html, /Time not recorded/);
       });
     }
