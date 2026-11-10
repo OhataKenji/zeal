@@ -23,6 +23,7 @@
   let view = $state.raw(emptyAnalytics());
   let controller = $state<ReturnType<typeof createAnalytics> | null>(null);
   let chartWidth = $state(0);
+  let breakdown = $state<"result" | "workspace">("result");
   $effect(() => {
     // A workspace change discards both the filters and pending responses.
     void workspace;
@@ -47,14 +48,38 @@
     Math.max(640, (data?.days.length ?? 0) * 24 + 60, chartWidth),
   );
   const step = $derived((width - 70) / Math.max(1, data?.days.length ?? 1));
+  const series = $derived.by((): Array<{ key: string; label: string; color: string }> => {
+    if (breakdown === "result") {
+      const colors = {
+        ok: "success",
+        failed: "destructive",
+        interrupted: "warning",
+        unknown: "muted-foreground",
+      } as const;
+      return OUTCOMES.map((kind) => ({
+        key: kind,
+        label: kind,
+        color: `var(--${colors[kind]})`,
+      }));
+    }
+    return (data?.workspaces ?? []).map((w, index) => ({
+      key: w.id,
+      label: w.path,
+      color: `hsl(${(index * 137.508) % 360} 60% 50%)`,
+    }));
+  });
   const dayBars = $derived(
     (data?.days ?? []).map((day, index) => {
       let top = PLOT.baseline;
-      const rects = OUTCOMES.flatMap((kind) => {
-        const height = (day[kind] / max) * PLOT.height;
+      const rects = series.flatMap((item) => {
+        const count =
+          breakdown === "result"
+            ? day[item.key as (typeof OUTCOMES)[number]]
+            : (day.workspaceCounts[item.key] ?? 0);
+        const height = (count / max) * PLOT.height;
         if (height <= 0) return [];
         top -= height;
-        return [{ kind, x: PLOT.left + index * step, y: top, height }];
+        return [{ ...item, count, x: PLOT.left + index * step, y: top, height }];
       });
       return { day, rects };
     }),
@@ -165,6 +190,11 @@
     <section class="analytics-card">
       <h2>Invocations</h2>
       <p class="dim">{data.filter.start} to {data.filter.end} · Invocations without a recorded start time are excluded.</p>
+      <label class="breakdown"
+        >Breakdown <select bind:value={breakdown} aria-label="Breakdown"
+          ><option value="result">Result</option><option value="workspace">Workspace</option></select
+        ></label
+      >
       <div class="chart-scroll" bind:clientWidth={chartWidth}>
         <svg
           viewBox="0 0 {width} 240"
@@ -191,15 +221,17 @@
           <text x={width - 45} y="236">Date</text>
           {#each dayBars as { day, rects }}
             <g>
-              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (${OUTCOMES.map((kind) => `${kind} ${day[kind]}`).join(", ")})${day.day === data.today ? " (in progress)" : ""}`}</title>
+              <title>{`${day.day}: ${day.count} ${day.count === 1 ? "invocation" : "invocations"} (${rects.map((r) => `${r.label} ${r.count}`).join(", ")})${day.day === data.today ? " (in progress)" : ""}`}</title>
               {#each rects as rect}
                 <rect
-                  class="bar-{rect.kind}"
+                  style:fill={rect.color}
                   x={rect.x}
                   y={rect.y}
                   width={Math.max(1, step - 3)}
                   height={rect.height}
-                />
+                >
+                  <title>{`${rect.label}: ${rect.count}`}</title>
+                </rect>
               {/each}
             </g>
           {/each}
@@ -207,8 +239,8 @@
         </svg>
       </div>
       <p class="legend">
-        {#each OUTCOMES as kind}
-          <span><i class="sw bar-{kind}"></i>{kind}</span>
+        {#each series as item}
+          <span><i class="sw" style:background={item.color}></i>{item.label}</span>
         {/each}
       </p>
     </section>
@@ -371,7 +403,8 @@
   }
 
   .filters input,
-  .filters select {
+  .filters select,
+  .breakdown select {
     height: 32px;
     background: var(--muted);
     border: 1px solid var(--border);
@@ -379,6 +412,15 @@
     border-radius: 8px;
     color: var(--foreground);
     font: inherit;
+  }
+
+  .breakdown {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--muted-foreground);
   }
 
   .filters {
@@ -429,29 +471,10 @@
     fill: var(--chart-bar, #0891b2);
   }
 
-  .bar-ok {
-    fill: var(--success);
-    background: var(--success);
-  }
-
-  .bar-failed {
-    fill: var(--destructive);
-    background: var(--destructive);
-  }
-
-  .bar-interrupted {
-    fill: var(--warning);
-    background: var(--warning);
-  }
-
-  .bar-unknown {
-    fill: var(--muted-foreground);
-    background: var(--muted-foreground);
-  }
-
   .legend {
     display: flex;
-    gap: 14px;
+    flex-wrap: wrap;
+    gap: 6px 14px;
     margin: 6px 0 0;
     font-size: 11px;
     color: var(--muted-foreground);
@@ -461,6 +484,7 @@
     display: inline-flex;
     gap: 4px;
     align-items: center;
+    overflow-wrap: anywhere;
   }
 
   .sw {

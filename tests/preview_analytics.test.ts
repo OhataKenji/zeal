@@ -25,6 +25,7 @@ test("pattern selection limits daily counts but preserves the ranking and untime
       failed: 1,
       interrupted: 0,
       unknown: 1,
+      workspaceCounts: {},
       totalMs: 1000,
       p50Ms: 100,
       p95Ms: 900,
@@ -37,6 +38,7 @@ test("pattern selection limits daily counts but preserves the ranking and untime
       failed: 0,
       interrupted: 0,
       unknown: 0,
+      workspaceCounts: {},
       totalMs: 0,
       p50Ms: 0,
       p95Ms: 0,
@@ -183,12 +185,21 @@ test("workspace selection limits records to the chosen workspace", () => {
     { id: "/two", path: "/two" },
   ]);
   assert.equal(all.days[0].count, 2);
+  assert.deepEqual(all.days[0].workspaceCounts, { "/one": 1, "/two": 1 });
+  assert.deepEqual(all.days[1].workspaceCounts, {});
   const selected = previewAnalytics(records, { ...PERIOD, workspaceId: "/two" }, NOW);
   assert.equal(selected.days[0].count, 1);
+  assert.deepEqual(selected.days[0].workspaceCounts, { "/two": 1 });
   assert.deepEqual(
     selected.patterns.map((row) => row.pattern),
     ["//:b"],
   );
+  const patterned = previewAnalytics(records, { ...PERIOD, pattern: "//:a" }, NOW);
+  assert.deepEqual(patterned.days[0].workspaceCounts, { "/one": 1 });
+  const mistyped = previewAnalytics(records, { ...PERIOD, cmd: "test" }, NOW);
+  assert.deepEqual(mistyped.days[0].workspaceCounts, {});
+  const failed = previewAnalytics(records, { ...PERIOD, outcome: "failed" }, NOW);
+  assert.deepEqual(failed.days[0].workspaceCounts, {});
   assert.throws(
     () => previewAnalytics(records, { ...PERIOD, workspaceId: "/missing" }, NOW),
     /invalid analytics filter/,

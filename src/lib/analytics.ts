@@ -22,6 +22,7 @@ export interface DailyAnalytics {
     failed: number;
     interrupted: number;
     unknown: number;
+    workspaceCounts: Record<string, number>;
     totalMs: number;
     p50Ms: number;
     p95Ms: number;

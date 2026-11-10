@@ -3,6 +3,7 @@
 use super::{ErrorKind, Store, StoreError};
 use rusqlite::{Connection, named_params, params};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,7 @@ pub struct Day {
     /// Nearest-rank percentiles over the day's recorded durations.
     pub p50_ms: i64,
     pub p95_ms: i64,
+    pub workspace_counts: BTreeMap<String, i64>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -191,6 +193,7 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 total_ms: 0,
                 p50_ms: 0,
                 p95_ms: 0,
+                workspace_counts: BTreeMap::new(),
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -256,6 +259,7 @@ fn aggregate(
                 total_ms: r.get(7)?,
                 p50_ms: r.get(8)?,
                 p95_ms: r.get(9)?,
+                workspace_counts: BTreeMap::new(),
             })
         },
     )?;
@@ -265,6 +269,34 @@ fn aggregate(
             .binary_search_by(|d| d.day.cmp(&day.day))
             .map_err(|_| super::fail(ErrorKind::Invalid))?;
         days[i] = day;
+    }
+    let mut statement = tx.prepare(&format!(
+        "SELECT date(started_at_ms / 1000,'unixepoch','localtime') AS day,workspace_id,COUNT(*)
+         FROM invocation WHERE {SCOPE} AND {MATCH}
+             AND (:pattern IS NULL OR target_pattern=:pattern)
+         GROUP BY day,workspace_id ORDER BY day,workspace_id"
+    ))?;
+    let rows = statement.query_map(
+        named_params! {
+            ":workspace":ws_id, ":start":from, ":end":until,
+            ":first_day":start, ":last_day":end,
+            ":cmd":filter.cmd, ":outcome":filter.outcome,
+            ":pattern":filter.pattern, ":selected_workspace":filter.workspace_id,
+        },
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        },
+    )?;
+    for row in rows {
+        let (day, workspace, count) = row?;
+        let i = days
+            .binary_search_by(|d| d.day.cmp(&day))
+            .map_err(|_| super::fail(ErrorKind::Invalid))?;
+        days[i].workspace_counts.insert(workspace, count);
     }
     let patterns: Vec<PatternDuration> = tx
         .prepare(&patterns_sql())?
@@ -1178,6 +1210,74 @@ mod tests {
             patterns,
             [("//a:x", 2, 1000, 100, 900), ("//b:y", 1, 200, 200, 200)]
         );
+    }
+
+    #[test]
+    fn workspace_counts_split_daily_totals_by_workspace() {
+        let f = grouped();
+        let second = f.root.join("second");
+        let earlier = f.noon_ms() - 86_400_000;
+        f.insert_ms(&second, earlier, Some(earlier + 100), Some(0), "//b:y");
+
+        let result = f.query(f.filter());
+        let ws = f.ws_id(&f.ws);
+        let second = f.ws_id(&second);
+        let third = f.ws_id(&f.root.join("third"));
+        for day in &result.days {
+            assert_eq!(day.workspace_counts.values().sum::<i64>(), day.count);
+            assert_eq!(day.workspace_counts.is_empty(), day.count == 0);
+        }
+        let days: Vec<_> = result.days.iter().filter(|day| day.count > 0).collect();
+        assert_eq!(days.len(), 2);
+        let noon = days
+            .iter()
+            .find(|day| day.workspace_counts.len() == 3)
+            .unwrap();
+        assert_eq!(
+            noon.workspace_counts,
+            BTreeMap::from([(ws, 1), (second.clone(), 1), (third, 1)])
+        );
+        let previous = days
+            .iter()
+            .find(|day| day.workspace_counts.len() == 1)
+            .unwrap();
+        assert_eq!(previous.workspace_counts, BTreeMap::from([(second, 1)]));
+    }
+
+    #[test]
+    fn workspace_counts_follow_workspace_pattern_and_result_filters() {
+        let f = grouped();
+        let ws = f.ws_id(&f.ws);
+        let second = f.ws_id(&f.root.join("second"));
+        let third = f.ws_id(&f.root.join("third"));
+
+        let selected = f.query(Filter {
+            workspace_id: Some(second.clone()),
+            ..f.filter()
+        });
+        let day = selected.days.iter().find(|day| day.count > 0).unwrap();
+        assert_eq!(day.workspace_counts, BTreeMap::from([(second.clone(), 1)]));
+
+        let patterned = f.query(Filter {
+            pattern: Some("//a:x".into()),
+            ..f.filter()
+        });
+        let day = patterned.days.iter().find(|day| day.count > 0).unwrap();
+        assert_eq!(day.workspace_counts, BTreeMap::from([(ws, 1), (third, 1)]));
+
+        let failed = f.query(Filter {
+            outcome: Some("failed".into()),
+            ..f.filter()
+        });
+        let day = failed.days.iter().find(|day| day.count > 0).unwrap();
+        assert_eq!(day.workspace_counts, BTreeMap::from([(second, 1)]));
+
+        let none = f.query(Filter {
+            cmd: Some("nonexistent".into()),
+            ..f.filter()
+        });
+        assert_eq!(total(&none), 0);
+        assert!(none.days.iter().all(|day| day.workspace_counts.is_empty()));
     }
 
     #[test]

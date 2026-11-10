@@ -15,6 +15,7 @@ interface DaySamples {
   failed: number;
   interrupted: number;
   unknown: number;
+  workspaceCounts: Record<string, number>;
   durations: number[];
 }
 
@@ -98,7 +99,15 @@ function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
   for (let index = 0; index < spanDays; index++) {
     const date = new Date(first + index * 86400000);
     const day = `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-    days.set(day, { count: 0, ok: 0, failed: 0, interrupted: 0, unknown: 0, durations: [] });
+    days.set(day, {
+      count: 0,
+      ok: 0,
+      failed: 0,
+      interrupted: 0,
+      unknown: 0,
+      workspaceCounts: {},
+      durations: [],
+    });
   }
   return days;
 }
@@ -112,6 +121,9 @@ function recordInvocation(
   const slot = days.get(dayString(new Date(inv.startedAt)));
   if (!slot) throw new Error("Preview analytics day was not initialized.");
   slot.count += 1;
+  if (inv.workspace !== undefined) {
+    slot.workspaceCounts[inv.workspace] = (slot.workspaceCounts[inv.workspace] ?? 0) + 1;
+  }
   slot[outcome(inv)] += 1;
   const elapsed = duration(inv);
   if (elapsed !== null) slot.durations.push(elapsed);
@@ -135,6 +147,7 @@ function dailyAnalytics(
     failed: slot.failed,
     interrupted: slot.interrupted,
     unknown: slot.unknown,
+    workspaceCounts: slot.workspaceCounts,
     ...timing(slot.durations),
   }));
 }
