@@ -37,7 +37,7 @@ interface HistoryRequest {
 }
 
 interface StartRequest {
-  readonly workspace: string;
+  readonly id: number;
   readonly navigation: number;
 }
 
@@ -54,7 +54,7 @@ export interface SessionModel {
     error: string | null;
     requestId: number | null;
   };
-  readonly starts: Record<number, StartRequest>;
+  readonly startRequest: StartRequest | null;
   readonly targets: {
     selection: ExplorerSelection;
     snapshot: {
@@ -83,7 +83,7 @@ export interface SessionView {
   console: InvocationRecord | null;
   core: AppState | null;
   state: WorkspaceState | null;
-  executions: OwnedInvocation[];
+  invocationRows: Array<{ record: InvocationRecord; execution?: OwnedInvocation }>;
   execution: OwnedInvocation | null;
   snapshot: TargetIndex | null;
   snapshotLoading: boolean;
@@ -202,7 +202,7 @@ export type SessionMessage =
       readonly pattern: string;
       readonly argumentsText: string;
     }
-  | RequestResult<"startResult", OwnedInvocation>
+  | RequestResult<"startResult", string>
   | { readonly type: "workspacePrompt"; readonly open: boolean }
   | { readonly type: "openWorkspace"; readonly path: string; readonly scope: TargetScope }
   | RequestResult<"workspaceResult", OpenWorkspaceResult>
@@ -229,7 +229,7 @@ export function initialModel(page: WorkspacePage = "targets"): SessionModel {
     workspace: null,
     navigation: 0,
     workspacePrompt: { status: "closed", error: null, requestId: null },
-    starts: {},
+    startRequest: null,
     targets: {
       selection: null,
       snapshot: { value: null, error: null, requestId: null },
@@ -281,30 +281,40 @@ function savedEligible(model: SessionModel): boolean {
   );
 }
 
-function consoleRecord(model: SessionModel, core: AppState | null): InvocationRecord | null {
-  if (model.content.kind !== "console") return null;
-  const id = model.content.id;
-  return recordFor(model.history.records, id) ?? ownedEntry(core, id);
-}
-
 export function sessionView(model: SessionModel): SessionView {
   const eligible = savedEligible(model);
   const core = model.connection.state;
-  const historyIds = new Set(model.history.records.map((record) => record.id));
-  const executions = (core?.invocations ?? [])
-    .filter(
-      (entry) =>
-        entry.workspace === model.workspace &&
-        (entry.running || (entry.console && !historyIds.has(entry.id))),
-    )
+  const owned = (core?.invocations ?? []).filter((entry) => entry.workspace === model.workspace);
+  const ownedById = new Map(owned.map((entry) => [entry.id, entry]));
+  const historyById = new Map(model.history.records.map((record) => [record.id, record]));
+  const pinned = owned
+    .filter((entry) => entry.running || (entry.console && !historyById.has(entry.id)))
     .sort((a, b) => b.startedAt - a.startedAt);
+  const pinnedIds = new Set(pinned.map((entry) => entry.id));
+  const invocationRows = [
+    ...pinned.map((execution) => ({
+      record: historyById.get(execution.id) ?? execution,
+      execution,
+    })),
+    ...model.history.records
+      .filter((record) => !pinnedIds.has(record.id))
+      .map((record) => ({ record, execution: ownedById.get(record.id) })),
+  ];
+  let consoleRecord: InvocationRecord | null = null;
+  if (model.content.kind === "console") {
+    const execution = ownedById.get(model.content.id);
+    if (execution?.console) {
+      consoleRecord = historyById.get(model.content.id) ?? execution;
+    }
+  }
+  const selectedId = contentInvocationId(model);
   return {
     content: model.content,
-    console: consoleRecord(model, core),
+    console: consoleRecord,
     core,
     state: wsEntry(core, model.workspace),
-    executions,
-    execution: ownedEntry(core, contentInvocationId(model)),
+    invocationRows,
+    execution: selectedId === null ? null : (ownedById.get(selectedId) ?? null),
     snapshot: model.targets.snapshot.value,
     snapshotLoading: model.targets.snapshot.requestId !== null,
     snapshotError: model.targets.snapshot.error,
@@ -316,9 +326,7 @@ export function sessionView(model: SessionModel): SessionView {
     targetActions: model.targets.actions.value,
     targetActionsError: model.targets.actions.error,
     ready: core !== null,
-    starting:
-      model.workspace !== null &&
-      Object.values(model.starts).some((request) => request.workspace === model.workspace),
+    starting: model.startRequest !== null,
     opening: model.workspacePrompt.status === "opening",
     workspacePromptOpen: model.workspacePrompt.status !== "closed",
     workspaceError: model.workspacePrompt.error,
@@ -365,7 +373,6 @@ function draft(model: SessionModel): Draft {
     ...model,
     connection: { ...model.connection },
     workspacePrompt: { ...model.workspacePrompt },
-    starts: { ...model.starts },
     targets: {
       ...model.targets,
       snapshot: { ...model.targets.snapshot },
@@ -681,6 +688,7 @@ function selectWorkspace(draft: Draft, workspace: string) {
   const page = workspacePage(draft);
   draft.workspace = workspace;
   draft.navigation++;
+  draft.startRequest = null;
   draft.content = { kind: page };
   draft.targets.selection = null;
   draft.targets.snapshot.requestId = null;
@@ -945,10 +953,7 @@ function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: 
   const workspace = draft.workspace;
   if (!workspace || !canSend(sessionView(draft), pattern)) return;
   const id = nextId(draft);
-  draft.starts[id] = {
-    workspace,
-    navigation: draft.navigation,
-  };
+  draft.startRequest = { id, navigation: draft.navigation };
   draft.connection.error = null;
   draft.effects.push({
     type: "startInvocation",
@@ -960,19 +965,16 @@ function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: 
   });
 }
 
-function startResult(draft: Draft, requestId: number, result: Result<OwnedInvocation>) {
-  const pending = draft.starts[requestId];
-  if (!pending) return;
-  delete draft.starts[requestId];
+function startResult(draft: Draft, requestId: number, result: Result<string>) {
+  const pending = draft.startRequest;
+  if (pending?.id !== requestId) return;
+  draft.startRequest = null;
+  if (pending.navigation !== draft.navigation) return;
   if (!result.ok) {
-    if (pending.workspace === draft.workspace && pending.navigation === draft.navigation) {
-      draft.connection.error = result.error;
-    }
+    draft.connection.error = result.error;
     return;
   }
-  if (pending.workspace === draft.workspace && pending.navigation === draft.navigation) {
-    showContent(draft, { kind: "console", id: result.value.id, page: workspacePage(draft) });
-  }
+  showContent(draft, { kind: "console", id: result.value, page: workspacePage(draft) });
 }
 
 function stateResult(draft: Draft, result: Result<AppState>) {
@@ -985,12 +987,8 @@ function stateResult(draft: Draft, result: Result<AppState>) {
 
 function openConsole(draft: Draft, id: string) {
   const owned = ownedEntry(draft.connection.state, id);
-  if (owned?.console) {
-    if (draft.content.kind === "console" && draft.content.id === id) return;
-    showContent(draft, { kind: "console", id, page: workspacePage(draft) });
-    return;
-  }
-  selectSaved(draft, id);
+  if (!owned?.console || owned.workspace !== draft.workspace) return;
+  showContent(draft, { kind: "console", id, page: workspacePage(draft) });
 }
 
 function setWorkspacePromptOpen(draft: Draft, open: boolean) {

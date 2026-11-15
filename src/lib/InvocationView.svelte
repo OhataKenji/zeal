@@ -14,12 +14,13 @@
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { formatOptions } from "./invocation/options";
-  import { getSession } from "./state.svelte";
 
-  let { view, reload, reloadProfile }: {
+  let { view, reload, reloadProfile, onstop, onconsole }: {
     view: SessionView;
     reload: () => void;
     reloadProfile: () => void;
+    onstop: (id: string) => void;
+    onconsole: (id: string) => void;
   } = $props();
   const selectedInvocation = $derived(view.content.kind === "invocation" ? view.content.id : null);
   const record = $derived(
@@ -99,7 +100,7 @@
           <button
             type="button"
             class="button button-ghost"
-            onclick={() => getSession().openConsole(execution.id)}>Console</button
+            onclick={() => onconsole(execution.id)}>Console</button
           >
         {/if}
         {#if execution.stoppable}
@@ -107,7 +108,7 @@
             type="button"
             class="button button-ghost"
             disabled={execution.stopping}
-            onclick={() => getSession().stop(execution.id)}
+            onclick={() => onstop(execution.id)}
             >{execution.stopping ? "Stopping…" : "Stop"}</button
           >
         {/if}

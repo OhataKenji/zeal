@@ -8,7 +8,7 @@
 //! supervised.
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
-use crate::state::{ActiveInvocation, Core, CoreState, OwnedInvocation, now_millis, owned_dto};
+use crate::state::{ActiveInvocation, Core, CoreState, OwnedInvocation, now_millis};
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
@@ -111,7 +111,7 @@ pub(crate) fn spawn(
     Ok((child, capture))
 }
 
-/// Start an invocation in `ws` and return its DTO. The invocation finishes in
+/// Start an invocation in `ws` and return its id. The invocation finishes in
 /// the background; target data is refreshed only on request.
 pub fn start(
     app: AppHandle,
@@ -120,7 +120,7 @@ pub fn start(
     cmd: &str,
     pattern: &str,
     arguments: &str,
-) -> Result<crate::state::OwnedInvocationDto, String> {
+) -> Result<String, String> {
     validate_cmd(cmd)?;
     validate_pattern(pattern)?;
     let arguments = parse_arguments(arguments)?;
@@ -153,7 +153,7 @@ pub fn start(
         .get_mut(&id)
         .expect("just registered")
         .console = Some(log);
-    let dto = owned_dto(&id, st.invocations.get(&id).expect("just registered"));
+    let result = id.clone();
     drop(st);
     core.emit(&app);
 
@@ -178,7 +178,7 @@ pub fn start(
             invocation.note = Some(format!("Failed to save the terminal output: {error}"));
         }
     });
-    Ok(dto)
+    Ok(result)
 }
 
 /// A capture failure must stop the still-owned child before its output blocks.
@@ -357,14 +357,6 @@ impl<F: Fn()> Drop for InvocationGuard<'_, F> {
     }
 }
 
-/// Whether `id` still owns a process: only that entry's group may be
-/// signalled and only its process slot may be released.
-fn process_owned(st: &CoreState, id: &str) -> bool {
-    st.invocations
-        .get(id)
-        .is_some_and(|invocation| invocation.process.is_some())
-}
-
 /// Apply the reap of `id` to its entry and return whether this reap belongs
 /// to a process still owned there. A `wait` error leaves the exit unknown,
 /// with the reason in the note. Other invocations are never touched.
@@ -393,13 +385,9 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &io::Result<i32>) -> bool {
     true
 }
 
-fn kill_invocation_groups(st: &CoreState, ids: &[String]) {
-    for id in ids {
-        let Some(process) = st
-            .invocations
-            .get(id)
-            .and_then(|invocation| invocation.process.as_ref())
-        else {
+fn kill_invocation_groups(st: &CoreState) {
+    for invocation in st.invocations.values() {
+        let Some(process) = invocation.process.as_ref() else {
             continue;
         };
         let Some(pgid) = process.pgid else {
@@ -411,10 +399,9 @@ fn kill_invocation_groups(st: &CoreState, ids: &[String]) {
     }
 }
 
-fn revoke_unconfirmed_groups(st: &mut CoreState, ids: &[String]) {
-    for id in ids {
-        if let Some(invocation) = st.invocations.get_mut(id)
-            && let Some(process) = invocation.process.as_mut()
+fn revoke_unconfirmed_groups(st: &mut CoreState) {
+    for invocation in st.invocations.values_mut() {
+        if let Some(process) = invocation.process.as_mut()
             && process.pgid.take().is_some()
         {
             invocation.note = Some(STOP_UNCONFIRMED.to_string());
@@ -422,14 +409,12 @@ fn revoke_unconfirmed_groups(st: &mut CoreState, ids: &[String]) {
     }
 }
 
-fn interrupt_invocations(st: &mut CoreState) -> Vec<String> {
+fn interrupt_invocations(st: &mut CoreState) {
     st.shutting_down = true;
-    let mut ids = Vec::new();
-    for (id, invocation) in st.invocations.iter_mut() {
+    for invocation in st.invocations.values_mut() {
         let Some(process) = invocation.process.as_mut() else {
             continue;
         };
-        ids.push(id.clone());
         let Some(pgid) = process.pgid.filter(|_| process.stop_started.is_none()) else {
             continue;
         };
@@ -439,7 +424,6 @@ fn interrupt_invocations(st: &mut CoreState) -> Vec<String> {
             log::warn!("SIGINT to invocation group failed: {e}");
         }
     }
-    ids
 }
 
 /// Bound process stopping to the short exit grace, shared across every owned
@@ -447,11 +431,12 @@ fn interrupt_invocations(st: &mut CoreState) -> Vec<String> {
 /// reaped have nothing left to signal; their in-progress saves are joined
 /// through the condvar. New starts are rejected by `shutting_down`.
 pub fn exit_stop(core: &Core) {
-    let ids = {
+    let owned = {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        interrupt_invocations(&mut st)
+        interrupt_invocations(&mut st);
+        st.invocations.values().any(|entry| entry.process.is_some())
     };
-    if ids.is_empty() {
+    if !owned {
         return;
     }
     let kill_at = Instant::now() + EXIT_GRACE;
@@ -459,16 +444,16 @@ pub fn exit_stop(core: &Core) {
     let mut killed = false;
     loop {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        if ids.iter().all(|id| !process_owned(&st, id)) {
+        if !st.invocations.values().any(|entry| entry.process.is_some()) {
             return;
         }
         let now = Instant::now();
         if now >= kill_at && !killed {
-            kill_invocation_groups(&st, &ids);
+            kill_invocation_groups(&st);
             killed = true;
         }
         if now >= finish_at {
-            revoke_unconfirmed_groups(&mut st, &ids);
+            revoke_unconfirmed_groups(&mut st);
             return;
         }
         let _ = core
@@ -1412,7 +1397,7 @@ mod tests {
             st.invocations["invocation"].note.as_deref(),
             Some(STOP_UNCONFIRMED)
         );
-        assert!(process_owned(&st, "next"));
+        assert!(st.invocations["next"].process.is_some());
         assert_eq!(held_pgid(&st, "next"), Some(i32::MAX));
         assert!(st.invocations["next"].note.is_none());
         drop(st);
@@ -1938,7 +1923,7 @@ mod tests {
             .is_err()
         );
         let st = core.state.lock().unwrap();
-        assert!(process_owned(&st, "next"));
+        assert!(st.invocations["next"].process.is_some());
         assert_eq!(held_pgid(&st, "next"), Some(i32::MAX));
     }
 

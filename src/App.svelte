@@ -63,12 +63,6 @@
       : null,
   );
 
-  function ownedFor(id: string): OwnedInvocation | undefined {
-    return core?.invocations.find((entry) => entry.id === id);
-  }
-
-  const executionIds = $derived(new Set(app.view.executions.map((entry) => entry.id)));
-
   function retryTargets() {
     if (app.view.snapshotError) void getSession().loadSnapshot();
     else refresh();
@@ -287,14 +281,8 @@
     {#if !collapsed.invocations}
       <div class="pane-body">
         <ul class="list">
-          {#each app.view.executions as execution (execution.id)}
-            {@const record = app.view.invocations.find((inv) => inv.id === execution.id) ?? execution}
-            {@render invocationRow(record, execution)}
-          {/each}
-          {#each app.view.invocations as inv (inv.id)}
-            {#if !executionIds.has(inv.id)}
-              {@render invocationRow(inv, ownedFor(inv.id))}
-            {/if}
+          {#each app.view.invocationRows as row (row.record.id)}
+            {@render invocationRow(row.record, row.execution)}
           {/each}
         </ul>
         {#if app.view.invocationsError}<Notice tone="error" onaction={getSession().loadInvocations}
@@ -341,7 +329,13 @@
     {/if}
     {#if content.kind === "invocation"}
       {#key content.id}
-        <InvocationView view={app.view} reload={getSession().loadDetail} reloadProfile={getSession().loadProfile} />
+        <InvocationView
+          view={app.view}
+          reload={getSession().loadDetail}
+          reloadProfile={getSession().loadProfile}
+          onstop={getSession().stop}
+          onconsole={getSession().openConsole}
+        />
       {/key}
     {:else if content.kind === "analytics"}
       {#key workspace}<AnalyticsView {workspace} invocations={app.view.invocations} />{/key}

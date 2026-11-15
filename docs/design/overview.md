@@ -26,8 +26,8 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 
 - **workspace**: main repository と定義された外部 repository を含む Bazel の環境。Zeal では workspace root（main repository のルート）を開く
 - **target / label / package / rule class**: Bazel の通常の意味。`//app/lib:parser` の `java_library` が rule class
-- **composer**: toolbar にある実行の唯一の入口。cmd 選択・target 欄・Send の三点
-- **content**: ウィンドウ本体の3状態(target / invocation / analytics)
+- **composer**: toolbar にある build / test / run の実行入口。cmd 選択・target 欄・Send の三点
+- **content**: ウィンドウ本体の表示先（targets / invocation / console / analytics / query）
 - **invocation**: 一回のBazelコマンド呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
 - **BEP**: Build Event Protocol。Bazelが報告する呼び出し単位のイベント列。送信先のBuild Event Service(BES)をZeal内のreceiverが受け付ける
@@ -40,17 +40,19 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 Zeal は Tauri v2 の単一ウィンドウアプリで、Rust core とシステム webview 上の Svelte 5 UI に分かれる。
 対象 OS は POSIX 系(macOS を第一対象)とし、中断処理が SIGINT とプロセスグループを前提とする([m3](./m3-find-and-execute.md))。
 
-Rust core が workspace の管理、bazel の子プロセス起動、観測データの読み取りを担い、UI は表示と入力だけを担う。
+Rust core が workspace の登録、子プロセスの所有、観測データの保存と読み取りを担う。
+WebView が表示先と workspace の選択を持ち、Bazel が output_base の排他を担う。
 bazel はライブラリとして組み込まず、常に子プロセスとして spawn する。
 
 ```mermaid
-flowchart TD
-    UI["Svelte UI (WebView)<br/>表示と入力。content = target / invocation / analytics"]
-    CORE["Rust core<br/>workspace / runner / ingest / store<br/>SQLiteの元事実とevent file"]
-    BAZEL["bazel CLI<br/>query ・ build/test/run"]
-    UI <-->|"Tauri commands / events"| CORE
-    CORE -->|"spawn + 観測 flag"| BAZEL
-    BAZEL -->|"BES event / profile(file) / query proto(stdout)"| CORE
+flowchart LR
+    subgraph Zeal
+        UI["WebView / Svelte"] <-->|"commands / events"| CORE["Rust core"]
+        CORE <-->|"保存 / 読込"| DATA[("SQLite / 観測ファイル")]
+    end
+    CORE -->|"所有する子の起動 / 入出力 / signal"| BAZEL["Bazel CLI"]
+    BAZEL -->|"BES / query 出力 / profile"| CORE
+    EXTERNAL["外部 CLI / agent"] -->|"起動"| BAZEL
 ```
 
 データは二系統に分かれる。
@@ -72,13 +74,18 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ### コンポーネントと責務
 
-| コンポーネント  | 責務                                                                                   |
-| --------------- | -------------------------------------------------------------------------------------- |
-| UI(Svelte)      | content 3状態(target / invocation / analytics)の表示、composer、tree、invocations 一覧 |
-| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                       |
-| core::runner    | invocation ごとの起動、出力、停止の管理、観測 flag の付与、stdout/stderr の捕捉        |
-| core::ingest    | query proto / BEP / profile の parse。観測 file は詳細表示のたびに読む                 |
-| core::store     | BEPの元事実をSQLite、ログ込みeventと任意のprofileをfileへ保存する                      |
+| コンポーネント | 責務 |
+| --- | --- |
+| WebView (`App.svelte`, `session_model.ts`, `session.ts`) | 選択と要求の状態、表示用データの導出、操作と IPC の接続 |
+| IPC (`lib.rs`) | 入力の受付、登録済み workspace の確認、処理の呼び出し |
+| workspace (`workspace.rs`, `state.rs`) | パスと Bazel の解決、workspace の登録、scope と snapshot の保持 |
+| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`) | invocation ごとの起動、停止、終了回収、Console の入出力と保持 |
+| target と query (`ingest.rs`, `query.rs`) | query の実行依頼と結果の解釈、workspace ごとの target データの更新 |
+| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`) | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
+
+表は既存コードの責務を示すもので、追加の管理層は設けない。
+起動 IPC は invocation ID だけを返し、実行状態は Rust core の通知から受け取る。
+UI は workspace を離れると起動応答の待機を解除するが、Rust core の実行は止めない。
 
 live ConsoleはPTYの出力を表示し、stdinと停止をメモリのprocess状態で制御する。
 保存済みのログはBEPのProgressから詳細要求時に組み立てる。
@@ -93,8 +100,8 @@ build、test、query 系の終了コード 9 はロック競合として表示�
 run の終了コード 9 は、実行したプログラムが返す場合もあるため区別する。
 Stop は Zeal が所有する実行だけを対象にし、BES で受信した外部実行は停止しない。
 Console を持たない query 系の実行状態は、処理の完了時に破棄する。
-Console を持つ実行は、出力の保存が終わるまでプロセスの所有を保持する。
-終了後も Console は読める。
+子プロセスを回収した時点で PGID を無効にし、以後は signal を送らない。
+出力の保存が終わるまでは完了待ちの状態を残し、終了後も Console は読める。
 取り込みは workspace を開いたときと手動 refresh のみ行う([m1](./m1-targets.md))。
 同じ workspace のターゲット一覧を取得中に届いた再取得要求だけを拒否する。
 取り込み中も Send を使える。
@@ -158,10 +165,10 @@ permission、disk full、新しすぎる schema は別のエラーとして扱�
 
 ### UI の一貫性
 
-実行の入口は toolbar の composer のみで、他の画面からは実行しない。
+build / test / run は toolbar の composer から、query は Query 画面から起動する。
 tree・dropdown・target 画面での選択は、すべて composer の target 欄への文字列挿入である(詳細は [m3](./m3-find-and-execute.md))。
-content は target / invocation / analytics の3状態で、sidebar の tree と invocations、composer の Send が状態遷移の起点になる。
-この構成は mock の「window 1種・content 3状態・実行入口は composer だけ」と対応する。
+表示先は targets / invocation / console / analytics / query とし、SessionModel が選択を管理する。
+Stop は invocation と Console の画面から、対象の invocation ID を指定して行う。
 
 ## Alternatives Considered
 

@@ -27,11 +27,13 @@ test("App renders workspace navigation and invocation history", async (t) => {
   const { default: App } = await load("/src/App.svelte");
 
   function output(startedAt: number | undefined): string {
+    const record = { id: "invocation", cmd: "build", pattern: "//app:app", startedAt };
     Object.assign(app.view, {
       ready: true,
       core: CORE,
       state: WS,
-      invocations: [{ id: "invocation", cmd: "build", pattern: "//app:app", startedAt }],
+      invocations: [record],
+      invocationRows: [{ record }],
     });
     return render(App).body;
   }

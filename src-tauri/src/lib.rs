@@ -30,7 +30,7 @@ pub use store::{
 use detail::{InvocationDetail, Section};
 use profile::Profile;
 use query::QueryOutput;
-use state::{AppStateDto, Core, OpenWorkspaceResult, OwnedInvocationDto};
+use state::{AppStateDto, Core, OpenWorkspaceResult};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -209,11 +209,8 @@ fn start_invocation(
     cmd: String,
     pattern: String,
     arguments: Option<String>,
-) -> Result<OwnedInvocationDto, String> {
-    let ws = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        st.workspace_path(&workspace)?
-    };
+) -> Result<String, String> {
+    let ws = registered_workspace(&core, &workspace)?;
     runner::start(
         app,
         core.inner().clone(),
@@ -233,10 +230,7 @@ fn stop_invocation(
     workspace: String,
     id: String,
 ) -> Result<(), String> {
-    let ws = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        st.workspace_path(&workspace)?
-    };
+    let ws = registered_workspace(&core, &workspace)?;
     runner::stop(app, core.inner().clone(), &ws, &id)
 }
 
@@ -324,10 +318,7 @@ async fn list_invocations(
     core: State<'_, Arc<Core>>,
     workspace: String,
 ) -> Result<Vec<InvocationRecord>, String> {
-    let ws = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        st.workspace_path(&workspace)?
-    };
+    let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         store::list(&data, &ws).map_err(|error| error.to_string())
@@ -344,10 +335,7 @@ async fn get_analytics(
     workspace: String,
     filter: store::analytics::Filter,
 ) -> Result<store::analytics::Analytics, String> {
-    let ws = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        st.workspace_path(&workspace)?
-    };
+    let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         store::analytics::query(&data, &ws, filter).map_err(|e| e.to_string())
@@ -392,10 +380,7 @@ async fn get_invocation(
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
-    let ws = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        st.workspace_path(&workspace)?
-    };
+    let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "invocation detail worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -423,10 +408,7 @@ async fn get_invocation_profile(
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
-    let ws = {
-        let st = core.state.lock().expect("application state lock poisoned");
-        st.workspace_path(&workspace)?
-    };
+    let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -445,6 +427,13 @@ fn expand_home(path: &str) -> PathBuf {
         return Path::new(&home).join(rest);
     }
     PathBuf::from(path)
+}
+
+fn registered_workspace(core: &Core, workspace: &str) -> Result<PathBuf, String> {
+    core.state
+        .lock()
+        .expect("application state lock poisoned")
+        .workspace_path(workspace)
 }
 
 fn restore_workspace(app: &tauri::App, core: Arc<Core>) {

@@ -16,7 +16,6 @@ import type {
   InvocationDetail,
   InvocationRecord,
   OpenWorkspaceResult,
-  OwnedInvocation,
   Profile,
   Section,
   TargetActions,
@@ -199,7 +198,7 @@ export function createSession(
           type: "startResult",
           requestId: effect.id,
           result: await resultOf(() =>
-            transport.invoke<OwnedInvocation>(COMMANDS.startInvocation, {
+            transport.invoke<string>(COMMANDS.startInvocation, {
               workspace: effect.workspace,
               cmd: effect.cmd,
               pattern: effect.pattern,

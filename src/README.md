@@ -21,12 +21,14 @@ the result and requests outputs. The UI never has to close Console first.
 ## State ownership
 
 - The Model groups state by ownership: `connection`, `workspace`, `navigation`,
-  `workspacePrompt`, `starts`, `targets`, `history`, `saved`, and
+  `workspacePrompt`, `startRequest`, `targets`, `history`, `saved`, and
   `nextRequestId`. `SessionView` is a flat projection, not stored state.
 - `connection.state` is the aggregate `AppState`: registered workspaces plus
   every owned invocation, ordered by the backend `revision`. `workspace` is the
   selected canonical id; `navigation` is an epoch bumped by explicit navigation
-  so delayed start replies cannot reroute the view.
+  so delayed start replies cannot reroute the view. `startRequest` is the one
+  foreground launch awaiting its reply; switching workspaces clears it while
+  the native execution stays owned by the core.
 - `content` is the current destination: targets, invocation, Console, Analytics,
   or Query. Invocation and Console destinations carry the workspace page to
   return to; workspace-page destinations are authoritative on their own.

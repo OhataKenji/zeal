@@ -325,18 +325,7 @@ function writeConsole(workspace: string, id: string, data: unknown) {
   const result = interpretConsoleInput(consoleInput.get(id) ?? "", text);
   consoleInput.set(id, result.input);
   consoleOutput.set(id, (consoleOutput.get(id) ?? "") + result.output);
-  if (result.exitCode !== null) {
-    const record = records.find((inv) => inv.id === id);
-    if (!record) throw new Error("Preview invocation was not found.");
-    if (record.cmd !== "run") {
-      record.finishedAt = Date.now();
-      record.exitCode = result.exitCode;
-    }
-    owned.running = false;
-    owned.stoppable = false;
-    owned.processExitCode = result.exitCode;
-    emitState();
-  }
+  if (result.exitCode !== null) finishOwned(id, result.exitCode);
   return data.length;
 }
 
@@ -430,7 +419,7 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
     stoppable: cmd === "run",
     stopping: false,
     console: true,
-    processExitCode: null,
+    processExitCode: cmd === "run" ? null : 0,
     note: null,
   };
   state.invocations.unshift(owned);
@@ -440,13 +429,8 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
   );
   record.finishedAt = Date.now();
   record.exitCode = 0;
-  if (cmd !== "run") {
-    owned.running = false;
-    owned.stoppable = false;
-    owned.processExitCode = 0;
-  }
   emitState();
-  return structuredClone(owned);
+  return id;
 }
 
 function stopInvocation(workspace: string, id: string) {

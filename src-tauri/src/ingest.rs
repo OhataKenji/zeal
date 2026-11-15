@@ -126,7 +126,6 @@ pub fn target_detail(
     let query = crate::scope::target_query(label)?;
     let (ws_path, bazel) = acquire_target(&core, ws, label, fetched_at)?;
     let id = uuid::Uuid::new_v4().to_string();
-    core.emit(&app);
     let mut command = command(&ws_path, &bazel, &query, "proto");
     let (query, status) = match fetch(
         &core,
@@ -170,7 +169,6 @@ pub fn target_outputs(
     let pattern = crate::scope::cquery_target(label)?;
     let (ws_path, bazel) = acquire_target(&core, ws, label, fetched_at)?;
     let id = uuid::Uuid::new_v4().to_string();
-    core.emit(&app);
     let mut command = Command::new(&bazel);
     command
         .arg("--noblock_for_lock")
@@ -228,7 +226,6 @@ pub fn target_actions(
     let pattern = crate::scope::cquery_target(label)?;
     let (ws_path, bazel) = acquire_target(&core, ws, label, fetched_at)?;
     let id = uuid::Uuid::new_v4().to_string();
-    core.emit(&app);
     let mut command = Command::new(&bazel);
     command
         .arg("--noblock_for_lock")

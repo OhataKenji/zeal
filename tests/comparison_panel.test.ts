@@ -122,7 +122,13 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
       detail: left,
     };
     const html = render(InvocationView, {
-      props: { view, reload: () => {}, reloadProfile: () => {} },
+      props: {
+        view,
+        reload: () => {},
+        reloadProfile: () => {},
+        onstop: () => {},
+        onconsole: () => {},
+      },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
     assert.match(html, /id="invocation-tab-Compare"/);
     assert.ok(!html.includes("compare-invocation-id"));

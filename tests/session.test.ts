@@ -298,7 +298,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
   });
   await settle();
   assert.equal(h.view.state?.workspace, OTHER);
-  aStart.reply.resolve(owned("a-inv", WS));
+  aStart.reply.resolve("a-inv");
   await settle();
   assert.notEqual(h.view.content.kind, "console");
   assert.equal(h.view.error, null);
@@ -317,7 +317,7 @@ test("same-workspace navigation after start is not overridden by the reply", asy
   await settle();
   const start = pendingRequest(h, "start_invocation");
   h.session.showPage("query");
-  start.reply.resolve(owned("a-inv", WS));
+  start.reply.resolve("a-inv");
   await settle();
   assert.deepEqual(h.view.content, { kind: "query" });
 });
@@ -325,11 +325,21 @@ test("same-workspace navigation after start is not overridden by the reply", asy
 test("the start reply navigates; the app-state event supplies the owned entry", async () => {
   const h = harness();
   await initReady(h);
-  h.session.start("build", "//app:first");
+  h.session.start(
+    "run",
+    "//:app",
+    `--config=dev --define='message=hello world' -- "two words" '$HOME; echo'`,
+  );
   await settle();
   const start = pendingRequest(h, "start_invocation");
-  const launched = owned("a-inv", WS);
-  start.reply.resolve(launched);
+  assert.deepEqual(start.args, {
+    workspace: WS,
+    cmd: "run",
+    pattern: "//:app",
+    arguments: `--config=dev --define='message=hello world' -- "two words" '$HOME; echo'`,
+  });
+  const launched = owned("a-inv", WS, { cmd: "run" });
+  start.reply.resolve("a-inv");
   await settle();
   assert.deepEqual(h.view.content, { kind: "console", id: "a-inv", page: "targets" });
   // The reply alone carries no core entry; console and execution wait for it.
@@ -399,23 +409,25 @@ test("a finished owned console reopens while another invocation runs", async () 
   assert.equal(h.view.execution?.stoppable, false);
 });
 
-test("console for another workspace's owned invocation uses its own workspace", async () => {
+test("openConsole is a no-op for foreign, missing, and console-less entries", async () => {
   const foreign = owned("b-run", OTHER);
+  const consoleless = owned("q-1", WS, { cmd: "query", console: false });
   const h = harness(
     Promise.resolve(
       coreState({
         revision: 2,
         workspaces: [wsEntry(WS), wsEntry(OTHER)],
-        invocations: [foreign],
+        invocations: [foreign, consoleless],
       }),
     ),
   );
   await initReady(h);
-  h.session.openConsole("b-run");
-  await settle();
-  assert.deepEqual(h.view.content, { kind: "console", id: "b-run", page: "targets" });
-  assert.equal(h.view.execution?.workspace, OTHER);
-  assert.equal(h.view.state?.workspace, WS);
+  for (const id of ["missing", "b-run", "q-1"]) {
+    h.session.openConsole(id);
+    await settle();
+    assert.deepEqual(h.view.content, { kind: "targets" }, id);
+    assert.equal(h.view.execution, null, id);
+  }
 });
 
 test("scope change invalidates stale target results and readers name the workspace", async () => {
@@ -521,4 +533,71 @@ test("canSend requires readiness, a workspace, bazel, BES, and a valid target", 
   const noWs = { ...h.view, state: null };
   assert.equal(canSend(noWs, "//app:first"), false);
   assert.equal(canSend(h.view, "-//bad"), false);
+});
+
+test("dispose removes listeners and ignores late reads", async () => {
+  const h = harness();
+  await initReady(h);
+  pendingRequest(h, "list_invocations").reply.resolve([
+    { ...RECORD, id: "run-a" },
+    { ...RECORD, id: "run-b" },
+  ]);
+  await settle();
+  h.session.selectInvocation("run-a");
+  h.session.selectInvocation("run-b");
+  await settle();
+  h.session.dispose();
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.listeners.size, 0);
+  assert.equal(h.view.detail, null);
+  assert.equal(h.view.profile, null);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+});
+
+test("unmount during listener registration immediately cleans the late subscription", async () => {
+  const registered = deferred<() => void>();
+  let removed = 0;
+  let invoked = false;
+  const session = createSession(
+    {
+      listen: () => registered.promise,
+      invoke: async <T>() => {
+        invoked = true;
+        return coreState() as T;
+      },
+    },
+    () => {},
+  );
+  const initialized = session.init();
+  session.dispose();
+  registered.resolve(() => {
+    removed++;
+  });
+  await initialized;
+  assert.equal(removed, 1);
+  assert.equal(invoked, false);
+});
+
+test("failed state subscription removes the history subscription", async () => {
+  let view = emptyView();
+  const removed: string[] = [];
+  const session = createSession(
+    {
+      listen: async (name) => {
+        if (name === "app-state") throw new Error("state listener unavailable");
+        return () => removed.push(name);
+      },
+      invoke: async <T>() => coreState() as T,
+    },
+    (next) => {
+      view = next;
+    },
+  );
+  await session.init();
+  assert.deepEqual(removed, ["invocations-changed"]);
+  assert.match(view.error ?? "", /state listener unavailable/);
+  session.dispose();
 });

@@ -195,10 +195,7 @@ impl CoreState {
     pub fn register_workspace(&mut self, ws: PathBuf, scope: crate::scope::Scope) {
         match self.workspaces.get_mut(&ws) {
             Some(state) if state.scope != scope => {
-                state.scope = scope;
-                state.snapshot = None;
-                state.last_error = None;
-                state.ingest_request = None;
+                *state = WorkspaceState::new(scope);
             }
             Some(_) => {}
             None => {
@@ -216,8 +213,8 @@ pub(crate) fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// The DTO for one owned invocation, shared by `Core::dto` and `runner::start`.
-pub(crate) fn owned_dto(id: &str, invocation: &OwnedInvocation) -> OwnedInvocationDto {
+/// The DTO for one owned invocation in the aggregate state.
+fn owned_dto(id: &str, invocation: &OwnedInvocation) -> OwnedInvocationDto {
     OwnedInvocationDto {
         id: id.to_string(),
         workspace: invocation.workspace.to_string_lossy().into_owned(),
