@@ -15,16 +15,7 @@
 <div class="invocation-header">
   <header class="invocation-summary">
     <InvocationStatus {...status} />
-    <div>
-      <h1>{record?.pattern ?? fallback ?? record?.id}{#if record?.cmd}<span class="badge">{record.cmd}</span>{/if}</h1>
-    </div>
+    <h1>{#if record?.cmd}{record.cmd}{" "}{/if}{record?.pattern ?? fallback ?? record?.id}</h1>
   </header>
   {@render children?.()}
 </div>
-
-<style>
-
-  h1 .badge {
-    margin-left: 8px;
-  }
-</style>

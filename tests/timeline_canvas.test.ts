@@ -5,12 +5,12 @@ import { layoutProfile, visibleTracks } from "../src/lib/timeline.ts";
 import type { Profile } from "../src/lib/types.ts";
 
 const THEME: TimelineTheme = {
-  background: "#fff",
-  foreground: "#222",
-  muted: "#f4f4f4",
-  mutedForeground: "#666",
-  border: "#dedede",
-  sidebar: "#fafafa",
+  background: "#182129",
+  foreground: "#e1e8ed",
+  muted: "#24313c",
+  mutedForeground: "#abbac6",
+  border: "#3a4a57",
+  sidebar: "#202b36",
 };
 
 // This boundary supports only the canvas operations the renderer uses. Unknown
@@ -30,6 +30,7 @@ function recordingCanvas() {
   const strokedArcs: Array<{ x: number; y: number; radius: number }> = [];
   const filledArcs: typeof strokedArcs = [];
   const filledLines: number[][] = [];
+  const texts: Array<{ text: string; fillStyle: string }> = [];
   let pathArcs: typeof strokedArcs = [];
   const lines: number[][] = [];
   let position = [0, 0];
@@ -58,7 +59,9 @@ function recordingCanvas() {
       assert.ok(rectangle, "the renderer clips with a rectangular path");
       clips = [...clips, rectangle];
     },
-    fillText() {},
+    fillText(text: string) {
+      texts.push({ text, fillStyle: canvas.fillStyle });
+    },
     fillRect(x: number, y: number, width: number, height: number) {
       fills.push({ bounds: [x, y, width, height], clips });
     },
@@ -98,6 +101,7 @@ function recordingCanvas() {
     fills,
     strokedLines,
     strokes,
+    texts,
   };
 }
 
@@ -360,6 +364,27 @@ test("a span paints its body at the selectable event position", () => {
 
   assert.deepEqual(hits, [{ x: 108, y: 20, width: 20, height: 18, tid: 7, index: 0 }]);
   assert.deepEqual(fills.find(({ bounds }) => bounds[0] === 110)?.bounds, [110, 20, 20, 17]);
+});
+
+test("span labels use dark text on event fills and selection", () => {
+  const { texts } = render(
+    [
+      {
+        tid: 7,
+        name: "worker",
+        events: [
+          { ph: "X", ts: 10, dur: 30, name: "first" },
+          { ph: "X", ts: 50, dur: 40, name: "second" },
+        ],
+      },
+    ],
+    { selection: { tid: 7, index: 1 } },
+  );
+
+  assert.deepEqual(texts, [
+    { text: "first", fillStyle: THEME.background },
+    { text: "second", fillStyle: THEME.background },
+  ]);
 });
 
 test("a span is painted inside the track clip after the gutter and lane header", () => {

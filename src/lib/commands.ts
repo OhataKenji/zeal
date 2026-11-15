@@ -8,6 +8,7 @@ export const COMMANDS = {
   getTargetOutputs: "get_target_outputs",
   getTargetActions: "get_target_actions",
   openWorkspace: "open_workspace",
+  listWorkspaces: "list_workspaces",
   refresh: "refresh",
   listInvocations: "list_invocations",
   getInvocation: "get_invocation",

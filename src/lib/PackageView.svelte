@@ -10,10 +10,10 @@
 </script>
 
 <header class="target-head">
-  <span class="badge">Package</span>
   <h1>//{pkg}</h1>
+  <span class="badge">Package</span>
 </header>
-<div class="attributes-head"><h2>Contents</h2></div>
+<h2 class="attributes-head">Contents</h2>
 <dl class="relations">
   <dt>Targets <small>{targets.length}</small></dt>
   <dd>

@@ -7,11 +7,13 @@
   import type { TargetScope } from "./types";
 
   let {
+    mode = "open",
     initial = "",
     initialScope,
     bazelAvailable,
     onclose,
   }: {
+    mode?: "open" | "settings";
     initial?: string;
     initialScope: TargetScope;
     bazelAvailable: boolean;
@@ -77,6 +79,14 @@ build --experimental_collect_system_network_usage`;
     submit();
   }}
 >
+  <header>
+    <h1>{mode === "settings" ? "Workspace settings" : "Open a workspace"}</h1>
+    <p class="dim">
+      {mode === "settings"
+        ? "Choose which targets to discover in this workspace."
+        : "Choose a Bazel repository to explore its targets and build history."}
+    </p>
+  </header>
   <div class="workspace-folder">
     <label class="workspace-selection">
       <span>Workspace</span>
@@ -86,17 +96,20 @@ build --experimental_collect_system_network_usage`;
         bind:value={path}
         placeholder="/path/to/workspace"
         spellcheck={false}
+        readonly={mode === "settings"}
         disabled={busy}
         required
       />
     </label>
-    <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
-      Choose folder…
-    </button>
+    {#if mode === "open"}
+      <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
+        Choose folder…
+      </button>
+    {/if}
   </div>
   <Notice tone="warning">Do not open an untrusted repository.</Notice>
   <label>
-    target patterns
+    Target patterns
     <textarea
       class="input scope-patterns"
       bind:value={include}
@@ -121,10 +134,10 @@ build --experimental_collect_system_network_usage`;
     <button
       class="button button-primary"
       type="submit"
-      disabled={!canSubmit}>open</button
+      disabled={!canSubmit}>{mode === "settings" ? "Save settings" : "Open workspace"}</button
     >
     {#if onclose}
-      <button class="button" type="button" onclick={onclose} disabled={busy}>cancel</button>
+      <button class="button" type="button" onclick={onclose} disabled={busy}>Cancel</button>
     {/if}
   </div>
   {#if error ?? app.view.workspaceError}

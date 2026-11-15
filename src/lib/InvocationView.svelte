@@ -118,8 +118,8 @@
     {/if}
     {#each sections as section}
       {#if active === "All" || active === section}
-        <section class="invocation-section" aria-labelledby="invocation-heading-{section}">
-          <h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>
+        <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
+          {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
           {#if section === "Targets"}
             <TargetsPanel section={view.detail?.bep} />
           {:else if section === "Logs"}
@@ -157,16 +157,14 @@
               </dl>
               <h3 class="panel-subheading">Options</h3>
               {#if bep?.options}
-                <div class="invocation-command-options">
-                  <section class="invocation-command-block">
-                    <h4>Explicit command options</h4>
-                    <code class="invocation-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
-                  </section>
-                  <section class="invocation-command-block">
-                    <h4>Effective command options</h4>
-                    <code class="invocation-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
-                  </section>
-                </div>
+                <section class="invocation-command-block">
+                  <h4>Explicit command options</h4>
+                  <code class="invocation-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
+                </section>
+                <section class="invocation-command-block">
+                  <h4>Effective command options</h4>
+                  <code class="invocation-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
+                </section>
               {:else if view.detailLoading}
                 <p class="panel-empty">Loading options…</p>
               {:else if view.detail}

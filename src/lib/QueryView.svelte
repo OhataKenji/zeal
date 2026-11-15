@@ -359,58 +359,53 @@
 <section class="query-view" bind:this={viewEl}>
   <div class="query-main">
     <div class="query-content">
-      <header class="query-page-header">
-        <div class="query-title-row"><h1>Query editor</h1></div>
-      </header>
+      <h1 class="query-title" id="query-heading">Query editor</h1>
       <section class="query-panel" aria-labelledby="query-heading">
         <div class="query-panel-head">
-          <div class="query-panel-title-group">
-            <h2 id="query-heading">Bazel query</h2>
-            <details
-              class="query-examples-wrap"
-              bind:this={detailsEl}
-              open={typeof location !== "undefined" &&
-                new URLSearchParams(location.search).has("examples")}
-            >
-              <summary class="query-examples-trigger">
-                <Bookmarks size={14} />
-                <span>Examples</span>
-                <span class="query-caret">
-                  <CaretDown size={12} />
-                </span>
-              </summary>
-              <button
-                type="button"
-                class="query-examples-backdrop"
-                tabindex="-1"
-                aria-label="Close examples menu"
-                onclick={() => {
-                  if (detailsEl) detailsEl.open = false;
-                }}
-              ></button>
-              <div class="query-examples-dropdown" role="menu" aria-label="Query examples">
-                {#each EXAMPLE_GROUPS as group}
-                  <div class="query-examples-group">
-                    <div class="query-examples-group-title">{group.title}</div>
-                    {#each group.ids as itemId}
-                      {@const example = EXAMPLES.find((e) => e.id === itemId)}
-                      {#if example}
-                        <button
-                          type="button"
-                          class="query-example-item"
-                          role="menuitem"
-                          onclick={() => loadExample(example.id)}
-                        >
-                          <code>{example.name}</code>
-                          <span class="query-ex-desc">{example.desc}</span>
-                        </button>
-                      {/if}
-                    {/each}
-                  </div>
-                {/each}
-              </div>
-            </details>
-          </div>
+          <details
+            class="query-examples-wrap"
+            bind:this={detailsEl}
+            open={typeof location !== "undefined" &&
+              new URLSearchParams(location.search).has("examples")}
+          >
+            <summary class="query-examples-trigger">
+              <Bookmarks size={14} />
+              <span>Examples</span>
+              <span class="query-caret">
+                <CaretDown size={12} />
+              </span>
+            </summary>
+            <button
+              type="button"
+              class="query-examples-backdrop"
+              tabindex="-1"
+              aria-label="Close examples menu"
+              onclick={() => {
+                if (detailsEl) detailsEl.open = false;
+              }}
+            ></button>
+            <div class="query-examples-dropdown" role="menu" aria-label="Query examples">
+              {#each EXAMPLE_GROUPS as group}
+                <div class="query-examples-group">
+                  <div class="query-examples-group-title">{group.title}</div>
+                  {#each group.ids as itemId}
+                    {@const example = EXAMPLES.find((e) => e.id === itemId)}
+                    {#if example}
+                      <button
+                        type="button"
+                        class="query-example-item"
+                        role="menuitem"
+                        onclick={() => loadExample(example.id)}
+                      >
+                        <code>{example.name}</code>
+                        <span class="query-ex-desc">{example.desc}</span>
+                      </button>
+                    {/if}
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          </details>
           <div class="query-tabs" role="tablist" aria-label="Query mode">
             <button
               type="button"
@@ -429,16 +424,14 @@
         </div>
         {#if mode === "builder"}
           <div class="query-builder">
-            <div>
-              <QueryExpr
-                bind:node={root}
-                {errors}
-                {searchIndex}
-                {kindIndex}
-                {attrIndex}
-                context="Root"
-              />
-            </div>
+            <QueryExpr
+              bind:node={root}
+              {errors}
+              {searchIndex}
+              {kindIndex}
+              {attrIndex}
+              context="Root"
+            />
           </div>
         {:else}
           <div class="query-code-body">
