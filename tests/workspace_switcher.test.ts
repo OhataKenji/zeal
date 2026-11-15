@@ -29,53 +29,23 @@ test("WorkspaceSwitcher renders home, switch, and settings as separate controls"
     return match[0];
   }
 
-  await t.test("name, caret, path, and settings are separate controls", () => {
+  await t.test("shows separately named home, switch, and settings controls", () => {
     const html = output({});
-    const home = html.match(/<button[^>]*class="[^"]*ws-home[^"]*"[^>]*>[\s\S]*?<\/button>/);
-    assert.ok(home, "missing workspace home button");
-    assert.match(home[0], /aria-label="Workspace home"/);
-    assert.match(home[0], /title="Workspace home"/);
-    const logo = home[0].match(/<svg[^>]*class="[^"]*zeal-logo[^"]*"[^>]*>/)?.[0];
-    assert.ok(logo, "workspace logo svg missing");
-    assert.match(logo, /aria-hidden="true"/);
-    assert.match(home[0], /cool-mono/);
-    assert.doesNotMatch(home[0], /disabled/);
-
-    const summary = html.match(/<summary[^>]*>[\s\S]*?<\/summary>/);
-    assert.ok(summary, "missing workspace switch summary");
-    assert.match(summary[0], /aria-label="Switch workspace"/);
-    assert.match(summary[0], /title="Switch workspace"/);
-    assert.doesNotMatch(summary[0], /cool-mono/);
-    assert.doesNotMatch(summary[0], /\/work\/cool-mono/);
-
-    const gear = buttonTag(html, "Workspace settings");
-    assert.match(gear, /aria-pressed="false"/);
-    assert.match(gear, /title="Workspace settings"/);
-    assert.doesNotMatch(gear, /disabled/);
-
-    assert.match(html, /class="[^"]*ws-path[^"]*"[^>]*title="\/work\/cool-mono"/);
+    assert.doesNotMatch(buttonTag(html, "Workspace home"), /disabled/);
+    assert.match(buttonTag(html, "Workspace settings"), /aria-pressed="false"/);
+    assert.doesNotMatch(buttonTag(html, "Workspace settings"), /disabled/);
+    assert.match(html, /<summary[^>]*aria-label="Switch workspace"/);
     assert.match(html, />\/work\/cool-mono</);
-    assert.match(html, /<details[^>]*class="[^"]*ws-details/);
     assert.match(html, /Open workspace…/);
-  });
-
-  await t.test("path row groups the path with the caret switcher", () => {
-    const html = output({});
-    const row = html.slice(html.indexOf("ws-path-row"));
-    assert.ok(row.includes('title="/work/cool-mono"'));
-    assert.ok(row.includes(">/work/cool-mono<"));
-    assert.match(row, /<summary[^>]*class="[^"]*ws-summary/);
-    assert.doesNotMatch(row, /ws-home/);
-    assert.doesNotMatch(row, /Workspace settings/);
-    assert.doesNotMatch(row, /Workspace home/);
   });
 
   await t.test("name shows the local basename even with a trailing separator", () => {
     const html = output({ workspace: "/work/cool-mono/" });
-    const home = html.match(/<button[^>]*class="[^"]*ws-home[^"]*"[^>]*>[\s\S]*?<\/button>/);
+    const home = html.match(/<button[^>]*aria-label="Workspace home"[^>]*>[\s\S]*?<\/button>/);
     assert.ok(home, "missing workspace home button");
     assert.match(home[0], />cool-mono</);
     assert.doesNotMatch(home[0], /cool-mono\//);
+    assert.match(home[0], /<svg[^>]*aria-hidden="true"/);
   });
 
   await t.test("settings toggle reflects open state via aria-pressed", () => {

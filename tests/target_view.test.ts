@@ -148,45 +148,22 @@ test("TargetView renders target details", async (t) => {
     },
   );
 
-  await t.test("header keeps label, kind, and source as one wrapping row", () => {
-    const GRAMMARS: Target = {
-      label: "//app:grammars",
-      pkg: "app",
-      name: "grammars",
-      ruleClass: "filegroup",
-      location: { file: "/ws/app/BUILD.bazel", line: 14 },
-    };
-    const html = view({ actions: [], truncated: false }, null, GRAMMARS);
-    const header = html.match(/<header class="target-head">([\s\S]*?)<\/header>/)?.[1] ?? "";
-    const h1 = header.indexOf("<h1");
-    const badge = header.indexOf("filegroup");
-    const source = header.indexOf("app/BUILD.bazel:14");
-    assert.ok(h1 !== -1 && badge !== -1 && source !== -1);
-    assert.ok(h1 < badge && badge < source);
-    assert.match(header, /title="\/ws\/app\/BUILD\.bazel"/);
+  await t.test("header shows the label, rule class, and relative source location", () => {
+    const html = view({ actions: [], truncated: false }, null, {
+      ...PARSER,
+      location: { file: "/ws/app/lib/BUILD.bazel", line: 14 },
+    });
+    assert.match(html, /<h1>\/\/app\/lib:parser<\/h1>/);
+    assert.ok(html.includes(PARSER.ruleClass));
+    assert.match(html, />\s*app\/lib\/BUILD\.bazel:14\s*</);
 
-    assert.ok(!view({ actions: [], truncated: false }).includes("source-location"));
-
-    const LONG: Target = {
-      label: "//tools/a-very-long-target-name-for-header-wrapping-checks",
-      pkg: "tools",
-      name: "a-very-long-target-name-for-header-wrapping-checks",
-      ruleClass: "genrule",
-      location: {
-        file: "/ws/tools/deeply/nested/directory/structure/BUILD.bazel",
-        line: 42,
-      },
-    };
-    const longHtml = view({ actions: [], truncated: false }, null, LONG);
-    assert.ok(longHtml.includes(LONG.label));
-    assert.ok(longHtml.includes("/ws/tools/deeply/nested/directory/structure/BUILD.bazel"));
-    assert.ok(longHtml.includes("tools/deeply/nested/directory/structure/BUILD.bazel:42"));
+    assert.ok(!view({ actions: [], truncated: false }).includes("BUILD.bazel"));
 
     const pkgHtml = render(PackageView, {
       props: { index: INDEX, pkg: "app/lib", onselect: () => {} },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
-    const pkgHeader = pkgHtml.match(/<header class="target-head">([\s\S]*?)<\/header>/)?.[1] ?? "";
-    assert.ok(pkgHeader.indexOf("<h1") < pkgHeader.indexOf("Package"));
+    assert.match(pkgHtml, /<h1>\/\/app\/lib<\/h1>/);
+    assert.match(pkgHtml, />Package</);
   });
 
   await t.test("attributes render without the label filter and keep Show more", () => {

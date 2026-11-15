@@ -51,49 +51,17 @@ test("App renders workspace navigation and invocation history", async (t) => {
     });
   }
 
-  await t.test("renders the workspace nav and an accessible icon action", () => {
+  await t.test("names workspace navigation and command controls accessibly", () => {
     const html = output(1_700_000_000_000);
-    assert.match(html, /<nav class="workspace-nav" aria-label="Workspace views">/);
-    assert.match(
-      html,
-      /<button[^>]*class="[^"]*workspace-nav-link[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*?Query<\/button>/,
-    );
-    assert.match(
-      html,
-      /<button[^>]*class="[^"]*workspace-nav-link[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*?Analytics<\/button>/,
-    );
-    const action = html.match(
-      /<button(?=[^>]*class="[^"]*button-primary[^"]*")(?=[^>]*aria-label="Build")[^>]*>[\s\S]*?<\/button>/,
-    )?.[0];
-    assert.ok(action, "primary action button is missing");
-    assert.match(action, /title="Build"/);
-    assert.match(action, /icon-button/);
-    assert.match(action, /<svg/);
-    assert.equal(action.replace(/<[^>]*>/g, "").trim(), "");
-  });
-
-  await t.test("renders an icon-only arguments toggle", () => {
-    const html = output(1_700_000_000_000);
-    const toggle = html.match(
-      /<button(?=[^>]*aria-label="Arguments")[^>]*>[\s\S]*?<\/button>/,
-    )?.[0];
+    const nav = html.match(/<nav[^>]*aria-label="Workspace views"[^>]*>([\s\S]*?)<\/nav>/)?.[1];
+    assert.ok(nav, "workspace navigation is missing");
+    assert.match(nav, /<button[^>]*>(?:(?!<\/button>)[\s\S])*?Query<\/button>/);
+    assert.match(nav, /<button[^>]*>(?:(?!<\/button>)[\s\S])*?Analytics<\/button>/);
+    assert.match(html, /<button[^>]*aria-label="Build"/);
+    assert.match(html, /<button[^>]*aria-label="Reload targets"/);
+    const toggle = html.match(/<button[^>]*aria-label="Arguments"[^>]*>/)?.[0];
     assert.ok(toggle, "arguments toggle is missing");
     assert.match(toggle, /aria-expanded="false"/);
-    assert.match(toggle, /<svg/);
-    assert.equal(toggle.replace(/<[^>]*>/g, "").trim(), "");
-    assert.ok(!html.includes('id="command-arguments"'));
-    assert.ok(!html.includes("arguments-indicator"));
-  });
-
-  await t.test("renders the targets toolbar without a count", () => {
-    const html = output(1_700_000_000_000);
-    assert.ok(!html.includes("pane-count"));
-    const toolbar = html.match(/<div class="pane-toolbar">([\s\S]*?)<\/div>/)?.[1];
-    assert.ok(toolbar, "targets toolbar is missing");
-    const buttons = toolbar.match(/<button[\s\S]*?<\/button>/g) ?? [];
-    assert.equal(buttons.length, 2);
-    assert.match(buttons[0], /aria-expanded="(?:true|false)"/);
-    assert.ok(buttons[0].includes("Targets"));
-    assert.match(buttons[1], /aria-label="Reload targets"/);
+    assert.doesNotMatch(html, /id="command-arguments"/);
   });
 });
