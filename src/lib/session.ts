@@ -15,6 +15,8 @@ import type {
   ExplorerSelection,
   InvocationDetail,
   InvocationRecord,
+  OpenWorkspaceResult,
+  OwnedInvocation,
   Profile,
   Section,
   TargetActions,
@@ -24,7 +26,7 @@ import type {
   TargetScope,
 } from "./types.ts";
 
-export { bazelBusyReason, canSend, canStop, emptyView, sessionBusy } from "./session_model.ts";
+export { canSend, emptyView } from "./session_model.ts";
 export type { SessionView, WorkspacePage } from "./session_model.ts";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
@@ -108,10 +110,8 @@ export function createSession(
       return;
     }
 
-    const revision = model.connection.revision;
     dispatch({
-      type: "initialStateResult",
-      revision,
+      type: "stateResult",
       result: await resultOf(() => transport.invoke<AppState>(COMMANDS.getState)),
     });
   }
@@ -129,18 +129,25 @@ export function createSession(
     switch (effect.type) {
       case "listInvocations":
         return settle(
-          () => transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations),
+          () =>
+            transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations, {
+              workspace: effect.workspace,
+            }),
           (result) => ({ type: "invocationsResult", requestId: effect.id, result }),
         );
       case "getSnapshot":
         return settle(
-          () => transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot),
+          () =>
+            transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot, {
+              workspace: effect.workspace,
+            }),
           (result) => ({ type: "snapshotResult", requestId: effect.id, result }),
         );
       case "getTargetDetail": {
         return settle(
           () =>
             transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
+              workspace: effect.workspace,
               label: effect.label,
               fetchedAt: effect.fetchedAt,
             }),
@@ -151,6 +158,7 @@ export function createSession(
         return settle(
           () =>
             transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
+              workspace: effect.workspace,
               label: effect.label,
               fetchedAt: effect.fetchedAt,
             }),
@@ -161,6 +169,7 @@ export function createSession(
         return settle(
           () =>
             transport.invoke<TargetActions>(COMMANDS.getTargetActions, {
+              workspace: effect.workspace,
               label: effect.label,
               fetchedAt: effect.fetchedAt,
             }),
@@ -171,6 +180,7 @@ export function createSession(
         return settle(
           () =>
             transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
+              workspace: effect.workspace,
               id: effect.invocationId,
             }),
           (result) => ({ type: "detailResult", requestId: effect.id, result }),
@@ -179,6 +189,7 @@ export function createSession(
         return settle(
           () =>
             transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
+              workspace: effect.workspace,
               id: effect.invocationId,
             }),
           (result) => ({ type: "profileResult", requestId: effect.id, result }),
@@ -188,40 +199,35 @@ export function createSession(
           type: "startResult",
           requestId: effect.id,
           result: await resultOf(() =>
-            transport.invoke<InvocationRecord>(COMMANDS.startInvocation, {
+            transport.invoke<OwnedInvocation>(COMMANDS.startInvocation, {
+              workspace: effect.workspace,
               cmd: effect.cmd,
               pattern: effect.pattern,
               arguments: effect.argumentsText,
             }),
           ),
         };
-      case "getStartState":
-        return settle(
-          () => transport.invoke<AppState>(COMMANDS.getState),
-          (result) => ({
-            type: "startStateResult",
-            startId: effect.startId,
-            revision: effect.revision,
-            result,
-          }),
-        );
       case "openWorkspace":
         return settle(
           () =>
-            transport.invoke<AppState>(COMMANDS.openWorkspace, {
+            transport.invoke<OpenWorkspaceResult>(COMMANDS.openWorkspace, {
               path: effect.path,
               scope: effect.scope,
             }),
-          (result) => ({ type: "workspaceResult", revision: effect.revision, result }),
+          (result) => ({ type: "workspaceResult", requestId: effect.id, result }),
         );
       case "stop":
         return settle(
-          () => transport.invoke<void>(COMMANDS.stopInvocation),
-          (result) => ({ type: "stopResult", workspace: effect.workspace, result }),
+          () =>
+            transport.invoke<void>(COMMANDS.stopInvocation, {
+              workspace: effect.workspace,
+              id: effect.id,
+            }),
+          (result) => ({ type: "stopResult", id: effect.id, result }),
         );
       case "refresh":
         return settle(
-          () => transport.invoke<void>(COMMANDS.refresh),
+          () => transport.invoke<void>(COMMANDS.refresh, { workspace: effect.workspace }),
           (result) => ({ type: "refreshResult", workspace: effect.workspace, result }),
         );
     }
@@ -240,14 +246,14 @@ export function createSession(
     dispose,
     start: (cmd: BazelCommand, pattern: string, argumentsText = "") =>
       dispatch({ type: "start", cmd, pattern, argumentsText }),
-    stop: () => dispatch({ type: "stop" }),
+    stop: (id: string) => dispatch({ type: "stop", id }),
     openWorkspace: (path: string, scope: TargetScope) =>
       dispatch({ type: "openWorkspace", path, scope }),
     setWorkspacePromptOpen: (open: boolean) => dispatch({ type: "workspacePrompt", open }),
     refresh: () => dispatch({ type: "refresh" }),
     selectInvocation: (id: string) => dispatch({ type: "selectInvocation", id }),
     showPage: (page: WorkspacePage) => dispatch({ type: "showPage", page }),
-    openConsole: (record: InvocationRecord) => dispatch({ type: "openConsole", record }),
+    openConsole: (id: string) => dispatch({ type: "openConsole", id }),
     loadDetail: () => dispatch({ type: "loadDetail" }),
     loadProfile: () => dispatch({ type: "loadProfile" }),
     loadInvocations: () => dispatch({ type: "loadInvocations" }),

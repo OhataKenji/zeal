@@ -14,7 +14,6 @@ PRD の狙いは「Bazel に詳しい人が捉えている対象と関係を、G
 
 - RBE・cloud runner との連携
 - bazel の解析・実行ロジックの再実装
-- 複数 workspace の同時管理
 - 画面ごとの細部設計(各 M 文書で扱う)
 
 ## Background
@@ -77,7 +76,7 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 | --------------- | -------------------------------------------------------------------------------------- |
 | UI(Svelte)      | content 3状態(target / invocation / analytics)の表示、composer、tree、invocations 一覧 |
 | core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                       |
-| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理        |
+| core::runner    | invocation ごとの起動、出力、停止の管理、観測 flag の付与、stdout/stderr の捕捉        |
 | core::ingest    | query proto / BEP / profile の parse。観測 file は詳細表示のたびに読む                 |
 | core::store     | BEPの元事実をSQLite、ログ込みeventと任意のprofileをfileへ保存する                      |
 
@@ -85,13 +84,20 @@ live ConsoleはPTYの出力を表示し、stdinと停止をメモリのprocess�
 保存済みのログはBEPのProgressから詳細要求時に組み立てる。
 UI が直接プロセスやファイルを触る経路は作らない。
 
-### bazel 呼び出しの直列化とプロセス管理
+### invocation ごとのプロセス管理
 
-bazel server は同一 output base 上で同時に一つのコマンドしか処理せず、後続の呼び出しは lock を待ってブロックする。
-このため runner は同一 workspace の bazel 呼び出しを同時に一つに限る(mutex)。
-invocation または query の実行中は snapshot 取り込み要求を予約せず拒否する。
+Zeal は、起動した Bazel を invocation ごとに管理する。
+workspace を切り替えても、実行の所属と停止対象は変わらない。
+各コマンドに --noblock_for_lock を付け、output_base の排他は Bazel に任せる。
+build、test、query 系の終了コード 9 はロック競合として表示する。
+run の終了コード 9 は、実行したプログラムが返す場合もあるため区別する。
+Stop は Zeal が所有する実行だけを対象にし、BES で受信した外部実行は停止しない。
+Console を持たない query 系の実行状態は、処理の完了時に破棄する。
+Console を持つ実行は、出力の保存が終わるまでプロセスの所有を保持する。
+終了後も Console は読める。
 取り込みは workspace を開いたときと手動 refresh のみ行う([m1](./m1-targets.md))。
-M2 では取り込み中の Send を disabled にし、待ち行列を持たない([m2](./m2-invocation-detail.md))。
+同じ workspace のターゲット一覧を取得中に届いた再取得要求だけを拒否する。
+取り込み中も Send を使える。
 実行中はConsoleを表示する。
 Bazelが待機する原因は推測しない。
 
@@ -170,7 +176,7 @@ content は target / invocation / analytics の3状態で、sidebar の tree と
 - `bazel query` は大きい repo で遅くなり得る。grpc/grpc でのツリー用 query は warm 時の中央値 194ms だった。cold 時の所要時間と画面表示までの時間は別に測る。
 - bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。実行中はConsoleを表示する。
 - workspace を移動・rename するとルートパスが変わり、履歴は新規 workspace として分断される。
-- 初版は同一 workspace で Zeal を二重起動しない前提で試す。取り込みや他の Bazel 処理の間は同じ process slot が解放されるまで Send を拒否する。
+- 初版は同一 workspace で Zeal を二重起動しない前提で試す。実行中の invocation や取り込みがあっても Send は拒否しない。
 
 ## Security Concerns
 

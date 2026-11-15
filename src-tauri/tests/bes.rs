@@ -99,6 +99,72 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
     server.abort();
 }
 
+type EventClient =
+    wire::publish_build_event_client::PublishBuildEventClient<tonic::transport::Channel>;
+type EventSender = tokio::sync::mpsc::Sender<wire::PublishBuildToolEventStreamRequest>;
+type EventStream = tonic::Streaming<wire::PublishBuildToolEventStreamResponse>;
+
+async fn admit_stream(client: &mut EventClient) -> (EventSender, EventStream) {
+    loop {
+        let (send, receive) =
+            tokio::sync::mpsc::channel::<wire::PublishBuildToolEventStreamRequest>(1);
+        match client
+            .publish_build_tool_event_stream(ReceiverStream::new(receive))
+            .await
+        {
+            Ok(response) => return (send, response.into_inner()),
+            Err(status) if status.code() == tonic::Code::ResourceExhausted => {
+                tokio::task::yield_now().await;
+            }
+            Err(status) => panic!("unexpected stream error: {status}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn grpc_stream_capacity_rejects_excess_and_readmits_after_close() {
+    let temp = Temp::new();
+    let data = temp.0.join("data");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(zeal_lib::serve_build_events(listener, data.clone()));
+    let mut client = wire::publish_build_event_client::PublishBuildEventClient::connect(format!(
+        "http://{address}"
+    ))
+    .await
+    .unwrap();
+    // The public helper always serves 32 streams; the env knob only affects
+    // the internal configuration path, so this fixture stays hermetic.
+    let capacity = 32;
+    let mut streams = Vec::new();
+    for _ in 0..capacity {
+        let (send, receive) =
+            tokio::sync::mpsc::channel::<wire::PublishBuildToolEventStreamRequest>(1);
+        let stream = client
+            .publish_build_tool_event_stream(ReceiverStream::new(receive))
+            .await
+            .unwrap()
+            .into_inner();
+        streams.push((send, stream));
+    }
+    let (send, receive) = tokio::sync::mpsc::channel(1);
+    let rejected = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.publish_build_tool_event_stream(ReceiverStream::new(receive)),
+    )
+    .await
+    .expect("excess stream was not rejected promptly")
+    .expect_err("excess stream was admitted");
+    assert_eq!(rejected.code(), tonic::Code::ResourceExhausted);
+    drop(streams.pop());
+    drop(send);
+    let admitted = tokio::time::timeout(Duration::from_secs(5), admit_stream(&mut client))
+        .await
+        .expect("a freed permit was never readmitted");
+    streams.push(admitted);
+    server.abort();
+}
+
 struct Temp(PathBuf);
 
 impl Temp {

@@ -1,26 +1,45 @@
 //! Shared application state held by the Rust core.
+//!
+//! One mutex guards workspace and owned-invocation maps plus the shutdown
+//! flag; it serializes map ownership and process reap/signal decisions, not
+//! admission capacity. Every Bazel operation Zeal starts gets its own
+//! [`OwnedInvocation`] entry keyed by a fresh id, so a later launch never
+//! overwrites an earlier one. External BES invocations are only observed and
+//! are never inserted here.
 
 use crate::snapshot::TargetIndex;
 use serde::Serialize;
-use std::ops::Deref;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 /// Serializable copy of everything the UI needs, pushed as the `app-state`
-/// event on every change.
+/// event on every change. `revision` grows on every snapshot so out-of-order
+/// pushes cannot overwrite newer state.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStateDto {
+    pub revision: u64,
     pub bes_error: Option<String>,
     /// Whether the receiver can accept a new Bazel invocation.
     pub bes_ready: bool,
-    /// Workspace root path, if one is open.
-    pub workspace: Option<String>,
-    pub scope: crate::scope::Scope,
     /// Resolved bazel executable, if found on PATH.
     pub bazel: Option<String>,
-    /// "idle" | "running": whether a query ingestion is in flight.
+    /// Saved preference for the last opened workspace; never used to resolve
+    /// an operation, which always names its workspace explicitly.
+    pub last_workspace: Option<String>,
+    pub workspaces: Vec<WorkspaceDto>,
+    pub invocations: Vec<OwnedInvocationDto>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDto {
+    pub workspace: String,
+    pub scope: crate::scope::Scope,
+    /// "idle" | "running": whether a target-list fetch is in flight.
     pub ingest: &'static str,
     /// `fetched_at` of the current snapshot, kept across failed refreshes. The
     /// UI fetches the target index through `get_snapshot` only when this
@@ -29,18 +48,40 @@ pub struct AppStateDto {
     /// The most recent fetch failure (or partial-fetch cause). Cleared by a
     /// fully successful fetch.
     pub last_error: Option<IngestError>,
-    /// Id of the Bazel operation in flight, if any.
-    pub active_invocation: Option<InvocationId>,
-    /// The Console whose output can still be read in the open workspace.
-    pub console_invocation: Option<InvocationId>,
-    /// A stop was accepted for `active_invocation`; it stays until the
-    /// Bazel operation leaves the slot, however it ends.
+}
+
+/// One Bazel operation Zeal launched: build/test/run under a terminal, or a
+/// query/cquery/aquery over pipes. It describes the local process only and is
+/// never persisted as BEP history.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedInvocationDto {
+    pub id: String,
+    pub workspace: String,
+    pub cmd: String,
+    pub pattern: String,
+    /// Milliseconds since the Unix epoch, the store's timestamp convention.
+    pub started_at: i64,
+    /// A process is still owned, including the final output drain.
+    pub running: bool,
+    /// The owned process group may still be signalled.
+    pub stoppable: bool,
+    /// A stop was accepted; it stays until the process leaves the entry.
     pub stopping: bool,
-    /// Why the last Bazel process's exit is unknown: its `wait` failed, or its
-    /// group was killed and no exit was confirmed.
-    pub invocation_note: Option<String>,
-    /// "idle" | "running": whether a selected target's detail is loading.
-    pub detail_query: &'static str,
+    /// Retained console output exists for this invocation.
+    pub console: bool,
+    /// The owned process's exit code, kept apart from any BEP exit code.
+    pub process_exit_code: Option<i32>,
+    /// Why the process exit is unknown or noteworthy (e.g. lock contention).
+    pub note: Option<String>,
+}
+
+/// Result of registering a workspace: its canonical path plus the new state.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenWorkspaceResult {
+    pub workspace: String,
+    pub state: AppStateDto,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -52,125 +93,149 @@ pub struct IngestError {
     pub summary: String,
 }
 
-/// Identifier for one invocation owned by the application.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct InvocationId(String);
-
-impl InvocationId {
-    /// Identifier for an invocation record or active Bazel operation.
-    #[must_use]
-    pub fn new(value: String) -> Self {
-        Self(value)
-    }
-
-    /// Returns the persisted identifier text.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for InvocationId {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<&str> for InvocationId {
-    fn from(value: &str) -> Self {
-        Self::new(value.to_owned())
-    }
-}
-
-impl Deref for InvocationId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-/// The Bazel operation holding the slot. Its fields exist exactly while it
-/// owns the slot: releasing the slot drops them together,
+/// The Bazel operation holding an invocation entry's process slot. Its fields
+/// exist exactly while it owns the process: releasing it drops them together,
 /// so a group id can never outlive the operation it belongs to. `pgid` is
 /// revoked at reap so a racing stop can never signal a recycled process group.
 pub struct ActiveInvocation {
-    /// Identifier for the Bazel operation in flight.
-    pub id: InvocationId,
     /// Present for terminal output; queries use stdout/stderr pipes.
     pub terminal: Option<crate::terminal::Control>,
     /// The child's process group, for the one stop that signals it; `None`
     /// once the owner has reaped the child.
     pub pgid: Option<i32>,
-    /// A stop was accepted for `id`: its group was signalled and a repeated
-    /// stop does nothing. It stays until the operation leaves the slot,
-    /// however it ends.
-    pub stopping: bool,
-    /// First stop request; the child owner applies its escalation deadlines.
+    /// First stop request: its group was signalled and a repeated stop does
+    /// nothing. It stays until the process leaves the entry, however it ends,
+    /// and the child owner applies its escalation deadlines from it.
     pub stop_started: Option<std::time::Instant>,
 }
 
 impl ActiveInvocation {
-    /// A held slot for state tests; its terminal is detached from any pty.
+    /// A held process for state tests; its terminal is detached from any pty.
     #[cfg(test)]
-    pub fn stub(id: &str, pgid: Option<i32>) -> Self {
+    pub fn stub(pgid: Option<i32>) -> Self {
         Self {
-            id: id.into(),
             terminal: Some(crate::terminal::Control::stub()),
             pgid,
-            stopping: false,
             stop_started: None,
         }
     }
 }
 
-/// Read access to the last Console. This outlives process control and is never
-/// used to classify or persist invocation history.
-pub struct ConsoleSession {
-    pub id: InvocationId,
+/// Target discovery state for one registered workspace. It owns no execution
+/// slot: Bazel operations live in [`CoreState::invocations`] instead.
+pub struct WorkspaceState {
+    pub scope: crate::scope::Scope,
+    /// The latest target index; swapped atomically per fetch.
+    pub snapshot: Option<Arc<TargetIndex>>,
+    pub last_error: Option<IngestError>,
+    /// Token of the in-flight ingest request, if any.
+    pub ingest_request: Option<String>,
+}
+
+impl WorkspaceState {
+    pub fn new(scope: crate::scope::Scope) -> Self {
+        Self {
+            scope,
+            snapshot: None,
+            last_error: None,
+            ingest_request: None,
+        }
+    }
+}
+
+/// One locally launched Bazel operation. A console keeps its entry for the
+/// app's lifetime so finished consoles stay readable; a console-less entry is
+/// released when its worker finishes.
+pub struct OwnedInvocation {
     pub workspace: PathBuf,
+    pub cmd: String,
+    pub pattern: String,
+    pub started_at: i64,
+    /// `None` once the worker released the slot after its final drain.
+    pub process: Option<ActiveInvocation>,
     /// The session's captured terminal output; an already-unlinked temp file.
-    pub log: std::fs::File,
-    /// The capture worker has stopped writing, including its final drain.
-    pub finished: bool,
+    /// This outlives the process slot, which is released only after the
+    /// capture's final drain.
+    pub console: Option<std::fs::File>,
+    /// The owned process's exit code, separate from any BEP exit code.
+    pub process_exit_code: Option<i32>,
+    /// Message for the UI about an unknown or noteworthy process exit.
+    pub note: Option<String>,
 }
 
 pub struct CoreState {
     pub bes_error: Option<String>,
     /// Only this process's bound receiver may be used for a new Bazel child.
     pub bes_endpoint: Option<String>,
-    pub workspace: Option<PathBuf>,
-    pub scope: crate::scope::Scope,
     pub bazel: Option<PathBuf>,
-    /// The latest target index; swapped atomically per fetch.
-    pub snapshot: Option<Arc<TargetIndex>>,
-    pub last_error: Option<IngestError>,
-    /// The index/detail phase flags and process slot serialize Bazel work.
-    /// Busy requests are rejected.
-    pub ingest_running: bool,
-    /// The Bazel operation holding the slot; `None` when no process is in
-    /// flight.
-    pub active_invocation: Option<ActiveInvocation>,
-    pub console: Option<ConsoleSession>,
-    /// Message for the UI about why the last process exit is unknown.
-    pub invocation_note: Option<String>,
-    /// Scoped proto query for a selected target.
-    pub detail_query_running: bool,
+    /// Saved preference only; operations always name their workspace.
+    pub last_workspace: Option<PathBuf>,
+    /// Registered workspaces by canonical path.
+    pub workspaces: BTreeMap<PathBuf, WorkspaceState>,
+    /// Every Bazel operation Zeal launched, by invocation id.
+    pub invocations: BTreeMap<String, OwnedInvocation>,
+    /// Set at app exit: new starts are rejected while owned children stop.
+    pub shutting_down: bool,
+    revision: u64,
 }
 
 impl CoreState {
-    /// Whether Bazel work or an index/detail phase occupies the workspace.
-    pub fn bazel_busy(&self) -> bool {
-        self.ingest_running || self.active_invocation.is_some() || self.detail_query_running
+    /// `ws` is a canonical workspace id returned by `open_workspace`; only an
+    /// exact registered key resolves, so a removed directory stays reachable.
+    pub fn workspace_path(&self, ws: &str) -> Result<PathBuf, String> {
+        self.workspaces
+            .get_key_value(Path::new(ws))
+            .map(|(path, _)| path.clone())
+            .ok_or_else(|| "workspace is not open".to_string())
+    }
+
+    /// Register `ws` (already canonicalized) under `scope`, or apply a scope
+    /// change to the existing entry: a different scope invalidates the cached
+    /// snapshot, error and any in-flight fetch without touching executions.
+    pub fn register_workspace(&mut self, ws: PathBuf, scope: crate::scope::Scope) {
+        match self.workspaces.get_mut(&ws) {
+            Some(state) if state.scope != scope => {
+                state.scope = scope;
+                state.snapshot = None;
+                state.last_error = None;
+                state.ingest_request = None;
+            }
+            Some(_) => {}
+            None => {
+                self.workspaces.insert(ws, WorkspaceState::new(scope));
+            }
+        }
     }
 }
 
-impl CoreState {
-    pub fn console_invocation(&self) -> Option<&InvocationId> {
-        self.console
+/// Milliseconds since the Unix epoch, the store's timestamp convention.
+pub(crate) fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The DTO for one owned invocation, shared by `Core::dto` and `runner::start`.
+pub(crate) fn owned_dto(id: &str, invocation: &OwnedInvocation) -> OwnedInvocationDto {
+    OwnedInvocationDto {
+        id: id.to_string(),
+        workspace: invocation.workspace.to_string_lossy().into_owned(),
+        cmd: invocation.cmd.clone(),
+        pattern: invocation.pattern.clone(),
+        started_at: invocation.started_at,
+        running: invocation.process.is_some(),
+        stoppable: invocation
+            .process
             .as_ref()
-            .filter(|console| self.workspace.as_ref() == Some(&console.workspace))
-            .map(|console| &console.id)
+            .is_some_and(|process| process.pgid.is_some()),
+        stopping: invocation
+            .process
+            .as_ref()
+            .is_some_and(|process| process.stop_started.is_some()),
+        console: invocation.console.is_some(),
+        process_exit_code: invocation.process_exit_code,
+        note: invocation.note.clone(),
     }
 }
 
@@ -186,54 +251,56 @@ impl Core {
             state: Mutex::new(CoreState {
                 bes_error: None,
                 bes_endpoint: None,
-                workspace: None,
-                scope: crate::scope::Scope::default(),
                 bazel: crate::workspace::resolve_bazel(),
-                snapshot: None,
-                last_error: None,
-                ingest_running: false,
-                active_invocation: None,
-                console: None,
-                invocation_note: None,
-                detail_query_running: false,
+                last_workspace: None,
+                workspaces: BTreeMap::new(),
+                invocations: BTreeMap::new(),
+                shutting_down: false,
+                revision: 0,
             }),
             invocation_finished: Condvar::new(),
         }
     }
 
+    /// Snapshot the state for the UI. The revision is bumped while holding
+    /// the lock so the emitted order matches the observed mutation order.
     #[must_use]
     pub fn dto(&self) -> AppStateDto {
-        let st = self.state.lock().expect("application state lock poisoned");
+        let mut st = self.state.lock().expect("application state lock poisoned");
+        st.revision += 1;
+        let revision = st.revision;
         AppStateDto {
+            revision,
             bes_error: st.bes_error.clone(),
             bes_ready: st.bes_endpoint.is_some(),
-            scope: st.scope.clone(),
-            workspace: st
-                .workspace
+            bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            last_workspace: st
+                .last_workspace
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
-            bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
-            ingest: if st.ingest_running { "running" } else { "idle" },
-            snapshot_fetched_at: st
-                .snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.meta.fetched_at),
-            last_error: st.last_error.clone(),
-            active_invocation: st
-                .active_invocation
-                .as_ref()
-                .map(|invocation| invocation.id.clone()),
-            console_invocation: st.console_invocation().cloned(),
-            stopping: st
-                .active_invocation
-                .as_ref()
-                .is_some_and(|invocation| invocation.stopping),
-            invocation_note: st.invocation_note.clone(),
-            detail_query: if st.detail_query_running {
-                "running"
-            } else {
-                "idle"
-            },
+            workspaces: st
+                .workspaces
+                .iter()
+                .map(|(path, state)| WorkspaceDto {
+                    workspace: path.to_string_lossy().into_owned(),
+                    scope: state.scope.clone(),
+                    ingest: if state.ingest_request.is_some() {
+                        "running"
+                    } else {
+                        "idle"
+                    },
+                    snapshot_fetched_at: state
+                        .snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.meta.fetched_at),
+                    last_error: state.last_error.clone(),
+                })
+                .collect(),
+            invocations: st
+                .invocations
+                .iter()
+                .map(|(id, invocation)| owned_dto(id, invocation))
+                .collect(),
         }
     }
 
@@ -254,6 +321,19 @@ impl Default for Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn owned(ws: &Path) -> OwnedInvocation {
+        OwnedInvocation {
+            workspace: ws.to_path_buf(),
+            cmd: "build".to_string(),
+            pattern: "//pkg:b".to_string(),
+            started_at: 1,
+            process: Some(ActiveInvocation::stub(Some(42))),
+            console: None,
+            process_exit_code: None,
+            note: None,
+        }
+    }
 
     #[test]
     fn dto_reports_bes_readiness_independently_of_its_message() {
@@ -280,79 +360,163 @@ mod tests {
     }
 
     #[test]
-    fn dto_reports_the_stopping_invocation_and_its_note() {
+    fn dto_lists_workspaces_and_owned_invocations_with_monotonic_revision() {
         let core = Core::new();
-        let idle = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(idle["activeInvocation"], serde_json::Value::Null);
-        assert_eq!(idle["stopping"], false);
-        assert_eq!(idle["invocationNote"], serde_json::Value::Null);
-
+        let ws_a = PathBuf::from("/ws/a");
+        let ws_b = PathBuf::from("/ws/b");
         {
             let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation {
-                stopping: true,
-                ..ActiveInvocation::stub("abc", Some(1))
-            });
-            st.invocation_note = Some("note".to_string());
+            st.workspaces.insert(
+                ws_a.clone(),
+                WorkspaceState::new(crate::scope::Scope::default()),
+            );
+            st.workspaces.insert(
+                ws_b.clone(),
+                WorkspaceState::new(crate::scope::Scope::default()),
+            );
+            st.invocations.insert("one".to_string(), owned(&ws_a));
+            st.invocations.insert("two".to_string(), owned(&ws_b));
+            st.invocations.get_mut("two").unwrap().process = None;
+            st.invocations.get_mut("two").unwrap().process_exit_code = Some(0);
+        }
+        let first = core.dto();
+        let second = core.dto();
+        assert!(second.revision > first.revision);
+        let json = serde_json::to_value(&second).unwrap();
+        assert_eq!(json["workspaces"].as_array().unwrap().len(), 2);
+        let invocations = json["invocations"].as_array().unwrap();
+        assert_eq!(invocations.len(), 2);
+        let finished = invocations
+            .iter()
+            .find(|invocation| invocation["id"] == "two")
+            .unwrap();
+        assert_eq!(finished["running"], false);
+        assert_eq!(finished["stoppable"], false);
+        assert_eq!(finished["processExitCode"], 0);
+    }
+
+    #[test]
+    fn a_finished_invocation_keeps_its_console_readable() {
+        let core = Core::new();
+        let ws = PathBuf::from("/ws");
+        {
+            let mut st = core.state.lock().unwrap();
+            st.workspaces.insert(
+                ws.clone(),
+                WorkspaceState::new(crate::scope::Scope::default()),
+            );
+            let mut invocation = owned(&ws);
+            invocation.process = None;
+            invocation.console = Some(crate::terminal::session_log().unwrap());
+            st.invocations.insert("one".to_string(), invocation);
         }
         let json = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(json["activeInvocation"], "abc");
-        assert_eq!(json["stopping"], true);
-        assert_eq!(json["invocationNote"], "note");
+        let invocation = &json["invocations"][0];
+        assert_eq!(invocation["console"], true);
+        assert_eq!(invocation["running"], false);
     }
 
-    /// Every way the serialized slot can be held makes `bazel_busy` true.
-    #[test]
-    fn bazel_busy_covers_ingest_invocation_and_detail_query() {
-        let core = Core::new();
-        assert!(!core.state.lock().unwrap().bazel_busy());
-        {
-            let mut st = core.state.lock().unwrap();
-            st.ingest_running = true;
-            assert!(st.bazel_busy());
-            st.ingest_running = false;
-            st.active_invocation = Some(ActiveInvocation::stub("r", None));
-            assert!(st.bazel_busy());
-            st.active_invocation = None;
-            st.detail_query_running = true;
-            assert!(st.bazel_busy());
-        }
-    }
-
-    #[test]
-    fn dto_reports_the_detail_query_state() {
-        let core = Core::new();
-        let idle = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(idle["detailQuery"], "idle");
-
-        {
-            let mut st = core.state.lock().unwrap();
-            st.detail_query_running = true;
-        }
-        let json = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(json["detailQuery"], "running");
-    }
-
-    #[test]
-    fn the_dto_names_the_snapshot_without_carrying_its_data() {
-        use crate::snapshot::{Meta, Status};
-
-        let snapshot = TargetIndex {
-            meta: Meta {
+    fn fetch_state(state: &mut WorkspaceState) {
+        state.ingest_request = Some("req-1".to_string());
+        state.snapshot = Some(Arc::new(crate::snapshot::TargetIndex {
+            meta: crate::snapshot::Meta {
                 fetched_at: 1,
-                status: Status::Partial,
+                status: crate::snapshot::Status::Ok,
             },
-            targets: Vec::new(),
-        };
-        let core = Core::new();
-        core.state.lock().unwrap().snapshot = Some(Arc::new(snapshot));
+            targets: vec![],
+        }));
+        state.last_error = Some(IngestError {
+            exit_code: Some(1),
+            summary: "failed".to_string(),
+        });
+    }
 
-        let json = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(
-            json["snapshotFetchedAt"],
-            serde_json::json!(1),
-            "the event names the snapshot; its data goes through get_snapshot"
+    #[test]
+    fn register_workspace_reuses_entries_and_keeps_fetch_state() {
+        let core = Core::new();
+        let ws = PathBuf::from("/ws");
+        let scope = crate::scope::Scope::default();
+        let mut st = core.state.lock().unwrap();
+        st.register_workspace(ws.clone(), scope.clone());
+        fetch_state(st.workspaces.get_mut(&ws).unwrap());
+        // Same scope: the entry, request id, snapshot and error survive.
+        st.register_workspace(ws.clone(), scope.clone());
+        let state = &st.workspaces[&ws];
+        assert_eq!(state.ingest_request.as_deref(), Some("req-1"));
+        assert_eq!(state.snapshot.as_ref().unwrap().meta.fetched_at, 1);
+        assert!(state.last_error.is_some());
+    }
+
+    #[test]
+    fn register_workspace_scope_change_clears_fetch_state_only() {
+        let core = Core::new();
+        let ws = PathBuf::from("/ws");
+        let other = PathBuf::from("/other");
+        let scope = crate::scope::Scope::default();
+        let mut st = core.state.lock().unwrap();
+        st.register_workspace(ws.clone(), scope.clone());
+        st.register_workspace(other.clone(), scope.clone());
+        st.invocations.insert("run".to_string(), owned(&other));
+        fetch_state(st.workspaces.get_mut(&other).unwrap());
+        fetch_state(st.workspaces.get_mut(&ws).unwrap());
+        // A different scope invalidates the cached fetch state only.
+        st.register_workspace(
+            ws.clone(),
+            crate::scope::Scope {
+                include: vec!["//app/...".to_string()],
+            },
         );
-        assert!(json.get("snapshot").is_none());
+        let state = &st.workspaces[&ws];
+        assert!(state.snapshot.is_none());
+        assert!(state.ingest_request.is_none());
+        assert!(state.last_error.is_none());
+        // The other workspace and owned invocations are untouched.
+        assert_eq!(
+            st.workspaces[&other]
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .meta
+                .fetched_at,
+            1
+        );
+        assert!(st.invocations.contains_key("run"));
+    }
+
+    #[test]
+    fn workspace_lookup_requires_the_registered_canonical_id() {
+        let temp = std::env::temp_dir().join(format!("zeal-state-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&temp).unwrap();
+        let canonical = temp.canonicalize().unwrap();
+        let core = Core::new();
+        assert!(
+            core.state
+                .lock()
+                .unwrap()
+                .workspace_path(temp.to_str().unwrap())
+                .is_err()
+        );
+        {
+            let mut st = core.state.lock().unwrap();
+            st.register_workspace(canonical.clone(), crate::scope::Scope::default());
+        }
+        assert_eq!(
+            core.state
+                .lock()
+                .unwrap()
+                .workspace_path(canonical.to_str().unwrap())
+                .unwrap(),
+            canonical
+        );
+        // A different spelling of the same directory is not an id.
+        let alias = temp.join("..").join(temp.file_name().unwrap());
+        assert!(
+            core.state
+                .lock()
+                .unwrap()
+                .workspace_path(alias.to_str().unwrap())
+                .is_err()
+        );
+        std::fs::remove_dir(&temp).unwrap();
     }
 }

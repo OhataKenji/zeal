@@ -3,42 +3,42 @@ import assert from "node:assert/strict";
 import type { AppState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
-const IDLE: AppState = {
-  besReady: false,
-  scope: { include: ["//app/..."] },
-  workspace: "/workspace",
+const CORE: AppState = {
+  revision: 1,
+  besError: null,
+  besReady: true,
   bazel: "/bin/bazel",
-  ingest: "idle",
-  snapshotFetchedAt: null,
-  lastError: null,
-  activeInvocation: null,
-  stopping: false,
-  invocationNote: null,
-  detailQuery: "idle",
+  lastWorkspace: "/workspace",
+  workspaces: [],
+  invocations: [],
 };
 
-test("QueryView reflects the target detail query's Bazel slot", async (t) => {
+test("QueryView blocks Execute only on its own readiness checks", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { app } = await load("/src/lib/state.svelte.ts");
   const { default: QueryView } = await load("/src/lib/QueryView.svelte");
 
-  function output(detailQuery: AppState["detailQuery"]): string {
-    Object.assign(app.view, {
-      ready: true,
-      state: { ...IDLE, detailQuery },
-    });
-    return render(QueryView, { props: { snap: null } }).body;
+  function output(ready: boolean, core: AppState | null): string {
+    Object.assign(app.view, { ready, core });
+    return render(QueryView, {
+      props: { snap: null, workspace: "/workspace" },
+    }).body;
   }
 
-  await t.test("a running detail query disables Execute and explains why", () => {
-    const html = output("running");
+  await t.test("a disconnected session disables Execute and explains why", () => {
+    const html = output(false, CORE);
     assert.match(html, /class="button button-primary"[^>]*disabled/);
-    assert.match(html, /title="target details are loading"/);
-    assert.match(html, /class="query-busy dim"[^>]*>\s*target details are loading\s*</);
+    assert.match(html, /not connected/);
   });
 
-  await t.test("an idle detail query leaves Execute enabled with no reason", () => {
-    const html = output("idle");
+  await t.test("a missing Bazel disables Execute and explains why", () => {
+    const html = output(true, { ...CORE, bazel: null });
+    assert.match(html, /class="button button-primary"[^>]*disabled/);
+    assert.match(html, /Bazel is not available/);
+  });
+
+  await t.test("a ready workspace leaves Execute enabled with no reason", () => {
+    const html = output(true, CORE);
     assert.match(html, /class="button button-primary" title="Execute query"/);
     assert.doesNotMatch(html, /class="button button-primary"[^>]*disabled/);
     assert.doesNotMatch(html, /query-busy/);

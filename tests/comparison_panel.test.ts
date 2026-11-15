@@ -24,7 +24,8 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
         left: detail(),
         leftLoading: false,
         leftError: null,
-        activeInvocation: null,
+        workspace: "/workspace",
+        runningIds: [],
         ...overrides,
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
@@ -61,14 +62,14 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     assert.ok(html.includes("read failed"));
   });
 
-  await t.test("disables the input while the compared invocation is active", () => {
-    const html = output({ activeInvocation: "left-id" });
+  await t.test("disables the input while the compared invocation is running", () => {
+    const html = output({ runningIds: ["left-id"] });
     assert.match(inputTag(html), /\bdisabled\b/);
     assert.ok(html.includes("Comparison is available"));
   });
 
-  await t.test("keeps the input enabled when a different invocation is active", () => {
-    const html = output({ activeInvocation: "other-id" });
+  await t.test("keeps the input enabled when a different invocation is running", () => {
+    const html = output({ runningIds: ["other-id"] });
     assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
   });
 
@@ -116,7 +117,7 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     const left = detail();
     const view = {
       ...emptyView(),
-      selectedInvocation: "left-id",
+      content: { kind: "invocation" as const, id: "left-id", page: "targets" as const },
       invocations: [left.record],
       detail: left,
     };

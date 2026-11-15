@@ -20,14 +20,19 @@ the result and requests outputs. The UI never has to close Console first.
 
 ## State ownership
 
-- The Model groups state by ownership: `connection`, `workspacePrompt`,
-  `execution`, `targets`, `history`, `saved`, and `nextRequestId`.
-  `SessionView` is a flat projection, not stored state.
+- The Model groups state by ownership: `connection`, `workspace`, `navigation`,
+  `workspacePrompt`, `starts`, `targets`, `history`, `saved`, and
+  `nextRequestId`. `SessionView` is a flat projection, not stored state.
+- `connection.state` is the aggregate `AppState`: registered workspaces plus
+  every owned invocation, ordered by the backend `revision`. `workspace` is the
+  selected canonical id; `navigation` is an epoch bumped by explicit navigation
+  so delayed start replies cannot reroute the view.
 - `content` is the current destination: targets, invocation, Console, Analytics,
   or Query. Invocation and Console destinations carry the workspace page to
   return to; workspace-page destinations are authoritative on their own.
-- Target selection and the retained Console record are independent of visibility.
-  Hiding Console does not unmount its terminal.
+- Target selection is independent of visibility. One Console is mounted per
+  workspace/invocation key; native capture keeps draining while it is hidden,
+  and reopening replays the captured bytes.
 - Form input, focus, expanded panels, and the native folder picker stay local to
   Svelte. Console byte streams and terminal handles also stay outside the Model.
 
@@ -46,8 +51,9 @@ invalidates the in-flight result and still releases the worker when it returns.
 
 `update` never performs IPC. `runEffect` returns `Promise<SessionMessage>` and
 converts IPC failures to result Messages; it does not decide whether results are
-current or change navigation. Event subscriptions send Messages independently.
-Disposal stops dispatching results, not already-started IPC.
+current or change navigation. Every Effect carries the workspace captured when
+it was requested, never the live selection. Event subscriptions send Messages
+independently. Disposal stops dispatching results, not already-started IPC.
 
 See the [session design](../docs/design/session-state.md) for rationale and
 ordering rules, [pure transition tests](../tests/session_model.test.ts) for

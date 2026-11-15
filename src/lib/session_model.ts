@@ -5,6 +5,8 @@ import type {
   ExplorerSelection,
   InvocationDetail,
   InvocationRecord,
+  OpenWorkspaceResult,
+  OwnedInvocation,
   Profile,
   Section,
   TargetActions,
@@ -12,6 +14,7 @@ import type {
   TargetIndex,
   TargetOutputs,
   TargetScope,
+  WorkspaceState,
 } from "./types.ts";
 
 export type WorkspacePage = "targets" | "analytics" | "query";
@@ -19,7 +22,7 @@ export type WorkspacePage = "targets" | "analytics" | "query";
 export type SessionContent =
   | { readonly kind: WorkspacePage }
   | { readonly kind: "invocation"; readonly id: string; readonly page: WorkspacePage }
-  | { readonly kind: "console"; readonly page: WorkspacePage };
+  | { readonly kind: "console"; readonly id: string; readonly page: WorkspacePage };
 
 interface Reader<T> {
   value: T | null;
@@ -33,37 +36,25 @@ interface HistoryRequest {
   status: "current" | "refresh" | "invalidated";
 }
 
-interface ObservedExecution {
-  readonly id: string;
-  readonly active: boolean;
-}
-
 interface StartRequest {
-  readonly id: number;
-  readonly cmd: BazelCommand;
-  readonly pattern: string;
-  readonly previousExecution: ObservedExecution | null;
-  readonly observedId: string | null;
-  readonly recordId: string | null;
+  readonly workspace: string;
+  readonly navigation: number;
 }
 
 export interface SessionModel {
   readonly content: SessionContent;
   readonly connection: {
     state: AppState | null;
-    ready: boolean;
-    revision: number;
     error: string | null;
   };
+  readonly workspace: string | null;
+  readonly navigation: number;
   readonly workspacePrompt: {
     status: "closed" | "editing" | "opening";
     error: string | null;
+    requestId: number | null;
   };
-  readonly execution: {
-    console: InvocationRecord | null;
-    pendingStart: StartRequest | null;
-    observed: ObservedExecution | null;
-  };
+  readonly starts: Record<number, StartRequest>;
   readonly targets: {
     selection: ExplorerSelection;
     snapshot: {
@@ -90,7 +81,10 @@ export interface SessionModel {
 export interface SessionView {
   content: SessionContent;
   console: InvocationRecord | null;
-  state: AppState | null;
+  core: AppState | null;
+  state: WorkspaceState | null;
+  executions: OwnedInvocation[];
+  execution: OwnedInvocation | null;
   snapshot: TargetIndex | null;
   snapshotLoading: boolean;
   snapshotError: string | null;
@@ -130,52 +124,61 @@ type RequestResult<T extends string, V> = ResultMessage<T, V> & {
 };
 
 export type SessionEffect =
-  | { readonly type: "listInvocations"; readonly id: number }
-  | { readonly type: "getSnapshot"; readonly id: number }
+  | { readonly type: "listInvocations"; readonly id: number; readonly workspace: string }
+  | { readonly type: "getSnapshot"; readonly id: number; readonly workspace: string }
   | {
       readonly type: "getTargetDetail";
       readonly id: number;
+      readonly workspace: string;
       readonly label: string;
       readonly fetchedAt: number;
     }
   | {
       readonly type: "getTargetOutputs";
       readonly id: number;
+      readonly workspace: string;
       readonly label: string;
       readonly fetchedAt: number;
     }
   | {
       readonly type: "getTargetActions";
       readonly id: number;
+      readonly workspace: string;
       readonly label: string;
       readonly fetchedAt: number;
     }
-  | { readonly type: "getInvocation"; readonly id: number; readonly invocationId: string }
-  | { readonly type: "getProfile"; readonly id: number; readonly invocationId: string }
+  | {
+      readonly type: "getInvocation";
+      readonly id: number;
+      readonly workspace: string;
+      readonly invocationId: string;
+    }
+  | {
+      readonly type: "getProfile";
+      readonly id: number;
+      readonly workspace: string;
+      readonly invocationId: string;
+    }
   | {
       readonly type: "startInvocation";
       readonly id: number;
+      readonly workspace: string;
       readonly cmd: BazelCommand;
       readonly pattern: string;
       readonly argumentsText: string;
     }
   | {
-      readonly type: "getStartState";
-      readonly startId: number;
-      readonly revision: number;
-    }
-  | {
       readonly type: "openWorkspace";
+      readonly id: number;
       readonly path: string;
       readonly scope: TargetScope;
-      readonly revision: number;
     }
-  | { readonly type: "stop"; readonly workspace: string | null }
-  | { readonly type: "refresh"; readonly workspace: string | null };
+  | { readonly type: "stop"; readonly id: string; readonly workspace: string }
+  | { readonly type: "refresh"; readonly workspace: string };
 
 export type SessionMessage =
   | { readonly type: "subscriptionsFailed"; readonly error: string }
-  | (ResultMessage<"initialStateResult", AppState> & { readonly revision: number })
+  | ResultMessage<"stateResult", AppState>
   | { readonly type: "appState"; readonly state: AppState }
   | { readonly type: "historyChanged" }
   | { readonly type: "loadInvocations" }
@@ -190,7 +193,7 @@ export type SessionMessage =
   | { readonly type: "select"; readonly selection: ExplorerSelection }
   | { readonly type: "selectInvocation"; readonly id: string }
   | { readonly type: "showPage"; readonly page: WorkspacePage }
-  | { readonly type: "openConsole"; readonly record: InvocationRecord }
+  | { readonly type: "openConsole"; readonly id: string }
   | { readonly type: "loadDetail" }
   | { readonly type: "loadProfile" }
   | {
@@ -199,25 +202,20 @@ export type SessionMessage =
       readonly pattern: string;
       readonly argumentsText: string;
     }
-  | RequestResult<"startResult", InvocationRecord>
-  | (ResultMessage<"startStateResult", AppState> & {
-      readonly startId: number;
-      readonly revision: number;
-    })
+  | RequestResult<"startResult", OwnedInvocation>
   | { readonly type: "workspacePrompt"; readonly open: boolean }
   | { readonly type: "openWorkspace"; readonly path: string; readonly scope: TargetScope }
-  | (ResultMessage<"workspaceResult", AppState> & { readonly revision: number })
-  | { readonly type: "stop" }
-  | (ResultMessage<"stopResult", void> & { readonly workspace: string | null })
+  | RequestResult<"workspaceResult", OpenWorkspaceResult>
+  | { readonly type: "stop"; readonly id: string }
+  | (ResultMessage<"stopResult", void> & { readonly id: string })
   | { readonly type: "refresh" }
-  | (ResultMessage<"refreshResult", void> & { readonly workspace: string | null });
+  | (ResultMessage<"refreshResult", void> & { readonly workspace: string });
 
 interface SessionTransition {
   readonly model: SessionModel;
   readonly effects: SessionEffect[];
 }
 
-const RUNNING_SLOTS = ["ingest", "detailQuery"] as const;
 const TARGET_LIST_ERROR = "Could not load the target list";
 
 function emptyReader<T>(): Reader<T> {
@@ -227,9 +225,11 @@ function emptyReader<T>(): Reader<T> {
 export function initialModel(page: WorkspacePage = "targets"): SessionModel {
   return {
     content: { kind: page },
-    connection: { state: null, ready: false, revision: 0, error: null },
-    workspacePrompt: { status: "closed", error: null },
-    execution: { console: null, pendingStart: null, observed: null },
+    connection: { state: null, error: null },
+    workspace: null,
+    navigation: 0,
+    workspacePrompt: { status: "closed", error: null, requestId: null },
+    starts: {},
     targets: {
       selection: null,
       snapshot: { value: null, error: null, requestId: null },
@@ -246,9 +246,24 @@ export function initialModel(page: WorkspacePage = "targets"): SessionModel {
   };
 }
 
+function wsEntry(state: AppState | null, workspace: string | null): WorkspaceState | null {
+  if (!state || workspace === null) return null;
+  return state.workspaces.find((entry) => entry.workspace === workspace) ?? null;
+}
+
+function ownedEntry(state: AppState | null, id: string | null): OwnedInvocation | null {
+  if (!state || id === null) return null;
+  return state.invocations.find((entry) => entry.id === id) ?? null;
+}
+
 function selectedInvocation(model: SessionModel): string | null {
   const content = model.content;
   return content.kind === "invocation" ? content.id : null;
+}
+
+function contentInvocationId(model: SessionModel): string | null {
+  const content = model.content;
+  return content.kind === "invocation" || content.kind === "console" ? content.id : null;
 }
 
 function workspacePage(model: SessionModel): WorkspacePage {
@@ -260,19 +275,36 @@ function savedEligible(model: SessionModel): boolean {
   const id = selectedInvocation(model);
   return !!(
     id &&
-    model.connection.ready &&
-    model.connection.state?.workspace &&
-    model.execution.pendingStart === null &&
-    id !== model.connection.state.activeInvocation
+    model.connection.state !== null &&
+    model.workspace &&
+    model.history.records.some((record) => record.id === id)
   );
+}
+
+function consoleRecord(model: SessionModel, core: AppState | null): InvocationRecord | null {
+  if (model.content.kind !== "console") return null;
+  const id = model.content.id;
+  return recordFor(model.history.records, id) ?? ownedEntry(core, id);
 }
 
 export function sessionView(model: SessionModel): SessionView {
   const eligible = savedEligible(model);
+  const core = model.connection.state;
+  const historyIds = new Set(model.history.records.map((record) => record.id));
+  const executions = (core?.invocations ?? [])
+    .filter(
+      (entry) =>
+        entry.workspace === model.workspace &&
+        (entry.running || (entry.console && !historyIds.has(entry.id))),
+    )
+    .sort((a, b) => b.startedAt - a.startedAt);
   return {
     content: model.content,
-    console: model.execution.console,
-    state: model.connection.state,
+    console: consoleRecord(model, core),
+    core,
+    state: wsEntry(core, model.workspace),
+    executions,
+    execution: ownedEntry(core, contentInvocationId(model)),
     snapshot: model.targets.snapshot.value,
     snapshotLoading: model.targets.snapshot.requestId !== null,
     snapshotError: model.targets.snapshot.error,
@@ -283,8 +315,10 @@ export function sessionView(model: SessionModel): SessionView {
     targetOutputsError: model.targets.outputs.error,
     targetActions: model.targets.actions.value,
     targetActionsError: model.targets.actions.error,
-    ready: model.connection.ready,
-    starting: model.execution.pendingStart !== null,
+    ready: core !== null,
+    starting:
+      model.workspace !== null &&
+      Object.values(model.starts).some((request) => request.workspace === model.workspace),
     opening: model.workspacePrompt.status === "opening",
     workspacePromptOpen: model.workspacePrompt.status !== "closed",
     workspaceError: model.workspacePrompt.error,
@@ -310,30 +344,15 @@ export function emptyView(page: WorkspacePage = "targets"): SessionView {
   return sessionView(initialModel(page));
 }
 
-export function bazelBusyReason(state: AppState | null): string | null {
-  if (state?.activeInvocation) return "a Bazel operation is in progress";
-  const reasons = {
-    ingest: "targets are loading",
-    detailQuery: "target details are loading",
-  };
-  const slot = RUNNING_SLOTS.find((name) => state?.[name] === "running");
-  return slot ? reasons[slot] : null;
-}
-
-function workspaceReady(view: SessionView): boolean {
-  return !!(view.state?.workspace && view.state.bazel);
-}
-
-export function sessionBusy(view: SessionView): boolean {
-  return !view.ready || view.opening || view.starting || bazelBusyReason(view.state) !== null;
-}
-
 export function canSend(view: SessionView, target: string): boolean {
-  return !!(!sessionBusy(view) && workspaceReady(view) && targetError(target) === null);
-}
-
-export function canStop(view: SessionView): boolean {
-  return !!(view.ready && view.state?.activeInvocation && !view.state.stopping);
+  return !!(
+    view.ready &&
+    view.state &&
+    view.core?.bazel &&
+    view.core.besReady &&
+    !view.starting &&
+    targetError(target) === null
+  );
 }
 
 type Draft = { -readonly [K in keyof SessionModel]: SessionModel[K] } & {
@@ -346,7 +365,7 @@ function draft(model: SessionModel): Draft {
     ...model,
     connection: { ...model.connection },
     workspacePrompt: { ...model.workspacePrompt },
-    execution: { ...model.execution },
+    starts: { ...model.starts },
     targets: {
       ...model.targets,
       snapshot: { ...model.targets.snapshot },
@@ -380,8 +399,8 @@ function unexpected(message: never): never {
   throw new Error(`Unhandled session message: ${JSON.stringify(message)}`);
 }
 
-function sameScope(left: AppState | null, right: AppState): boolean {
-  return JSON.stringify(left?.scope.include ?? []) === JSON.stringify(right.scope.include);
+function sameScope(left: WorkspaceState | null, right: WorkspaceState | null): boolean {
+  return JSON.stringify(left?.scope.include ?? []) === JSON.stringify(right?.scope.include ?? []);
 }
 
 function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boolean {
@@ -396,13 +415,14 @@ function recordFor(records: InvocationRecord[], id: string | null): InvocationRe
 }
 
 function startHistory(draft: Draft) {
-  if (!draft.connection.ready || !draft.connection.state?.workspace || draft.history.request) {
+  const workspace = draft.workspace;
+  if (draft.connection.state === null || !workspace || draft.history.request) {
     return;
   }
   const id = nextId(draft);
   draft.history.request = { id, status: "current" };
   draft.history.error = null;
-  draft.effects.push({ type: "listInvocations", id });
+  draft.effects.push({ type: "listInvocations", id, workspace });
 }
 
 function requestHistory(draft: Draft) {
@@ -416,30 +436,34 @@ function requestHistory(draft: Draft) {
 }
 
 function startSnapshot(draft: Draft) {
-  const state = draft.connection.state;
-  if (!state?.workspace || state.snapshotFetchedAt === null) return;
+  const workspace = draft.workspace;
+  const state = wsEntry(draft.connection.state, workspace);
+  if (!workspace || !state || state.snapshotFetchedAt === null) return;
   if (draft.targets.snapshot.requestId !== null) return;
   const id = nextId(draft);
   draft.targets.snapshot.requestId = id;
   draft.targets.snapshot.error = null;
-  draft.effects.push({ type: "getSnapshot", id });
+  draft.effects.push({ type: "getSnapshot", id, workspace });
 }
 
-function targetReadArgs(draft: Draft): { label: string; fetchedAt: number } | null {
+function targetReadArgs(
+  draft: Draft,
+): { workspace: string; label: string; fetchedAt: number } | null {
   const selection = draft.targets.selection;
-  const state = draft.connection.state;
+  const workspace = draft.workspace;
   const snapshot = draft.targets.snapshot.value;
-  const view = sessionView(draft);
+  const state = wsEntry(draft.connection.state, workspace);
   if (
+    !workspace ||
+    !state ||
+    !draft.connection.state?.bazel ||
     selection?.kind !== "target" ||
     !snapshot ||
     !snapshot.targets.some((target) => target.label === selection.label) ||
-    snapshot.meta.fetchedAt !== state?.snapshotFetchedAt ||
-    !workspaceReady(view) ||
-    sessionBusy(view)
+    snapshot.meta.fetchedAt !== state.snapshotFetchedAt
   )
     return null;
-  return { label: selection.label, fetchedAt: snapshot.meta.fetchedAt };
+  return { workspace, label: selection.label, fetchedAt: snapshot.meta.fetchedAt };
 }
 
 function startTargetDetail(draft: Draft) {
@@ -501,11 +525,12 @@ function startDetail(draft: Draft) {
   )
     return;
   const invocationId = selectedInvocation(draft);
-  if (!invocationId) return;
+  const workspace = draft.workspace;
+  if (!invocationId || !workspace) return;
   const id = draft.saved.detail.wanted;
   draft.saved.detail.running = id;
   draft.saved.detail.error = null;
-  draft.effects.push({ type: "getInvocation", id, invocationId });
+  draft.effects.push({ type: "getInvocation", id, workspace, invocationId });
 }
 
 function startProfile(draft: Draft) {
@@ -516,11 +541,12 @@ function startProfile(draft: Draft) {
   )
     return;
   const invocationId = selectedInvocation(draft);
-  if (!invocationId) return;
+  const workspace = draft.workspace;
+  if (!invocationId || !workspace) return;
   const id = draft.saved.profile.wanted;
   draft.saved.profile.running = id;
   draft.saved.profile.error = null;
-  draft.effects.push({ type: "getProfile", id, invocationId });
+  draft.effects.push({ type: "getProfile", id, workspace, invocationId });
 }
 
 function resumeTargets(draft: Draft) {
@@ -551,12 +577,15 @@ function sameContent(left: SessionContent, right: SessionContent): boolean {
   if (left.kind === "invocation" && right.kind === "invocation") {
     return left.id === right.id && left.page === right.page;
   }
-  if (left.kind === "console" && right.kind === "console") return left.page === right.page;
+  if (left.kind === "console" && right.kind === "console") {
+    return left.id === right.id && left.page === right.page;
+  }
   return true;
 }
 
 function showContent(draft: Draft, content: SessionContent) {
   if (sameContent(draft.content, content)) return;
+  draft.navigation++;
   const previousId = selectedInvocation(draft);
   draft.content = content;
   const id = selectedInvocation(draft);
@@ -642,159 +671,111 @@ function selectTarget(draft: Draft, selection: ExplorerSelection) {
     }
     return;
   }
+  draft.navigation++;
   draft.targets.selection = selection;
   resetTargetContext(draft);
 }
 
-function resetWorkspaceData(draft: Draft, state: AppState) {
-  draft.execution.pendingStart = null;
-  draft.execution.observed = state.activeInvocation
-    ? { id: state.activeInvocation, active: true }
-    : null;
-  draft.targets.snapshot.requestId = null;
-  if (draft.history.request) draft.history.request.status = "invalidated";
-  showPage(draft, workspacePage(draft));
+function selectWorkspace(draft: Draft, workspace: string) {
+  if (draft.workspace === workspace) return;
+  const page = workspacePage(draft);
+  draft.workspace = workspace;
+  draft.navigation++;
+  draft.content = { kind: page };
   draft.targets.selection = null;
-  resetTargetContext(draft);
-  draft.execution.console = null;
+  draft.targets.snapshot.requestId = null;
   draft.targets.snapshot.value = null;
   draft.targets.snapshot.error = null;
+  draft.targets.detail = emptyReader<TargetDetail>();
+  draft.targets.outputs = emptyReader<TargetOutputs>();
+  draft.targets.actions = emptyReader<TargetActions>();
   draft.history.records = [];
   draft.history.error = null;
+  if (draft.history.request) draft.history.request.status = "invalidated";
+  // The saved readers' in-flight workers are global; keep them so their
+  // replies still release the slot, but drop everything else for the new
+  // workspace's selection.
+  draft.saved.detail = {
+    ...emptyReader<InvocationDetail>(),
+    running: draft.saved.detail.running,
+  };
+  draft.saved.profile = {
+    ...emptyReader<Section<Profile>>(),
+    running: draft.saved.profile.running,
+  };
+  draft.connection.error = null;
+  startHistory(draft);
+  startSnapshot(draft);
+  refreshMissingTargets(draft);
 }
 
-function applyPendingStartState(draft: Draft, state: AppState): boolean {
-  const starting = draft.execution.pendingStart;
-  const activeId = state.activeInvocation;
+function refreshMissingTargets(draft: Draft) {
+  const state = wsEntry(draft.connection.state, draft.workspace);
   if (
-    !starting ||
-    !activeId ||
-    state.consoleInvocation !== activeId ||
-    starting.observedId === activeId
+    state &&
+    draft.connection.state?.bazel &&
+    state.snapshotFetchedAt === null &&
+    state.ingest === "idle" &&
+    state.lastError === null
   ) {
-    return false;
+    draft.effects.push({ type: "refresh", workspace: state.workspace });
   }
-  draft.execution.pendingStart = { ...starting, observedId: activeId };
-  draft.execution.console = { id: activeId, cmd: starting.cmd, pattern: starting.pattern };
-  showContent(draft, { kind: "console", page: workspacePage(draft) });
-  return true;
 }
 
-function observedCompletionId(
+function updateTargetsForWorkspace(
   draft: Draft,
-  before: AppState | null,
-  state: AppState,
-  activeId: string | null,
-): string | null {
-  const observed = draft.execution.observed;
-  if (activeId) {
-    return observed?.active && before?.activeInvocation === observed.id && observed.id !== activeId
-      ? observed.id
-      : null;
-  }
-  if (!observed) return null;
-  if (
-    (observed.active && before?.activeInvocation === observed.id) ||
-    state.consoleInvocation === observed.id
-  ) {
-    return observed.id;
-  }
-  return null;
-}
-
-function observeExecution(draft: Draft, before: AppState | null, state: AppState) {
-  const activeId = state.activeInvocation;
-  const completed = observedCompletionId(draft, before, state, activeId);
-  draft.execution.observed = activeId ? { id: activeId, active: true } : null;
-  if (completed) completeConsole(draft, completed);
-}
-
-function updateExecutionState(draft: Draft, before: AppState | null, state: AppState) {
-  if (!applyPendingStartState(draft, state)) observeExecution(draft, before, state);
-}
-
-function updateTargetsForState(draft: Draft, before: AppState | null, state: AppState) {
-  const workspaceChanged = state.workspace !== before?.workspace;
-  const scopeChanged = !sameScope(before, state);
-  const contextChanged =
-    before === null ||
-    workspaceChanged ||
-    scopeChanged ||
-    state.snapshotFetchedAt !== before.snapshotFetchedAt;
+  before: WorkspaceState | null,
+  after: WorkspaceState | null,
+) {
+  const scopeChanged = !sameScope(before, after);
+  const fetchedChanged = (before?.snapshotFetchedAt ?? null) !== (after?.snapshotFetchedAt ?? null);
+  const contextChanged = before === null || scopeChanged || fetchedChanged || after === null;
   let selectionCleared = false;
-  if (!workspaceChanged && (scopeChanged || state.snapshotFetchedAt === null)) {
+  if (after === null || scopeChanged || after.snapshotFetchedAt === null) {
     selectionCleared = draft.targets.selection !== null;
     draft.targets.selection = null;
     draft.targets.snapshot.value = null;
     draft.targets.snapshot.error = null;
   }
-  if ((contextChanged && !workspaceChanged) || selectionCleared) resetTargetContext(draft);
+  if (contextChanged || selectionCleared) resetTargetContext(draft);
   if (!contextChanged) {
     if (draft.targets.snapshot.error !== null) startSnapshot(draft);
     return;
   }
   draft.targets.snapshot.requestId = null;
-  if (state.snapshotFetchedAt === null || scopeChanged || workspaceChanged) {
+  if (after === null || scopeChanged || after.snapshotFetchedAt === null) {
     draft.targets.snapshot.value = null;
   }
   startSnapshot(draft);
+  if (scopeChanged) refreshMissingTargets(draft);
 }
 
 function applyAppState(draft: Draft, state: AppState) {
   const before = draft.connection.state;
-  const wasReady = draft.connection.ready;
+  if (before !== null && state.revision <= before.revision) return;
   const wasSavedEligible = savedEligible(draft);
-  const wasBusy = sessionBusy(sessionView(draft));
-  draft.connection.revision++;
+  const workspaceBefore = draft.workspace;
   draft.connection.state = state;
-  draft.connection.ready = true;
-  if (!wasReady) draft.connection.error = null;
-  if (state.workspace !== before?.workspace) {
-    resetWorkspaceData(draft, state);
-    startHistory(draft);
-  } else {
-    updateExecutionState(draft, before, state);
-    if (!wasReady || state.activeInvocation !== before?.activeInvocation) requestHistory(draft);
-  }
-  updateTargetsForState(draft, before, state);
-  savedEligibilityChanged(draft, wasSavedEligible, savedEligible(draft));
-  if (wasBusy && sessionBusy(sessionView(draft)) === false) resumeTargets(draft);
-}
+  if (before === null) draft.connection.error = null;
 
-function completeConsole(draft: Draft, id: string) {
   if (
-    draft.execution.pendingStart ||
-    draft.connection.state?.activeInvocation ||
-    draft.content.kind !== "console" ||
-    draft.execution.console?.id !== id
+    draft.workspace === null &&
+    state.lastWorkspace !== null &&
+    state.workspaces.some((entry) => entry.workspace === state.lastWorkspace)
   ) {
-    return;
+    selectWorkspace(draft, state.lastWorkspace);
   }
-  selectSaved(draft, id);
-}
 
-function finishStart(draft: Draft, requestId: number) {
-  const current = draft.execution.pendingStart;
-  if (!current || current.id !== requestId) return;
-  const wasEligible = savedEligible(draft);
-  draft.execution.pendingStart = null;
-  if (current.recordId === null) {
-    draft.execution.observed = current.previousExecution;
-  } else {
-    const id = current.recordId;
-    if (!draft.connection.ready) {
-      draft.execution.observed = { id, active: current.observedId === id };
-    } else if (draft.connection.state?.activeInvocation === id) {
-      draft.execution.observed = { id, active: true };
-    } else if (!draft.connection.state?.activeInvocation) {
-      draft.execution.observed = null;
-      completeConsole(draft, id);
-    } else {
-      draft.execution.observed = { id: draft.connection.state.activeInvocation, active: true };
-    }
+  // A workspace selected above already reset its readers; only an unchanged
+  // selection needs its target context reconciled against the new snapshot.
+  if (draft.workspace !== null && draft.workspace === workspaceBefore) {
+    updateTargetsForWorkspace(
+      draft,
+      wsEntry(before, draft.workspace),
+      wsEntry(state, draft.workspace),
+    );
   }
-  savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
-  resumeTargets(draft);
+  savedEligibilityChanged(draft, wasSavedEligible, savedEligible(draft));
 }
 
 function acceptHistory(draft: Draft, records: InvocationRecord[]) {
@@ -961,87 +942,55 @@ function finishProfile(draft: Draft, requestId: number, result: Result<Section<P
 }
 
 function start(draft: Draft, cmd: BazelCommand, pattern: string, argumentsText: string) {
-  if (!canSend(sessionView(draft), pattern) || !draft.connection.state?.workspace) return;
-  const wasEligible = savedEligible(draft);
-  const request: StartRequest = {
-    id: nextId(draft),
-    cmd,
-    pattern,
-    previousExecution: draft.execution.observed,
-    observedId: null,
-    recordId: null,
+  const workspace = draft.workspace;
+  if (!workspace || !canSend(sessionView(draft), pattern)) return;
+  const id = nextId(draft);
+  draft.starts[id] = {
+    workspace,
+    navigation: draft.navigation,
   };
-  draft.execution.pendingStart = request;
   draft.connection.error = null;
   draft.effects.push({
     type: "startInvocation",
-    id: request.id,
+    id,
+    workspace,
     cmd,
     pattern,
     argumentsText,
   });
-  savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
 }
 
-function startResult(draft: Draft, requestId: number, result: Result<InvocationRecord>) {
-  const pending = draft.execution.pendingStart;
-  if (!pending || pending.id !== requestId) return;
+function startResult(draft: Draft, requestId: number, result: Result<OwnedInvocation>) {
+  const pending = draft.starts[requestId];
+  if (!pending) return;
+  delete draft.starts[requestId];
   if (!result.ok) {
-    finishStart(draft, requestId);
-    draft.connection.error = result.error;
-    return;
-  }
-  draft.execution.pendingStart = { ...pending, recordId: result.value.id };
-  if (draft.content.kind !== "console" || draft.execution.console?.id !== result.value.id) {
-    draft.execution.console = { ...result.value, cmd: pending.cmd, pattern: pending.pattern };
-    showContent(draft, { kind: "console", page: workspacePage(draft) });
-  }
-  draft.effects.push({
-    type: "getStartState",
-    startId: requestId,
-    revision: draft.connection.revision,
-  });
-}
-
-function startStateResult(
-  draft: Draft,
-  message: Extract<SessionMessage, { type: "startStateResult" }>,
-) {
-  if (draft.execution.pendingStart?.id !== message.startId) return;
-  if (message.revision === draft.connection.revision) {
-    if (message.result.ok) {
-      applyAppState(draft, message.result.value);
-    } else {
-      const wasEligible = savedEligible(draft);
-      draft.connection.ready = false;
-      draft.connection.error = `The invocation started, but getting its state failed; waiting for the next update: ${message.result.error}`;
-      savedEligibilityChanged(draft, wasEligible, savedEligible(draft));
+    if (pending.workspace === draft.workspace && pending.navigation === draft.navigation) {
+      draft.connection.error = result.error;
     }
-  }
-  finishStart(draft, message.startId);
-  if (draft.connection.ready) requestHistory(draft);
-}
-
-function initialStateResult(
-  draft: Draft,
-  message: Extract<SessionMessage, { type: "initialStateResult" }>,
-) {
-  if (message.revision !== draft.connection.revision) return;
-  if (message.result.ok) applyAppState(draft, message.result.value);
-  else if (!draft.connection.ready)
-    draft.connection.error = `Could not connect: ${message.result.error}`;
-}
-
-function openConsole(draft: Draft, record: InvocationRecord) {
-  const expected =
-    draft.connection.state?.consoleInvocation ?? draft.connection.state?.activeInvocation;
-  if (record.id !== expected) {
-    selectSaved(draft, record.id);
     return;
   }
-  if (draft.content.kind === "console" && draft.execution.console?.id === record.id) return;
-  draft.execution.console = record;
-  showContent(draft, { kind: "console", page: workspacePage(draft) });
+  if (pending.workspace === draft.workspace && pending.navigation === draft.navigation) {
+    showContent(draft, { kind: "console", id: result.value.id, page: workspacePage(draft) });
+  }
+}
+
+function stateResult(draft: Draft, result: Result<AppState>) {
+  if (result.ok) {
+    applyAppState(draft, result.value);
+  } else if (draft.connection.state === null) {
+    draft.connection.error = `Could not connect: ${result.error}`;
+  }
+}
+
+function openConsole(draft: Draft, id: string) {
+  const owned = ownedEntry(draft.connection.state, id);
+  if (owned?.console) {
+    if (draft.content.kind === "console" && draft.content.id === id) return;
+    showContent(draft, { kind: "console", id, page: workspacePage(draft) });
+    return;
+  }
+  selectSaved(draft, id);
 }
 
 function setWorkspacePromptOpen(draft: Draft, open: boolean) {
@@ -1051,31 +1000,36 @@ function setWorkspacePromptOpen(draft: Draft, open: boolean) {
 }
 
 function requestWorkspaceOpen(draft: Draft, path: string, scope: TargetScope) {
-  if (sessionBusy(sessionView(draft))) {
-    draft.workspacePrompt.error =
-      "Wait for the current Bazel operation to finish before changing the workspace";
-    return;
-  }
-  setWorkspacePromptOpen(draft, true);
+  draft.navigation++;
   draft.workspacePrompt.status = "opening";
-  draft.effects.push({ type: "openWorkspace", path, scope, revision: draft.connection.revision });
+  draft.workspacePrompt.error = null;
+  const id = nextId(draft);
+  draft.workspacePrompt.requestId = id;
+  draft.effects.push({ type: "openWorkspace", id, path, scope });
 }
 
-function finishWorkspaceOpen(draft: Draft, revision: number, result: Result<AppState>) {
+function finishWorkspaceOpen(draft: Draft, requestId: number, result: Result<OpenWorkspaceResult>) {
+  // The embedded aggregate is revision-guarded, so even a stale reply may
+  // apply; only the latest request owns the prompt and the selection.
+  if (result.ok) applyAppState(draft, result.value.state);
+  if (draft.workspacePrompt.requestId !== requestId) return;
+  draft.workspacePrompt.requestId = null;
   draft.workspacePrompt.status = result.ok ? "closed" : "editing";
   draft.workspacePrompt.error = result.ok ? null : result.error;
-  if (result.ok && revision === draft.connection.revision) applyAppState(draft, result.value);
+  if (result.ok) selectWorkspace(draft, result.value.workspace);
   resumeTargets(draft);
 }
 
-function requestStop(draft: Draft) {
-  if (!canStop(sessionView(draft))) return;
-  draft.effects.push({ type: "stop", workspace: draft.connection.state?.workspace ?? null });
+function requestStop(draft: Draft, id: string) {
+  const execution = ownedEntry(draft.connection.state, id);
+  if (!execution?.stoppable || execution.stopping) return;
+  draft.effects.push({ type: "stop", id: execution.id, workspace: execution.workspace });
 }
 
 function requestRefresh(draft: Draft) {
-  if (sessionBusy(sessionView(draft))) return;
-  draft.effects.push({ type: "refresh", workspace: draft.connection.state?.workspace ?? null });
+  const workspace = draft.workspace;
+  if (!workspace || draft.connection.state === null) return;
+  draft.effects.push({ type: "refresh", workspace });
 }
 
 export function update(model: SessionModel, message: SessionMessage): SessionTransition {
@@ -1084,8 +1038,8 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "subscriptionsFailed":
       next.connection.error = `Could not connect: ${message.error}`;
       break;
-    case "initialStateResult":
-      initialStateResult(next, message);
+    case "stateResult":
+      stateResult(next, message.result);
       break;
     case "appState":
       applyAppState(next, message.state);
@@ -1129,7 +1083,7 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       showPage(next, message.page);
       break;
     case "openConsole":
-      openConsole(next, message.record);
+      openConsole(next, message.id);
       break;
     case "loadDetail":
       retryDetail(next);
@@ -1143,9 +1097,6 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "startResult":
       startResult(next, message.requestId, message.result);
       break;
-    case "startStateResult":
-      startStateResult(next, message);
-      break;
     case "workspacePrompt":
       setWorkspacePromptOpen(next, message.open);
       break;
@@ -1153,13 +1104,13 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       requestWorkspaceOpen(next, message.path, message.scope);
       break;
     case "workspaceResult":
-      finishWorkspaceOpen(next, message.revision, message.result);
+      finishWorkspaceOpen(next, message.requestId, message.result);
       break;
     case "stop":
-      requestStop(next);
+      requestStop(next, message.id);
       break;
     case "stopResult":
-      if (!message.result.ok && message.workspace === next.connection.state?.workspace) {
+      if (!message.result.ok && contentInvocationId(next) === message.id) {
         next.connection.error = message.result.error;
       }
       break;
@@ -1167,7 +1118,7 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       requestRefresh(next);
       break;
     case "refreshResult":
-      if (!message.result.ok && message.workspace === next.connection.state?.workspace) {
+      if (!message.result.ok && message.workspace === next.workspace) {
         next.connection.error = message.result.error;
       }
       break;

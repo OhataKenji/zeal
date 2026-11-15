@@ -10,7 +10,6 @@ test("WorkspaceSwitcher renders home, switch, and settings as separate controls"
     return render(WorkspaceSwitcher, {
       props: {
         workspace: "/work/cool-mono",
-        busy: false,
         settingsOpen: false,
         opening: false,
         onopen: () => {},
@@ -53,16 +52,15 @@ test("WorkspaceSwitcher renders home, switch, and settings as separate controls"
     assert.match(buttonTag(html, "Workspace settings"), /aria-pressed="true"/);
   });
 
-  await t.test("busy disables opening settings but not home; open settings can close", () => {
-    const busyHtml = output({ busy: true });
-    assert.match(buttonTag(busyHtml, "Workspace settings"), /disabled/);
-    assert.match(busyHtml, /Wait for the current Bazel operation/);
-    assert.doesNotMatch(buttonTag(busyHtml, "Workspace home"), /disabled/);
+  await t.test("opening disables Open; default Open is enabled without a busy notice", () => {
+    const openingHtml = output({ opening: true });
+    assert.match(openingHtml, /class="[^"]*ws-open[^"]*"[^>]*disabled/);
 
-    const closing = output({ busy: true, settingsOpen: true });
-    const gear = buttonTag(closing, "Workspace settings");
-    assert.match(gear, /aria-pressed="true"/);
-    assert.doesNotMatch(gear, /disabled/);
+    const html = output({});
+    const openTag = html.match(/<button[^>]*class="[^"]*ws-open[^"]*"[^>]*>/)?.[0];
+    assert.ok(openTag, "missing Open workspace button");
+    assert.doesNotMatch(openTag, /disabled/);
+    assert.doesNotMatch(html, /Wait for the current Bazel operation/);
   });
 
   await t.test("opening and missing workspace disable home and settings", () => {

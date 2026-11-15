@@ -72,6 +72,7 @@ export function analyticsDateError(filter: Pick<AnalyticsFilter, "start" | "end"
  * responses, and disposal ignores any response from the previous workspace.
  */
 export function createAnalytics(
+  workspace: string,
   transport: Pick<Transport, "invoke">,
   changed: (view: AnalyticsView) => void,
 ) {
@@ -91,6 +92,7 @@ export function createAnalytics(
     changed(view);
     try {
       const data = await transport.invoke<DailyAnalytics>(COMMANDS.getAnalytics, {
+        workspace,
         filter: view.filter,
       });
       if (disposed || request !== generation) return;

@@ -518,6 +518,7 @@ function harness() {
     reject: (error: unknown) => void;
   }> = [];
   const runner = createQuery(
+    "/workspace",
     {
       invoke: <T>(command: string, args?: Record<string, unknown>) =>
         new Promise<T>((resolve, reject) =>
@@ -547,7 +548,10 @@ test("run invokes run_query and stores the reply under the chosen view", async (
   assert.equal(h.state.error, null);
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].command, "run_query");
-  assert.deepEqual(h.calls[0].args, queryArgv("deps(//a)", "raw", FLAGS));
+  assert.deepEqual(h.calls[0].args, {
+    workspace: "/workspace",
+    ...queryArgv("deps(//a)", "raw", FLAGS),
+  });
   h.calls[0].resolve(OUTPUT);
   await pending;
   assert.equal(h.state.running, false);

@@ -839,6 +839,7 @@ export function emptyQueryState(): QueryState {
  * The workspace-keyed editor owns this controller, so results never cross workspaces.
  */
 export function createQuery(
+  workspace: string,
   t: Transport,
   changed: (s: QueryState) => void,
 ): {
@@ -875,7 +876,7 @@ export function createQuery(
     update({ running: true, error: null, result: null });
     let result: QueryOutput;
     try {
-      result = await t.invoke<QueryOutput>(COMMANDS.runQuery, args);
+      result = await t.invoke<QueryOutput>(COMMANDS.runQuery, { workspace, ...args });
     } catch (error) {
       update({ running: false, error: acceptResult ? String(error) : null });
       return;

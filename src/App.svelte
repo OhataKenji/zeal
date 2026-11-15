@@ -8,12 +8,11 @@
     Folders,
     Play,
     SlidersHorizontal,
-    Stop,
     TreeStructure,
   } from "phosphor-svelte";
   import { onMount, tick } from "svelte";
   import { app, connect, getSession, refresh } from "./lib/state.svelte";
-  import { canSend, canStop, sessionBusy } from "./lib/session";
+  import { canSend } from "./lib/session";
   import { invocationStatus } from "./lib/invocation";
   import { createIndex } from "./lib/search";
   import { targetError } from "./lib/target";
@@ -30,10 +29,12 @@
   import QueryView from "./lib/QueryView.svelte";
   import SearchInput from "./lib/SearchInput.svelte";
   import type {
-    AppState,
     BazelCommand,
     ExplorerSelection,
+    InvocationRecord,
+    OwnedInvocation,
     TargetScope,
+    WorkspaceState,
   } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
@@ -50,11 +51,23 @@
   onMount(() => connect(initialPage));
 
   const st = $derived(app.state);
+  const core = $derived(app.view.core);
   const snap = $derived(app.view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const selection = $derived(app.view.selection);
   const selected = $derived(selection?.kind === "target" ? selection.label : null);
   const content = $derived(app.view.content);
+  const consoleView = $derived(
+    app.view.console && app.view.execution
+      ? { record: app.view.console, execution: app.view.execution }
+      : null,
+  );
+
+  function ownedFor(id: string): OwnedInvocation | undefined {
+    return core?.invocations.find((entry) => entry.id === id);
+  }
+
+  const executionIds = $derived(new Set(app.view.executions.map((entry) => entry.id)));
 
   function retryTargets() {
     if (app.view.snapshotError) void getSession().loadSnapshot();
@@ -70,8 +83,6 @@
   let argumentsInput = $state<HTMLInputElement>();
   const argumentsConfigured = $derived(argumentsText.trim() !== "");
   const switchingWs = $derived(app.view.workspacePromptOpen);
-  const busy = $derived(sessionBusy(app.view));
-
   let workspaceForm = $state<{
     mode: "open" | "settings";
     path: string;
@@ -115,10 +126,7 @@
       cmd = "build";
     }
   });
-  const running = $derived(!!st?.activeInvocation);
-  const actionLabel = $derived(
-    running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
-  );
+  const actionLabel = $derived(cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build");
   const inputError = $derived(
     targetField === "" ? null : targetError(targetField),
   );
@@ -135,11 +143,7 @@
   }
 
   function submit() {
-    if (running) {
-      getSession().stop();
-    } else {
-      getSession().start(cmd, targetField, argumentsText);
-    }
+    getSession().start(cmd, targetField, argumentsText);
   }
 
   async function setArgumentsOpen(open: boolean) {
@@ -185,7 +189,7 @@
   }
 </script>
 
-{#snippet targetPane(state: AppState)}
+{#snippet targetPane(state: WorkspaceState)}
   <section
     class="pane"
     class:collapsed={collapsed.targets}
@@ -207,7 +211,7 @@
         aria-label="Reload targets"
         title="Reload targets"
         onclick={refresh}
-        disabled={busy}
+        disabled={state.ingest === "running"}
       >
         <ArrowClockwise size={14} />
       </button>
@@ -230,7 +234,42 @@
   </section>
 {/snippet}
 
-{#snippet invocationPane(state: AppState)}
+{#snippet invocationRow(record: InvocationRecord, execution?: OwnedInvocation)}
+  {@const startedAt = new Date(record.startedAt ?? NaN)}
+  {@const status = invocationStatus(record, execution)}
+  {@const active =
+    (content.kind === "invocation" && content.id === record.id) ||
+    (content.kind === "console" && content.id === record.id)}
+  <li>
+    <button
+      class="invocation-row"
+      title={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id} — ${status.label}${record.workspace ? ` — ${record.workspace}` : ""}`}
+      aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}`}
+      class:selected={active}
+      aria-current={active ? "true" : undefined}
+      onclick={() => getSession().selectInvocation(record.id)}
+    >
+      <span class="invocation-label"
+        ><InvocationStatus {...status} compact /><span class="invocation-command"
+          >{record.cmd ?? "?"}</span
+        >
+        {#if Number.isFinite(startedAt.getTime())}
+        <time class="invocation-time" datetime={startedAt.toISOString()}
+          >{startedAt.toLocaleString([], {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}</time
+        >{:else}<span class="invocation-time">Time not recorded</span>{/if}</span
+      >
+      <span class="invocation-pattern">{record.pattern ?? record.id}</span>
+    </button>
+  </li>
+{/snippet}
+
+{#snippet invocationPane(state: WorkspaceState)}
   <section
     class="pane"
     class:collapsed={collapsed.invocations}
@@ -248,42 +287,14 @@
     {#if !collapsed.invocations}
       <div class="pane-body">
         <ul class="list">
+          {#each app.view.executions as execution (execution.id)}
+            {@const record = app.view.invocations.find((inv) => inv.id === execution.id) ?? execution}
+            {@render invocationRow(record, execution)}
+          {/each}
           {#each app.view.invocations as inv (inv.id)}
-            {@const startedAt = new Date(inv.startedAt ?? NaN)}
-            {@const status = invocationStatus(inv, state.activeInvocation, state.stopping)}
-            {@const active =
-              (content.kind === "invocation" && content.id === inv.id) ||
-              (content.kind === "console" && app.view.console?.id === inv.id)}
-            <li>
-              <button
-                class="invocation-row"
-                title={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id} — ${status.label}${inv.workspace ? ` — ${inv.workspace}` : ""}`}
-                aria-label={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id}: ${status.label}`}
-                class:selected={active}
-                aria-current={active ? "true" : undefined}
-                onclick={() =>
-                  inv.id === state.activeInvocation
-                    ? getSession().openConsole(inv)
-                    : getSession().selectInvocation(inv.id)}
-              >
-                <span class="invocation-label"
-                  ><InvocationStatus {...status} compact /><span class="invocation-command"
-                    >{inv.cmd ?? "?"}</span
-                  >
-                  {#if Number.isFinite(startedAt.getTime())}
-                  <time class="invocation-time" datetime={startedAt.toISOString()}
-                    >{startedAt.toLocaleString([], {
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}</time
-                  >{:else}<span class="invocation-time">Time not recorded</span>{/if}</span
-                >
-                <span class="invocation-pattern">{inv.pattern ?? inv.id}</span>
-              </button>
-            </li>
+            {#if !executionIds.has(inv.id)}
+              {@render invocationRow(inv, ownedFor(inv.id))}
+            {/if}
           {/each}
         </ul>
         {#if app.view.invocationsError}<Notice tone="error" onaction={getSession().loadInvocations}
@@ -295,17 +306,18 @@
   </section>
 {/snippet}
 
-{#snippet workspaceContent(state: AppState, workspace: string)}
+{#snippet workspaceContent(state: WorkspaceState, workspace: string)}
   <main
     class="content"
     class:invocation-content={content.kind !== "targets"}
   >
-    {#if app.view.console}
-      {#key app.view.console.id}
-        <div class="console-container" hidden={content.kind !== "console"}>
+    {#if content.kind === "console" && consoleView}
+      {#key `${consoleView.execution.workspace}:${consoleView.execution.id}`}
+        <div class="console-container">
           {#await loadConsole() then { default: ConsoleView }}
-          <ConsoleView record={app.view.invocations.find((inv) => inv.id === app.view.console?.id) ?? app.view.console}
-            visible={content.kind === "console"} running={state.activeInvocation === app.view.console.id} stopping={state.stopping} />
+          <ConsoleView record={consoleView.record}
+            execution={consoleView.execution}
+            onstop={() => getSession().stop(consoleView.execution.id)} />
           {/await}
         </div>
       {/key}
@@ -335,7 +347,7 @@
       {#key workspace}<AnalyticsView {workspace} invocations={app.view.invocations} />{/key}
     {:else if content.kind === "query"}
       {#key workspace}
-        <QueryView {snap} />
+        <QueryView {snap} {workspace} />
       {/key}
     {:else if snap && selection?.kind === "package"}
       <PackageView index={snap} pkg={selection.path} onselect={(label) => select({ kind: "target", label })} />
@@ -365,9 +377,7 @@
         </Notice>
       {:else}
         <p class="dim">
-          {st?.ingest === "running" || st?.activeInvocation
-            ? "Waiting for Bazel…"
-            : "Loading target details…"}
+          {st?.ingest === "running" ? "Waiting for Bazel…" : "Loading target details…"}
         </p>
       {/if}
     {:else if snap}
@@ -389,7 +399,6 @@
   <div class="toolbar">
     <WorkspaceSwitcher
       workspace={st?.workspace ?? null}
-      {busy}
       {settingsOpen}
       opening={app.view.opening}
       onopen={(path) => editWorkspace("open", path)}
@@ -430,14 +439,10 @@
         class="button button-primary icon-button"
         aria-label={actionLabel}
         title={actionLabel}
-        disabled={switchingWs ||
-          (running ? !canStop(app.view) : !canSend(app.view, targetField))}
+        disabled={switchingWs || !canSend(app.view, targetField)}
         onclick={submit}
       >
-        {#if running}<Stop size={12} weight="fill" />{:else}<Play
-            size={12}
-            weight="fill"
-          />{/if}
+        <Play size={12} weight="fill" />
       </button>
       {#if argumentsOpen}
         <div class="arguments-row">
@@ -458,23 +463,22 @@
     </div>
   </div>
   {#if app.view.error}<Notice tone="error">{app.view.error}</Notice>{/if}
-  {#if st?.invocationNote}<Notice tone="error">{st.invocationNote}</Notice>{/if}
-  {#if st?.besError}<Notice tone={st.besReady ? "warning" : "error"}
-      >BES receiver: {st.besError}</Notice
+  {#if core?.besError}<Notice tone={core.besReady ? "warning" : "error"}
+      >BES receiver: {core.besError}</Notice
     >{/if}
   {#if inputError}<p class="field-error composer-error" id="composer-target-error" role="status">{inputError}</p>{/if}
 
-  {#if st === null}
+  {#if core === null}
     <div class="content dim">loading…</div>
-  {:else if st.workspace === null || switchingWs}
+  {:else if st === null || switchingWs}
     <div class="content">
       {#key `${workspaceForm?.mode ?? "open"}:${workspaceForm?.path ?? ""}`}
         <WorkspacePrompt
           mode={workspaceForm?.mode ?? "open"}
-          initial={workspaceForm?.path ?? st.workspace ?? ""}
-          initialScope={workspaceForm?.scope ?? st.scope}
-          bazelAvailable={st.bazel !== null}
-          onclose={st.workspace ? () => getSession().setWorkspacePromptOpen(false) : undefined}
+          initial={workspaceForm?.path ?? st?.workspace ?? core.lastWorkspace ?? ""}
+          initialScope={workspaceForm?.scope ?? st?.scope ?? { include: ["//..."] }}
+          bazelAvailable={core.bazel !== null}
+          onclose={st ? () => getSession().setWorkspacePromptOpen(false) : undefined}
         />
       {/key}
     </div>

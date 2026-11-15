@@ -14,6 +14,7 @@ export interface ConsoleOutput {
  * next poll to retry the same queued bytes.
  */
 export function createConsole(
+  workspace: string,
   id: string,
   transport: Pick<Transport, "invoke">,
   display: (bytes: Uint8Array) => Promise<void>,
@@ -46,7 +47,11 @@ export function createConsole(
   /** Sends one chunk of the input queue; false stops the flush loop. */
   async function writeChunk(): Promise<boolean> {
     const data = Array.from(pending.subarray(0, 8192));
-    const count = await transport.invoke<number>(COMMANDS.writeConsole, { id, data });
+    const count = await transport.invoke<number>(COMMANDS.writeConsole, {
+      workspace,
+      id,
+      data,
+    });
     if (disposed) return false;
     pending = pending.slice(count);
     if (count > 0) setError("write", null);
@@ -83,7 +88,11 @@ export function createConsole(
 
   /** Reads and displays one chunk; false stops the read loop. */
   async function readChunk(): Promise<boolean> {
-    const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, { id, offset });
+    const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, {
+      workspace,
+      id,
+      offset,
+    });
     if (disposed) return false;
     if (result.data.length) await display(Uint8Array.from(result.data));
     if (disposed) return false;
@@ -112,7 +121,7 @@ export function createConsole(
   async function resize(cols: number, rows: number) {
     if (disposed || done || !running) return;
     try {
-      await transport.invoke(COMMANDS.resizeConsole, { id, cols, rows });
+      await transport.invoke(COMMANDS.resizeConsole, { workspace, id, cols, rows });
       setError("resize", null);
     } catch (error) {
       setError("resize", String(error));

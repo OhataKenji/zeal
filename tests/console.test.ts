@@ -7,6 +7,7 @@ test("a successful output read clears its previous error and retries the same of
   const displayed: number[] = [];
   let fail = true;
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
@@ -36,6 +37,7 @@ test("successful reads do not hide failed input or resize operations", async () 
   let failWrite = true;
   let failResize = true;
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: async <T>(command: string) => {
@@ -71,6 +73,7 @@ test("output is delivered once in byte order, including split UTF-8", async () =
   const displayed: number[] = [];
   const offsets: number[] = [];
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
@@ -106,6 +109,7 @@ test("partial writes and backpressure keep key bytes in order", async () => {
   const received: number[] = [];
   let blocked = true;
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
@@ -139,6 +143,7 @@ test("closing a Console ignores late output without stopping the process", async
   let resolve!: (value: unknown) => void;
   const calls: string[] = [];
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: <T>(command: string) => {
@@ -172,6 +177,7 @@ test("completed Console drains its final output without further process operatio
     { data: [66, 67], offset: 3, done: true },
   ];
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: async <T>(command: string) => {
@@ -197,9 +203,42 @@ test("completed Console drains its final output without further process operatio
   assert.deepEqual(calls, ["read_console", "read_console"]);
 });
 
+test("read, write, and resize payloads carry the captured workspace and id", async () => {
+  const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const console = createConsole(
+    "/workspace-a",
+    "inv-a",
+    {
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        calls.push({ command, args: args ?? {} });
+        if (command === "write_console") return 1 as T;
+        if (command === "resize_console") return undefined as T;
+        return { data: [], offset: 0, done: false } as T;
+      },
+    },
+    async () => {},
+    (error) => {
+      assert.equal(error, null);
+    },
+  );
+  console.input(Uint8Array.of(66));
+  await console.poll();
+  await console.resize(80, 24);
+  await console.poll();
+  assert.deepEqual(
+    calls.map((call) => call.command),
+    ["write_console", "read_console", "resize_console", "read_console"],
+  );
+  for (const call of calls) {
+    assert.equal(call.args.workspace, "/workspace-a");
+    assert.equal(call.args.id, "inv-a");
+  }
+});
+
 test("process completion discards pending input under backpressure but keeps reading", async () => {
   const calls: string[] = [];
   const console = createConsole(
+    "/workspace",
     "owned",
     {
       invoke: async <T>(command: string) => {

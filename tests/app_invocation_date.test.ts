@@ -1,20 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AppState } from "../src/lib/types.ts";
+import type { AppState, WorkspaceState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
-const IDLE: AppState = {
-  besReady: false,
-  scope: { include: ["//app/..."] },
+const WS: WorkspaceState = {
   workspace: "/workspace",
-  bazel: "/bin/bazel",
+  scope: { include: ["//app/..."] },
   ingest: "idle",
   snapshotFetchedAt: null,
   lastError: null,
-  activeInvocation: null,
-  stopping: false,
-  invocationNote: null,
-  detailQuery: "idle",
+};
+
+const CORE: AppState = {
+  revision: 1,
+  besError: null,
+  besReady: true,
+  bazel: "/bin/bazel",
+  lastWorkspace: "/workspace",
+  workspaces: [WS],
+  invocations: [],
 };
 
 test("App renders workspace navigation and invocation history", async (t) => {
@@ -25,7 +29,8 @@ test("App renders workspace navigation and invocation history", async (t) => {
   function output(startedAt: number | undefined): string {
     Object.assign(app.view, {
       ready: true,
-      state: IDLE,
+      core: CORE,
+      state: WS,
       invocations: [{ id: "invocation", cmd: "build", pattern: "//app:app", startedAt }],
     });
     return render(App).body;

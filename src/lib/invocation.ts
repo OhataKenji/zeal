@@ -1,4 +1,4 @@
-import type { InvocationRecord, Section } from "./types.ts";
+import type { InvocationRecord, OwnedInvocation, Section } from "./types.ts";
 
 /** Display status and label for one invocation record. */
 export interface InvocationStatus {
@@ -9,8 +9,7 @@ export interface InvocationStatus {
 /** Resolves an invocation's result while preserving an unknown state for partial data. */
 export function invocationStatus(
   record: InvocationRecord | undefined,
-  running: string | null,
-  stopping = false,
+  execution?: OwnedInvocation,
 ): InvocationStatus {
   if (record?.exitCode !== undefined) {
     return record.exitCode === 0
@@ -20,8 +19,8 @@ export function invocationStatus(
           label: `✗ failed (exit ${record.exitCode})`,
         };
   }
-  if (record && record.id === running) {
-    return stopping
+  if (execution?.running) {
+    return execution.stopping
       ? { kind: "stopping", label: "■ stopping" }
       : { kind: "running", label: "● running" };
   }

@@ -30,7 +30,7 @@ pub use store::{
 use detail::{InvocationDetail, Section};
 use profile::Profile;
 use query::QueryOutput;
-use state::{AppStateDto, Core};
+use state::{AppStateDto, Core, OpenWorkspaceResult, OwnedInvocationDto};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,27 +41,31 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
-/// The current workspace target index. Events carry only `snapshot_fetched_at`,
-/// so the UI requests this once per change instead of on every state push.
+/// The target index of one registered workspace. Events carry only
+/// `snapshot_fetched_at`, so the UI requests this once per change instead of
+/// on every state push.
 #[tracing::instrument(target = "zeal::operations", name = "snapshot.get", skip_all)]
 #[tauri::command]
 async fn get_snapshot(
     core: State<'_, Arc<Core>>,
+    workspace: String,
 ) -> Result<Option<Arc<snapshot::TargetIndex>>, String> {
-    Ok(core
-        .state
-        .lock()
-        .expect("application state lock poisoned")
-        .snapshot
-        .clone())
+    let st = core.state.lock().expect("application state lock poisoned");
+    let ws = st.workspace_path(&workspace)?;
+    Ok(st
+        .workspaces
+        .get(&ws)
+        .and_then(|state| state.snapshot.clone()))
 }
 
-/// Load relationships for one target in the current target-list generation.
+/// Load relationships for one target in the workspace's target-list
+/// generation.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "target.detail.request", skip_all)]
 async fn get_target_detail(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     label: String,
     fetched_at: u64,
 ) -> Result<snapshot::TargetDetail, String> {
@@ -69,7 +73,7 @@ async fn get_target_detail(
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_detail(app, core, &label, fetched_at)
+        ingest::target_detail(app, core, &workspace, &label, fetched_at)
     })
     .await
     {
@@ -87,6 +91,7 @@ async fn get_target_detail(
 async fn get_target_outputs(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     label: String,
     fetched_at: u64,
 ) -> Result<ingest::TargetOutputs, String> {
@@ -94,7 +99,7 @@ async fn get_target_outputs(
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_outputs(app, core, &label, fetched_at)
+        ingest::target_outputs(app, core, &workspace, &label, fetched_at)
     })
     .await
     {
@@ -111,6 +116,7 @@ async fn get_target_outputs(
 async fn get_target_actions(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     label: String,
     fetched_at: u64,
 ) -> Result<actions::TargetActions, String> {
@@ -118,7 +124,7 @@ async fn get_target_actions(
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_actions(app, core, &label, fetched_at)
+        ingest::target_actions(app, core, &workspace, &label, fetched_at)
     })
     .await
     {
@@ -130,10 +136,10 @@ async fn get_target_actions(
     }
 }
 
-/// Open a directory as the Bazel workspace: validate it, resolve bazel, and
-/// start a background snapshot ingestion. Refused while an invocation is in
-/// flight: its
-/// process group belongs to the workspace it was started in.
+/// Register a directory as a Bazel workspace: validate it, canonicalize it,
+/// reuse or create its state entry, and save it as the last-workspace
+/// preference. It does not query; the caller refreshes explicitly. Running
+/// invocations in any workspace are unaffected.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "workspace.open", skip_all)]
 fn open_workspace(
@@ -141,7 +147,7 @@ fn open_workspace(
     core: State<Arc<Core>>,
     path: String,
     scope: scope::Scope,
-) -> Result<AppStateDto, String> {
+) -> Result<OpenWorkspaceResult, String> {
     let scope = scope.validated()?;
     let ws = expand_home(path.trim());
     if !ws.is_dir() {
@@ -150,42 +156,34 @@ fn open_workspace(
     if !workspace::is_workspace(&ws) {
         return Err("no MODULE.bazel / WORKSPACE at this path".to_string());
     }
-    let ws = std::fs::canonicalize(&ws).map_err(|error| error.to_string())?;
+    let ws = ws
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve {}: {e}", ws.display()))?;
     let bazel = workspace::resolve_bazel();
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        // Keep the busy check and workspace assignment atomic with any bazel
-        // invocation (ingest, invocation, editor query). Filesystem validation
-        // above holds no shared state.
-        if st.bazel_busy() {
-            return Err("cannot change workspace while bazel is busy".to_string());
-        }
         store::analytics::refresh_timezone();
-        st.console = None;
-        st.workspace = Some(ws.clone());
-        st.scope = scope.clone();
+        st.register_workspace(ws.clone(), scope.clone());
         st.bazel = bazel;
-        // A different workspace has no shared snapshot with the previous one.
-        st.snapshot = None;
-        st.last_error = None;
-        // The note can describe an invocation that was released without a
-        // confirmed exit, and it belongs to the workspace that invocation was
-        // started in.
-        st.invocation_note = None;
+        st.last_workspace = Some(ws.clone());
     }
     if let Ok(dir) = app.path().app_data_dir() {
         let _ = store::refresh_workspace(&dir, &ws);
         workspace::save(&dir, &ws, &scope);
     }
-    ingest::request(app.clone(), core.inner().clone())?;
-    Ok(core.dto())
+    core.emit(&app);
+    Ok(OpenWorkspaceResult {
+        workspace: ws.to_string_lossy().into_owned(),
+        state: core.dto(),
+    })
 }
 
-/// Manual refresh: re-run the query unless bazel is already busy.
+/// Manual refresh: re-run the target-list query for `workspace` unless that
+/// workspace already has one in flight.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "workspace.refresh", skip_all)]
-fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
-    ingest::request(app, core.inner().clone())
+fn refresh(app: AppHandle, core: State<Arc<Core>>, workspace: String) -> Result<(), String> {
+    ingest::request(app, core.inner().clone(), &workspace)
 }
 
 #[tauri::command]
@@ -201,40 +199,56 @@ async fn list_workspaces(app: AppHandle) -> Result<Vec<PathBuf>, String> {
     .map_err(|_| "workspace list worker failed".to_string())?
 }
 
-/// Start `bazel build|test|run <target>`. Fails while bazel is busy.
+/// Start `bazel build|test|run <target>` in `workspace`.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocation.start", skip_all)]
 fn start_invocation(
     app: AppHandle,
     core: State<Arc<Core>>,
+    workspace: String,
     cmd: String,
     pattern: String,
     arguments: Option<String>,
-) -> Result<InvocationRecord, String> {
+) -> Result<OwnedInvocationDto, String> {
+    let ws = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        st.workspace_path(&workspace)?
+    };
     runner::start(
         app,
         core.inner().clone(),
+        &ws,
         &cmd,
         &pattern,
         arguments.as_deref().unwrap_or_default(),
     )
 }
 
-/// Stop the active Bazel operation through the shared process lifecycle.
+/// Stop the owned invocation `id` in `workspace`.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocation.stop", skip_all)]
-fn stop_invocation(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
-    runner::stop(app, core.inner().clone())
+fn stop_invocation(
+    app: AppHandle,
+    core: State<Arc<Core>>,
+    workspace: String,
+    id: String,
+) -> Result<(), String> {
+    let ws = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        st.workspace_path(&workspace)?
+    };
+    runner::stop(app, core.inner().clone(), &ws, &id)
 }
 
-/// Run an ad-hoc `bazel query` from the query editor through the shared Bazel
-/// process slot. The blocking work is spawned so this command does not hold
+/// Run an ad-hoc `bazel query` from the query editor as its own owned
+/// invocation. The blocking work is spawned so this command does not hold
 /// the main thread for the whole query.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
 async fn run_query(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     expr: String,
     output: String,
     no_implicit_deps: bool,
@@ -244,7 +258,15 @@ async fn run_query(
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        query::run(app, core, &expr, &output, no_implicit_deps, no_tool_deps)
+        query::run(
+            app,
+            core,
+            &workspace,
+            &expr,
+            &output,
+            no_implicit_deps,
+            no_tool_deps,
+        )
     })
     .await
     {
@@ -259,45 +281,52 @@ async fn run_query(
 }
 
 #[tauri::command]
-fn write_console(core: State<Arc<Core>>, id: String, data: Vec<u8>) -> Result<usize, String> {
-    terminal::write(&core, &id, &data)
+fn write_console(
+    core: State<Arc<Core>>,
+    workspace: String,
+    id: String,
+    data: Vec<u8>,
+) -> Result<usize, String> {
+    terminal::write(&core, &workspace, &id, &data)
 }
 
 #[tauri::command]
-fn resize_console(core: State<Arc<Core>>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    terminal::resize(&core, &id, cols, rows)
+fn resize_console(
+    core: State<Arc<Core>>,
+    workspace: String,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terminal::resize(&core, &workspace, &id, cols, rows)
 }
 
 #[tauri::command]
 async fn read_console(
     core: State<'_, Arc<Core>>,
+    workspace: String,
     id: String,
     offset: u64,
 ) -> Result<console::Output, String> {
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        console::read(&core, &id, offset).map_err(|e| e.to_string())
+        console::read(&core, &workspace, &id, offset).map_err(|e| e.to_string())
     })
     .await
     .map_err(|_| "terminal read worker failed".to_string())?
 }
 
-/// Invocations of the open workspace, newest first, at most
-/// [`store::LIST_LIMIT`].
+/// Invocations of `workspace`, newest first, at most [`store::LIST_LIMIT`].
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocations.list", skip_all)]
 async fn list_invocations(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
 ) -> Result<Vec<InvocationRecord>, String> {
-    let Some(ws) = core
-        .state
-        .lock()
-        .expect("application state lock poisoned")
-        .workspace
-        .clone()
-    else {
-        return Ok(Vec::new());
+    let ws = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        st.workspace_path(&workspace)?
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -307,20 +336,18 @@ async fn list_invocations(
     .map_err(|_| "history list worker failed".to_string())?
 }
 
-/// Aggregate only the core-owned workspace; caller cannot name a DB or root.
+/// Aggregate only a registered workspace; caller cannot name a DB or root.
 #[tauri::command]
 async fn get_analytics(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     filter: store::analytics::Filter,
 ) -> Result<store::analytics::Analytics, String> {
-    let ws = core
-        .state
-        .lock()
-        .expect("application state lock poisoned")
-        .workspace
-        .clone()
-        .ok_or_else(|| "no workspace".to_string())?;
+    let ws = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        st.workspace_path(&workspace)?
+    };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         store::analytics::query(&data, &ws, filter).map_err(|e| e.to_string())
@@ -359,19 +386,15 @@ impl Drop for ArtifactWorker {
 async fn get_invocation(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     id: String,
 ) -> Result<InvocationDetail, String> {
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
-    let Some(ws) = core
-        .state
-        .lock()
-        .expect("application state lock poisoned")
-        .workspace
-        .clone()
-    else {
-        return Err("no workspace".to_string());
+    let ws = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        st.workspace_path(&workspace)?
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "invocation detail worker busy")?;
@@ -394,19 +417,15 @@ async fn get_invocation(
 async fn get_invocation_profile(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    workspace: String,
     id: String,
 ) -> Result<Section<Profile>, String> {
     let id = uuid::Uuid::parse_str(&id)
         .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
-    let Some(ws) = core
-        .state
-        .lock()
-        .expect("application state lock poisoned")
-        .workspace
-        .clone()
-    else {
-        return Err("no workspace".to_string());
+    let ws = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        st.workspace_path(&workspace)?
     };
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
@@ -429,18 +448,20 @@ fn expand_home(path: &str) -> PathBuf {
 }
 
 fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
-    // Reopen the last workspace, if it is still a workspace.
+    // Re-register the last workspace, if it is still a workspace. Its saved
+    // scope restores with it; the caller refreshes explicitly.
     if let Ok(dir) = app.path().app_data_dir()
-        && let Some(ws) = workspace::load_saved(&dir).filter(|w| workspace::is_workspace(&w.path))
+        && let Some(saved) =
+            workspace::load_saved(&dir).filter(|w| workspace::is_workspace(&w.path))
+        && let Ok(ws) = saved.path.canonicalize()
     {
-        let _ = store::refresh_workspace(&dir, &ws.path);
+        let _ = store::refresh_workspace(&dir, &ws);
         {
             let mut st = core.state.lock().expect("application state lock poisoned");
             store::analytics::refresh_timezone();
-            st.workspace = Some(ws.path);
-            st.scope = ws.scope;
+            st.register_workspace(ws.clone(), saved.scope);
+            st.last_workspace = Some(ws);
         }
-        let _ = ingest::request(app.handle().clone(), core);
     }
 }
 

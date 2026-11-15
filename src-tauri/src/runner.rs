@@ -2,19 +2,19 @@
 //! Terminal output is saved independently of the Console view.
 //! Build history is received by the app-owned BES, independently of process exit.
 //!
-//! Stop for active Bazel work uses its process group: SIGINT, then SIGKILL
-//! after the shared grace period.
-//! An unknown exit releases the slot. Only the currently held operation may be
-//! signalled; descendants are not supervised.
+//! Stop for an owned invocation uses its process group: SIGINT, then SIGKILL
+//! after the shared grace period. An unknown exit releases the process slot.
+//! Only the invocation's own entry may be signalled; descendants are not
+//! supervised.
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
-use crate::state::{ActiveInvocation, ConsoleSession, Core, CoreState};
-use crate::store::InvocationRecord;
+use crate::state::{ActiveInvocation, Core, CoreState, OwnedInvocation, now_millis, owned_dto};
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
 use std::io;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -24,27 +24,57 @@ use tauri::AppHandle;
 /// Time SIGINT gets to end the invocation before its group is killed.
 const STOP_GRACE: Duration = Duration::from_secs(3);
 /// Time SIGKILL gets to end the invocation before its exit is called unknown
-/// and its slot is released.
+/// and its process slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
-/// App exit gives a live child at most `EXIT_GRACE` of polling before SIGKILL.
-/// A reaped child's in-progress save is joined separately.
+/// App exit gives live children at most `EXIT_GRACE` of polling before
+/// SIGKILL, shared across every owned invocation. A reaped child's in-progress
+/// save is joined separately.
 const EXIT_GRACE: Duration = Duration::from_secs(1);
 const EXIT_POLL: Duration = Duration::from_millis(25);
 
 /// Shown when the group was killed but no exit was confirmed.
 const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
+/// Shown when Bazel exits 9 on build/test: another command holds the
+/// output_base lock. `run` is excluded because its program may exit 9 itself.
+const BUSY_NOTE: &str =
+    "Bazel is busy (output_base lock held); retry when the other command finishes";
+
 pub(crate) enum Output<'a> {
     Terminal(&'a std::fs::File),
     Pipes,
 }
 
+/// What one spawned operation is: where it runs and what it runs. The id is
+/// the invocation map key, so it must be fresh for every launch.
+pub(crate) struct InvocationMeta<'a> {
+    pub workspace: &'a Path,
+    pub cmd: &'a str,
+    pub pattern: &'a str,
+    pub id: &'a str,
+}
+
+/// Spawn `command` as the owned invocation `meta` describes and register it
+/// under the same lock, so shutdown cannot miss an owned child. Only shutdown
+/// and a duplicate id are rejected; other active invocations never block.
 pub(crate) fn spawn(
     state: &mut CoreState,
     command: &mut Command,
-    id: &str,
+    meta: InvocationMeta<'_>,
     output: Output<'_>,
 ) -> io::Result<(Child, Option<crate::terminal::Capture>)> {
+    if state.shutting_down {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "application is shutting down",
+        ));
+    }
+    if state.invocations.contains_key(meta.id) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "invocation id already in use",
+        ));
+    }
     let (child, terminal, capture) = match output {
         Output::Terminal(log) => {
             let (child, terminal, capture) = crate::terminal::spawn(command, log)?;
@@ -61,93 +91,94 @@ pub(crate) fn spawn(
             None,
         ),
     };
-    state.active_invocation = Some(ActiveInvocation {
-        id: id.into(),
-        terminal,
-        pgid: Some(child.id() as i32),
-        stopping: false,
-        stop_started: None,
-    });
-    state.invocation_note = None;
+    state.invocations.insert(
+        meta.id.to_string(),
+        OwnedInvocation {
+            workspace: meta.workspace.to_path_buf(),
+            cmd: meta.cmd.to_string(),
+            pattern: meta.pattern.to_string(),
+            started_at: now_millis(),
+            process: Some(ActiveInvocation {
+                terminal,
+                pgid: Some(child.id() as i32),
+                stop_started: None,
+            }),
+            console: None,
+            process_exit_code: None,
+            note: None,
+        },
+    );
     Ok((child, capture))
 }
 
-/// Start an invocation in the open workspace and return its record. The
-/// invocation finishes in the background; target data is refreshed only on
-/// request.
+/// Start an invocation in `ws` and return its DTO. The invocation finishes in
+/// the background; target data is refreshed only on request.
 pub fn start(
     app: AppHandle,
     core: Arc<Core>,
+    ws: &Path,
     cmd: &str,
     pattern: &str,
     arguments: &str,
-) -> Result<InvocationRecord, String> {
+) -> Result<crate::state::OwnedInvocationDto, String> {
     validate_cmd(cmd)?;
     validate_pattern(pattern)?;
     let arguments = parse_arguments(arguments)?;
     let mut st = core.state.lock().expect("application state lock poisoned");
-    let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
-        return Err("no workspace or bazel".to_string());
-    };
-    if st.bazel_busy() {
-        return Err("bazel is busy".to_string());
+    if !st.workspaces.contains_key(ws) {
+        return Err("workspace is not open".to_string());
     }
+    let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
     let endpoint = receiver_endpoint(&st)?.to_string();
-    // Held across the spawn so the busy check and slot stay one atomic step.
+    // Held across the spawn so registration and shutdown stay one atomic step.
     let id = uuid::Uuid::new_v4().to_string();
     let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
-    let rec = InvocationRecord {
-        id,
-        workspace: None,
-        cmd: None,
-        pattern: None,
-        started_at: None,
-        finished_at: None,
-        exit_code: None,
-    };
     // Its own process group: a stop reaches bazel and whatever it started.
     let (mut child, capture) = spawn(
         &mut st,
         Command::new(&bazel)
-            .args(argv(cmd, pattern, &arguments, &endpoint, &rec.id))
-            .current_dir(&ws),
-        &rec.id,
+            .args(argv(cmd, pattern, &arguments, &endpoint, &id))
+            .current_dir(ws),
+        InvocationMeta {
+            workspace: ws,
+            cmd,
+            pattern,
+            id: &id,
+        },
         Output::Terminal(&log),
     )
     .map_err(|e| format!("failed to spawn {}: {e}", bazel.display()))?;
     let capture = capture.expect("terminal output capture");
-    st.console = Some(ConsoleSession {
-        id: rec.id.clone().into(),
-        workspace: ws,
-        log,
-        finished: false,
-    });
+    st.invocations
+        .get_mut(&id)
+        .expect("just registered")
+        .console = Some(log);
+    let dto = owned_dto(&id, st.invocations.get(&id).expect("just registered"));
     drop(st);
     core.emit(&app);
 
-    let id = rec.id.clone();
     thread::spawn(move || {
-        let _slot = BazelSlot {
+        let _guard = InvocationGuard {
             core: &core,
             id: &id,
             emit: || core.emit(&app),
         };
-        // Drop capture before the slot on unwind, so Console completion can
+        // Drop capture before the guard on unwind, so Console completion can
         // never precede the capture worker's final drain.
         let mut capture = capture;
         let exit = wait(&core, &id, || poll_capture(&mut child, &capture));
-        // Reap already revoked signal ownership. Keep the slot until terminal
+        // Reap already revoked signal ownership. Keep the entry until terminal
         // capture ends; build history is finalized only by BES.
         let captured = capture.finish();
         let mut st = core.state.lock().expect("application state lock poisoned");
-        finish_console(&mut st, &id);
         if apply_reap(&mut st, &id, &exit)
             && let Err(error) = captured
+            && let Some(invocation) = st.invocations.get_mut(&id)
         {
-            st.invocation_note = Some(format!("Failed to save the terminal output: {error}"));
+            invocation.note = Some(format!("Failed to save the terminal output: {error}"));
         }
     });
-    Ok(rec)
+    Ok(dto)
 }
 
 /// A capture failure must stop the still-owned child before its output blocks.
@@ -170,42 +201,69 @@ fn receiver_endpoint(st: &CoreState) -> Result<&str, String> {
     })
 }
 
-fn finish_console(st: &mut CoreState, id: &str) {
-    if let Some(console) = &mut st.console
-        && console.id.as_str() == id
-    {
-        console.finished = true;
-    }
-}
-
-/// Stop the active Bazel process through the shared process-group lifecycle.
-pub fn stop(app: AppHandle, core: Arc<Core>) -> Result<(), String> {
-    begin_stop(&mut core.state.lock().expect("application state lock poisoned"));
+/// Stop the owned invocation `id` in `ws` through the process-group lifecycle.
+pub fn stop(app: AppHandle, core: Arc<Core>, ws: &Path, id: &str) -> Result<(), String> {
+    begin_stop(
+        &mut core.state.lock().expect("application state lock poisoned"),
+        ws,
+        id,
+    )?;
     core.emit(&app);
     Ok(())
 }
 
-fn begin_stop(st: &mut CoreState) {
-    let Some(invocation) = st.active_invocation.as_mut() else {
-        return;
+/// Signal the invocation's group once. A repeated stop for the same entry is
+/// a no-op; finished, reaped or foreign entries are rejected.
+fn begin_stop(st: &mut CoreState, ws: &Path, id: &str) -> Result<(), String> {
+    let invocation = st
+        .invocations
+        .get_mut(id)
+        .ok_or_else(|| "no such invocation".to_string())?;
+    if invocation.workspace != ws {
+        return Err("invocation belongs to another workspace".to_string());
+    }
+    let process = invocation
+        .process
+        .as_mut()
+        .ok_or_else(|| "invocation already finished".to_string())?;
+    if process.stop_started.is_some() {
+        return Ok(());
+    }
+    let Some(pgid) = process.pgid else {
+        return Err("invocation is not running".to_string());
     };
-    let Some(pgid) = invocation.pgid.filter(|_| !invocation.stopping) else {
-        return;
-    };
-    invocation.stopping = true;
-    invocation.stop_started = Some(Instant::now());
-    st.invocation_note = None;
-    if let Err(e) = signal_invocation(st, pgid, Signal::INT) {
+    process.stop_started = Some(Instant::now());
+    invocation.note = None;
+    if let Err(e) = signal_process(process, pgid, Signal::INT) {
         log::warn!("SIGINT to invocation group failed: {e}");
     }
+    Ok(())
 }
 
-pub(crate) fn wait(
-    core: &Core,
-    id: &str,
-    poll: impl FnMut() -> io::Result<Option<i32>>,
-) -> io::Result<i32> {
+fn wait(core: &Core, id: &str, poll: impl FnMut() -> io::Result<Option<i32>>) -> io::Result<i32> {
     observe_process(core, id, poll, STOP_GRACE, STOP_CONFIRM)
+}
+
+pub(crate) fn wait_query(core: &Core, id: &str, child: &mut Child) -> Result<i32, String> {
+    let waited = wait(core, id, || {
+        child
+            .try_wait()
+            .map(|status| status.map(|status| status.code().unwrap_or(-1)))
+    });
+    let mut st = core.state.lock().expect("application state lock poisoned");
+    let stopping = st
+        .invocations
+        .get(id)
+        .and_then(|invocation| invocation.process.as_ref())
+        .is_some_and(|process| process.stop_started.is_some());
+    apply_reap(&mut st, id, &waited);
+    drop(st);
+    let exit = waited.map_err(|error| format!("failed to wait on query: {error}"))?;
+    if stopping {
+        Err("Query stopped".to_string())
+    } else {
+        Ok(exit)
+    }
 }
 
 /// Poll and signal under the same lock. Once try_wait reaps the child, its PID
@@ -221,39 +279,37 @@ fn observe_process(
     let mut killed = false;
     loop {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        if !still_held(&st, id) {
+        let Some(process) = st
+            .invocations
+            .get_mut(id)
+            .and_then(|invocation| invocation.process.as_mut())
+        else {
             return Err(io::Error::other("invocation no longer owned"));
-        }
+        };
         match poll() {
             Ok(Some(code)) => {
-                if let Some(invocation) = st.active_invocation.as_mut() {
-                    invocation.pgid = None;
-                }
+                process.pgid = None;
                 return Ok(code);
             }
             Ok(None) => (),
             Err(error) => {
                 // A failed wait can mean another reaper already consumed the
                 // child. Its former PID is no longer safe to signal.
-                if let Some(invocation) = st.active_invocation.as_mut() {
-                    invocation.pgid = None;
-                }
+                process.pgid = None;
                 return Err(error);
             }
         }
-        if let Some(started) = st
-            .active_invocation
-            .as_ref()
-            .and_then(|invocation| invocation.stop_started)
-        {
+        if let Some(started) = process.stop_started {
             if started.elapsed() >= grace && !killed {
-                kill_invocation(&st);
+                if let Some(pgid) = process.pgid
+                    && let Err(error) = signal_process(process, pgid, Signal::KILL)
+                {
+                    log::warn!("SIGKILL to invocation group failed: {error}");
+                }
                 killed = true;
             }
             if started.elapsed() >= grace + confirm {
-                if let Some(invocation) = st.active_invocation.as_mut() {
-                    invocation.pgid = None;
-                }
+                process.pgid = None;
                 return Err(io::Error::new(io::ErrorKind::TimedOut, STOP_UNCONFIRMED));
             }
         }
@@ -262,28 +318,36 @@ fn observe_process(
     }
 }
 
-/// A panic in observation or saving must release the slot and wake app exit.
-/// Normal completion publishes after the slot is released.
-pub(crate) struct BazelSlot<'a, F: Fn()> {
+/// A panic in observation or saving must release the process slot and wake app
+/// exit. Normal completion publishes after the slot is released.
+pub(crate) struct InvocationGuard<'a, F: Fn()> {
     pub(crate) core: &'a Core,
     pub(crate) id: &'a str,
     pub(crate) emit: F,
 }
-impl<F: Fn()> Drop for BazelSlot<'_, F> {
+/// The owning worker finished: release the process slot. A console-less
+/// entry leaves nothing behind; a console keeps its entry readable.
+fn release_invocation(st: &mut CoreState, id: &str) {
+    let Some(invocation) = st.invocations.get_mut(id) else {
+        return;
+    };
+    let owned = invocation.process.take().is_some();
+    if owned && thread::panicking() {
+        invocation.note = Some("Failed to finish processing the invocation result".into());
+    }
+    if invocation.console.is_none() {
+        st.invocations.remove(id);
+    }
+}
+
+impl<F: Fn()> Drop for InvocationGuard<'_, F> {
     fn drop(&mut self) {
         let mut st = self
             .core
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        finish_console(&mut st, self.id);
-        let held = still_held(&st, self.id);
-        if held {
-            clear_invocation(&mut st);
-        }
-        if held && thread::panicking() {
-            st.invocation_note = Some("Failed to finish processing the invocation result".into());
-        }
+        release_invocation(&mut st, self.id);
         self.core.invocation_finished.notify_all();
         drop(st);
         // Avoid a second panic from an event emission while unwinding.
@@ -293,109 +357,125 @@ impl<F: Fn()> Drop for BazelSlot<'_, F> {
     }
 }
 
-/// Bound process stopping to the short exit grace. A child already reaped has
-/// nothing left to signal; wait for its in-progress save to release the slot.
-pub fn exit_stop(core: &Core) {
-    let id = {
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        begin_stop(&mut st);
-        st.active_invocation
-            .as_ref()
-            .map(|invocation| invocation.id.clone())
+/// Whether `id` still owns a process: only that entry's group may be
+/// signalled and only its process slot may be released.
+fn process_owned(st: &CoreState, id: &str) -> bool {
+    st.invocations
+        .get(id)
+        .is_some_and(|invocation| invocation.process.is_some())
+}
+
+/// Apply the reap of `id` to its entry and return whether this reap belongs
+/// to a process still owned there. A `wait` error leaves the exit unknown,
+/// with the reason in the note. Other invocations are never touched.
+fn apply_reap(st: &mut CoreState, id: &str, exit: &io::Result<i32>) -> bool {
+    let Some(invocation) = st.invocations.get_mut(id) else {
+        return false;
     };
-    let Some(id) = id else {
-        return;
+    let Some(process) = invocation.process.as_mut() else {
+        return false;
     };
-    let deadline = Instant::now() + EXIT_GRACE;
-    loop {
-        let st = core.state.lock().expect("application state lock poisoned");
-        if !still_held(&st, &id) {
-            return;
-        }
-        if st
-            .active_invocation
-            .as_ref()
-            .is_some_and(|invocation| invocation.pgid.is_none())
+    process.pgid = None;
+    invocation.process_exit_code = exit.as_ref().ok().copied();
+    invocation.note = match exit {
+        Ok(9)
+            if matches!(
+                invocation.cmd.as_str(),
+                "build" | "test" | "query" | "cquery" | "aquery"
+            ) =>
         {
-            wait_for_save(core, st, &id);
-            return;
+            Some(BUSY_NOTE.to_string())
         }
-        if Instant::now() >= deadline {
-            kill_invocation(&st);
-            return;
+        Ok(_) => None,
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => Some(STOP_UNCONFIRMED.to_string()),
+        Err(error) => Some(format!("Could not confirm the exit: {error}")),
+    };
+    true
+}
+
+fn kill_invocation_groups(st: &CoreState, ids: &[String]) {
+    for id in ids {
+        let Some(process) = st
+            .invocations
+            .get(id)
+            .and_then(|invocation| invocation.process.as_ref())
+        else {
+            continue;
+        };
+        let Some(pgid) = process.pgid else {
+            continue;
+        };
+        if let Err(error) = signal_process(process, pgid, Signal::KILL) {
+            log::warn!("SIGKILL to invocation group failed: {error}");
         }
-        drop(st);
-        thread::sleep(EXIT_POLL);
     }
 }
 
-fn wait_for_save(core: &Core, mut state: std::sync::MutexGuard<'_, CoreState>, id: &str) {
-    while still_held(&state, id) {
-        state = core
+fn revoke_unconfirmed_groups(st: &mut CoreState, ids: &[String]) {
+    for id in ids {
+        if let Some(invocation) = st.invocations.get_mut(id)
+            && let Some(process) = invocation.process.as_mut()
+            && process.pgid.take().is_some()
+        {
+            invocation.note = Some(STOP_UNCONFIRMED.to_string());
+        }
+    }
+}
+
+fn interrupt_invocations(st: &mut CoreState) -> Vec<String> {
+    st.shutting_down = true;
+    let mut ids = Vec::new();
+    for (id, invocation) in st.invocations.iter_mut() {
+        let Some(process) = invocation.process.as_mut() else {
+            continue;
+        };
+        ids.push(id.clone());
+        let Some(pgid) = process.pgid.filter(|_| process.stop_started.is_none()) else {
+            continue;
+        };
+        process.stop_started = Some(Instant::now());
+        invocation.note = None;
+        if let Err(e) = signal_process(process, pgid, Signal::INT) {
+            log::warn!("SIGINT to invocation group failed: {e}");
+        }
+    }
+    ids
+}
+
+/// Bound process stopping to the short exit grace, shared across every owned
+/// invocation: one common deadline, not one per child. Children already
+/// reaped have nothing left to signal; their in-progress saves are joined
+/// through the condvar. New starts are rejected by `shutting_down`.
+pub fn exit_stop(core: &Core) {
+    let ids = {
+        let mut st = core.state.lock().expect("application state lock poisoned");
+        interrupt_invocations(&mut st)
+    };
+    if ids.is_empty() {
+        return;
+    }
+    let kill_at = Instant::now() + EXIT_GRACE;
+    let finish_at = kill_at + STOP_CONFIRM;
+    let mut killed = false;
+    loop {
+        let mut st = core.state.lock().expect("application state lock poisoned");
+        if ids.iter().all(|id| !process_owned(&st, id)) {
+            return;
+        }
+        let now = Instant::now();
+        if now >= kill_at && !killed {
+            kill_invocation_groups(&st, &ids);
+            killed = true;
+        }
+        if now >= finish_at {
+            revoke_unconfirmed_groups(&mut st, &ids);
+            return;
+        }
+        let _ = core
             .invocation_finished
-            .wait(state)
+            .wait_timeout(st, EXIT_POLL)
             .unwrap_or_else(|error| error.into_inner());
     }
-}
-
-fn kill_invocation(state: &CoreState) {
-    if let Some(pgid) = state
-        .active_invocation
-        .as_ref()
-        .and_then(|invocation| invocation.pgid)
-        && let Err(error) = signal_invocation(state, pgid, Signal::KILL)
-    {
-        log::warn!("SIGKILL to invocation group failed: {error}");
-    }
-}
-
-/// Whether `id` is still the invocation in flight: only that invocation's
-/// group may be signalled and only its slot may be released.
-fn still_held(st: &CoreState, id: &str) -> bool {
-    st.active_invocation
-        .as_ref()
-        .is_some_and(|invocation| invocation.id.as_str() == id)
-}
-
-/// Give up on the invocation `id` after an unconfirmed kill: release its slot
-/// and put up the note that says the exit is unknown. Returns whether it did;
-/// a successor invocation in the slot is never touched.
-fn give_up(st: &mut CoreState, id: &str) -> bool {
-    if !still_held(st, id) {
-        return false;
-    }
-    clear_invocation(st);
-    st.invocation_note = Some(STOP_UNCONFIRMED.to_string());
-    true
-}
-
-/// Apply the reap of `id` to the state and return whether this reap belongs to
-/// the invocation still holding the slot. A `wait` error leaves the process
-/// exit unknown, with the reason in the note. A successor invocation is never
-/// touched.
-fn apply_reap(st: &mut CoreState, id: &str, exit: &std::io::Result<i32>) -> bool {
-    if !still_held(st, id) {
-        return false;
-    }
-    if exit
-        .as_ref()
-        .is_err_and(|error| error.kind() == io::ErrorKind::TimedOut)
-    {
-        return give_up(st, id);
-    }
-    clear_invocation(st);
-    st.invocation_note = match exit {
-        Ok(_) => None,
-        Err(e) => Some(format!("Could not confirm the exit: {e}")),
-    };
-    true
-}
-
-/// Clear the invocation slot: nothing is in flight, nothing is ours to
-/// signal. The note is the caller's: a recorded exit clears it, an unknown one
-/// sets it.
-fn clear_invocation(st: &mut CoreState) {
-    st.active_invocation = None;
 }
 
 /// An invocation's process group must not address the caller's group (0) or
@@ -416,11 +496,12 @@ pub(crate) fn signal_group(pgid: i32, signal: Signal) -> io::Result<()> {
     Ok(process::kill_process_group(process_group(pgid)?, signal)?)
 }
 
-fn signal_invocation(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()> {
-    if let Some(foreground) = st
-        .active_invocation
+/// Signal `process`'s session group, plus its terminal's foreground job
+/// group when that differs — the same reach the single slot had.
+fn signal_process(process: &ActiveInvocation, pgid: i32, signal: Signal) -> io::Result<()> {
+    if let Some(foreground) = process
+        .terminal
         .as_ref()
-        .and_then(|invocation| invocation.terminal.as_ref())
         .and_then(crate::terminal::Control::foreground_group)
         && foreground != pgid
     {
@@ -432,29 +513,20 @@ fn signal_invocation(st: &CoreState, pgid: i32, signal: Signal) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{OwnedInvocation, WorkspaceState};
     use crate::store;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    fn held_id(st: &CoreState) -> Option<&str> {
-        st.active_invocation
-            .as_ref()
-            .map(|invocation| invocation.id.as_str())
+    const WS: &str = "/ws";
+
+    fn register_ws(st: &mut CoreState, ws: &Path) {
+        st.workspaces
+            .entry(ws.to_path_buf())
+            .or_insert_with(|| WorkspaceState::new(crate::scope::Scope::default()));
     }
 
-    fn held_pgid(st: &CoreState) -> Option<i32> {
-        st.active_invocation
-            .as_ref()
-            .and_then(|invocation| invocation.pgid)
-    }
-
-    fn is_stopping(st: &CoreState) -> bool {
-        st.active_invocation
-            .as_ref()
-            .is_some_and(|invocation| invocation.stopping)
-    }
-
-    /// The state `start` leaves around a spawned child: its invocation holds
-    /// the slot and a console session exists under the same id.
+    /// The state `start` leaves around a spawned child: its invocation entry
+    /// owns the process and a console session under the same id.
     fn hold_invocation(
         core: &Core,
         ws: &Path,
@@ -463,21 +535,150 @@ mod tests {
         pgid: i32,
         log: std::fs::File,
     ) {
+        let ws = &ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
         let mut state = core.state.lock().unwrap();
-        state.workspace = Some(ws.to_path_buf());
-        state.active_invocation = Some(ActiveInvocation {
-            id: id.into(),
-            terminal: Some(terminal),
-            pgid: Some(pgid),
-            stopping: false,
-            stop_started: None,
+        register_ws(&mut state, ws);
+        state.invocations.insert(
+            id.to_string(),
+            OwnedInvocation {
+                workspace: ws.to_path_buf(),
+                cmd: "build".to_string(),
+                pattern: "//pkg:b".to_string(),
+                started_at: 1,
+                process: Some(ActiveInvocation {
+                    terminal: Some(terminal),
+                    pgid: Some(pgid),
+                    stop_started: None,
+                }),
+                console: Some(log),
+                process_exit_code: None,
+                note: None,
+            },
+        );
+    }
+
+    /// Finish what a worker's guard drop does: release the process slot after
+    /// `apply_reap` already revoked signal ownership.
+    fn release_process(core: &Core, id: &str) {
+        drop(InvocationGuard {
+            core,
+            id,
+            emit: || (),
         });
-        state.console = Some(ConsoleSession {
-            id: id.into(),
-            workspace: ws.to_path_buf(),
-            log,
-            finished: false,
-        });
+    }
+
+    /// Spawn through the production path so the invocation owns its process,
+    /// terminal and console exactly as `start` leaves them.
+    fn spawn_gui_child(
+        core: &Core,
+        command: &mut Command,
+        meta: InvocationMeta<'_>,
+    ) -> (Child, crate::terminal::Capture, std::fs::File) {
+        let log = crate::terminal::session_log().unwrap();
+        let read_log = log.try_clone().unwrap();
+        let mut st = core.state.lock().unwrap();
+        register_ws(&mut st, meta.workspace);
+        let id = meta.id.to_string();
+        let (child, capture) =
+            spawn(&mut st, command, meta, Output::Terminal(&log)).expect("gui child spawn");
+        st.invocations.get_mut(&id).unwrap().console = Some(log);
+        drop(st);
+        (child, capture.expect("terminal capture"), read_log)
+    }
+
+    fn console_text(core: &Core, ws: &Path, id: &str) -> String {
+        let console =
+            serde_json::to_value(crate::console::read(core, ws.to_str().unwrap(), id, 0).unwrap())
+                .unwrap();
+        let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    fn wait_for_console_marker(core: &Core, ws: &Path, id: &str, marker: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !console_text(core, ws, id).contains(marker) {
+            assert!(Instant::now() < deadline, "{id} never printed {marker}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn assert_drained(core: &Core, ids: &[&str]) {
+        let st = core.state.lock().unwrap();
+        for id in ids {
+            let invocation = &st.invocations[*id];
+            assert!(invocation.process.is_none(), "{id} still owns a process");
+            assert!(invocation.console.is_some(), "{id} console lost");
+        }
+    }
+
+    fn assert_no_foreign_marker(id: &str, text: &str, entries: &[(&str, &str)], own: usize) {
+        for (position, (_, other_marker)) in entries.iter().enumerate() {
+            assert!(
+                position == own || !text.contains(other_marker),
+                "{id} contains {other_marker}: {text}"
+            );
+        }
+    }
+
+    fn assert_console_isolated(core: &Core, ws: &Path, entries: &[(&str, &str)]) {
+        for (index, (id, marker)) in entries.iter().enumerate() {
+            let text = console_text(core, ws, id);
+            assert!(text.contains(marker), "{id}: {text}");
+            assert_no_foreign_marker(id, &text, entries, index);
+        }
+    }
+
+    fn assert_group_dead(pgid: i32) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while group_alive(pgid) {
+            assert!(Instant::now() < deadline, "group {pgid} still has members");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// An owned process without console output, as queries register.
+    fn hold_process(core: &Core, ws: &Path, id: &str, pgid: Option<i32>) {
+        let ws = &ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+        let mut state = core.state.lock().unwrap();
+        register_ws(&mut state, ws);
+        state.invocations.insert(
+            id.to_string(),
+            OwnedInvocation {
+                workspace: ws.to_path_buf(),
+                cmd: "query".to_string(),
+                pattern: "//pkg:*".to_string(),
+                started_at: 1,
+                process: Some(ActiveInvocation {
+                    terminal: None,
+                    pgid,
+                    stop_started: None,
+                }),
+                console: None,
+                process_exit_code: None,
+                note: None,
+            },
+        );
+    }
+
+    fn held_pgid(st: &CoreState, id: &str) -> Option<i32> {
+        st.invocations
+            .get(id)
+            .and_then(|invocation| invocation.process.as_ref())
+            .and_then(|process| process.pgid)
+    }
+
+    fn is_stopping(st: &CoreState, id: &str) -> bool {
+        st.invocations
+            .get(id)
+            .and_then(|invocation| invocation.process.as_ref())
+            .is_some_and(|process| process.stop_started.is_some())
+    }
+
+    fn process_count(st: &CoreState) -> usize {
+        st.invocations
+            .values()
+            .filter(|invocation| invocation.process.is_some())
+            .count()
     }
 
     use std::io::{BufRead, BufReader};
@@ -560,10 +761,11 @@ mod tests {
     fn argv_has_the_command_one_pattern_and_the_observation_flags() {
         for (cmd, pattern) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
             let args = argv(cmd, pattern, &[], "grpc://127.0.0.1:12345", "abc");
-            assert_eq!(args[0], cmd);
+            assert_eq!(args[0], "--noblock_for_lock");
+            assert_eq!(args[1], cmd);
             assert_eq!(args.last().unwrap(), pattern);
             assert_eq!(
-                &args[1..args.len() - 1],
+                &args[2..args.len() - 1],
                 [
                     "--bes_backend=grpc://127.0.0.1:12345",
                     "--bes_proxy=",
@@ -601,6 +803,7 @@ mod tests {
         let temp = LogDir::new();
         let ws = temp.0.join("workspace");
         fs::create_dir(&ws).unwrap();
+        let ws = ws.canonicalize().unwrap();
         let data = temp.0.join("data");
         let id = uuid::Uuid::new_v4().to_string();
         let log = crate::terminal::session_log().unwrap();
@@ -615,34 +818,65 @@ mod tests {
         capture.finish().unwrap();
         {
             let mut state = core.state.lock().unwrap();
-            finish_console(&mut state, &id);
             assert!(apply_reap(&mut state, &id, &exit));
-            begin_stop(&mut state);
-            assert!(!is_stopping(&state));
+            assert!(begin_stop(&mut state, &ws, &id).is_err());
         }
+        release_process(&core, &id);
         assert!(store::read_record(&data, &ws, &id).is_err());
-        assert!(crate::terminal::resize(&core, &id, 80, 24).is_ok());
-        assert_eq!(core.dto().console_invocation.as_deref(), Some(id.as_str()));
-        assert_saved_console(&core, &id, "startup failed\r\n");
+        assert!(crate::terminal::resize(&core, ws.to_str().unwrap(), &id, 80, 24).is_ok());
+        let console = serde_json::to_value(
+            crate::console::read(&core, ws.to_str().unwrap(), &id, 0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(console["done"], true);
+        let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "startup failed\r\n");
     }
 
+    /// A stale worker can never mark another invocation's console finished:
+    /// completion is the entry's own released process slot.
     #[test]
-    fn an_old_capture_cannot_finish_or_restore_a_new_console() {
+    fn console_completion_follows_the_entries_own_process_slot() {
         let core = Core::new();
-        let mut state = core.state.lock().unwrap();
-        state.console = Some(ConsoleSession {
-            id: "new".into(),
-            workspace: Path::new("/workspace").into(),
-            log: crate::terminal::session_log().unwrap(),
-            finished: false,
-        });
-        finish_console(&mut state, "old");
-        assert!(!state.console.as_ref().unwrap().finished);
-        finish_console(&mut state, "new");
-        assert!(state.console.as_ref().unwrap().finished);
-        state.console = None;
-        finish_console(&mut state, "new");
-        assert!(state.console.is_none());
+        let ws = PathBuf::from(WS);
+        {
+            let mut state = core.state.lock().unwrap();
+            register_ws(&mut state, &ws);
+            state.invocations.insert(
+                "new".to_string(),
+                OwnedInvocation {
+                    workspace: ws.clone(),
+                    cmd: "build".to_string(),
+                    pattern: "//:b".to_string(),
+                    started_at: 1,
+                    process: Some(ActiveInvocation::stub(Some(42))),
+                    console: Some(crate::terminal::session_log().unwrap()),
+                    process_exit_code: None,
+                    note: None,
+                },
+            );
+            // A reaped but still-draining process is not a finished console.
+            state
+                .invocations
+                .get_mut("new")
+                .unwrap()
+                .process
+                .as_mut()
+                .unwrap()
+                .pgid = None;
+        }
+        let output =
+            serde_json::to_value(crate::console::read(&core, WS, "new", 0).unwrap()).unwrap();
+        assert_eq!(output["done"], false);
+        release_process(&core, "new");
+        let output =
+            serde_json::to_value(crate::console::read(&core, WS, "new", 0).unwrap()).unwrap();
+        assert_eq!(output["done"], true);
+        // A foreign id's guard cannot release "new"'s slot.
+        release_process(&core, "old");
+        let st = core.state.lock().unwrap();
+        assert!(st.invocations["new"].process.is_none());
+        assert!(st.invocations["new"].console.is_some());
     }
 
     /// Uses only a temporary workspace, rc file, data directory and Bazel root.
@@ -677,6 +911,7 @@ mod tests {
             let ws = temp.0.join("workspace");
             let data = temp.0.join("data");
             fs::create_dir(&ws).unwrap();
+            let ws = ws.canonicalize().unwrap();
             fs::write(ws.join("WORKSPACE"), "workspace(name='zeal_gui_test')\n").unwrap();
             fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
             fs::write(ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
@@ -695,14 +930,21 @@ mod tests {
             }
         }
         fn command(&self, cmd: &str, pattern: &str, id: &str) -> Command {
+            self.command_at(&self.ws, &self.temp.0.join("bazel"), cmd, pattern, id)
+        }
+        fn command_at(
+            &self,
+            ws: &Path,
+            root: &Path,
+            cmd: &str,
+            pattern: &str,
+            id: &str,
+        ) -> Command {
             let mut command = Command::new(&self.bazel);
             command
-                .current_dir(&self.ws)
+                .current_dir(ws)
                 .args(["--batch", "--nosystem_rc", "--nohome_rc"])
-                .arg(format!(
-                    "--output_user_root={}",
-                    self.temp.0.join("bazel").display()
-                ))
+                .arg(format!("--output_user_root={}", root.display()))
                 .args(argv(cmd, pattern, &[], &self.endpoint, id))
                 .args([
                     "--enable_bzlmod=false",
@@ -728,11 +970,13 @@ mod tests {
         let (release, input) = mpsc::sync_channel(1);
         let owner_core = core.clone();
         let owner_id = id.clone();
+        let owner_ws = fixture.ws.clone();
         let process = tokio::task::spawn_blocking(move || {
             complete_gui_run(
                 child,
                 capture,
                 owner_core,
+                &owner_ws,
                 owner_id,
                 (cmd == "run").then_some(input),
             )
@@ -740,8 +984,8 @@ mod tests {
         // A `run` child blocks on stdin: feed it only once the build's BEP
         // record exists, the order the GUI observes.
         if cmd == "run" {
-            wait_for_gui_build(fixture, &id, &read_log, &process).await;
-            crate::terminal::resize(&core, &id, 100, 30).unwrap();
+            wait_for_gui_build(fixture, &fixture.ws, &id, &read_log, &process).await;
+            crate::terminal::resize(&core, fixture.ws.to_str().unwrap(), &id, 100, 30).unwrap();
             release.send(()).unwrap();
         }
         let code = tokio::time::timeout(Duration::from_secs(60), process)
@@ -751,8 +995,15 @@ mod tests {
         let output = String::from_utf8(log_bytes(&read_log)).unwrap();
         assert_eq!(code, if cmd == "run" { 23 } else { 0 }, "{cmd}: {output}");
         assert_gui_record(fixture, cmd, pattern, &id);
-        assert!(core.state.lock().unwrap().active_invocation.is_none());
-        assert_saved_console(&core, &id, &output);
+        assert!(
+            core.state
+                .lock()
+                .unwrap()
+                .invocations
+                .get(&id)
+                .is_some_and(|invocation| invocation.process.is_none())
+        );
+        assert_saved_console(&core, &fixture.ws, &id, &output);
     }
 
     /// The BES-recorded invocation: the build's own command, pattern and
@@ -771,37 +1022,207 @@ mod tests {
         assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.json.gz").is_ok());
     }
 
+    struct GuiRun {
+        id: String,
+        ws: PathBuf,
+        read_log: fs::File,
+        release: mpsc::SyncSender<()>,
+        process: tokio::task::JoinHandle<i32>,
+    }
+
+    fn second_workspace(fixture: &GuiBazelFixture) -> PathBuf {
+        let ws_b = fixture.temp.0.join("workspace-b");
+        fs::create_dir(&ws_b).unwrap();
+        let ws_b = ws_b.canonicalize().unwrap();
+        for name in ["WORKSPACE", ".bazelrc", "BUILD", "binary.bzl"] {
+            fs::copy(fixture.ws.join(name), ws_b.join(name)).unwrap();
+        }
+        ws_b
+    }
+
+    fn start_gui_run(
+        fixture: &GuiBazelFixture,
+        core: &Arc<Core>,
+        ws: &Path,
+        root: PathBuf,
+        gated: bool,
+    ) -> GuiRun {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut command = fixture.command_at(ws, &root, "run", "//:double", &id);
+        let (child, capture, read_log) = spawn_gui_child(
+            core,
+            &mut command,
+            InvocationMeta {
+                workspace: ws,
+                cmd: "run",
+                pattern: "//:double",
+                id: &id,
+            },
+        );
+        let (release, released) = mpsc::sync_channel::<()>(1);
+        let owner_core = core.clone();
+        let owner_id = id.clone();
+        let owner_ws = ws.to_path_buf();
+        let process = tokio::task::spawn_blocking(move || {
+            complete_gui_run(
+                child,
+                capture,
+                owner_core,
+                &owner_ws,
+                owner_id,
+                gated.then_some(released),
+            )
+        });
+        GuiRun {
+            id,
+            ws: ws.to_path_buf(),
+            read_log,
+            release,
+            process,
+        }
+    }
+
+    async fn wait_for_bep_build(fixture: &GuiBazelFixture, run: &GuiRun) {
+        let receipt =
+            wait_for_gui_build_receipt(fixture, &run.ws, &run.id, &run.read_log, &run.process);
+        if let Err(error) = tokio::time::timeout(Duration::from_secs(90), receipt).await {
+            panic!(
+                "BES did not finalize before stdin: {error}; {}",
+                String::from_utf8_lossy(&log_bytes(&run.read_log))
+            );
+        }
+    }
+
+    async fn wait_for_bep_builds(fixture: &GuiBazelFixture, runs: &[GuiRun]) {
+        for run in runs {
+            wait_for_bep_build(fixture, run).await;
+        }
+    }
+
+    fn assert_owned_groups(core: &Core, runs: &[GuiRun]) {
+        let st = core.state.lock().unwrap();
+        for run in runs {
+            let invocation = &st.invocations[&run.id];
+            assert!(
+                invocation
+                    .process
+                    .as_ref()
+                    .is_some_and(|process| process.pgid.is_some()),
+                "{} lost signal ownership while its program waited",
+                run.id
+            );
+            assert!(!is_stopping(&st, &run.id));
+        }
+    }
+
+    fn assert_run_still_owned(core: &Core, run: &GuiRun) {
+        let st = core.state.lock().unwrap();
+        let invocation = &st.invocations[&run.id];
+        assert!(
+            invocation
+                .process
+                .as_ref()
+                .is_some_and(|process| process.pgid.is_some()),
+            "{} lost signal ownership",
+            run.id
+        );
+    }
+
+    fn assert_run_records(fixture: &GuiBazelFixture, runs: &[GuiRun]) {
+        for run in runs {
+            let record = store::read_record(&fixture.data, &run.ws, &run.id).unwrap();
+            assert_eq!(record.cmd.as_deref(), Some("run"));
+            assert_eq!(record.pattern.as_deref(), Some("//:double"));
+            assert_eq!(
+                record.exit_code,
+                Some(0),
+                "program exit must not replace build exit"
+            );
+            assert!(record.finished_at.is_some());
+        }
+    }
+
+    /// Two workspaces run interactive programs at once on one Core and one
+    /// BES: stopping A leaves B's process, console and record untouched.
+    #[tokio::test]
+    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    async fn real_bazel_two_workspaces_run_and_stop_independently() {
+        let fixture = GuiBazelFixture::new().await;
+        let ws_b = second_workspace(&fixture);
+        let core = Arc::new(Core::new());
+        let mut runs = vec![
+            start_gui_run(
+                &fixture,
+                &core,
+                &fixture.ws,
+                fixture.temp.0.join("bazel"),
+                false,
+            ),
+            start_gui_run(&fixture, &core, &ws_b, fixture.temp.0.join("bazel-b"), true),
+        ];
+        wait_for_bep_builds(&fixture, &runs).await;
+        assert_owned_groups(&core, &runs);
+
+        let id_a = runs[0].id.clone();
+        let ws_a = runs[0].ws.clone();
+        begin_stop(&mut core.state.lock().unwrap(), &ws_a, &id_a).unwrap();
+        let code_a = tokio::time::timeout(Duration::from_secs(30), &mut runs[0].process)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(code_a, 23, "stopped program must not exit cleanly");
+        assert_run_still_owned(&core, &runs[1]);
+        runs[1].release.send(()).unwrap();
+        let code_b = tokio::time::timeout(Duration::from_secs(30), &mut runs[1].process)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(code_b, 23);
+        assert_run_records(&fixture, &runs);
+        let text_a = console_text(&core, &runs[0].ws, &runs[0].id);
+        let text_b = console_text(&core, &runs[1].ws, &runs[1].id);
+        assert!(text_b.contains("42\r\n"), "B console: {text_b}");
+        assert!(!text_a.contains("42\r\n"), "A console: {text_a}");
+        let ids: Vec<&str> = runs.iter().map(|run| run.id.as_str()).collect();
+        assert_drained(&core, &ids);
+    }
+
     /// Completed consoles expose captured bytes even when reopened, but reject new input.
-    fn assert_saved_console(core: &Core, id: &str, output: &str) {
-        let console = serde_json::to_value(crate::console::read(core, id, 0).unwrap()).unwrap();
+    fn assert_saved_console(core: &Core, ws: &Path, id: &str, output: &str) {
+        let console =
+            serde_json::to_value(crate::console::read(core, ws.to_str().unwrap(), id, 0).unwrap())
+                .unwrap();
         assert_eq!(
             console["done"], true,
             "final terminal bytes must already be saved"
         );
         let bytes: Vec<u8> = serde_json::from_value(console["data"].clone()).unwrap();
         assert_eq!(String::from_utf8(bytes).unwrap(), output);
-        let reopened = serde_json::to_value(crate::console::read(core, id, 0).unwrap()).unwrap();
+        let reopened =
+            serde_json::to_value(crate::console::read(core, ws.to_str().unwrap(), id, 0).unwrap())
+                .unwrap();
         assert_eq!(reopened, console);
-        assert!(crate::terminal::write(core, id, b"late input").is_err());
+        assert!(crate::terminal::write(core, ws.to_str().unwrap(), id, b"late input").is_err());
     }
 
     fn complete_gui_run(
         mut child: std::process::Child,
         mut capture: crate::terminal::Capture,
         core: Arc<Core>,
+        ws: &Path,
         id: String,
         input: Option<mpsc::Receiver<()>>,
     ) -> i32 {
         let _group = GroupGuard(child.id() as i32);
         if let Some(input) = input {
             input
-                .recv_timeout(Duration::from_secs(30))
+                .recv_timeout(Duration::from_secs(120))
                 .expect("BEP completes before stdin");
             assert!(
                 child.try_wait().unwrap().is_none(),
                 "program still waits for input"
             );
-            crate::terminal::write(&core, &id, b"21\n").unwrap();
+            crate::terminal::write(&core, ws.to_str().unwrap(), &id, b"21\n").unwrap();
         }
         let exit = observe_process(
             &core,
@@ -813,21 +1234,22 @@ mod tests {
         capture.finish().unwrap();
         {
             let mut state = core.state.lock().unwrap();
-            finish_console(&mut state, &id);
             apply_reap(&mut state, &id, &exit);
         }
+        release_process(&core, &id);
         exit.unwrap()
     }
 
     async fn wait_for_gui_build(
         fixture: &GuiBazelFixture,
+        ws: &Path,
         id: &str,
         log: &fs::File,
         process: &tokio::task::JoinHandle<i32>,
     ) {
         tokio::time::timeout(
             Duration::from_secs(25),
-            wait_for_gui_build_receipt(fixture, id, log, process),
+            wait_for_gui_build_receipt(fixture, ws, id, log, process),
         )
         .await
         .unwrap_or_else(|error| {
@@ -840,11 +1262,12 @@ mod tests {
 
     async fn wait_for_gui_build_receipt(
         fixture: &GuiBazelFixture,
+        ws: &Path,
         id: &str,
         log: &fs::File,
         process: &tokio::task::JoinHandle<i32>,
     ) {
-        while !store::read_record(&fixture.data, &fixture.ws, id)
+        while !store::read_record(&fixture.data, ws, id)
             .is_ok_and(|record| record.exit_code == Some(0))
         {
             assert!(
@@ -926,104 +1349,81 @@ mod tests {
         }
     }
 
-    /// The escalation's release: the invocation leaves the slot with the note
-    /// that says the exit is unknown, and the stopping flag goes with it.
+    /// An unconfirmed kill releases the entry's process slot with the note
+    /// that says the exit is unknown; its console stays readable.
     #[test]
-    fn give_up_releases_the_invocation_and_says_the_exit_is_unknown() {
+    fn unconfirmed_kill_releases_the_process_with_the_unknown_exit_note() {
         let core = Core::new();
+        hold_process(&core, Path::new(WS), "invocation", Some(i32::MAX));
+        {
+            let mut st = core.state.lock().unwrap();
+            begin_stop(&mut st, Path::new(WS), "invocation").unwrap();
+        }
+        let exit = observe_process(
+            &core,
+            "invocation",
+            || Ok(None),
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .unwrap_err();
+        assert_eq!(exit.kind(), io::ErrorKind::TimedOut);
         let mut st = core.state.lock().unwrap();
-        st.active_invocation = Some(ActiveInvocation {
-            stopping: true,
-            ..ActiveInvocation::stub("abc", Some(42))
-        });
-        st.invocation_note = Some("old".to_string());
-
-        assert!(still_held(&st, "abc"));
-        assert!(give_up(&mut st, "abc"));
-        assert!(
-            st.active_invocation.is_none(),
-            "the group is no longer ours to signal"
-        );
-        assert!(!is_stopping(&st));
-        assert_eq!(st.invocation_note.as_deref(), Some(STOP_UNCONFIRMED));
-    }
-
-    /// A successor invocation is never touched: an escalation that outlived
-    /// its invocation must not release the invocation that took the slot.
-    #[test]
-    fn give_up_never_touches_a_successor_invocation() {
-        let core = Core::new();
-        let mut st = core.state.lock().unwrap();
-        st.active_invocation = Some(ActiveInvocation::stub("def", Some(7)));
-        st.invocation_note = Some("old".to_string());
-
-        assert!(!still_held(&st, "abc"));
-        assert!(!give_up(&mut st, "abc"));
-        assert_eq!(held_id(&st), Some("def"));
-        assert_eq!(held_pgid(&st), Some(7));
-        assert_eq!(st.invocation_note.as_deref(), Some("old"));
-    }
-
-    /// A reap of the invocation the slot still holds: a recorded exit
-    /// clears the slot and the note.
-    #[test]
-    fn apply_reap_clears_the_held_invocation_and_its_note() {
-        let core = Core::new();
-        let mut st = core.state.lock().unwrap();
-        st.active_invocation = Some(ActiveInvocation {
-            stopping: true,
-            ..ActiveInvocation::stub("abc", Some(42))
-        });
-        st.invocation_note = Some("old".to_string());
-
-        assert!(apply_reap(&mut st, "abc", &Ok(3)));
-        assert!(st.active_invocation.is_none());
-        assert!(!is_stopping(&st));
-        assert_eq!(st.invocation_note, None, "a recorded exit clears the note");
-    }
-
-    /// A wait error still releases the held invocation's slot and leaves
-    /// its reason in the note.
-    #[test]
-    fn apply_reap_notes_the_reason_for_an_unknown_exit() {
-        let core = Core::new();
-        let mut st = core.state.lock().unwrap();
-        st.active_invocation = Some(ActiveInvocation::stub("abc", Some(42)));
-
-        let why = std::io::Error::from_raw_os_error(libc::EINTR);
-        assert!(apply_reap(&mut st, "abc", &Err(why)));
-        assert!(
-            st.active_invocation.is_none(),
-            "an unknown exit still releases the slot"
-        );
-        let note = st.invocation_note.clone().expect("the reason is shown");
-        assert!(note.starts_with("Could not confirm the exit:"), "{note}");
-    }
-
-    /// A reap after the stop gave up: the slot is no longer this invocation's,
-    /// so its give-up note stands. A successor invocation is
-    /// not ours to reap either.
-    #[test]
-    fn apply_reap_after_give_up_writes_nothing() {
-        let core = Core::new();
-        let mut st = core.state.lock().unwrap();
-        st.active_invocation = Some(ActiveInvocation {
-            stopping: true,
-            ..ActiveInvocation::stub("abc", Some(42))
-        });
-        assert!(give_up(&mut st, "abc"));
-
-        assert!(!apply_reap(&mut st, "abc", &Ok(0)));
-        assert!(st.active_invocation.is_none());
+        assert!(held_pgid(&st, "invocation").is_none());
+        assert!(apply_reap(&mut st, "invocation", &Err(exit)));
         assert_eq!(
-            st.invocation_note.as_deref(),
-            Some(STOP_UNCONFIRMED),
-            "untouched"
+            st.invocations["invocation"].note.as_deref(),
+            Some(STOP_UNCONFIRMED)
         );
+        drop(st);
+        release_process(&core, "invocation");
+        assert!(
+            !core
+                .state
+                .lock()
+                .unwrap()
+                .invocations
+                .contains_key("invocation")
+        );
+    }
 
-        st.active_invocation = Some(ActiveInvocation::stub("def", Some(7)));
-        assert!(!apply_reap(&mut st, "abc", &Ok(0)));
-        assert_eq!(held_id(&st), Some("def"));
+    /// A reap after the stop gave up writes nothing, and a different
+    /// invocation's entry is never touched.
+    #[test]
+    fn an_expired_reap_never_releases_another_invocations_process() {
+        let core = Core::new();
+        hold_process(&core, Path::new(WS), "invocation", Some(i32::MAX));
+        hold_process(&core, Path::new(WS), "next", Some(i32::MAX));
+        {
+            let mut st = core.state.lock().unwrap();
+            begin_stop(&mut st, Path::new(WS), "invocation").unwrap();
+        }
+        let exit = observe_process(
+            &core,
+            "invocation",
+            || Ok(None),
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .unwrap_err();
+        let mut st = core.state.lock().unwrap();
+        assert!(apply_reap(&mut st, "invocation", &Err(exit)));
+        assert_eq!(
+            st.invocations["invocation"].note.as_deref(),
+            Some(STOP_UNCONFIRMED)
+        );
+        assert!(process_owned(&st, "next"));
+        assert_eq!(held_pgid(&st, "next"), Some(i32::MAX));
+        assert!(st.invocations["next"].note.is_none());
+        drop(st);
+        release_process(&core, "invocation");
+        let mut st = core.state.lock().unwrap();
+        assert!(!apply_reap(
+            &mut st,
+            "invocation",
+            &Err(io::Error::other("a second reap"))
+        ));
+        assert!(!st.invocations.contains_key("invocation"));
     }
 
     /// Best-effort SIGKILL of the test's group, so a failed assertion cannot
@@ -1100,58 +1500,120 @@ mod tests {
         // it, exactly as `stop` does after the grace, and then require every
         // member to be gone. The group may be empty already.
         let _ = signal_group(pgid, Signal::KILL);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while group_alive(pgid) {
-            assert!(Instant::now() < deadline, "group {pgid} still has members");
-            thread::sleep(Duration::from_millis(20));
-        }
+        assert_group_dead(pgid);
     }
 
     /// `exit_stop` is the app-exit path, which cannot defer the exit: it must
-    /// still kill a group that outlived its SIGINT, within the short budget.
-    /// The shell ignores SIGINT (`trap '' INT`), so only the SIGKILL can empty
-    /// the group.
+    /// still kill groups that outlive their SIGINT, within the short budget
+    /// shared by every owned invocation.
     #[test]
-    fn exit_stop_kills_the_group_after_the_short_grace() {
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg("trap '' INT; sleep 30 & echo ready; wait")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let pgid = child.id() as i32;
-        let _guard = GroupGuard(pgid);
-
-        let mut ready = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut ready)
-            .unwrap();
-        assert_eq!(ready.trim(), "ready");
-
-        // Exactly what `start` leaves for a live invocation.
+    fn exit_stop_kills_every_group_after_the_short_grace() {
+        let mut children = Vec::new();
         let core = Core::new();
-        {
-            let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub("abc", Some(pgid)));
+        for id in ["a", "b"] {
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg("trap '' INT; sleep 30 & echo ready; wait")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let pgid = child.id() as i32;
+            let mut ready = String::new();
+            BufReader::new(child.stdout.take().unwrap())
+                .read_line(&mut ready)
+                .unwrap();
+            assert_eq!(ready.trim(), "ready");
+            hold_process(&core, Path::new(WS), id, Some(pgid));
+            children.push((child, pgid));
         }
+        let guards: Vec<_> = children.iter().map(|(_, pgid)| GroupGuard(*pgid)).collect();
 
         let started = Instant::now();
         exit_stop(&core);
-        // The SIGINT did not end it, so the SIGKILL came after the grace: the
-        // wait is bounded, not skipped.
+        // The SIGINTs did not end them, so the SIGKILLs came after the grace:
+        // the wait is bounded, not skipped, and not per-invocation.
         assert!(started.elapsed() >= EXIT_GRACE, "the grace was skipped");
-        // A zombie still holds the group id, so reap the shell before asking
-        // whether the group is empty.
-        let status = child.wait().unwrap();
-        assert!(!status.success(), "unexpected status: {status}");
+        assert!(core.state.lock().unwrap().shutting_down);
+        for (child, pgid) in &mut children {
+            let status = child.wait().unwrap();
+            assert!(!status.success(), "unexpected status: {status}");
+            assert_group_dead(*pgid);
+        }
+        drop(guards);
+    }
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while group_alive(pgid) {
-            assert!(Instant::now() < deadline, "group {pgid} still has members");
-            thread::sleep(Duration::from_millis(20));
+    fn spawn_run_owner(
+        core: &Arc<Core>,
+        ws: &Path,
+        id: &str,
+        child: Child,
+        capture: crate::terminal::Capture,
+    ) -> thread::JoinHandle<i32> {
+        let owner_core = core.clone();
+        let owner_ws = ws.to_path_buf();
+        let owner_id = id.to_string();
+        thread::spawn(move || {
+            complete_gui_run(child, capture, owner_core, &owner_ws, owner_id, None)
+        })
+    }
+
+    /// App exit must not return while an owner thread still holds a reaped
+    /// child: the shared deadline covers drain, console finish and reap.
+    #[test]
+    fn exit_stop_waits_for_owner_threads_to_reap_and_drain() {
+        let core = Arc::new(Core::new());
+        let ws = PathBuf::from(WS);
+        let mut owners = Vec::new();
+        for (id, marker) in [("a", "marker-a"), ("b", "marker-b")] {
+            let mut command = Command::new("sh");
+            command
+                .arg("-c")
+                .arg(format!("trap '' INT; printf '{marker}\\n'; sleep 30"));
+            let (child, capture, _log) = spawn_gui_child(
+                &core,
+                &mut command,
+                InvocationMeta {
+                    workspace: &ws,
+                    cmd: "run",
+                    pattern: "//:probe",
+                    id,
+                },
+            );
+            owners.push(spawn_run_owner(&core, &ws, id, child, capture));
+        }
+        for (id, marker) in [("a", "marker-a"), ("b", "marker-b")] {
+            wait_for_console_marker(&core, &ws, id, marker);
+        }
+        let started = Instant::now();
+        exit_stop(&core);
+        assert!(started.elapsed() >= EXIT_GRACE, "the grace was skipped");
+        assert_drained(&core, &["a", "b"]);
+        assert_console_isolated(&core, &ws, &[("a", "marker-a"), ("b", "marker-b")]);
+        for owner in owners {
+            owner.join().unwrap();
+        }
+    }
+
+    /// A child that never confirms leaves the shared deadline: ownership is
+    /// revoked, the note explains the unknown stop, and no signal can follow.
+    #[test]
+    fn exit_stop_confirmation_deadline_revokes_unconfirmed_ownership() {
+        let core = Core::new();
+        hold_process(&core, Path::new(WS), "a", Some(i32::MAX));
+        hold_process(&core, Path::new(WS), "b", Some(i32::MAX));
+        let started = Instant::now();
+        exit_stop(&core);
+        let elapsed = started.elapsed();
+        assert!(elapsed >= EXIT_GRACE + STOP_CONFIRM);
+        assert!(elapsed < EXIT_GRACE + STOP_CONFIRM + Duration::from_secs(5));
+        let st = core.state.lock().unwrap();
+        for id in ["a", "b"] {
+            assert!(held_pgid(&st, id).is_none());
+            assert_eq!(st.invocations[id].note.as_deref(), Some(STOP_UNCONFIRMED));
+            assert!(is_stopping(&st, id));
         }
     }
 
@@ -1173,10 +1635,10 @@ mod tests {
             .unwrap();
         assert_eq!(ready.trim(), "ready");
         let core = Core::new();
+        hold_process(&core, Path::new(WS), "invocation", Some(pgid));
         {
             let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(pgid)));
-            begin_stop(&mut st);
+            begin_stop(&mut st, Path::new(WS), "invocation").unwrap();
         }
         let exit = observe_process(
             &core,
@@ -1191,15 +1653,13 @@ mod tests {
         )
         .unwrap();
         assert_ne!(exit, 0);
-        assert!(held_pgid(&core.state.lock().unwrap()).is_none());
+        assert!(held_pgid(&core.state.lock().unwrap(), "invocation").is_none());
     }
+
     #[test]
     fn wait_errors_immediately_revoke_signal_ownership() {
         let core = Core::new();
-        {
-            let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
-        }
+        hold_process(&core, Path::new(WS), "invocation", Some(i32::MAX));
         let started = Instant::now();
         let error = observe_process(
             &core,
@@ -1212,24 +1672,32 @@ mod tests {
         assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
         assert!(started.elapsed() < Duration::from_secs(1));
         let mut st = core.state.lock().unwrap();
-        assert!(held_pgid(&st).is_none());
-        assert!(!is_stopping(&st));
+        assert!(held_pgid(&st, "invocation").is_none());
+        assert!(!is_stopping(&st, "invocation"));
         assert!(apply_reap(&mut st, "invocation", &Err(error)));
-        assert!(st.active_invocation.is_none());
         assert!(
-            st.invocation_note
+            st.invocations["invocation"]
+                .note
                 .as_ref()
                 .unwrap()
                 .contains("Could not confirm the exit")
         );
+        drop(st);
+        release_process(&core, "invocation");
+        assert!(
+            !core
+                .state
+                .lock()
+                .unwrap()
+                .invocations
+                .contains_key("invocation")
+        );
     }
+
     #[test]
-    fn reap_revokes_signal_ownership_before_the_invocation_slot_is_released() {
+    fn reap_revokes_signal_ownership_before_the_process_slot_is_released() {
         let core = Core::new();
-        {
-            let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
-        }
+        hold_process(&core, Path::new(WS), "invocation", Some(i32::MAX));
         assert_eq!(
             observe_process(
                 &core,
@@ -1242,14 +1710,26 @@ mod tests {
             7
         );
         let mut st = core.state.lock().unwrap();
-        begin_stop(&mut st);
-        assert_eq!(held_id(&st), Some("invocation"));
-        assert!(held_pgid(&st).is_none());
-        assert!(!is_stopping(&st));
+        assert!(begin_stop(&mut st, Path::new(WS), "invocation").is_err());
+        assert!(held_pgid(&st, "invocation").is_none());
+        assert!(!is_stopping(&st, "invocation"));
     }
-    fn spawn_pipes(core: &Core, id: &str, command: &mut Command) -> Child {
+
+    fn spawn_pipes(core: &Core, ws: &Path, id: &str, command: &mut Command) -> Child {
         let mut st = core.state.lock().unwrap();
-        let (child, capture) = spawn(&mut st, command, id, Output::Pipes).unwrap();
+        register_ws(&mut st, ws);
+        let (child, capture) = spawn(
+            &mut st,
+            command,
+            InvocationMeta {
+                workspace: ws,
+                cmd: "query",
+                pattern: "//pkg:*",
+                id,
+            },
+            Output::Pipes,
+        )
+        .unwrap();
         assert!(capture.is_none());
         child
     }
@@ -1263,73 +1743,190 @@ mod tests {
         .unwrap()
     }
 
-    fn assert_active_pipe(core: &Core, id: &str) {
-        let st = core.state.lock().unwrap();
-        let invocation = st.active_invocation.as_ref().unwrap();
-        assert_eq!(invocation.id.as_str(), id);
-        assert!(invocation.terminal.is_none());
-        assert!(st.bazel_busy());
+    fn assert_three_owned_processes(st: &CoreState) {
+        assert_eq!(process_count(st), 3);
+        for id in ["a1", "a2", "b1"] {
+            assert!(st.invocations.contains_key(id), "{id} missing");
+        }
+    }
+
+    fn kill_and_reap(core: &Core, mut child: Child, id: &str) {
+        let _guard = GroupGuard(child.id() as i32);
+        child.kill().unwrap();
+        assert_eq!(wait_child(core, id, &mut child), -1);
+        {
+            let mut st = core.state.lock().unwrap();
+            apply_reap(&mut st, id, &Ok(-1));
+        }
+        release_process(core, id);
+        assert!(!core.state.lock().unwrap().invocations.contains_key(id));
     }
 
     #[test]
-    fn pipe_invocation_uses_shared_stop_and_releases_the_slot() {
+    fn two_invocations_in_one_workspace_and_two_workspaces_are_all_accepted() {
         let core = Core::new();
-        let id = uuid::Uuid::new_v4().to_string();
+        let ws_a = PathBuf::from("/ws/a");
+        let ws_b = PathBuf::from("/ws/b");
+        let mut children = Vec::new();
+        for (ws, id) in [(&ws_a, "a1"), (&ws_a, "a2"), (&ws_b, "b1")] {
+            let mut command = Command::new("sh");
+            command.args(["-c", "exec sleep 60"]);
+            children.push((spawn_pipes(&core, ws, id, &mut command), id));
+        }
+        assert_three_owned_processes(&core.state.lock().unwrap());
+        for (child, id) in children {
+            kill_and_reap(&core, child, id);
+        }
+    }
+
+    #[test]
+    fn finishing_one_invocation_leaves_another_untouched() {
+        let core = Core::new();
+        let ws = Path::new(WS);
         let mut command = Command::new("sh");
         command.args(["-c", "exec sleep 60"]);
-        let mut child = spawn_pipes(&core, &id, &mut command);
-        let guard = GroupGuard(child.id() as i32);
-        let slot = BazelSlot {
-            core: &core,
-            id: &id,
-            emit: || (),
-        };
-        assert_active_pipe(&core, &id);
-        begin_stop(&mut core.state.lock().unwrap());
-        assert_eq!(wait_child(&core, &id, &mut child), -1);
-        drop(slot);
-        drop(guard);
-        assert!(!core.state.lock().unwrap().bazel_busy());
-
-        let next_id = uuid::Uuid::new_v4().to_string();
+        let mut child_a = spawn_pipes(&core, ws, "a", &mut command);
+        let guard_a = GroupGuard(child_a.id() as i32);
         let mut command = Command::new("sh");
-        command.args(["-c", "exit 0"]);
-        let mut child = spawn_pipes(&core, &next_id, &mut command);
-        let slot = BazelSlot {
-            core: &core,
-            id: &next_id,
-            emit: || (),
-        };
-        assert_eq!(wait_child(&core, &next_id, &mut child), 0);
-        drop(slot);
-        assert!(!core.state.lock().unwrap().bazel_busy());
+        command.args(["-c", "exec sleep 60"]);
+        let mut child_b = spawn_pipes(&core, ws, "b", &mut command);
+        let guard_b = GroupGuard(child_b.id() as i32);
+
+        // Stop A: B's entry, group and console-less process stay live.
+        begin_stop(&mut core.state.lock().unwrap(), ws, "a").unwrap();
+        assert_eq!(wait_child(&core, "a", &mut child_a), -1);
+        {
+            let mut st = core.state.lock().unwrap();
+            let _ = apply_reap(&mut st, "a", &Ok(-1));
+        }
+        release_process(&core, "a");
+        {
+            let st = core.state.lock().unwrap();
+            let b = &st.invocations["b"];
+            assert!(b.process.is_some());
+            assert_eq!(b.process.as_ref().unwrap().pgid, Some(child_b.id() as i32));
+            assert!(!is_stopping(&st, "b"));
+        }
+        // A repeated stop for A is rejected now that its entry is gone.
+        assert!(begin_stop(&mut core.state.lock().unwrap(), ws, "a").is_err());
+        // B still waits and can be stopped independently.
+        begin_stop(&mut core.state.lock().unwrap(), ws, "b").unwrap();
+        assert_eq!(wait_child(&core, "b", &mut child_b), -1);
+        drop(guard_a);
+        drop(guard_b);
+    }
+
+    #[test]
+    fn stop_rejects_unknown_ids_and_workspace_mismatch() {
+        let core = Core::new();
+        hold_process(&core, Path::new("/ws/a"), "a", Some(i32::MAX));
+        {
+            let mut st = core.state.lock().unwrap();
+            assert!(begin_stop(&mut st, Path::new("/ws/a"), "missing").is_err());
+            assert!(begin_stop(&mut st, Path::new("/ws/b"), "a").is_err());
+            // The failed attempts left the entry unstopped.
+            assert!(!is_stopping(&st, "a"));
+            assert_eq!(held_pgid(&st, "a"), Some(i32::MAX));
+        }
     }
 
     #[test]
     fn repeated_stop_does_not_extend_deadlines() {
         let core = Core::new();
+        let ws = Path::new(WS);
+        hold_process(&core, ws, "invocation", Some(i32::MAX));
+        hold_process(&core, ws, "other", Some(i32::MAX));
         let mut st = core.state.lock().unwrap();
-        st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
-        begin_stop(&mut st);
-        let first = st
-            .active_invocation
+        begin_stop(&mut st, ws, "invocation").unwrap();
+        let first = st.invocations["invocation"]
+            .process
             .as_ref()
-            .and_then(|invocation| invocation.stop_started);
-        begin_stop(&mut st);
+            .and_then(|process| process.stop_started);
+        begin_stop(&mut st, ws, "invocation").unwrap();
         assert_eq!(
-            st.active_invocation
+            st.invocations["invocation"]
+                .process
                 .as_ref()
-                .and_then(|invocation| invocation.stop_started),
+                .and_then(|process| process.stop_started),
             first
         );
+        assert!(
+            st.invocations["other"]
+                .process
+                .as_ref()
+                .is_some_and(|process| process.stop_started.is_none())
+        );
     }
+
+    /// A console-less entry is pruned only when its worker's guard drops:
+    /// reap alone keeps the exit and note for the in-flight drain.
     #[test]
-    fn old_owner_never_polls_or_signals_a_successor() {
+    fn a_console_less_entry_is_pruned_only_when_its_worker_releases_it() {
         let core = Core::new();
+        let ws = Path::new(WS);
+        hold_process(&core, ws, "query", None);
         {
             let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub("next", Some(i32::MAX)));
+            assert!(apply_reap(&mut st, "query", &Ok(0)));
+            let invocation = &st.invocations["query"];
+            assert!(invocation.process.is_some());
+            assert_eq!(invocation.process_exit_code, Some(0));
         }
+        release_process(&core, "query");
+        assert!(!core.state.lock().unwrap().invocations.contains_key("query"));
+    }
+
+    #[test]
+    fn wait_query_reaps_the_child_but_keeps_the_slot_until_the_guard_drops() {
+        let core = Core::new();
+        let ws = Path::new(WS);
+        hold_process(&core, ws, "other", Some(i32::MAX));
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 7"]);
+        let mut child = spawn_pipes(&core, ws, "query", &mut command);
+        assert_eq!(wait_query(&core, "query", &mut child).unwrap(), 7);
+        {
+            let st = core.state.lock().unwrap();
+            let invocation = &st.invocations["query"];
+            assert!(invocation.process.is_some());
+            assert!(invocation.process.as_ref().unwrap().pgid.is_none());
+            assert_eq!(invocation.process_exit_code, Some(7));
+            assert_eq!(held_pgid(&st, "other"), Some(i32::MAX));
+        }
+        release_process(&core, "query");
+        let st = core.state.lock().unwrap();
+        assert!(!st.invocations.contains_key("query"));
+        assert!(st.invocations["other"].process.is_some());
+    }
+
+    #[test]
+    fn wait_query_reports_a_stopped_query() {
+        let core = Core::new();
+        let ws = Path::new(WS);
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 60"]);
+        let mut child = spawn_pipes(&core, ws, "query", &mut command);
+        let guard = GroupGuard(child.id() as i32);
+        begin_stop(&mut core.state.lock().unwrap(), ws, "query").unwrap();
+        assert_eq!(
+            wait_query(&core, "query", &mut child).unwrap_err(),
+            "Query stopped"
+        );
+        {
+            let st = core.state.lock().unwrap();
+            let process = st.invocations["query"].process.as_ref().unwrap();
+            assert!(process.pgid.is_none());
+            assert!(process.stop_started.is_some());
+        }
+        release_process(&core, "query");
+        assert!(!core.state.lock().unwrap().invocations.contains_key("query"));
+        drop(guard);
+    }
+
+    #[test]
+    fn old_owner_never_polls_or_signals_another_invocation() {
+        let core = Core::new();
+        hold_process(&core, Path::new(WS), "next", Some(i32::MAX));
         assert!(
             observe_process(
                 &core,
@@ -1341,19 +1938,26 @@ mod tests {
             .is_err()
         );
         let st = core.state.lock().unwrap();
-        assert_eq!(held_id(&st), Some("next"));
-        assert_eq!(held_pgid(&st), Some(i32::MAX));
+        assert!(process_owned(&st, "next"));
+        assert_eq!(held_pgid(&st, "next"), Some(i32::MAX));
     }
+
     #[test]
-    fn panic_releases_the_invocation_slot_and_wakes_exit() {
+    fn panic_releases_the_process_slot_and_wakes_exit() {
         let core = Arc::new(Core::new());
-        core.state.lock().unwrap().active_invocation =
-            Some(ActiveInvocation::stub("invocation", None));
+        hold_invocation(
+            &core,
+            Path::new(WS),
+            "invocation",
+            crate::terminal::Control::stub(),
+            i32::MAX,
+            crate::terminal::session_log().unwrap(),
+        );
         let exiting_core = core.clone();
         let exiting = thread::spawn(move || exit_stop(&exiting_core));
         let owning_core = core.clone();
         let owner = thread::spawn(move || {
-            let _slot = BazelSlot {
+            let _guard = InvocationGuard {
                 core: &owning_core,
                 id: "invocation",
                 emit: || (),
@@ -1362,24 +1966,23 @@ mod tests {
         });
         assert!(owner.join().is_err());
         exiting.join().unwrap();
-        assert!(core.state.lock().unwrap().active_invocation.is_none());
+        let st = core.state.lock().unwrap();
+        let invocation = &st.invocations["invocation"];
+        assert!(invocation.process.is_none());
+        assert!(invocation.console.is_some());
         assert!(
-            core.state
-                .lock()
-                .unwrap()
-                .invocation_note
+            invocation
+                .note
                 .as_ref()
                 .unwrap()
                 .contains("finish processing")
         );
     }
+
     #[test]
     fn a_stop_racing_with_reap_cannot_signal_the_reaped_pid() {
         let core = Arc::new(Core::new());
-        {
-            let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub("invocation", Some(i32::MAX)));
-        }
+        hold_process(&core, Path::new(WS), "invocation", Some(i32::MAX));
         let (polling_tx, polling_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
         let owner_core = core.clone();
@@ -1396,26 +1999,32 @@ mod tests {
         let stopping_core = core.clone();
         let stopping = thread::spawn(move || {
             stopping_tx.send(()).unwrap();
-            begin_stop(&mut stopping_core.state.lock().unwrap());
+            // The reap already revoked the group: the late stop must fail
+            // without signalling a possibly recycled pid.
+            let _ = begin_stop(
+                &mut stopping_core.state.lock().unwrap(),
+                Path::new(WS),
+                "invocation",
+            );
         });
         stopping_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(owner.join().unwrap().unwrap(), 0);
         stopping.join().unwrap();
         let st = core.state.lock().unwrap();
-        assert!(held_pgid(&st).is_none());
-        assert!(!is_stopping(&st));
+        assert!(held_pgid(&st, "invocation").is_none());
+        assert!(!is_stopping(&st, "invocation"));
     }
+
     #[test]
     fn app_exit_waits_for_a_reaped_invocations_save_and_never_signals_it() {
         let core = Arc::new(Core::new());
-        core.state.lock().unwrap().active_invocation =
-            Some(ActiveInvocation::stub("invocation", None));
+        hold_process(&core, Path::new(WS), "invocation", None);
         let (finish_tx, finish_rx) = mpsc::sync_channel(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let finishing_core = core.clone();
         let finishing = thread::spawn(move || {
-            let _slot = BazelSlot {
+            let _guard = InvocationGuard {
                 core: &finishing_core,
                 id: "invocation",
                 emit: || (),
@@ -1439,42 +2048,56 @@ mod tests {
         finishing.join().unwrap();
         exiting.join().unwrap();
         let st = core.state.lock().unwrap();
-        assert!(st.active_invocation.is_none());
-        assert!(!is_stopping(&st));
-        assert!(held_pgid(&st).is_none());
+        assert!(!st.invocations.contains_key("invocation"));
     }
-    /// Stop a stubbed invocation and observe it with the deadlines already
-    /// lapsed: the owner reports the kill unconfirmed on its first poll.
-    fn unconfirmed_exit(core: &Core, id: &str) -> io::Result<i32> {
-        {
+
+    #[test]
+    fn exit_rejects_new_starts_once_shutdown_begins() {
+        let core = Core::new();
+        let mut st = core.state.lock().unwrap();
+        st.shutting_down = true;
+        register_ws(&mut st, Path::new(WS));
+        st.bazel = Some(PathBuf::from("/bin/true"));
+        st.bes_endpoint = Some("grpc://127.0.0.1:1".into());
+        let error = spawn(
+            &mut st,
+            &mut Command::new("true"),
+            InvocationMeta {
+                workspace: Path::new(WS),
+                cmd: "build",
+                pattern: "//:b",
+                id: "late",
+            },
+            Output::Pipes,
+        )
+        .err()
+        .expect("shutdown must reject the start");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(!st.invocations.contains_key("late"));
+    }
+
+    #[test]
+    fn exit_9_is_a_lock_note_for_build_test_and_queries_but_never_for_run() {
+        for (cmd, expect_note) in [
+            ("build", true),
+            ("test", true),
+            ("query", true),
+            ("cquery", true),
+            ("aquery", true),
+            ("run", false),
+        ] {
+            let core = Core::new();
+            hold_process(&core, Path::new(WS), "invocation", None);
             let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation::stub(id, Some(i32::MAX)));
-            begin_stop(&mut st);
+            st.invocations.get_mut("invocation").unwrap().cmd = cmd.to_string();
+            assert!(apply_reap(&mut st, "invocation", &Ok(9)));
+            let invocation = &st.invocations["invocation"];
+            assert_eq!(invocation.note.is_some(), expect_note, "{cmd}");
+            assert_eq!(
+                invocation.process_exit_code,
+                Some(9),
+                "{cmd}: the process exit is kept, never a BEP failure"
+            );
         }
-        observe_process(core, id, || Ok(None), Duration::ZERO, Duration::ZERO)
-    }
-
-    #[test]
-    fn unconfirmed_kill_releases_the_slot_with_the_unknown_exit_note() {
-        let core = Core::new();
-        let exit = unconfirmed_exit(&core, "invocation");
-        assert_eq!(exit.as_ref().unwrap_err().kind(), io::ErrorKind::TimedOut);
-        let mut st = core.state.lock().unwrap();
-        assert!(held_pgid(&st).is_none());
-        assert!(apply_reap(&mut st, "invocation", &exit));
-        assert!(st.active_invocation.is_none());
-        assert_eq!(st.invocation_note.as_deref(), Some(STOP_UNCONFIRMED));
-    }
-
-    #[test]
-    fn an_expired_reap_never_releases_a_successors_slot() {
-        let core = Core::new();
-        let exit = unconfirmed_exit(&core, "invocation");
-        let mut st = core.state.lock().unwrap();
-        assert!(apply_reap(&mut st, "invocation", &exit));
-        st.active_invocation = Some(ActiveInvocation::stub("next", Some(i32::MAX)));
-        assert!(!apply_reap(&mut st, "invocation", &exit));
-        assert_eq!(held_id(&st), Some("next"));
-        assert_eq!(held_pgid(&st), Some(i32::MAX));
     }
 }

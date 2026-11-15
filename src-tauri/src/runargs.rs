@@ -28,6 +28,7 @@ pub fn argv(
     id: &str,
 ) -> Vec<String> {
     let mut args = vec![
+        "--noblock_for_lock".to_string(),
         cmd.to_string(),
         format!("--bes_backend={endpoint}"),
         "--bes_proxy=".to_string(),

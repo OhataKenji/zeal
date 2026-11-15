@@ -14,7 +14,8 @@ use tonic::{Request, Response, Status};
 use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServer};
 
 pub const ADDRESS: &str = "127.0.0.1:4718";
-const MAX_STREAMS: usize = 4;
+const DEFAULT_MAX_STREAMS: usize = 32;
+const MAX_STREAMS_ERROR: &str = "ZEAL_BES_MAX_STREAMS must be a positive integer";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 type InvocationsChanged = Arc<dyn Fn() + Send + Sync>;
 
@@ -26,10 +27,10 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    fn new(data: PathBuf, invocations_changed: InvocationsChanged) -> Self {
+    fn new(data: PathBuf, max_streams: usize, invocations_changed: InvocationsChanged) -> Self {
         Self {
             data,
-            streams: Arc::new(tokio::sync::Semaphore::new(MAX_STREAMS)),
+            streams: Arc::new(tokio::sync::Semaphore::new(max_streams)),
             invocations_changed,
         }
     }
@@ -39,6 +40,29 @@ impl Receiver {
         self.streams.clone().try_acquire_owned().map_err(|_| {
             Status::resource_exhausted("BES is handling its maximum number of streams")
         })
+    }
+}
+
+fn parse_max_streams(value: Option<&str>) -> Result<usize, String> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_MAX_STREAMS);
+    };
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|limit| {
+            *limit > 0
+                && *limit <= u32::MAX as usize
+                && *limit <= tokio::sync::Semaphore::MAX_PERMITS
+        })
+        .ok_or_else(|| MAX_STREAMS_ERROR.to_string())
+}
+
+fn max_streams_from_env() -> Result<usize, String> {
+    match std::env::var("ZEAL_BES_MAX_STREAMS") {
+        Ok(value) => parse_max_streams(Some(&value)),
+        Err(std::env::VarError::NotPresent) => parse_max_streams(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(MAX_STREAMS_ERROR.to_string()),
     }
 }
 
@@ -249,6 +273,7 @@ async fn serve_ready(
     invocations_changed: InvocationsChanged,
 ) -> Result<(), String> {
     let data = data?;
+    let max_streams = max_streams_from_env()?;
     let listener = bind(ADDRESS).await.map_err(|error| error.to_string())?;
     let address = listener.local_addr().map_err(|error| error.to_string())?;
     let endpoint = format!("grpc://{address}");
@@ -262,7 +287,7 @@ async fn serve_ready(
         state.bes_endpoint = Some(endpoint);
     }
     state_changed();
-    serve_with_invocations_changed(listener, data, invocations_changed)
+    serve_with_invocations_changed(listener, data, max_streams, invocations_changed)
         .await
         .map_err(|error| error.to_string())?;
     Err("BES receiver stopped".to_string())
@@ -272,19 +297,18 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     data: PathBuf,
 ) -> Result<(), tonic::transport::Error> {
-    serve_with_invocations_changed(listener, data, Arc::new(|| {})).await
+    serve_with_invocations_changed(listener, data, DEFAULT_MAX_STREAMS, Arc::new(|| {})).await
 }
 
 async fn serve_with_invocations_changed(
     listener: tokio::net::TcpListener,
     data: PathBuf,
+    max_streams: usize,
     invocations_changed: InvocationsChanged,
 ) -> Result<(), tonic::transport::Error> {
     tonic::transport::Server::builder()
-        .concurrency_limit_per_connection(MAX_STREAMS)
-        .max_concurrent_streams(MAX_STREAMS as u32)
         .add_service(
-            PublishBuildEventServer::new(Receiver::new(data, invocations_changed))
+            PublishBuildEventServer::new(Receiver::new(data, max_streams, invocations_changed))
                 .max_decoding_message_size(16 * 1024 * 1024),
         )
         .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
@@ -339,11 +363,11 @@ mod tests {
             let invocations = store::list(&data, &workspace).unwrap();
             seen.lock().unwrap().push(invocations[0].exit_code);
         });
-        Receiver::new(fixture.data.clone(), notify)
+        Receiver::new(fixture.data.clone(), DEFAULT_MAX_STREAMS, notify)
     }
 
     fn silent_receiver(data: PathBuf) -> Receiver {
-        Receiver::new(data, Arc::new(|| {}))
+        Receiver::new(data, DEFAULT_MAX_STREAMS, Arc::new(|| {}))
     }
 
     #[tokio::test]
@@ -431,7 +455,7 @@ mod tests {
         let temp = Temp::new();
         let data = temp.0.join("data");
         let receiver = silent_receiver(data.clone());
-        let _permits: Vec<_> = (0..MAX_STREAMS)
+        let _permits: Vec<_> = (0..DEFAULT_MAX_STREAMS)
             .map(|_| receiver.admit().unwrap())
             .collect();
         assert_eq!(
@@ -481,12 +505,15 @@ mod tests {
         })
         .await;
         drop(rpc);
-        assert_eq!(receiver.streams.available_permits(), MAX_STREAMS - 1);
+        assert_eq!(
+            receiver.streams.available_permits(),
+            DEFAULT_MAX_STREAMS - 1
+        );
         release.send(()).unwrap();
         blocker.await.unwrap();
         let _permits = tokio::time::timeout(
             Duration::from_secs(5),
-            receiver.streams.acquire_many(MAX_STREAMS as u32),
+            receiver.streams.acquire_many(DEFAULT_MAX_STREAMS as u32),
         )
         .await
         .unwrap()
@@ -513,17 +540,64 @@ mod tests {
             tokio::task::yield_now().await;
             rpc.abort();
             assert!(rpc.await.unwrap_err().is_cancelled());
-            assert_eq!(receiver.streams.available_permits(), MAX_STREAMS - 1);
+            assert_eq!(
+                receiver.streams.available_permits(),
+                DEFAULT_MAX_STREAMS - 1
+            );
             release.send(()).unwrap();
             blocker.await.unwrap();
             let _permits = tokio::time::timeout(
                 Duration::from_secs(5),
-                receiver.streams.acquire_many(MAX_STREAMS as u32),
+                receiver.streams.acquire_many(DEFAULT_MAX_STREAMS as u32),
             )
             .await
             .unwrap()
             .unwrap();
         });
+    }
+
+    #[test]
+    fn stream_limit_defaults_to_32_and_rejects_invalid_values() {
+        assert_eq!(parse_max_streams(None).unwrap(), DEFAULT_MAX_STREAMS);
+        assert_eq!(parse_max_streams(Some("1")).unwrap(), 1);
+        assert_eq!(parse_max_streams(Some("64")).unwrap(), 64);
+        for value in ["0", "-1", "abc", "1.5", " 8", "8 ", &u64::MAX.to_string()] {
+            let error = parse_max_streams(Some(value)).unwrap_err();
+            assert_eq!(error, MAX_STREAMS_ERROR, "{value:?}");
+            assert!(!error.contains(value), "the value must not be echoed");
+        }
+        let overflow = (u32::MAX as u64 + 1).to_string();
+        assert!(parse_max_streams(Some(&overflow)).is_err());
+    }
+
+    #[test]
+    fn admission_accepts_up_to_the_limit_and_releases_a_permit() {
+        let temp = Temp::new();
+        let receiver = silent_receiver(temp.0.join("data"));
+        let permits: Vec<_> = (0..DEFAULT_MAX_STREAMS)
+            .map(|_| receiver.admit().unwrap())
+            .collect();
+        assert_eq!(
+            receiver.admit().unwrap_err().code(),
+            tonic::Code::ResourceExhausted
+        );
+        drop(permits);
+        assert!(receiver.admit().is_ok());
+    }
+
+    #[test]
+    fn a_configured_limit_bounds_admission() {
+        let temp = Temp::new();
+        let receiver = Receiver::new(temp.0.join("data"), 2, Arc::new(|| {}));
+        let first = receiver.admit().unwrap();
+        let second = receiver.admit().unwrap();
+        assert_eq!(
+            receiver.admit().unwrap_err().code(),
+            tonic::Code::ResourceExhausted
+        );
+        drop(second);
+        assert!(receiver.admit().is_ok());
+        drop(first);
     }
 
     #[tokio::test]

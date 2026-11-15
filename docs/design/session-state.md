@@ -4,6 +4,10 @@ _Devin_
 _Last update: 2026/11/08_
 _Status: Approved_
 
+> この文書はセッション更新方式を導入した時点の設計記録である。
+> 現在は、実行を invocation ごとに管理し、workspace の切替を busy で拒否しない。
+> 現行の状態と通知の扱いは [frontend README](../../src/README.md) を参照する。
+
 ## Goal
 
 Elm-like Architecture を採用して UI 更新のコードを整理する。実装は単純に保つ。

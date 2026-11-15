@@ -1,10 +1,9 @@
 //! Ad-hoc `bazel query` for the query editor.
 //!
 //! Distinct from ingest's fixed `bazel query //...` snapshot fetch: the
-//! expression and the output format come from the editor. Execution holds the
-//! same shared process slot as build, test, run, and ingest, and keeps bounded
-//! output:
-//! the first bytes of stdout and the tail of stderr.
+//! expression and the output format come from the editor. Execution registers
+//! its own owned invocation like every other Bazel operation, and keeps
+//! bounded output: the first bytes of stdout and the tail of stderr.
 //!
 //! Composer Stop and app exit use the same process-group lifecycle as other
 //! Bazel operations; queries have no separate timeout.
@@ -106,13 +105,13 @@ fn validate_expr(expr: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run one ad-hoc `bazel query` in the open workspace. Busy requests are
-/// rejected rather than queued.
-/// Blocks until the query exits or its stop is given up on.
+/// Run one ad-hoc `bazel query` in `ws`. Blocks until the query exits or its
+/// stop is given up on.
 #[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
 pub fn run(
     app: AppHandle,
     core: Arc<Core>,
+    ws: &str,
     expr: &str,
     output: &str,
     no_implicit: bool,
@@ -120,8 +119,8 @@ pub fn run(
 ) -> Result<QueryOutput, String> {
     validate_expr(expr)?;
     validate_output(output)?;
-    let (mut child, id) = spawn_query(&core, expr, output, no_implicit, no_tool)?;
-    let _slot = runner::BazelSlot {
+    let (mut child, id) = spawn_query(&core, ws, expr, output, no_implicit, no_tool)?;
+    let _slot = runner::InvocationGuard {
         core: &core,
         id: &id,
         emit: || core.emit(&app),
@@ -139,22 +138,7 @@ pub fn run(
     thread::spawn(move || {
         let _ = err_tx.send(capture_tail(&mut err_pipe, STDERR_TAIL));
     });
-    let exit = runner::wait(&core, &id, || {
-        child
-            .try_wait()
-            .map(|status| status.map(|status| status.code().unwrap_or(-1)))
-    })
-    .map_err(|error| format!("failed to wait on query: {error}"))?;
-    let stopping = core
-        .state
-        .lock()
-        .expect("application state lock poisoned")
-        .active_invocation
-        .as_ref()
-        .is_some_and(|invocation| invocation.id.as_str() == id && invocation.stopping);
-    if stopping {
-        return Err("Query stopped".to_string());
-    }
+    let exit = runner::wait_query(&core, &id, &mut child)?;
     // A starved reader must not fake an empty result: dropped stdout is
     // reported as truncated.
     let (stdout, truncated) = match drain(&out_rx)
@@ -176,28 +160,35 @@ pub fn run(
     })
 }
 
-/// Reserve the shared Bazel slot and spawn atomically.
+/// Register the query as its own owned invocation and spawn it atomically.
 fn spawn_query(
     core: &Core,
+    ws: &str,
     expr: &str,
     output: &str,
     no_implicit: bool,
     no_tool: bool,
 ) -> Result<(Child, String), String> {
     let mut st = core.state.lock().expect("application state lock poisoned");
-    if st.bazel_busy() {
-        return Err("bazel is busy; run the query after it finishes".to_string());
-    }
-    let (Some(ws), Some(bazel)) = (st.workspace.clone(), st.bazel.clone()) else {
-        return Err("no workspace or bazel".to_string());
-    };
+    let ws_path = st.workspace_path(ws)?;
+    let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut command = Command::new(&bazel);
     command
         .args(argv(expr, output, no_implicit, no_tool))
-        .current_dir(&ws);
-    let (child, _) = runner::spawn(&mut st, &mut command, &id, Output::Pipes)
-        .map_err(|error| format!("failed to spawn {}: {error}", bazel.display()))?;
+        .current_dir(&ws_path);
+    let (child, _) = runner::spawn(
+        &mut st,
+        &mut command,
+        runner::InvocationMeta {
+            workspace: &ws_path,
+            cmd: "query",
+            pattern: expr,
+            id: &id,
+        },
+        Output::Pipes,
+    )
+    .map_err(|error| format!("failed to spawn {}: {error}", bazel.display()))?;
     Ok((child, id))
 }
 
@@ -256,6 +247,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     #[test]
     fn argv_has_the_expression_the_output_and_the_flag_switches() {
@@ -367,64 +359,77 @@ mod tests {
         assert!(!msg.contains("bad"), "{msg}");
     }
 
+    fn assert_query_entry(st: &crate::state::CoreState, id: &str, ws: &str) {
+        let invocation = st.invocations.get(id).unwrap();
+        assert_eq!(invocation.cmd, "query");
+        assert_eq!(invocation.workspace, PathBuf::from(ws));
+        let process = invocation.process.as_ref().unwrap();
+        assert!(process.terminal.is_none());
+        assert!(process.pgid.is_some());
+    }
+
+    fn assert_reap_state(st: &crate::state::CoreState, reaped: &str, other: &str) {
+        // The reap revokes signal ownership; the slot releases at guard drop.
+        let process = st.invocations[reaped].process.as_ref().unwrap();
+        assert!(process.pgid.is_none());
+        assert_eq!(st.invocations[reaped].process_exit_code, Some(0));
+        assert!(st.invocations[other].process.is_some());
+    }
+
+    fn assert_slot_released(st: &crate::state::CoreState, released: &str, held: &str) {
+        // A console-less entry is pruned entirely when its guard drops.
+        assert!(!st.invocations.contains_key(released));
+        assert!(st.invocations[held].process.is_some());
+    }
+
     #[test]
-    fn spawned_query_holds_and_releases_the_shared_bazel_slot() {
+    fn spawned_queries_each_hold_their_own_invocation() {
         let dir = std::env::temp_dir().join(format!("zeal-query-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         let workspace = dir.join("workspace");
         fs::create_dir(&workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
         let bazel = dir.join("bazel");
         fs::write(&bazel, "#!/bin/sh\nprintf '//app:chosen\\n'\n").unwrap();
         fs::set_permissions(&bazel, fs::Permissions::from_mode(0o700)).unwrap();
 
         let core = Core::new();
-        {
-            let mut st = core.state.lock().unwrap();
-            st.workspace = Some(workspace);
-            st.bazel = Some(bazel);
+        let ws = workspace.to_str().unwrap().to_string();
+        let mut st = core.state.lock().unwrap();
+        st.register_workspace(workspace, crate::scope::Scope::default());
+        st.bazel = Some(bazel);
+        drop(st);
+        // Queries never serialize each other: both register before either ends.
+        let (mut child_a, id_a) = spawn_query(&core, &ws, "//...", "label", false, false).unwrap();
+        let (mut child_b, id_b) = spawn_query(&core, &ws, "//...", "label", false, false).unwrap();
+        let st = core.state.lock().unwrap();
+        for id in [&id_a, &id_b] {
+            assert_query_entry(&st, id, &ws);
         }
-        let (mut child, id) = spawn_query(&core, "//...", "label", false, false).unwrap();
-        let slot = runner::BazelSlot {
+        drop(st);
+        let _guard_a = runner::InvocationGuard {
             core: &core,
-            id: &id,
+            id: &id_a,
             emit: || (),
         };
+        assert_eq!(runner::wait_query(&core, &id_a, &mut child_a).unwrap(), 0);
         {
             let st = core.state.lock().unwrap();
-            let invocation = st.active_invocation.as_ref().unwrap();
-            assert_eq!(invocation.id.as_str(), id);
-            assert!(invocation.terminal.is_none());
-            assert!(st.bazel_busy());
+            assert_reap_state(&st, &id_a, &id_b);
         }
-        assert!(spawn_query(&core, "//...", "label", false, false).is_err());
-        assert_eq!(
-            runner::wait(&core, &id, || {
-                child
-                    .try_wait()
-                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
-            })
-            .unwrap(),
-            0
-        );
-        drop(slot);
-        assert!(core.state.lock().unwrap().active_invocation.is_none());
+        drop(_guard_a);
+        {
+            let st = core.state.lock().unwrap();
+            assert_slot_released(&st, &id_a, &id_b);
+        }
 
-        let (mut child, id) = spawn_query(&core, "//...", "label", false, false).unwrap();
-        let slot = runner::BazelSlot {
+        let _guard_b = runner::InvocationGuard {
             core: &core,
-            id: &id,
+            id: &id_b,
             emit: || (),
         };
-        assert_eq!(
-            runner::wait(&core, &id, || {
-                child
-                    .try_wait()
-                    .map(|status| status.map(|status| status.code().unwrap_or(-1)))
-            })
-            .unwrap(),
-            0
-        );
-        drop(slot);
+        assert_eq!(runner::wait_query(&core, &id_b, &mut child_b).unwrap(), 0);
+        drop(_guard_b);
         fs::remove_dir_all(dir).unwrap();
     }
 

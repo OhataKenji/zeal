@@ -102,26 +102,48 @@ export interface TargetScope {
   include: string[];
 }
 
-/** Current core state. A workspace switch clears workspace-scoped data. */
-export interface AppState {
-  besError?: string | null;
-  /** A receiver is available for new Bazel invocations, even if its preferred port is occupied. */
-  besReady: boolean;
-  workspace: string | null;
+/** Per-workspace state inside the aggregate snapshot. */
+export interface WorkspaceState {
+  workspace: string;
   scope: TargetScope;
-  bazel: string | null;
   ingest: "idle" | "running";
   /** `TargetIndex.meta.fetchedAt`; its data loads through `get_snapshot`. */
   snapshotFetchedAt: number | null;
   lastError: IngestError | null;
-  activeInvocation: string | null;
-  // The current workspace's last Console remains readable after process exit.
-  consoleInvocation?: string | null;
-  // Stop is best-effort. An unconfirmed exit releases the slot with invocationNote.
+}
+
+/** One Bazel operation Zeal launched, owned by the core until it exits. */
+export interface OwnedInvocation {
+  id: string;
+  workspace: string;
+  cmd: string;
+  pattern: string;
+  startedAt: number;
+  running: boolean;
+  stoppable: boolean;
   stopping: boolean;
-  invocationNote: string | null;
-  // A selected target's detail query, serialized with the other Bazel operations.
-  detailQuery: "idle" | "running";
+  console: boolean;
+  processExitCode: number | null;
+  note: string | null;
+}
+
+/** The aggregate core snapshot pushed on every change; `revision` grows
+ * monotonically so stale pushes cannot overwrite newer state. */
+export interface AppState {
+  revision: number;
+  besError: string | null;
+  /** A receiver is available for new Bazel invocations, even if its preferred port is occupied. */
+  besReady: boolean;
+  bazel: string | null;
+  lastWorkspace: string | null;
+  workspaces: WorkspaceState[];
+  invocations: OwnedInvocation[];
+}
+
+/** `open_workspace` reply: the canonical id plus the fresh aggregate state. */
+export interface OpenWorkspaceResult {
+  workspace: string;
+  state: AppState;
 }
 
 /** Commands accepted by the command composer. */

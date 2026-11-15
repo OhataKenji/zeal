@@ -95,6 +95,11 @@ build --experimental_collect_system_network_usage
 
 While Zeal is open, run `bazel build //...`.
 
+The BES receiver accepts up to 32 concurrent event streams by default.
+Set `ZEAL_BES_MAX_STREAMS` to a positive integer to change the limit, for
+example `ZEAL_BES_MAX_STREAMS=64 pnpm tauri dev`; the value is read at
+startup, so restart Zeal after changing it.
+
 ## Development
 
 - [Setup and checks](docs/development.md)
