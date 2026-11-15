@@ -63,11 +63,6 @@
       : null,
   );
 
-  function retryTargets() {
-    if (app.view.snapshotError) void getSession().loadSnapshot();
-    else refresh();
-  }
-
   let revealRequest = $state(0);
   let targetField = $state("");
   let cmd = $state<BazelCommand>("build");
@@ -183,7 +178,7 @@
   }
 </script>
 
-{#snippet targetPane(state: WorkspaceState)}
+{#snippet targetPane()}
   <section
     class="pane"
     class:collapsed={collapsed.targets}
@@ -205,21 +200,22 @@
         aria-label="Reload targets"
         title="Reload targets"
         onclick={refresh}
-        disabled={state.ingest === "running"}
+        disabled={app.view.snapshotLoading}
       >
         <ArrowClockwise size={14} />
       </button>
     </div>
     {#if !collapsed.targets}
       <div class="pane-body">
+        {#if app.view.snapshotError}
+          <Notice tone={snap ? "warning" : "error"} onaction={refresh}>
+            {app.view.snapshotError}
+          </Notice>
+        {/if}
         {#if snap && tree}
           <Tree root={tree} {selection} {revealRequest} onselect={select} />
-        {:else if state.ingest === "running" || app.view.snapshotLoading}
+        {:else if app.view.snapshotLoading}
           <p class="dim">Loading targets…</p>
-        {:else if app.view.snapshotError || state.lastError}
-          <Notice tone="error" onaction={retryTargets}
-            >{app.view.snapshotError ?? state.lastError?.summary}</Notice
-          >
         {:else}
           <p class="dim">—</p>
         {/if}
@@ -241,7 +237,10 @@
       aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}`}
       class:selected={active}
       aria-current={active ? "true" : undefined}
-      onclick={() => getSession().selectInvocation(record.id)}
+      onclick={() =>
+        execution?.running && execution.console
+          ? getSession().openConsole(record.id)
+          : getSession().selectInvocation(record.id)}
     >
       <span class="invocation-label"
         ><InvocationStatus {...status} compact /><span class="invocation-command"
@@ -294,7 +293,7 @@
   </section>
 {/snippet}
 
-{#snippet workspaceContent(state: WorkspaceState, workspace: string)}
+{#snippet workspaceContent(workspace: string)}
   <main
     class="content"
     class:invocation-content={content.kind !== "targets"}
@@ -309,22 +308,22 @@
           {/await}
         </div>
       {/key}
+    {:else if content.kind === "console"}
+      <p class="dim" role="status">Waiting for Console…</p>
     {/if}
     {#if content.kind !== "console"}
     {#if snap?.meta.status === "partial"}
       <Notice tone="warning">
-        Skipped some packages (exit {state.lastError?.exitCode ?? "?"}) —
-        partial results from
-        {new Date(snap.meta.fetchedAt).toLocaleTimeString()}
+        Partial target list{app.view.snapshotError ? ` — ${app.view.snapshotError}` : ""}
       </Notice>
-    {:else if snap && (state.lastError || app.view.snapshotError)}
-      <Notice tone="warning" onaction={app.view.snapshotError ? getSession().loadSnapshot : undefined}>
+    {:else if snap && app.view.snapshotError}
+      <Notice tone="warning" onaction={refresh}>
         Refresh failed — showing the snapshot from {new Date(
           snap.meta.fetchedAt,
-        ).toLocaleTimeString()} ({state.lastError?.summary ?? app.view.snapshotError})
+        ).toLocaleTimeString()} ({app.view.snapshotError})
       </Notice>
     {/if}
-    {#if state.ingest === "running" || app.view.snapshotLoading}
+    {#if app.view.snapshotLoading}
       <p class="dim">Loading targets…</p>
     {/if}
     {#if content.kind === "invocation"}
@@ -364,25 +363,17 @@
         {/key}
       {:else if app.view.targetDetailError}
         <Notice tone="error" onaction={() =>
-          app.view.snapshotError
-            ? void getSession().loadSnapshot()
-            : getSession().select(selection)}>
+          app.view.snapshotError ? refresh() : getSession().select(selection)}>
           Could not load target details: {app.view.targetDetailError}
         </Notice>
       {:else}
-        <p class="dim">
-          {st?.ingest === "running" ? "Waiting for Bazel…" : "Loading target details…"}
-        </p>
+        <p class="dim">Loading target details…</p>
       {/if}
     {:else if snap}
       <p class="workspace-empty dim">Select a package or target in the sidebar, or search for a target above.</p>
-    {:else if state.ingest !== "running" && !app.view.snapshotLoading && (app.view.snapshotError || state.lastError)}
-      <Notice tone="error" announce={collapsed.targets} onaction={retryTargets}>
-        {#if app.view.snapshotError}
-          {app.view.snapshotError}
-        {:else}
-          Failed to load targets: {state.lastError?.summary}
-        {/if}
+    {:else if !app.view.snapshotLoading && app.view.snapshotError}
+      <Notice tone="error" announce={collapsed.targets} onaction={refresh}>
+        {app.view.snapshotError}
       </Notice>
     {/if}
     {/if}
@@ -479,7 +470,7 @@
   {:else}
     <div class="win-body">
       <aside class="sidebar">
-        {@render targetPane(st)}
+        {@render targetPane()}
         <div
           class="divider"
           role="separator"
@@ -493,7 +484,7 @@
           <button type="button" class="workspace-nav-link" class:active={content.kind === "analytics"} aria-current={content.kind === "analytics" ? "page" : undefined} onclick={() => getSession().showPage("analytics")}><ChartBar size={18} />Analytics</button>
         </nav>
       </aside>
-      {@render workspaceContent(st, st.workspace)}
+      {@render workspaceContent(st.workspace)}
     </div>
   {/if}
 </div>

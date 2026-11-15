@@ -63,13 +63,13 @@ UI は target 選択など一つの操作を一つの Message で伝え、update
 `runEffect(effect): Promise<SessionMessage>` は IPC の成功・失敗を結果 Message として返し、呼び出し側が dispatch する。戻り値を必須にすることで、Effect を追加して処理を忘れると型エラーになる。採否や画面遷移は update が決める。継続的な通知の購読は一回限りの Effect と区別する。
 コードの配置と具体的な更新例は [frontend README](../../src/README.md) に置く。
 
-| API                                                            | 戻り値                   |
-| -------------------------------------------------------------- | ------------------------ |
-| `select`, `selectInvocation`, `openConsole`, `showPage`        | `void`                   |
-| `start`, `stop`, `refresh`                                     | `void`                   |
-| `loadDetail`, `loadProfile`, `loadInvocations`, `loadSnapshot` | `void`                   |
-| `openWorkspace`, `setWorkspacePromptOpen`                      | `void`                   |
-| `init` / `dispose`                                             | `Promise<void>` / `void` |
+| API                                                     | 戻り値                   |
+| ------------------------------------------------------- | ------------------------ |
+| `select`, `selectInvocation`, `openConsole`, `showPage` | `void`                   |
+| `start`, `stop`, `refresh`                              | `void`                   |
+| `loadDetail`, `loadProfile`, `loadInvocations`          | `void`                   |
+| `openWorkspace`, `setWorkspacePromptOpen`               | `void`                   |
+| `init` / `dispose`                                      | `Promise<void>` / `void` |
 
 Promise と listener 解除関数は実行層に置く。`init` は重複を防ぎ、`dispose` は結果を無視する。購読登録中の dispose でも、登録された listener を解除する。
 **Promise Map・`waitFor`・公開 API への完了配送は持たない。** Effect の重複防止は Model に任せる。
@@ -98,37 +98,37 @@ target detail / outputs / saved detail / profile は、それぞれ Reader と�
 | 用途     | 別に残す規則                                                                                                                                 |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | 履歴     | request status は `current` / `refresh` / `invalidated`。通知を後続1回にまとめ、workspace 変更時は旧結果を捨てて worker 解放後に再取得する。 |
-| snapshot | 版が変われば古い取得を待たず、新しく取得する。古い応答は捨てる。                                                                             |
+| snapshot | workspace 選択と scope 変更で取得し直す。古い応答は request ID で捨てる。snapshot はセッション側の状態で、core には保持しない。              |
 
 workspace を離れると旧要求の受理権を失う。**A→B→A でも旧応答を採用しない。** 直列 worker の占有は応答まで維持する。
-ID は Model の単一カウンタで生成し、保留引数は発行時の選択から得る。読み取りと start の識別にだけ使い、stop / refresh に配送専用 ID を付けない。
+ID は Model の単一カウンタで生成し、保留引数は発行時の選択から得る。読み取り、refresh、start の応答を照合し、stop には対象の invocation ID を使う。
 
 ### 4. 出来事から、必要な取得だけを進める
 
 **全体同期 `syncAll` は置かない。** 次の5経路を直接書く。
 
-| 出来事                                           | 進める処理                                                                                                                  |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| 初期 state・workspace 変更                       | 旧表示と受理権を破棄し、履歴と利用可能な snapshot を読む。                                                                  |
-| 履歴通知・active invocation 変更・readiness 回復 | 履歴を要求する。履歴受理時は選択中 record の変更、または idle・エラーなしの detail との不一致で detail/profile を更新する。 |
-| scope・snapshot 版の変更                         | target を無効化して snapshot を読む。保存済み invocation は維持する。snapshot 受理時に選択を検証し、待機 target を進める。  |
-| target / saved invocation の選択                 | target は detail → outputs の順。saved detail/profile は独立に要求し、一方の失敗で他方を隠さない。                          |
-| 結果・busy 終了・Retry                           | 関係する用途の結果反映と待機要求の再開だけを行う。Retry 開始時は対象の error を消す。                                       |
+| 出来事                                           | 進める処理                                                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| 初期 state・workspace 変更                       | 旧表示と受理権を破棄し、履歴を読み、ターゲット一覧を取得する。                                                                 |
+| 履歴通知・active invocation 変更・readiness 回復 | 履歴を要求する。履歴受理時は選択中 record の変更、または idle・エラーなしの detail との不一致で detail/profile を更新する。    |
+| scope の変更                                     | target を無効化して snapshot を読み直す。保存済み invocation は維持する。snapshot 受理時に選択を検証し、待機 target を進める。 |
+| target / saved invocation の選択                 | target は detail → outputs の順。saved detail/profile は独立に要求し、一方の失敗で他方を隠さない。                             |
+| 結果・busy 終了・Retry                           | 関係する用途の結果反映と待機要求の再開だけを行う。Retry 開始時は対象の error を消す。                                          |
 
 **見落としやすい例外**
 
 - 履歴一覧が同じでも、取得済み detail との不一致は確認する。profile が取得中でも、更新が必要なら wanted を更新する。
-- snapshot の失敗は、次の authoritative state 通知か明示 Retry で再試行する。
+- snapshot の失敗は明示 Retry で再試行する。workspace を選び直しても再取得する。
 - busy 中は最新の target 選択を待つ。再開時に取得済みデータまで再取得しない。
 
-target は選択・snapshot の一致・workspace・busy を1か所で判定し、取得可能なら `{ label, fetchedAt }`、不可能なら `null` を返す。outputs 側には対応する detail の確認だけを足す。
+target は選択・snapshot の一致・workspace・取得中でないことを1か所で判定し、取得可能なら `{ workspace, label }`、不可能なら `null` を返す。outputs 側には対応する detail の確認だけを足す。
 state 比較・無効化・次の要求は用途内でまとめ、多数の変更フラグを helper 間で渡さない。
 
-### 5. Console は対応する完了で一度だけ遷移する
+### 5. 完了しても表示先は自動で変わらない
 
-- **開始通知が start 応答より先でもよい。** workspace と Console 所有権を確認して開く。起動失敗・直後の終了・再照合失敗も扱う。
-- **遅い state 応答で通知を上書きしない。** 初期取得と start 後の再照合に `connection.revision` を使う。再照合は start ID で対応付け、idle のままでも完了時に履歴を更新する。
-- **別の選択を奪わない。** 終了した実行の Console をまだ見ている場合だけ保存済み詳細へ移る。同じ完了を繰り返し処理せず、既存 API の Console 再表示も保つ。
+- **起動からの遷移は start 応答で決める。** 現在の navigation が一致する間だけ Console を開く。
+- **完了は表示先を変えない。** プロセス終了も履歴更新も現在の destination を変えない。詳細は利用者が明示的に選ぶ。
+- **再表示は保持された owned entry を使う。** Console を閉じても invocation は core が保持し、開き直すと capture 済みの出力を再生する。
 
 ## Alternatives Considered
 

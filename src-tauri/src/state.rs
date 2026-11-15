@@ -7,11 +7,10 @@
 //! overwrites an earlier one. External BES invocations are only observed and
 //! are never inserted here.
 
-use crate::snapshot::TargetIndex;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
@@ -39,15 +38,6 @@ pub struct AppStateDto {
 pub struct WorkspaceDto {
     pub workspace: String,
     pub scope: crate::scope::Scope,
-    /// "idle" | "running": whether a target-list fetch is in flight.
-    pub ingest: &'static str,
-    /// `fetched_at` of the current snapshot, kept across failed refreshes. The
-    /// UI fetches the target index through `get_snapshot` only when this
-    /// changes, so events never carry target data.
-    pub snapshot_fetched_at: Option<u64>,
-    /// The most recent fetch failure (or partial-fetch cause). Cleared by a
-    /// fully successful fetch.
-    pub last_error: Option<IngestError>,
 }
 
 /// One Bazel operation Zeal launched: build/test/run under a terminal, or a
@@ -84,15 +74,6 @@ pub struct OpenWorkspaceResult {
     pub state: AppStateDto,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IngestError {
-    /// Exit code of the query process, if it ran to an exit.
-    pub exit_code: Option<i32>,
-    /// Short human-readable summary (tail of stderr, timeout, spawn error).
-    pub summary: String,
-}
-
 /// The Bazel operation holding an invocation entry's process slot. Its fields
 /// exist exactly while it owns the process: releasing it drops them together,
 /// so a group id can never outlive the operation it belongs to. `pgid` is
@@ -121,25 +102,16 @@ impl ActiveInvocation {
     }
 }
 
-/// Target discovery state for one registered workspace. It owns no execution
-/// slot: Bazel operations live in [`CoreState::invocations`] instead.
+/// Discovery scope for one registered workspace. It owns no execution
+/// slot: Bazel operations live in [`CoreState::invocations`] instead, and
+/// the target list itself is fetched on demand by `ingest`.
 pub struct WorkspaceState {
     pub scope: crate::scope::Scope,
-    /// The latest target index; swapped atomically per fetch.
-    pub snapshot: Option<Arc<TargetIndex>>,
-    pub last_error: Option<IngestError>,
-    /// Token of the in-flight ingest request, if any.
-    pub ingest_request: Option<String>,
 }
 
 impl WorkspaceState {
     pub fn new(scope: crate::scope::Scope) -> Self {
-        Self {
-            scope,
-            snapshot: None,
-            last_error: None,
-            ingest_request: None,
-        }
+        Self { scope }
     }
 }
 
@@ -189,19 +161,10 @@ impl CoreState {
             .ok_or_else(|| "workspace is not open".to_string())
     }
 
-    /// Register `ws` (already canonicalized) under `scope`, or apply a scope
-    /// change to the existing entry: a different scope invalidates the cached
-    /// snapshot, error and any in-flight fetch without touching executions.
+    /// Register `ws` (already canonicalized) under `scope`, replacing any
+    /// previous entry's scope without touching executions.
     pub fn register_workspace(&mut self, ws: PathBuf, scope: crate::scope::Scope) {
-        match self.workspaces.get_mut(&ws) {
-            Some(state) if state.scope != scope => {
-                *state = WorkspaceState::new(scope);
-            }
-            Some(_) => {}
-            None => {
-                self.workspaces.insert(ws, WorkspaceState::new(scope));
-            }
-        }
+        self.workspaces.insert(ws, WorkspaceState::new(scope));
     }
 }
 
@@ -259,8 +222,8 @@ impl Core {
         }
     }
 
-    /// Snapshot the state for the UI. The revision is bumped while holding
-    /// the lock so the emitted order matches the observed mutation order.
+    /// Snapshot the state for the UI. The revision is assigned under the
+    /// state lock; the UI discards older snapshots if delivery is reordered.
     #[must_use]
     pub fn dto(&self) -> AppStateDto {
         let mut st = self.state.lock().expect("application state lock poisoned");
@@ -281,16 +244,6 @@ impl Core {
                 .map(|(path, state)| WorkspaceDto {
                     workspace: path.to_string_lossy().into_owned(),
                     scope: state.scope.clone(),
-                    ingest: if state.ingest_request.is_some() {
-                        "running"
-                    } else {
-                        "idle"
-                    },
-                    snapshot_fetched_at: state
-                        .snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.meta.fetched_at),
-                    last_error: state.last_error.clone(),
                 })
                 .collect(),
             invocations: st
@@ -393,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_invocation_keeps_its_console_readable() {
+    fn dto_advertises_console_for_a_finished_invocation() {
         let core = Core::new();
         let ws = PathBuf::from("/ws");
         {
@@ -413,39 +366,8 @@ mod tests {
         assert_eq!(invocation["running"], false);
     }
 
-    fn fetch_state(state: &mut WorkspaceState) {
-        state.ingest_request = Some("req-1".to_string());
-        state.snapshot = Some(Arc::new(crate::snapshot::TargetIndex {
-            meta: crate::snapshot::Meta {
-                fetched_at: 1,
-                status: crate::snapshot::Status::Ok,
-            },
-            targets: vec![],
-        }));
-        state.last_error = Some(IngestError {
-            exit_code: Some(1),
-            summary: "failed".to_string(),
-        });
-    }
-
     #[test]
-    fn register_workspace_reuses_entries_and_keeps_fetch_state() {
-        let core = Core::new();
-        let ws = PathBuf::from("/ws");
-        let scope = crate::scope::Scope::default();
-        let mut st = core.state.lock().unwrap();
-        st.register_workspace(ws.clone(), scope.clone());
-        fetch_state(st.workspaces.get_mut(&ws).unwrap());
-        // Same scope: the entry, request id, snapshot and error survive.
-        st.register_workspace(ws.clone(), scope.clone());
-        let state = &st.workspaces[&ws];
-        assert_eq!(state.ingest_request.as_deref(), Some("req-1"));
-        assert_eq!(state.snapshot.as_ref().unwrap().meta.fetched_at, 1);
-        assert!(state.last_error.is_some());
-    }
-
-    #[test]
-    fn register_workspace_scope_change_clears_fetch_state_only() {
+    fn register_workspace_replaces_scope_without_touching_other_entries() {
         let core = Core::new();
         let ws = PathBuf::from("/ws");
         let other = PathBuf::from("/other");
@@ -454,29 +376,13 @@ mod tests {
         st.register_workspace(ws.clone(), scope.clone());
         st.register_workspace(other.clone(), scope.clone());
         st.invocations.insert("run".to_string(), owned(&other));
-        fetch_state(st.workspaces.get_mut(&other).unwrap());
-        fetch_state(st.workspaces.get_mut(&ws).unwrap());
-        // A different scope invalidates the cached fetch state only.
-        st.register_workspace(
-            ws.clone(),
-            crate::scope::Scope {
-                include: vec!["//app/...".to_string()],
-            },
-        );
-        let state = &st.workspaces[&ws];
-        assert!(state.snapshot.is_none());
-        assert!(state.ingest_request.is_none());
-        assert!(state.last_error.is_none());
-        // The other workspace and owned invocations are untouched.
-        assert_eq!(
-            st.workspaces[&other]
-                .snapshot
-                .as_ref()
-                .unwrap()
-                .meta
-                .fetched_at,
-            1
-        );
+        // Re-registering under a new scope replaces only that entry's scope.
+        let narrow = crate::scope::Scope {
+            include: vec!["//app/...".to_string()],
+        };
+        st.register_workspace(ws.clone(), narrow.clone());
+        assert_eq!(st.workspaces[&ws].scope, narrow);
+        assert_eq!(st.workspaces[&other].scope, scope);
         assert!(st.invocations.contains_key("run"));
     }
 

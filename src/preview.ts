@@ -178,14 +178,10 @@ const state: AppState = {
     {
       workspace: WORKSPACE,
       scope: { include: ["//app/..."] },
-      ingest: "idle",
-      snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
-      lastError: null,
     },
   ],
   invocations: [],
 };
-const snapshots = new Map<string, TargetIndex | null>([[WORKSPACE, SNAPSHOT]]);
 
 function emitState() {
   state.revision += 1;
@@ -197,11 +193,6 @@ function wsEntry(workspace: unknown): WorkspaceState {
   const entry = state.workspaces.find((item) => item.workspace === id);
   if (!entry) throw new Error(`Preview workspace is not open: ${id}`);
   return entry;
-}
-
-function snapshotFor(workspace: unknown): TargetIndex | null {
-  wsEntry(workspace);
-  return snapshots.get(String(workspace)) ?? null;
 }
 
 function ownedFor(id: string): OwnedInvocation | undefined {
@@ -427,8 +418,10 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
     id,
     `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
   );
-  record.finishedAt = Date.now();
-  record.exitCode = 0;
+  if (cmd !== "run") {
+    record.finishedAt = Date.now();
+    record.exitCode = 0;
+  }
   emitState();
   return id;
 }
@@ -459,7 +452,6 @@ export function installPreview() {
   if (new URLSearchParams(location.search).get("preview") === "empty") {
     state.lastWorkspace = null;
     state.workspaces = [];
-    snapshots.clear();
   }
   function candidates(): string[] {
     const counts = new Map<string, { count: number; last: number }>();
@@ -479,12 +471,8 @@ export function installPreview() {
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
-    get_snapshot: (payload) => structuredClone(snapshotFor(payload?.workspace)),
     get_target_detail: (payload): TargetDetail => {
-      const snapshot = snapshotFor(payload?.workspace);
-      if (payload?.fetchedAt !== snapshot?.meta.fetchedAt) {
-        throw new Error("Target list changed; select the target again");
-      }
+      wsEntry(payload?.workspace);
       const label = String(payload?.label);
       const selected = FULL_DATA.targets.find((item) => item.label === label);
       if (!selected) throw new Error("Target not found");
@@ -496,12 +484,9 @@ export function installPreview() {
       });
     },
     get_target_outputs: (payload): TargetOutputs => {
-      const snapshot = snapshotFor(payload?.workspace);
-      if (payload?.fetchedAt !== snapshot?.meta.fetchedAt) {
-        throw new Error("Target list changed; select the target again");
-      }
+      wsEntry(payload?.workspace);
       const label = String(payload?.label);
-      if (!snapshot?.targets.some((item) => item.label === label)) {
+      if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
       const paths = FULL_DATA.files
@@ -510,12 +495,9 @@ export function installPreview() {
       return { paths: paths.slice(0, 10), truncated: paths.length > 10 };
     },
     get_target_actions: (payload): TargetActions => {
-      const snapshot = snapshotFor(payload?.workspace);
-      if (payload?.fetchedAt !== snapshot?.meta.fetchedAt) {
-        throw new Error("Target list changed; select the target again");
-      }
+      wsEntry(payload?.workspace);
       const label = String(payload?.label);
-      if (!snapshot?.targets.some((item) => item.label === label)) {
+      if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
       const inputs = FULL_DATA.files
@@ -594,30 +576,18 @@ export function installPreview() {
       const scope = structuredClone(payload?.scope) as WorkspaceState["scope"];
       let entry = state.workspaces.find((item) => item.workspace === workspace);
       if (!entry) {
-        entry = {
-          workspace,
-          scope,
-          ingest: "idle",
-          snapshotFetchedAt: SNAPSHOT.meta.fetchedAt ?? null,
-          lastError: null,
-        };
+        entry = { workspace, scope };
         state.workspaces.push(entry);
-        snapshots.set(workspace, SNAPSHOT);
-      } else if (JSON.stringify(entry.scope) !== JSON.stringify(scope)) {
+      } else {
         entry.scope = scope;
-        entry.snapshotFetchedAt = null;
-        snapshots.set(workspace, null);
       }
       state.lastWorkspace = workspace;
       emitState();
       return { workspace, state: structuredClone(state) };
     },
     refresh: (payload) => {
-      const workspace = String(payload?.workspace ?? "");
-      const entry = wsEntry(workspace);
-      snapshots.set(workspace, SNAPSHOT);
-      entry.snapshotFetchedAt = SNAPSHOT.meta.fetchedAt ?? null;
-      emitState();
+      wsEntry(payload?.workspace);
+      return { snapshot: structuredClone(SNAPSHOT), error: null };
     },
     start_invocation: (payload) =>
       startInvocation(
@@ -634,7 +604,7 @@ export function installPreview() {
       const output = String(payload?.output ?? "label");
       const expr = String(payload?.expr ?? "");
       const labels = expr.includes("//")
-        ? (snapshotFor(workspace)?.targets ?? []).map((t) => t.label)
+        ? SNAPSHOT.targets.map((t) => t.label)
         : ["//app:server", "//app/lib:parser", "//tools:cli"];
       const finished = {
         exitCode: 0,

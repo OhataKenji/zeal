@@ -1,5 +1,6 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
 import {
   canSend,
   createSession,
@@ -27,9 +28,6 @@ function wsEntry(workspace: string, over: Partial<WorkspaceState> = {}): Workspa
   return {
     workspace,
     scope: { include: ["//app/..."] },
-    ingest: "idle",
-    snapshotFetchedAt: null,
-    lastError: null,
     ...over,
   };
 }
@@ -79,7 +77,7 @@ const SNAPSHOT: TargetIndex = {
   })),
 };
 const READY = coreState({
-  workspaces: [wsEntry(WS, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt })],
+  workspaces: [wsEntry(WS)],
 });
 const RECORD: InvocationRecord = {
   id: "run-a",
@@ -186,7 +184,7 @@ function requestCount(h: ReturnType<typeof harness>, command: string) {
 }
 
 async function settle() {
-  for (let i = 0; i < 8; i++) await Promise.resolve();
+  await setImmediate();
 }
 
 async function initReady(h: ReturnType<typeof harness>) {
@@ -205,7 +203,7 @@ test("initial restore selects lastWorkspace and loads its readers", async () => 
   const h = harness(
     Promise.resolve(
       coreState({
-        workspaces: [wsEntry(WS, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt })],
+        workspaces: [wsEntry(WS)],
         lastWorkspace: WS,
       }),
     ),
@@ -213,7 +211,7 @@ test("initial restore selects lastWorkspace and loads its readers", async () => 
   await initReady(h);
   assert.equal(h.view.state?.workspace, WS);
   assert.equal(pendingRequest(h, "list_invocations").args?.workspace, WS);
-  assert.equal(pendingRequest(h, "get_snapshot").args?.workspace, WS);
+  assert.equal(pendingRequest(h, "refresh").args?.workspace, WS);
 });
 
 test("late app-state with an older revision is ignored", async () => {
@@ -233,10 +231,7 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
     Promise.resolve(
       coreState({
         revision: 2,
-        workspaces: [
-          wsEntry(WS, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }),
-          wsEntry(OTHER, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }),
-        ],
+        workspaces: [wsEntry(WS), wsEntry(OTHER)],
         invocations: [running],
       }),
     ),
@@ -244,14 +239,15 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   await initReady(h);
   h.session.openWorkspace("/alias/other", { include: ["//..."] });
   const open = pendingRequest(h, "open_workspace");
+  assert.deepEqual(open.args, {
+    path: "/alias/other",
+    scope: { include: ["//..."] },
+  });
   const result: OpenWorkspaceResult = {
     workspace: OTHER,
     state: coreState({
       revision: 3,
-      workspaces: [
-        wsEntry(WS, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }),
-        wsEntry(OTHER, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }),
-      ],
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
       invocations: [running],
     }),
   };
@@ -262,7 +258,7 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   pendingRequest(h, "list_invocations").reply.resolve([]);
   await settle();
   assert.equal(lastPendingRequest(h, "list_invocations").args?.workspace, OTHER);
-  assert.equal(lastPendingRequest(h, "get_snapshot").args?.workspace, OTHER);
+  assert.equal(lastPendingRequest(h, "refresh").args?.workspace, OTHER);
   // A remains owned in the aggregate.
   assert.equal(h.view.core?.invocations[0]?.id, "a-run");
   // B's own start names B.
@@ -293,7 +289,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
     workspace: OTHER,
     state: coreState({
       revision: 2,
-      workspaces: [wsEntry(WS), wsEntry(OTHER, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt })],
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
     }),
   });
   await settle();
@@ -433,7 +429,7 @@ test("openConsole is a no-op for foreign, missing, and console-less entries", as
 test("scope change invalidates stale target results and readers name the workspace", async () => {
   const h = harness();
   await initReady(h);
-  lastPendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
+  lastPendingRequest(h, "refresh").reply.resolve({ snapshot: SNAPSHOT, error: null });
   await settle();
   h.session.select({ kind: "target", label: "//app:first" });
   await settle();
@@ -444,12 +440,7 @@ test("scope change invalidates stale target results and readers name the workspa
     "app-state",
     coreState({
       revision: 2,
-      workspaces: [
-        wsEntry(WS, {
-          scope: { include: ["//other/..."] },
-          snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
-        }),
-      ],
+      workspaces: [wsEntry(WS, { scope: { include: ["//other/..."] } })],
     }),
   );
   await settle();
@@ -480,7 +471,7 @@ test("late history/detail/profile replies cannot populate another workspace", as
     workspace: OTHER,
     state: coreState({
       revision: 2,
-      workspaces: [wsEntry(WS), wsEntry(OTHER, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt })],
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
     }),
   });
   await settle();
@@ -492,18 +483,19 @@ test("late history/detail/profile replies cannot populate another workspace", as
   assert.notEqual(h.view.content.kind, "invocation");
 });
 
-test("returning to a workspace reuses its snapshot without a refresh", async () => {
+test("returning to a workspace refetches and the reply loads without app-state", async () => {
   const h = harness();
   await initReady(h);
-  lastPendingRequest(h, "get_snapshot").reply.resolve(SNAPSHOT);
+  lastPendingRequest(h, "refresh").reply.resolve({ snapshot: SNAPSHOT, error: null });
   await settle();
-  // Switch away and back.
+  assert.equal(h.view.snapshot?.meta.fetchedAt, 1);
+  // Switch away and back: each selection issues its own refresh.
   h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
       revision: 2,
-      workspaces: [wsEntry(WS, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }), wsEntry(OTHER)],
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
     }),
   });
   await settle();
@@ -513,13 +505,17 @@ test("returning to a workspace reuses its snapshot without a refresh", async () 
     workspace: WS,
     state: coreState({
       revision: 3,
-      workspaces: [wsEntry(WS, { snapshotFetchedAt: SNAPSHOT.meta.fetchedAt }), wsEntry(OTHER)],
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
     }),
   });
   await settle();
-  // WS has a snapshot: get_snapshot loads cached data, no refresh is issued.
-  assert.equal(requestCount(h, "refresh"), refreshes);
-  assert.equal(lastPendingRequest(h, "get_snapshot").args?.workspace, WS);
+  assert.equal(requestCount(h, "refresh"), refreshes + 1);
+  const load = lastPendingRequest(h, "refresh");
+  assert.equal(load.args?.workspace, WS);
+  assert.deepEqual(load.args?.scope, { include: ["//app/..."] });
+  load.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(h.view.snapshot?.meta.fetchedAt, 1);
 });
 
 test("canSend requires readiness, a workspace, bazel, BES, and a valid target", async () => {

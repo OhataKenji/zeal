@@ -15,7 +15,6 @@ use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServe
 
 pub const ADDRESS: &str = "127.0.0.1:4718";
 const DEFAULT_MAX_STREAMS: usize = 32;
-const MAX_STREAMS_ERROR: &str = "ZEAL_BES_MAX_STREAMS must be a positive integer";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 type InvocationsChanged = Arc<dyn Fn() + Send + Sync>;
 
@@ -43,6 +42,13 @@ impl Receiver {
     }
 }
 
+fn max_streams_error() -> String {
+    format!(
+        "ZEAL_BES_MAX_STREAMS must be an integer in 1..={}",
+        (u32::MAX as usize).min(tokio::sync::Semaphore::MAX_PERMITS)
+    )
+}
+
 fn parse_max_streams(value: Option<&str>) -> Result<usize, String> {
     let Some(value) = value else {
         return Ok(DEFAULT_MAX_STREAMS);
@@ -55,14 +61,14 @@ fn parse_max_streams(value: Option<&str>) -> Result<usize, String> {
                 && *limit <= u32::MAX as usize
                 && *limit <= tokio::sync::Semaphore::MAX_PERMITS
         })
-        .ok_or_else(|| MAX_STREAMS_ERROR.to_string())
+        .ok_or_else(max_streams_error)
 }
 
 fn max_streams_from_env() -> Result<usize, String> {
     match std::env::var("ZEAL_BES_MAX_STREAMS") {
         Ok(value) => parse_max_streams(Some(&value)),
         Err(std::env::VarError::NotPresent) => parse_max_streams(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(MAX_STREAMS_ERROR.to_string()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(max_streams_error()),
     }
 }
 
@@ -557,38 +563,30 @@ mod tests {
     }
 
     #[test]
-    fn stream_limit_defaults_to_32_and_rejects_invalid_values() {
-        assert_eq!(parse_max_streams(None).unwrap(), DEFAULT_MAX_STREAMS);
+    fn stream_limit_defaults_to_32_and_accepts_valid_values() {
+        assert_eq!(parse_max_streams(None).unwrap(), 32);
         assert_eq!(parse_max_streams(Some("1")).unwrap(), 1);
         assert_eq!(parse_max_streams(Some("64")).unwrap(), 64);
-        for value in ["0", "-1", "abc", "1.5", " 8", "8 ", &u64::MAX.to_string()] {
-            let error = parse_max_streams(Some(value)).unwrap_err();
-            assert_eq!(error, MAX_STREAMS_ERROR, "{value:?}");
-            assert!(!error.contains(value), "the value must not be echoed");
-        }
-        let overflow = (u32::MAX as u64 + 1).to_string();
-        assert!(parse_max_streams(Some(&overflow)).is_err());
     }
 
     #[test]
-    fn admission_accepts_up_to_the_limit_and_releases_a_permit() {
-        let temp = Temp::new();
-        let receiver = silent_receiver(temp.0.join("data"));
-        let permits: Vec<_> = (0..DEFAULT_MAX_STREAMS)
-            .map(|_| receiver.admit().unwrap())
-            .collect();
-        assert_eq!(
-            receiver.admit().unwrap_err().code(),
-            tonic::Code::ResourceExhausted
-        );
-        drop(permits);
-        assert!(receiver.admit().is_ok());
+    fn stream_limit_rejects_invalid_values_with_the_actual_bound() {
+        let bound = (u32::MAX as usize).min(tokio::sync::Semaphore::MAX_PERMITS);
+        let expected = format!("ZEAL_BES_MAX_STREAMS must be an integer in 1..={bound}");
+        for value in ["0", "-1", "abc", "1.5", " 8", "8 ", &u64::MAX.to_string()] {
+            assert_eq!(
+                parse_max_streams(Some(value)).unwrap_err(),
+                expected,
+                "{value:?}"
+            );
+        }
+        let overflow = (u32::MAX as u64 + 1).to_string();
+        assert_eq!(parse_max_streams(Some(&overflow)).unwrap_err(), expected);
     }
 
     #[test]
     fn a_configured_limit_bounds_admission() {
-        let temp = Temp::new();
-        let receiver = Receiver::new(temp.0.join("data"), 2, Arc::new(|| {}));
+        let receiver = Receiver::new(PathBuf::new(), 2, Arc::new(|| {}));
         let first = receiver.admit().unwrap();
         let second = receiver.admit().unwrap();
         assert_eq!(

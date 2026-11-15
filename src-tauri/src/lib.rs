@@ -41,25 +41,7 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
-/// The target index of one registered workspace. Events carry only
-/// `snapshot_fetched_at`, so the UI requests this once per change instead of
-/// on every state push.
-#[tracing::instrument(target = "zeal::operations", name = "snapshot.get", skip_all)]
-#[tauri::command]
-async fn get_snapshot(
-    core: State<'_, Arc<Core>>,
-    workspace: String,
-) -> Result<Option<Arc<snapshot::TargetIndex>>, String> {
-    let st = core.state.lock().expect("application state lock poisoned");
-    let ws = st.workspace_path(&workspace)?;
-    Ok(st
-        .workspaces
-        .get(&ws)
-        .and_then(|state| state.snapshot.clone()))
-}
-
-/// Load relationships for one target in the workspace's target-list
-/// generation.
+/// Load relationships for one target in `workspace`.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "target.detail.request", skip_all)]
 async fn get_target_detail(
@@ -67,13 +49,12 @@ async fn get_target_detail(
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
-    fetched_at: u64,
 ) -> Result<snapshot::TargetDetail, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_detail(app, core, &workspace, &label, fetched_at)
+        ingest::target_detail(app, core, &workspace, &label)
     })
     .await
     {
@@ -93,13 +74,12 @@ async fn get_target_outputs(
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
-    fetched_at: u64,
 ) -> Result<ingest::TargetOutputs, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_outputs(app, core, &workspace, &label, fetched_at)
+        ingest::target_outputs(app, core, &workspace, &label)
     })
     .await
     {
@@ -118,13 +98,12 @@ async fn get_target_actions(
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
-    fetched_at: u64,
 ) -> Result<actions::TargetActions, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_actions(app, core, &workspace, &label, fetched_at)
+        ingest::target_actions(app, core, &workspace, &label)
     })
     .await
     {
@@ -156,9 +135,7 @@ fn open_workspace(
     if !workspace::is_workspace(&ws) {
         return Err("no MODULE.bazel / WORKSPACE at this path".to_string());
     }
-    let ws = ws
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve {}: {e}", ws.display()))?;
+    let ws = canonical_workspace_path(&ws)?;
     let bazel = workspace::resolve_bazel();
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
@@ -178,12 +155,30 @@ fn open_workspace(
     })
 }
 
-/// Manual refresh: re-run the target-list query for `workspace` unless that
-/// workspace already has one in flight.
+/// Manual refresh: run the target-list query for `workspace` under `scope`
+/// and return its result. Every call is an independent owned invocation.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "workspace.refresh", skip_all)]
-fn refresh(app: AppHandle, core: State<Arc<Core>>, workspace: String) -> Result<(), String> {
-    ingest::request(app, core.inner().clone(), &workspace)
+async fn refresh(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    workspace: String,
+    scope: scope::Scope,
+) -> Result<ingest::TargetLoad, String> {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        ingest::request(app, core, &workspace, scope)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("target list worker failed".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -429,6 +424,16 @@ fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Canonicalize a workspace root and reject one the String path API cannot
+/// represent, before it is registered or persisted.
+fn canonical_workspace_path(path: &Path) -> Result<PathBuf, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve {}: {e}", path.display()))?;
+    path.to_str().ok_or("workspace path must be valid UTF-8")?;
+    Ok(path)
+}
+
 fn registered_workspace(core: &Core, workspace: &str) -> Result<PathBuf, String> {
     core.state
         .lock()
@@ -442,7 +447,7 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
     if let Ok(dir) = app.path().app_data_dir()
         && let Some(saved) =
             workspace::load_saved(&dir).filter(|w| workspace::is_workspace(&w.path))
-        && let Ok(ws) = saved.path.canonicalize()
+        && let Ok(ws) = canonical_workspace_path(&saved.path)
     {
         let _ = store::refresh_workspace(&dir, &ws);
         {
@@ -493,7 +498,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
-            get_snapshot,
             get_target_detail,
             get_target_outputs,
             get_target_actions,
@@ -526,7 +530,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtifactWorker, DETAIL_BUSY, PROFILE_BUSY};
+    use super::{ArtifactWorker, DETAIL_BUSY, PROFILE_BUSY, canonical_workspace_path};
 
     #[test]
     fn readers_are_independent_and_each_stays_busy_until_its_worker_is_dropped() {
@@ -539,5 +543,39 @@ mod tests {
         assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_err());
         drop(profile);
         assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_workspace_path_resolves_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!("zeal-ws-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let child = dir.join("child");
+        std::fs::create_dir(&child).unwrap();
+        let alias = dir.join("alias");
+        symlink(&child, &alias).unwrap();
+        let resolved = canonical_workspace_path(&alias).unwrap();
+        assert_eq!(resolved, child.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn canonical_workspace_path_rejects_non_utf8_roots() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!("zeal-ws-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let bad = dir.join(OsString::from_vec(b"bad\xff".to_vec()));
+        std::fs::create_dir(&bad).unwrap();
+        let alias = dir.join("alias");
+        symlink(&bad, &alias).unwrap();
+        let error = canonical_workspace_path(&alias).unwrap_err();
+        assert_eq!(error, "workspace path must be valid UTF-8");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

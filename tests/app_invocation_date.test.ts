@@ -1,14 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AppState, WorkspaceState } from "../src/lib/types.ts";
+import type { AppState, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 const WS: WorkspaceState = {
   workspace: "/workspace",
   scope: { include: ["//app/..."] },
-  ingest: "idle",
-  snapshotFetchedAt: null,
-  lastError: null,
 };
 
 const CORE: AppState = {
@@ -71,4 +68,89 @@ test("App renders workspace navigation and invocation history", async (t) => {
     assert.match(toggle, /aria-expanded="false"/);
     assert.doesNotMatch(html, /id="command-arguments"/);
   });
+});
+
+test("App shows snapshot errors alongside retained targets", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { app } = await load("/src/lib/state.svelte.ts");
+  const { default: App } = await load("/src/App.svelte");
+
+  const CACHED: TargetIndex = {
+    meta: { fetchedAt: 1, status: "ok" },
+    targets: [
+      {
+        label: "//:cached",
+        pkg: "",
+        name: "cached",
+        ruleClass: "cc_library",
+        location: null,
+      },
+    ],
+  };
+
+  function output(snapshot: TargetIndex | null, snapshotError: string | null): string {
+    Object.assign(app.view, {
+      ready: true,
+      core: CORE,
+      state: WS,
+      content: { kind: "targets" },
+      selection: null,
+      snapshot,
+      snapshotError,
+      snapshotLoading: false,
+      targetDetail: null,
+      targetDetailError: null,
+      targetOutputs: null,
+      targetOutputsError: null,
+      targetActions: null,
+      targetActionsError: null,
+      invocations: [],
+      invocationRows: [],
+      invocationsError: null,
+    });
+    return render(App).body;
+  }
+
+  await t.test("a refresh error keeps the previous tree visible", () => {
+    const html = output(CACHED, "refresh test failure");
+    assert.ok(html.includes("refresh test failure"));
+    assert.ok(html.includes("//:cached"));
+  });
+
+  await t.test("a partial snapshot reports its cause", () => {
+    const html = output(
+      { ...CACHED, meta: { fetchedAt: 2, status: "partial" } },
+      "refresh test failure",
+    );
+    assert.ok(html.includes("Partial target list"));
+    assert.ok(html.includes("refresh test failure"));
+  });
+
+  await t.test("an error without a snapshot uses an alert", () => {
+    const html = output(null, "refresh test failure");
+    assert.ok(html.includes('role="alert"'));
+    assert.ok(html.includes("refresh test failure"));
+    assert.ok(!html.includes("//:cached"));
+  });
+});
+
+test("App shows a pending Console placeholder before the owned entry arrives", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { app } = await load("/src/lib/state.svelte.ts");
+  const { default: App } = await load("/src/App.svelte");
+
+  Object.assign(app.view, {
+    ready: true,
+    core: CORE,
+    state: WS,
+    content: { kind: "console", id: "pending", page: "targets" },
+    console: null,
+    execution: null,
+    invocations: [],
+    invocationRows: [],
+    invocationsError: null,
+  });
+  const html = render(App).body;
+  assert.ok(html.includes('role="status"'));
+  assert.ok(html.includes("Waiting for Console…"));
 });

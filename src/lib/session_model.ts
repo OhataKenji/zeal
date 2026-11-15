@@ -12,6 +12,7 @@ import type {
   TargetActions,
   TargetDetail,
   TargetIndex,
+  TargetLoad,
   TargetOutputs,
   TargetScope,
   WorkspaceState,
@@ -125,27 +126,29 @@ type RequestResult<T extends string, V> = ResultMessage<T, V> & {
 
 export type SessionEffect =
   | { readonly type: "listInvocations"; readonly id: number; readonly workspace: string }
-  | { readonly type: "getSnapshot"; readonly id: number; readonly workspace: string }
+  | {
+      readonly type: "refresh";
+      readonly id: number;
+      readonly workspace: string;
+      readonly scope: TargetScope;
+    }
   | {
       readonly type: "getTargetDetail";
       readonly id: number;
       readonly workspace: string;
       readonly label: string;
-      readonly fetchedAt: number;
     }
   | {
       readonly type: "getTargetOutputs";
       readonly id: number;
       readonly workspace: string;
       readonly label: string;
-      readonly fetchedAt: number;
     }
   | {
       readonly type: "getTargetActions";
       readonly id: number;
       readonly workspace: string;
       readonly label: string;
-      readonly fetchedAt: number;
     }
   | {
       readonly type: "getInvocation";
@@ -173,8 +176,7 @@ export type SessionEffect =
       readonly path: string;
       readonly scope: TargetScope;
     }
-  | { readonly type: "stop"; readonly id: string; readonly workspace: string }
-  | { readonly type: "refresh"; readonly workspace: string };
+  | { readonly type: "stop"; readonly id: string; readonly workspace: string };
 
 export type SessionMessage =
   | { readonly type: "subscriptionsFailed"; readonly error: string }
@@ -183,8 +185,7 @@ export type SessionMessage =
   | { readonly type: "historyChanged" }
   | { readonly type: "loadInvocations" }
   | RequestResult<"invocationsResult", InvocationRecord[]>
-  | { readonly type: "loadSnapshot" }
-  | RequestResult<"snapshotResult", TargetIndex | null>
+  | RequestResult<"snapshotResult", TargetLoad>
   | RequestResult<"targetDetailResult", TargetDetail>
   | RequestResult<"targetOutputsResult", TargetOutputs>
   | RequestResult<"targetActionsResult", TargetActions>
@@ -208,15 +209,12 @@ export type SessionMessage =
   | RequestResult<"workspaceResult", OpenWorkspaceResult>
   | { readonly type: "stop"; readonly id: string }
   | (ResultMessage<"stopResult", void> & { readonly id: string })
-  | { readonly type: "refresh" }
-  | (ResultMessage<"refreshResult", void> & { readonly workspace: string });
+  | { readonly type: "refresh" };
 
 interface SessionTransition {
   readonly model: SessionModel;
   readonly effects: SessionEffect[];
 }
-
-const TARGET_LIST_ERROR = "Could not load the target list";
 
 function emptyReader<T>(): Reader<T> {
   return { value: null, error: null, running: null, wanted: null };
@@ -445,17 +443,14 @@ function requestHistory(draft: Draft) {
 function startSnapshot(draft: Draft) {
   const workspace = draft.workspace;
   const state = wsEntry(draft.connection.state, workspace);
-  if (!workspace || !state || state.snapshotFetchedAt === null) return;
-  if (draft.targets.snapshot.requestId !== null) return;
+  if (!workspace || !state || !draft.connection.state?.bazel) return;
   const id = nextId(draft);
   draft.targets.snapshot.requestId = id;
   draft.targets.snapshot.error = null;
-  draft.effects.push({ type: "getSnapshot", id, workspace });
+  draft.effects.push({ type: "refresh", id, workspace, scope: state.scope });
 }
 
-function targetReadArgs(
-  draft: Draft,
-): { workspace: string; label: string; fetchedAt: number } | null {
+function targetReadArgs(draft: Draft): { workspace: string; label: string } | null {
   const selection = draft.targets.selection;
   const workspace = draft.workspace;
   const snapshot = draft.targets.snapshot.value;
@@ -466,11 +461,11 @@ function targetReadArgs(
     !draft.connection.state?.bazel ||
     selection?.kind !== "target" ||
     !snapshot ||
-    !snapshot.targets.some((target) => target.label === selection.label) ||
-    snapshot.meta.fetchedAt !== state.snapshotFetchedAt
+    draft.targets.snapshot.requestId !== null ||
+    !snapshot.targets.some((target) => target.label === selection.label)
   )
     return null;
-  return { workspace, label: selection.label, fetchedAt: snapshot.meta.fetchedAt };
+  return { workspace, label: selection.label };
 }
 
 function startTargetDetail(draft: Draft) {
@@ -714,48 +709,30 @@ function selectWorkspace(draft: Draft, workspace: string) {
   draft.connection.error = null;
   startHistory(draft);
   startSnapshot(draft);
-  refreshMissingTargets(draft);
-}
-
-function refreshMissingTargets(draft: Draft) {
-  const state = wsEntry(draft.connection.state, draft.workspace);
-  if (
-    state &&
-    draft.connection.state?.bazel &&
-    state.snapshotFetchedAt === null &&
-    state.ingest === "idle" &&
-    state.lastError === null
-  ) {
-    draft.effects.push({ type: "refresh", workspace: state.workspace });
-  }
 }
 
 function updateTargetsForWorkspace(
   draft: Draft,
   before: WorkspaceState | null,
   after: WorkspaceState | null,
+  bazelArrived: boolean,
 ) {
   const scopeChanged = !sameScope(before, after);
-  const fetchedChanged = (before?.snapshotFetchedAt ?? null) !== (after?.snapshotFetchedAt ?? null);
-  const contextChanged = before === null || scopeChanged || fetchedChanged || after === null;
-  let selectionCleared = false;
-  if (after === null || scopeChanged || after.snapshotFetchedAt === null) {
-    selectionCleared = draft.targets.selection !== null;
-    draft.targets.selection = null;
-    draft.targets.snapshot.value = null;
-    draft.targets.snapshot.error = null;
-  }
-  if (contextChanged || selectionCleared) resetTargetContext(draft);
-  if (!contextChanged) {
-    if (draft.targets.snapshot.error !== null) startSnapshot(draft);
+  if (before !== null && after !== null && !scopeChanged) {
+    if (
+      bazelArrived &&
+      draft.targets.snapshot.value === null &&
+      draft.targets.snapshot.requestId === null
+    ) {
+      startSnapshot(draft);
+    }
     return;
   }
+  // A different workspace entry or scope discards the target context; the
+  // next refresh belongs to the new scope.
   draft.targets.snapshot.requestId = null;
-  if (after === null || scopeChanged || after.snapshotFetchedAt === null) {
-    draft.targets.snapshot.value = null;
-  }
-  startSnapshot(draft);
-  if (scopeChanged) refreshMissingTargets(draft);
+  acceptSnapshot(draft, null);
+  if (after !== null) startSnapshot(draft);
 }
 
 function applyAppState(draft: Draft, state: AppState) {
@@ -781,6 +758,7 @@ function applyAppState(draft: Draft, state: AppState) {
       draft,
       wsEntry(before, draft.workspace),
       wsEntry(state, draft.workspace),
+      !before?.bazel && state.bazel !== null,
     );
   }
   savedEligibilityChanged(draft, wasSavedEligible, savedEligible(draft));
@@ -814,7 +792,6 @@ function finishHistory(draft: Draft, requestId: number, result: Result<Invocatio
 }
 
 function acceptSnapshot(draft: Draft, snapshot: TargetIndex | null) {
-  const previousFetchedAt = draft.targets.snapshot.value?.meta.fetchedAt ?? null;
   const selection = draft.targets.selection;
   const validTarget =
     selection?.kind === "target" &&
@@ -823,26 +800,20 @@ function acceptSnapshot(draft: Draft, snapshot: TargetIndex | null) {
     selection?.kind === "package" || (selection?.kind === "target" && !validTarget);
   draft.targets.snapshot.value = snapshot;
   draft.targets.snapshot.error = null;
-  if (draft.targets.detail.error === TARGET_LIST_ERROR) {
-    draft.targets.detail.error = null;
-  }
   if (selectionInvalid) draft.targets.selection = null;
-  if (previousFetchedAt !== (snapshot?.meta.fetchedAt ?? null) || selectionInvalid) {
-    resetTargetContext(draft);
-  }
-  resumeTargets(draft);
+  resetTargetContext(draft);
 }
 
-function failSnapshot(draft: Draft, error: string) {
-  draft.targets.snapshot.error = `Could not load the workspace snapshot: ${error}`;
-  if (draft.targets.selection?.kind === "target") draft.targets.detail.error = TARGET_LIST_ERROR;
-}
-
-function finishSnapshot(draft: Draft, requestId: number, result: Result<TargetIndex | null>) {
+function finishSnapshot(draft: Draft, requestId: number, result: Result<TargetLoad>) {
   if (draft.targets.snapshot.requestId !== requestId) return;
   draft.targets.snapshot.requestId = null;
-  if (result.ok) acceptSnapshot(draft, result.value);
-  else failSnapshot(draft, result.error);
+  if (!result.ok) {
+    draft.targets.snapshot.error = `Could not load the workspace snapshot: ${result.error}`;
+  } else {
+    if (result.value.snapshot !== null) acceptSnapshot(draft, result.value.snapshot);
+    draft.targets.snapshot.error = result.value.error?.summary ?? null;
+  }
+  resumeTargets(draft);
 }
 
 function acceptTargetDetail(draft: Draft, result: Result<TargetDetail>) {
@@ -1024,12 +995,6 @@ function requestStop(draft: Draft, id: string) {
   draft.effects.push({ type: "stop", id: execution.id, workspace: execution.workspace });
 }
 
-function requestRefresh(draft: Draft) {
-  const workspace = draft.workspace;
-  if (!workspace || draft.connection.state === null) return;
-  draft.effects.push({ type: "refresh", workspace });
-}
-
 export function update(model: SessionModel, message: SessionMessage): SessionTransition {
   const next = draft(model);
   switch (message.type) {
@@ -1048,9 +1013,6 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       break;
     case "invocationsResult":
       finishHistory(next, message.requestId, message.result);
-      break;
-    case "loadSnapshot":
-      startSnapshot(next);
       break;
     case "snapshotResult":
       finishSnapshot(next, message.requestId, message.result);
@@ -1113,12 +1075,7 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       }
       break;
     case "refresh":
-      requestRefresh(next);
-      break;
-    case "refreshResult":
-      if (!message.result.ok && message.workspace === next.workspace) {
-        next.connection.error = message.result.error;
-      }
+      startSnapshot(next);
       break;
     default:
       unexpected(message);

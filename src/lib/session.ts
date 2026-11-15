@@ -20,7 +20,7 @@ import type {
   Section,
   TargetActions,
   TargetDetail,
-  TargetIndex,
+  TargetLoad,
   TargetOutputs,
   TargetScope,
 } from "./types.ts";
@@ -134,11 +134,12 @@ export function createSession(
             }),
           (result) => ({ type: "invocationsResult", requestId: effect.id, result }),
         );
-      case "getSnapshot":
+      case "refresh":
         return settle(
           () =>
-            transport.invoke<TargetIndex | null>(COMMANDS.getSnapshot, {
+            transport.invoke<TargetLoad>(COMMANDS.refresh, {
               workspace: effect.workspace,
+              scope: effect.scope,
             }),
           (result) => ({ type: "snapshotResult", requestId: effect.id, result }),
         );
@@ -148,7 +149,6 @@ export function createSession(
             transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, {
               workspace: effect.workspace,
               label: effect.label,
-              fetchedAt: effect.fetchedAt,
             }),
           (result) => ({ type: "targetDetailResult", requestId: effect.id, result }),
         );
@@ -159,7 +159,6 @@ export function createSession(
             transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, {
               workspace: effect.workspace,
               label: effect.label,
-              fetchedAt: effect.fetchedAt,
             }),
           (result) => ({ type: "targetOutputsResult", requestId: effect.id, result }),
         );
@@ -170,7 +169,6 @@ export function createSession(
             transport.invoke<TargetActions>(COMMANDS.getTargetActions, {
               workspace: effect.workspace,
               label: effect.label,
-              fetchedAt: effect.fetchedAt,
             }),
           (result) => ({ type: "targetActionsResult", requestId: effect.id, result }),
         );
@@ -224,11 +222,6 @@ export function createSession(
             }),
           (result) => ({ type: "stopResult", id: effect.id, result }),
         );
-      case "refresh":
-        return settle(
-          () => transport.invoke<void>(COMMANDS.refresh, { workspace: effect.workspace }),
-          (result) => ({ type: "refreshResult", workspace: effect.workspace, result }),
-        );
     }
   }
 
@@ -256,7 +249,6 @@ export function createSession(
     loadDetail: () => dispatch({ type: "loadDetail" }),
     loadProfile: () => dispatch({ type: "loadProfile" }),
     loadInvocations: () => dispatch({ type: "loadInvocations" }),
-    loadSnapshot: () => dispatch({ type: "loadSnapshot" }),
     select: (selection: ExplorerSelection) => dispatch({ type: "select", selection }),
   };
 }

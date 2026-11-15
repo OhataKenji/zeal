@@ -2,7 +2,7 @@
 
 _OhataKenji_
 _Last update: 2026/10/31_
-_Status: Approved_
+_Status: 過去のマイルストーン仕様。現行の設計は [全体構成](./overview.md)・[frontend 状態](../../src/README.md)・[Target の段階的な取得](./target-loading.md) を参照。_
 
 履歴の入力とビルド結果はDBから表示し、詳細は保存したイベントから読む。
 受信の扱いは[正常受信](#正常受信)、詳細表示は[詳細の読込](#詳細の読込)を参照する。

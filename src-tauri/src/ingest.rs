@@ -1,15 +1,16 @@
 //! Fast target-list ingestion and on-demand proto details for one target.
 //!
-//! Triggers: workspace open and manual refresh. Each workspace tracks its own
-//! in-flight fetch by request id; a duplicate refresh for the same
-//! workspace is rejected, never queued, and Bazel's own lock decides whether
-//! queries can run alongside other commands.
+//! Triggers: workspace open and manual refresh. Each refresh runs its own
+//! scoped query as an owned invocation; Bazel's own lock decides whether
+//! queries can run alongside other commands, and the caller's request id
+//! decides which reply is current.
 
 use crate::actions;
 use crate::query_proto::{self, ParsedQuery};
 use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target, TargetIndex};
-use crate::state::{Core, IngestError};
+use crate::state::Core;
+use serde::Serialize;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,99 +33,75 @@ enum Outcome<T> {
     Failed(IngestError),
 }
 
-/// Start one ingestion for `ws`. A second refresh while one is in flight is
-/// rejected rather than queued; it says nothing about other Bazel work.
-pub fn request(app: AppHandle, core: Arc<Core>, ws: &str) -> Result<(), String> {
-    let (ws_path, bazel, query, id) = {
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        let ws_path = st.workspace_path(ws)?;
-        let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
-        let (query, id) = begin_ingest(&mut st, &ws_path)?;
-        (ws_path, bazel, query, id)
-    };
-    core.emit(&app);
-    thread::spawn(move || {
-        let mut command = command(&ws_path, &bazel, &query, "label_kind");
-        let outcome = fetch(
-            &core,
-            runner::InvocationMeta {
-                workspace: &ws_path,
-                cmd: "query",
-                pattern: &query,
-                id: &id,
-            },
-            &mut command,
-            || core.emit(&app),
-            snapshot::parse_label_kind,
-            |targets: &Vec<Target>| !targets.is_empty(),
-        );
-        let (snapshot, error) = match outcome {
-            Outcome::Ok(targets) => (
-                Some(Arc::new(snapshot::build_index(targets, Status::Ok))),
-                None,
-            ),
-            Outcome::Partial(targets, error) => (
-                Some(Arc::new(snapshot::build_index(targets, Status::Partial))),
-                Some(error),
-            ),
-            Outcome::Failed(error) => (None, Some(error)),
-        };
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        publish_ingest(&mut st, &ws_path, &id, snapshot, error);
-        drop(st);
-        core.emit(&app);
-    });
-    Ok(())
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestError {
+    /// Exit code of the query process, if it ran to an exit.
+    pub exit_code: Option<i32>,
+    /// Short human-readable summary (tail of stderr, timeout, spawn error).
+    pub summary: String,
 }
 
-/// Claim `ws`'s next ingest request for one refresh. A second refresh
-/// while one is in flight is rejected rather than queued; it says nothing
-/// about other Bazel work.
-fn begin_ingest(st: &mut crate::state::CoreState, ws: &Path) -> Result<(String, String), String> {
-    let ws_state = st
-        .workspaces
-        .get_mut(ws)
-        .ok_or_else(|| "workspace is not open".to_string())?;
-    if ws_state.ingest_request.is_some() {
-        return Err("target list refresh already in flight".to_string());
-    }
+/// The result of one target-list refresh: the parsed index, or the error
+/// that prevented it. A partial fetch carries both.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetLoad {
+    pub snapshot: Option<TargetIndex>,
+    pub error: Option<IngestError>,
+}
+
+/// Run the scoped target-list query for `ws` and return its result. Every
+/// call is an independent owned invocation; nothing is cached in the core.
+pub fn request(
+    app: AppHandle,
+    core: Arc<Core>,
+    ws: &str,
+    scope: crate::scope::Scope,
+) -> Result<TargetLoad, String> {
+    let query = scope.validated()?.rules_query();
+    let (ws_path, bazel) = acquire_target(&core, ws)?;
     let id = uuid::Uuid::new_v4().to_string();
-    ws_state.ingest_request = Some(id.clone());
-    Ok((ws_state.scope.rules_query(), id))
+    let mut command = command(&ws_path, &bazel, &query, "label_kind");
+    let outcome = fetch(
+        &core,
+        runner::InvocationMeta {
+            workspace: &ws_path,
+            cmd: "query",
+            pattern: &query,
+            id: &id,
+        },
+        &mut command,
+        || core.emit(&app),
+        snapshot::parse_label_kind,
+        |targets: &Vec<Target>| !targets.is_empty(),
+    );
+    Ok(target_load(outcome))
 }
 
-/// Publish a finished fetch only while `id` is still `ws`'s in-flight
-/// request: a scope change or a newer refresh supersedes it.
-fn publish_ingest(
-    st: &mut crate::state::CoreState,
-    ws: &Path,
-    id: &str,
-    snapshot: Option<Arc<TargetIndex>>,
-    error: Option<IngestError>,
-) {
-    if let Some(ws_state) = st.workspaces.get_mut(ws)
-        && ws_state.ingest_request.as_deref() == Some(id)
-    {
-        if let Some(snapshot) = snapshot {
-            ws_state.snapshot = Some(snapshot);
-        }
-        ws_state.last_error = error;
-        ws_state.ingest_request = None;
-    }
+fn target_load(outcome: Outcome<Vec<Target>>) -> TargetLoad {
+    let (snapshot, error) = match outcome {
+        Outcome::Ok(targets) => (Some(snapshot::build_index(targets, Status::Ok)), None),
+        Outcome::Partial(targets, error) => (
+            Some(snapshot::build_index(targets, Status::Partial)),
+            Some(error),
+        ),
+        Outcome::Failed(error) => (None, Some(error)),
+    };
+    TargetLoad { snapshot, error }
 }
 
-/// Query the selected target. The workspace's index guards its label and
-/// fetched generation; other workspaces and invocations are unaffected.
+/// Query the selected target in `ws`. The label's format is validated here;
+/// membership in the current target list is the caller's check.
 #[tracing::instrument(target = "zeal::operations", name = "target.detail", skip_all)]
 pub fn target_detail(
     app: AppHandle,
     core: Arc<Core>,
     ws: &str,
     label: &str,
-    fetched_at: u64,
 ) -> Result<snapshot::TargetDetail, String> {
     let query = crate::scope::target_query(label)?;
-    let (ws_path, bazel) = acquire_target(&core, ws, label, fetched_at)?;
+    let (ws_path, bazel) = acquire_target(&core, ws)?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut command = command(&ws_path, &bazel, &query, "proto");
     let (query, status) = match fetch(
@@ -164,10 +141,9 @@ pub fn target_outputs(
     core: Arc<Core>,
     ws: &str,
     label: &str,
-    fetched_at: u64,
 ) -> Result<TargetOutputs, String> {
     let pattern = crate::scope::cquery_target(label)?;
-    let (ws_path, bazel) = acquire_target(&core, ws, label, fetched_at)?;
+    let (ws_path, bazel) = acquire_target(&core, ws)?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut command = Command::new(&bazel);
     command
@@ -221,10 +197,9 @@ pub fn target_actions(
     core: Arc<Core>,
     ws: &str,
     label: &str,
-    fetched_at: u64,
 ) -> Result<actions::TargetActions, String> {
     let pattern = crate::scope::cquery_target(label)?;
-    let (ws_path, bazel) = acquire_target(&core, ws, label, fetched_at)?;
+    let (ws_path, bazel) = acquire_target(&core, ws)?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut command = Command::new(&bazel);
     command
@@ -255,27 +230,11 @@ pub fn target_actions(
     }
 }
 
-/// Resolve `ws`'s current snapshot for `label` at `fetched_at`. Only that
-/// workspace's index is consulted; nothing here serializes other work.
-fn acquire_target(
-    core: &Core,
-    ws: &str,
-    label: &str,
-    fetched_at: u64,
-) -> Result<(PathBuf, PathBuf), String> {
+/// Resolve `ws`'s registered path and the bazel executable. Only that
+/// workspace is consulted; nothing here serializes other work.
+fn acquire_target(core: &Core, ws: &str) -> Result<(PathBuf, PathBuf), String> {
     let st = core.state.lock().expect("application state lock poisoned");
     let ws_path = st.workspace_path(ws)?;
-    let index = st
-        .workspaces
-        .get(&ws_path)
-        .and_then(|state| state.snapshot.as_ref())
-        .ok_or("target list is not loaded")?;
-    if index.meta.fetched_at != fetched_at {
-        return Err("target list changed; select the target again".to_string());
-    }
-    if !index.targets.iter().any(|target| target.label == label) {
-        return Err("target is not in the current Scope".to_string());
-    }
     let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
     Ok((ws_path, bazel))
 }
@@ -409,7 +368,6 @@ fn summarize(stderr_tail: &str) -> String {
 mod tests {
     use super::*;
     use crate::protocol::query as query_schema;
-    use crate::snapshot::{Meta, TargetIndex};
     use prost::Message;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -552,18 +510,26 @@ exit "$code"
     #[test]
     fn heavy_stderr_does_not_block_target_list_success() {
         let fixture = QueryFixture::new();
-        assert!(
-            matches!(fetch_list(&fixture, "success"), Outcome::Ok(targets) if targets.len() == 1)
-        );
+        let load = target_load(fetch_list(&fixture, "success"));
+        let snapshot = load.snapshot.expect("success carries an index");
+        assert!(load.error.is_none());
+        assert!(matches!(snapshot.meta.status, Status::Ok));
+        assert_eq!(snapshot.targets.len(), 1);
+        assert_eq!(snapshot.targets[0].label, "//app:chosen");
+        assert_eq!(snapshot.targets[0].rule_class, "cc_library");
     }
 
     #[test]
     fn heavy_stderr_preserves_partial_target_list() {
         let fixture = QueryFixture::new();
-        assert!(
-            matches!(fetch_list(&fixture, "partial"), Outcome::Partial(targets, error)
-            if targets.len() == 1 && error.exit_code == Some(9) && error.summary == "final diagnostic marker")
-        );
+        let load = target_load(fetch_list(&fixture, "partial"));
+        let snapshot = load.snapshot.expect("partial still carries an index");
+        assert!(matches!(snapshot.meta.status, Status::Partial));
+        assert_eq!(snapshot.targets.len(), 1);
+        assert_eq!(snapshot.targets[0].label, "//app:chosen");
+        let error = load.error.expect("partial carries its cause");
+        assert_eq!(error.exit_code, Some(9));
+        assert_eq!(error.summary, "final diagnostic marker");
     }
 
     #[test]
@@ -631,152 +597,43 @@ exit "$code"
         assert!(!outputs.truncated);
     }
 
-    fn index_with(fetched_at: u64, labels: &[&str]) -> Arc<TargetIndex> {
-        Arc::new(TargetIndex {
-            meta: Meta {
-                fetched_at,
-                status: Status::Ok,
-            },
-            targets: labels
-                .iter()
-                .map(|label| Target {
-                    label: (*label).into(),
-                    pkg: "app".into(),
-                    name: label.rsplit(':').next().unwrap().into(),
-                    rule_class: "cc_library".into(),
-                    location: None,
-                })
-                .collect(),
-        })
-    }
-
-    fn workspace_with_snapshot(core: &Core, ws: &Path, fetched_at: u64) {
-        let mut st = core.state.lock().unwrap();
-        st.register_workspace(ws.to_path_buf(), crate::scope::Scope::default());
-        st.workspaces.get_mut(ws).unwrap().snapshot =
-            Some(index_with(fetched_at, &["//app:chosen"]));
-    }
-
     #[test]
-    fn detail_requires_the_workspaces_current_index_label_and_generation() {
+    fn acquire_target_resolves_only_registered_roots_with_bazel() {
         let core = Core::new();
         let ws = PathBuf::from("/ws");
+        let other = PathBuf::from("/other");
+        {
+            let mut st = core.state.lock().unwrap();
+            st.register_workspace(ws.clone(), crate::scope::Scope::default());
+            st.register_workspace(other.clone(), crate::scope::Scope::default());
+            st.bazel = Some(PathBuf::from("/bin/bazel"));
+        }
+        // An unregistered workspace and a missing bazel are both rejected.
+        assert!(acquire_target(&core, "/missing").is_err());
+        {
+            let mut st = core.state.lock().unwrap();
+            st.bazel = None;
+        }
+        assert!(acquire_target(&core, "/ws").is_err());
         {
             let mut st = core.state.lock().unwrap();
             st.bazel = Some(PathBuf::from("/bin/bazel"));
         }
-        workspace_with_snapshot(&core, &ws, 7);
-        // Another workspace has no index: its labels are never served.
-        let other = PathBuf::from("/other");
-        {
-            let mut st = core.state.lock().unwrap();
-            st.register_workspace(other.clone(), crate::scope::Scope::default());
-        }
-        assert!(acquire_target(&core, "/other", "//app:chosen", 7).is_err());
-        assert!(acquire_target(&core, "/ws", "//app:chosen", 6).is_err());
-        assert!(acquire_target(&core, "/ws", "//app:unknown", 7).is_err());
-        let (ws_path, bazel) = acquire_target(&core, "/ws", "//app:chosen", 7).unwrap();
+        let (ws_path, bazel) = acquire_target(&core, "/ws").unwrap();
         assert_eq!(ws_path, ws);
         assert_eq!(bazel, PathBuf::from("/bin/bazel"));
-        // Detail reads never serialize each other: the same target can be
-        // acquired again while another query is in flight.
-        assert!(acquire_target(&core, "/ws", "//app:chosen", 7).is_ok());
-    }
-
-    fn assert_ingest_pending(st: &crate::state::CoreState, ws: &Path, id: &str) {
-        let state = &st.workspaces[ws];
-        assert!(state.snapshot.is_none());
-        assert_eq!(state.ingest_request.as_deref(), Some(id));
-        assert!(state.last_error.is_none());
-    }
-
-    fn assert_snapshot_published(st: &crate::state::CoreState, ws: &Path, fetched_at: u64) {
-        let state = &st.workspaces[ws];
-        assert_eq!(state.snapshot.as_ref().unwrap().meta.fetched_at, fetched_at);
-        assert!(state.ingest_request.is_none());
+        // Roots resolve independently of each other.
+        let (other_path, _) = acquire_target(&core, "/other").unwrap();
+        assert_eq!(other_path, other);
     }
 
     #[test]
-    fn ingest_requests_dedupe_and_only_the_matching_request_publishes() {
-        let core = Core::new();
-        let ws = PathBuf::from("/ws");
-        let mut st = core.state.lock().unwrap();
-        st.register_workspace(ws.clone(), crate::scope::Scope::default());
-        let (query, id) = begin_ingest(&mut st, &ws).unwrap();
-        assert!(!query.is_empty());
-        uuid::Uuid::parse_str(&id).unwrap();
-        // A second refresh while one is in flight is rejected, not queued.
-        assert!(begin_ingest(&mut st, &ws).is_err());
-        assert_ingest_pending(&st, &ws, &id);
-        // A foreign id can publish neither a result nor an error.
-        publish_ingest(
-            &mut st,
-            &ws,
-            "foreign",
-            Some(index_with(1, &[])),
-            Some(IngestError {
-                exit_code: None,
-                summary: "stale".to_string(),
-            }),
-        );
-        assert_ingest_pending(&st, &ws, &id);
-        // The matching id publishes and clears the request.
-        publish_ingest(&mut st, &ws, &id, Some(index_with(9, &[])), None);
-        assert_snapshot_published(&st, &ws, 9);
-        // A scope change supersedes the id a fetch captured.
-        let stale = begin_ingest(&mut st, &ws).unwrap().1;
-        st.register_workspace(
-            ws.clone(),
-            crate::scope::Scope {
-                include: vec!["//app/...".to_string()],
-            },
-        );
-        let fresh = begin_ingest(&mut st, &ws).unwrap().1;
-        assert_ne!(fresh, stale);
-        publish_ingest(
-            &mut st,
-            &ws,
-            &stale,
-            Some(index_with(3, &[])),
-            Some(IngestError {
-                exit_code: None,
-                summary: "stale".to_string(),
-            }),
-        );
-        assert_ingest_pending(&st, &ws, &fresh);
-        publish_ingest(
-            &mut st,
-            &ws,
-            &fresh,
-            Some(index_with(4, &[])),
-            Some(IngestError {
-                exit_code: None,
-                summary: "failed".to_string(),
-            }),
-        );
-        assert_snapshot_published(&st, &ws, 4);
-        assert!(st.workspaces[&ws].last_error.is_some());
-        // Scoping away and back cannot restore a cleared request id.
-        let gone = begin_ingest(&mut st, &ws).unwrap().1;
-        st.register_workspace(ws.clone(), crate::scope::Scope::default());
-        st.register_workspace(
-            ws.clone(),
-            crate::scope::Scope {
-                include: vec!["//app/...".to_string()],
-            },
-        );
-        let again = begin_ingest(&mut st, &ws).unwrap().1;
-        assert_ne!(again, gone);
-        publish_ingest(
-            &mut st,
-            &ws,
-            &gone,
-            Some(index_with(5, &[])),
-            Some(IngestError {
-                exit_code: None,
-                summary: "stale".to_string(),
-            }),
-        );
-        assert_ingest_pending(&st, &ws, &again);
+    fn heavy_stderr_reports_failed_target_list() {
+        let fixture = QueryFixture::new();
+        let load = target_load(fetch_list(&fixture, "failed"));
+        assert!(load.snapshot.is_none());
+        let error = load.error.expect("failure carries an error");
+        assert_eq!(error.exit_code, Some(7));
+        assert_eq!(error.summary, "final diagnostic marker");
     }
 }

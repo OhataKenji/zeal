@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  canSend,
   initialModel,
   sessionView,
   update,
@@ -27,9 +28,6 @@ function wsEntry(workspace: string, over: Partial<WorkspaceState> = {}): Workspa
   return {
     workspace,
     scope: { include: ["//app/..."] },
-    ingest: "idle",
-    snapshotFetchedAt: 1,
-    lastError: null,
     ...over,
   };
 }
@@ -136,11 +134,11 @@ function settleHistory(model: SessionModel): SessionModel {
 
 function indexedModel(core: AppState = state()) {
   const initialized = update(initialModel(), { type: "appState", state: core });
-  const snapshot = effect(initialized.effects, "getSnapshot");
+  const snapshot = effect(initialized.effects, "refresh");
   return update(initialized.model, {
     type: "snapshotResult",
     requestId: snapshot.id,
-    result: { ok: true, value: TARGETS },
+    result: { ok: true, value: { snapshot: TARGETS, error: null } },
   }).model;
 }
 
@@ -181,11 +179,12 @@ test("initial restore selects lastWorkspace once and never again", () => {
 });
 
 test("history, snapshot, and refresh effects carry the selected workspace", () => {
-  const two = state({}, [wsEntry(WS), wsEntry(OTHER)]);
+  const other = wsEntry(OTHER, { scope: { include: ["//..."] } });
+  const two = state({}, [wsEntry(WS), other]);
   const initial = update(initialModel(), { type: "appState", state: two });
   assert.equal(initial.model.workspace, WS);
   assert.equal(effect(initial.effects, "listInvocations").workspace, WS);
-  assert.equal(effect(initial.effects, "getSnapshot").workspace, WS);
+  assert.equal(effect(initial.effects, "refresh").workspace, WS);
   const settled = settleHistory(initial.model);
   const opened = update(settled, {
     type: "openWorkspace",
@@ -199,18 +198,24 @@ test("history, snapshot, and refresh effects carry the selected workspace", () =
       ok: true,
       value: {
         workspace: OTHER,
-        state: state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)]),
+        state: state({ revision: 2 }, [wsEntry(WS), other]),
       },
     },
   });
   assert.equal(reply.model.workspace, OTHER);
-  for (const item of reply.effects) {
-    if (item.type === "listInvocations" || item.type === "getSnapshot") {
-      assert.equal(item.workspace, OTHER);
-    }
-  }
-  assert.ok(reply.effects.some((item) => item.type === "listInvocations"));
-  assert.ok(reply.effects.some((item) => item.type === "getSnapshot"));
+  assert.equal(effect(reply.effects, "listInvocations").workspace, OTHER);
+  const initialLoad = effect(reply.effects, "refresh");
+  assert.equal(initialLoad.workspace, OTHER);
+  assert.deepEqual(initialLoad.scope, { include: ["//..."] });
+  // B's automatic refresh settles; a later manual one captures the same scope.
+  const loaded = acceptLoad(reply.model, initialLoad.id, {
+    snapshot: TARGETS,
+    error: null,
+  });
+  const manual = update(loaded, { type: "refresh" });
+  const manualLoad = effect(manual.effects, "refresh");
+  assert.equal(manualLoad.workspace, OTHER);
+  assert.deepEqual(manualLoad.scope, { include: ["//..."] });
 });
 
 test("openWorkspace reply selects its canonical workspace even with a stale snapshot", () => {
@@ -238,16 +243,11 @@ test("openWorkspace reply selects its canonical workspace even with a stale snap
   assert.equal(reply.model.connection.state?.revision, 9);
   assert.equal(reply.model.workspace, OTHER);
   assert.equal(reply.model.workspacePrompt.status, "closed");
-  // OTHER has a snapshot, so no refresh is scheduled; history + snapshot load.
   assert.ok(reply.effects.some((item) => item.type === "listInvocations"));
-  assert.ok(reply.effects.some((item) => item.type === "getSnapshot"));
-  assert.equal(
-    reply.effects.some((item) => item.type === "refresh"),
-    false,
-  );
+  assert.ok(reply.effects.some((item) => item.type === "refresh"));
 });
 
-test("openWorkspace without a snapshot schedules exactly one refresh", () => {
+test("openWorkspace schedules exactly one refresh and unrelated pushes none", () => {
   const model = connectedModel(state());
   const opened = update(model, {
     type: "openWorkspace",
@@ -255,7 +255,7 @@ test("openWorkspace without a snapshot schedules exactly one refresh", () => {
     scope: { include: ["//..."] },
   });
   const requestId = opened.model.workspacePrompt.requestId;
-  const bare = wsEntry(OTHER, { snapshotFetchedAt: null });
+  const bare = wsEntry(OTHER);
   const reply = update(opened.model, {
     type: "workspaceResult",
     requestId: requestId!,
@@ -267,7 +267,6 @@ test("openWorkspace without a snapshot schedules exactly one refresh", () => {
       },
     },
   });
-  // Embedded revision 2 < current 1? current is 1, so it applies and OTHER has no snapshot.
   assert.equal(reply.model.workspace, OTHER);
   assert.equal(reply.effects.filter((item) => item.type === "refresh").length, 1);
   const again = update(reply.model, {
@@ -312,42 +311,6 @@ test("start captures workspace and navigates only while it stays current", () =>
   assert.deepEqual(replied.model.content, { kind: "console", id: "inv-1", page: "targets" });
   assert.deepEqual(replied.effects, []);
   assert.equal(replied.model.startRequest, null);
-});
-
-test("a delayed start reply cannot navigate or error after a workspace switch", () => {
-  const model = indexedModel(state({}, [wsEntry(WS), wsEntry(OTHER)]));
-  const started = update(model, {
-    type: "start",
-    cmd: "build",
-    pattern: "//app:first",
-    argumentsText: "",
-  });
-  const request = effect(started.effects, "startInvocation");
-  // Explicitly open OTHER before the A reply lands.
-  const opened = update(started.model, {
-    type: "openWorkspace",
-    path: OTHER,
-    scope: { include: ["//..."] },
-  });
-  const switched = update(opened.model, {
-    type: "workspaceResult",
-    requestId: opened.model.workspacePrompt.requestId!,
-    result: {
-      ok: true,
-      value: {
-        workspace: OTHER,
-        state: state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)]),
-      },
-    },
-  });
-  const failed = update(switched.model, {
-    type: "startResult",
-    requestId: request.id,
-    result: { ok: false, error: "bazel missing" },
-  });
-  assert.equal(failed.model.workspace, OTHER);
-  assert.equal(failed.model.connection.error, null);
-  assert.notEqual(failed.model.content.kind, "console");
 });
 
 test("manual navigation after start blocks the console jump", () => {
@@ -508,12 +471,6 @@ test("target detail carries the workspace and drops stale selections on scope ch
   assert.equal(rescoped.model.targets.detail.value, null);
 });
 
-test("refresh uses the selected workspace", () => {
-  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)]));
-  const refreshed = update(model, { type: "refresh" });
-  assert.equal(effect(refreshed.effects, "refresh").workspace, WS);
-});
-
 test("stopResult surfaces errors only while the page targets that invocation", () => {
   const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [owned("a", WS)]));
   const selected = update(model, { type: "selectInvocation", id: "a" });
@@ -630,71 +587,169 @@ test("a workspace switch keeps occupied saved readers until their results settle
   assert.deepEqual(loaded.model.saved.detail.value, B_DETAIL);
 });
 
-test("reopening a workspace with a changed scope refreshes exactly once", () => {
-  for (const eventFirst of [true, false]) {
-    const initial = state({ revision: 2 }, [
-      wsEntry(WS, { scope: { include: ["//app/..."] }, snapshotFetchedAt: 1 }),
-    ]);
-    const model = connectedModel(initial);
-    const scoped = wsEntry(WS, {
-      scope: { include: ["//other/..."] },
-      snapshotFetchedAt: null,
-    });
-    const pushed = state({ revision: 3 }, [scoped]);
-    let refreshes = 0;
-    let current = model;
-    if (eventFirst) {
-      const pushedStep = update(current, { type: "appState", state: pushed });
-      refreshes += pushedStep.effects.filter((item) => item.type === "refresh").length;
-      current = pushedStep.model;
-    }
-    const reply = openReply(current, WS, { include: ["//other/..."] }, pushed);
-    refreshes += reply.effects.filter((item) => item.type === "refresh").length;
-    // The ingest-running push after the reply must not refresh again.
-    const running = state({ revision: 4 }, [
-      wsEntry(WS, {
-        scope: { include: ["//other/..."] },
-        snapshotFetchedAt: null,
-        ingest: "running",
-      }),
-    ]);
-    const after = update(reply.model, { type: "appState", state: running });
-    refreshes += after.effects.filter((item) => item.type === "refresh").length;
-    assert.equal(refreshes, 1, `eventFirst=${eventFirst}`);
-  }
+function refreshEffect(transition: { effects: SessionEffect[] }) {
+  return effect(transition.effects, "refresh");
+}
+
+function acceptLoad(
+  model: SessionModel,
+  requestId: number,
+  load: {
+    snapshot: TargetIndex | null;
+    error: { exitCode: number | null; summary: string } | null;
+  },
+) {
+  return update(model, {
+    type: "snapshotResult",
+    requestId,
+    result: { ok: true, value: load },
+  }).model;
+}
+
+test("selecting a workspace issues one refresh and unrelated pushes issue none", () => {
+  const boot = update(initialModel(), {
+    type: "appState",
+    state: state({}, [wsEntry(WS), wsEntry(OTHER)]),
+  });
+  const load = refreshEffect(boot);
+  assert.equal(load.workspace, WS);
+  assert.deepEqual(load.scope, { include: ["//app/..."] });
+  const settled = acceptLoad(boot.model, load.id, { snapshot: TARGETS, error: null });
+  const bumped = update(settled, {
+    type: "appState",
+    state: state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)]),
+  });
+  assert.equal(bumped.effects.filter((item) => item.type === "refresh").length, 0);
 });
 
-test("refreshMissingTargets skips running, errored, and populated workspaces", () => {
-  const cases: Array<[Partial<WorkspaceState>, number]> = [
-    [{ snapshotFetchedAt: null, ingest: "running" }, 0],
-    [{ snapshotFetchedAt: null, lastError: { exitCode: 1, summary: "boom" } }, 0],
-    [{ snapshotFetchedAt: 7 }, 0],
-    [{ snapshotFetchedAt: null }, 1],
-  ];
-  for (const [over, expected] of cases) {
-    const model = connectedModel(state());
-    const opened = update(model, {
-      type: "openWorkspace",
-      path: OTHER,
-      scope: { include: ["//..."] },
-    });
-    const reply = update(opened.model, {
-      type: "workspaceResult",
-      requestId: opened.model.workspacePrompt.requestId!,
-      result: {
-        ok: true,
-        value: {
-          workspace: OTHER,
-          state: state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER, over)]),
-        },
-      },
-    });
-    assert.equal(
-      reply.effects.filter((item) => item.type === "refresh").length,
-      expected,
-      JSON.stringify(over),
-    );
-  }
+test("A to B to A discards targets and refetches; stale replies cannot overwrite", () => {
+  const two = state({}, [wsEntry(WS), wsEntry(OTHER)]);
+  const boot = update(initialModel(), { type: "appState", state: two });
+  const aFirst = refreshEffect(boot);
+  let model = acceptLoad(boot.model, aFirst.id, { snapshot: TARGETS, error: null });
+  model = update(model, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  }).model;
+  // A manual refresh stays in flight across both workspace switches.
+  const manualA = update(model, { type: "refresh" });
+  const aPending = refreshEffect(manualA);
+  const toB = openReply(
+    manualA.model,
+    OTHER,
+    { include: ["//..."] },
+    state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)]),
+  );
+  assert.equal(toB.model.targets.snapshot.value, null);
+  assert.equal(toB.model.targets.selection, null);
+  const bPending = refreshEffect(toB);
+  assert.equal(bPending.workspace, OTHER);
+  const backA = openReply(
+    toB.model,
+    WS,
+    { include: ["//app/..."] },
+    state({ revision: 3 }, [wsEntry(WS), wsEntry(OTHER)]),
+  );
+  const aCurrent = refreshEffect(backA);
+  assert.equal(aCurrent.workspace, WS);
+  assert.notEqual(aCurrent.id, aPending.id);
+  // Each outstanding request gets exactly one late reply, delivered out of order.
+  const staleB = update(backA.model, {
+    type: "snapshotResult",
+    requestId: bPending.id,
+    result: {
+      ok: true,
+      value: { snapshot: null, error: { exitCode: 1, summary: "stale B" } },
+    },
+  });
+  assert.equal(staleB.model.targets.snapshot.value, null);
+  assert.equal(staleB.model.targets.snapshot.error, null);
+  const abandonedA = update(staleB.model, {
+    type: "snapshotResult",
+    requestId: aPending.id,
+    result: { ok: true, value: { snapshot: TARGETS, error: null } },
+  });
+  assert.equal(abandonedA.model.targets.snapshot.value, null);
+  const fresh = acceptLoad(abandonedA.model, aCurrent.id, {
+    snapshot: TARGETS,
+    error: null,
+  });
+  assert.deepEqual(fresh.targets.snapshot.value, TARGETS);
+});
+
+test("a scope change discards the pending target-list reply", () => {
+  const boot = update(initialModel(), { type: "appState", state: state() });
+  const pending = refreshEffect(boot);
+  const scoped = wsEntry(WS, { scope: { include: ["//other/..."] } });
+  const changed = update(boot.model, {
+    type: "appState",
+    state: state({ revision: 2 }, [scoped]),
+  });
+  const load = refreshEffect(changed);
+  assert.deepEqual(load.scope, { include: ["//other/..."] });
+  assert.notEqual(load.id, pending.id);
+  const stale = update(changed.model, {
+    type: "snapshotResult",
+    requestId: pending.id,
+    result: { ok: true, value: { snapshot: TARGETS, error: null } },
+  });
+  assert.equal(stale.model.targets.snapshot.value, null);
+});
+
+test("a failed refresh retains the index and selection and exposes the error", () => {
+  const model = indexedModel();
+  const selected = update(model, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  }).model;
+  const manual = update(selected, { type: "refresh" });
+  const load = refreshEffect(manual);
+  const failed = update(manual.model, {
+    type: "snapshotResult",
+    requestId: load.id,
+    result: { ok: false, error: "query exploded" },
+  });
+  assert.deepEqual(failed.model.targets.snapshot.value, TARGETS);
+  assert.equal(failed.model.targets.selection?.kind, "target");
+  assert.match(failed.model.targets.snapshot.error ?? "", /query exploded/);
+  const partial = update(failed.model, { type: "refresh" });
+  const partialLoad = refreshEffect(partial);
+  const PARTIAL: TargetIndex = { ...TARGETS, meta: { fetchedAt: 2, status: "partial" } };
+  const accepted = acceptLoad(partial.model, partialLoad.id, {
+    snapshot: PARTIAL,
+    error: { exitCode: 9, summary: "skipped pkg" },
+  });
+  assert.deepEqual(accepted.targets.snapshot.value, PARTIAL);
+  assert.equal(accepted.targets.snapshot.error, "skipped pkg");
+});
+
+test("an accepted snapshot always resets target reads, even with identical fetchedAt", () => {
+  const model = indexedModel();
+  const selected = update(model, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  const staleDetail = effect(selected.effects, "getTargetDetail");
+  const again = update(selected.model, { type: "refresh" });
+  const load = refreshEffect(again);
+  const refreshed = acceptLoad(again.model, load.id, {
+    snapshot: { ...TARGETS, meta: { fetchedAt: 1, status: "ok" } },
+    error: null,
+  });
+  const staleReply = update(refreshed, {
+    type: "targetDetailResult",
+    requestId: staleDetail.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  assert.equal(staleReply.model.targets.detail.value, null);
+  const freshDetail = effect(staleReply.effects, "getTargetDetail");
+  assert.notEqual(freshDetail.id, staleDetail.id);
+  const landed = update(staleReply.model, {
+    type: "targetDetailResult",
+    requestId: freshDetail.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  assert.deepEqual(landed.model.targets.detail.value, targetDetail("//app:first"));
 });
 
 test("stale open replies cannot alter the prompt or selection", () => {
@@ -806,7 +861,7 @@ test("connection readiness derives from state; failed polls keep it", () => {
   assert.equal(subFail.model.connection.error, "Could not connect: listen failed");
 });
 
-test("a foreground start reply cannot outlive its workspace", () => {
+test("a failed A start cannot clear B's pending start or show an error", () => {
   const model = indexedModel(state({}, [wsEntry(WS), wsEntry(OTHER)]));
   const startA = update(model, {
     type: "start",
@@ -842,19 +897,13 @@ test("a foreground start reply cannot outlive its workspace", () => {
   });
   const reqB = effect(startB.effects, "startInvocation");
   assert.equal(reqB.workspace, OTHER);
-  const lateA = update(startB.model, {
-    type: "startResult",
-    requestId: reqA.id,
-    result: { ok: true, value: "inv-a" },
-  });
-  assert.equal(lateA.model.startRequest?.id, reqB.id);
-  assert.deepEqual(lateA.model.content, { kind: "targets" });
-  const lateAErr = update(lateA.model, {
+  const lateAErr = update(startB.model, {
     type: "startResult",
     requestId: reqA.id,
     result: { ok: false, error: "spawn failed" },
   });
   assert.equal(lateAErr.model.startRequest?.id, reqB.id);
+  assert.deepEqual(lateAErr.model.content, { kind: "targets" });
   assert.equal(lateAErr.model.connection.error, null);
   const repliedB = update(lateAErr.model, {
     type: "startResult",
@@ -1106,9 +1155,9 @@ test("failed saved refreshes retain cached detail and profile values", () => {
     result: { ok: false, error: "profile refresh failed" },
   });
 
-  assert.equal(profileFailure.model.saved.detail.value, STALE_DETAIL);
+  assert.deepEqual(profileFailure.model.saved.detail.value, STALE_DETAIL);
   assert.equal(profileFailure.model.saved.detail.error, "detail refresh failed");
-  assert.equal(profileFailure.model.saved.profile.value, PROFILE);
+  assert.deepEqual(profileFailure.model.saved.profile.value, PROFILE);
   assert.equal(profileFailure.model.saved.profile.error, "profile refresh failed");
 });
 
@@ -1138,4 +1187,246 @@ test("target actions still load when outputs fails", () => {
   });
   assert.deepEqual(finished.model.targets.actions.value, ACTIONS);
   assert.equal(finished.model.targets.outputs.error, "cquery failed");
+});
+
+test("a failed foreground start clears the request and restores send readiness", () => {
+  const model = connectedModel();
+  const started = update(model, {
+    type: "start",
+    cmd: "build",
+    pattern: "//app:first",
+    argumentsText: "",
+  });
+  const request = effect(started.effects, "startInvocation");
+  const failed = update(started.model, {
+    type: "startResult",
+    requestId: request.id,
+    result: { ok: false, error: "spawn failed" },
+  });
+  assert.equal(failed.model.startRequest, null);
+  assert.equal(failed.model.connection.error, "spawn failed");
+  assert.deepEqual(failed.model.content, { kind: "targets" });
+  assert.equal(canSend(sessionView(failed.model), "//app:first"), true);
+});
+
+test("reselecting the same target retries a failed detail read", () => {
+  const indexed = indexedModel();
+  const selected = update(indexed, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  const first = effect(selected.effects, "getTargetDetail");
+  const failed = update(selected.model, {
+    type: "targetDetailResult",
+    requestId: first.id,
+    result: { ok: false, error: "detail failed" },
+  });
+  const reselected = update(failed.model, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  assert.equal(reselected.model.targets.detail.error, null);
+  const retry = effect(reselected.effects, "getTargetDetail");
+  assert.notEqual(retry.id, first.id);
+  const landed = update(reselected.model, {
+    type: "targetDetailResult",
+    requestId: retry.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  assert.deepEqual(landed.model.targets.detail.value, targetDetail("//app:first"));
+});
+
+test("loadDetail and loadProfile retry only their own failed reader", () => {
+  const initialized = update(initialModel(), { type: "appState", state: state() });
+  const historyRequest = effect(initialized.effects, "listInvocations");
+  const listed = update(initialized.model, {
+    type: "invocationsResult",
+    requestId: historyRequest.id,
+    result: { ok: true, value: [COMPLETED_RECORD] },
+  });
+  const selected = update(listed.model, { type: "selectInvocation", id: RECORD.id });
+  const detailRequest = effect(selected.effects, "getInvocation");
+  const profileRequest = effect(selected.effects, "getProfile");
+  const failedDetail = update(selected.model, {
+    type: "detailResult",
+    requestId: detailRequest.id,
+    result: { ok: false, error: "detail failed" },
+  });
+  const failed = update(failedDetail.model, {
+    type: "profileResult",
+    requestId: profileRequest.id,
+    result: { ok: false, error: "profile failed" },
+  });
+  assert.equal(failed.model.saved.detail.error, "detail failed");
+  assert.equal(failed.model.saved.profile.error, "profile failed");
+
+  const retried = update(failed.model, { type: "loadDetail" });
+  assert.deepEqual(
+    retried.effects.map((item) => item.type),
+    ["getInvocation"],
+  );
+  const detailRetry = effect(retried.effects, "getInvocation");
+  assert.notEqual(detailRetry.id, detailRequest.id);
+  assert.equal(retried.model.saved.detail.error, null);
+  assert.equal(retried.model.saved.profile.error, "profile failed");
+
+  const retriedProfile = update(retried.model, { type: "loadProfile" });
+  assert.deepEqual(
+    retriedProfile.effects.map((item) => item.type),
+    ["getProfile"],
+  );
+  const profileRetry = effect(retriedProfile.effects, "getProfile");
+  assert.notEqual(profileRetry.id, profileRequest.id);
+  assert.equal(retriedProfile.model.saved.profile.error, null);
+
+  const landed = update(retriedProfile.model, {
+    type: "detailResult",
+    requestId: detailRetry.id,
+    result: { ok: true, value: COMPLETED },
+  });
+  assert.equal(landed.model.saved.detail.value, COMPLETED);
+  const landedProfile = update(landed.model, {
+    type: "profileResult",
+    requestId: profileRetry.id,
+    result: { ok: true, value: PROFILE },
+  });
+  assert.equal(landedProfile.model.saved.profile.value, PROFILE);
+});
+
+test("a failed history read surfaces an error and loadInvocations retries", () => {
+  const initialized = update(initialModel(), { type: "appState", state: state() });
+  const first = effect(initialized.effects, "listInvocations");
+  const failed = update(initialized.model, {
+    type: "invocationsResult",
+    requestId: first.id,
+    result: { ok: false, error: "history unavailable" },
+  });
+  assert.equal(failed.model.history.error, "history unavailable");
+  assert.deepEqual(failed.model.history.records, []);
+  const retried = update(failed.model, { type: "loadInvocations" });
+  const retry = effect(retried.effects, "listInvocations");
+  assert.notEqual(retry.id, first.id);
+  assert.equal(retried.model.history.error, null);
+  const listed = update(retried.model, {
+    type: "invocationsResult",
+    requestId: retry.id,
+    result: { ok: true, value: [COMPLETED_RECORD] },
+  });
+  assert.deepEqual(listed.model.history.records, [COMPLETED_RECORD]);
+  assert.deepEqual(listed.model.content, { kind: "targets" });
+});
+
+test("workspace prompt open and close reset errors; close cannot discard an opening request", () => {
+  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)]));
+  const opened = update(model, {
+    type: "openWorkspace",
+    path: OTHER,
+    scope: { include: ["//..."] },
+  });
+  const requestId = opened.model.workspacePrompt.requestId!;
+  const failed = update(opened.model, {
+    type: "workspaceResult",
+    requestId,
+    result: { ok: false, error: "open failed" },
+  });
+  assert.equal(failed.model.workspacePrompt.status, "editing");
+  assert.equal(failed.model.workspacePrompt.error, "open failed");
+  const editing = update(failed.model, { type: "workspacePrompt", open: true });
+  assert.equal(editing.model.workspacePrompt.error, null);
+  const closed = update(editing.model, { type: "workspacePrompt", open: false });
+  assert.equal(closed.model.workspacePrompt.status, "closed");
+  assert.equal(closed.model.workspacePrompt.error, null);
+
+  const reopening = update(closed.model, {
+    type: "openWorkspace",
+    path: OTHER,
+    scope: { include: ["//..."] },
+  });
+  const pendingId = reopening.model.workspacePrompt.requestId!;
+  const dismissed = update(reopening.model, { type: "workspacePrompt", open: false });
+  assert.equal(dismissed.model.workspacePrompt.status, "opening");
+  assert.equal(dismissed.model.workspacePrompt.requestId, pendingId);
+  const done = update(dismissed.model, {
+    type: "workspaceResult",
+    requestId: pendingId,
+    result: {
+      ok: true,
+      value: {
+        workspace: OTHER,
+        state: state({ revision: 3 }, [wsEntry(WS), wsEntry(OTHER)]),
+      },
+    },
+  });
+  assert.equal(done.model.workspace, OTHER);
+  assert.equal(done.model.workspacePrompt.status, "closed");
+});
+
+test("a package selection issues no target reads and drops stale detail replies", () => {
+  const indexed = indexedModel();
+  const selected = update(indexed, {
+    type: "select",
+    selection: { kind: "target", label: "//app:first" },
+  });
+  const pending = effect(selected.effects, "getTargetDetail");
+  const packaged = update(selected.model, {
+    type: "select",
+    selection: { kind: "package", path: "app" },
+  });
+  assert.deepEqual(packaged.model.targets.selection, { kind: "package", path: "app" });
+  assert.deepEqual(packaged.model.content, { kind: "targets" });
+  assert.equal(
+    packaged.effects.some(
+      (item) =>
+        item.type === "getTargetDetail" ||
+        item.type === "getTargetOutputs" ||
+        item.type === "getTargetActions",
+    ),
+    false,
+  );
+  const stale = update(packaged.model, {
+    type: "targetDetailResult",
+    requestId: pending.id,
+    result: { ok: true, value: targetDetail("//app:first") },
+  });
+  assert.deepEqual(stale.model.targets.selection, { kind: "package", path: "app" });
+  assert.equal(stale.model.targets.detail.value, null);
+  assert.equal(stale.model.targets.detail.error, null);
+});
+
+test("a finished owned invocation keeps its Console destination", () => {
+  const settled = settleHistory(
+    connectedModel(state({ revision: 2 }, [wsEntry(WS)], [owned("a-run", WS)])),
+  );
+  const opened = update(settled, { type: "openConsole", id: "a-run" });
+  assert.deepEqual(opened.model.content, {
+    kind: "console",
+    id: "a-run",
+    page: "targets",
+  });
+  const finished = owned("a-run", WS, {
+    running: false,
+    stoppable: false,
+    processExitCode: 0,
+  });
+  const completed = update(opened.model, {
+    type: "appState",
+    state: state({ revision: 3 }, [wsEntry(WS)], [finished]),
+  });
+  const changed = update(completed.model, { type: "historyChanged" });
+  const request = effect(changed.effects, "listInvocations");
+  const reconciled = update(changed.model, {
+    type: "invocationsResult",
+    requestId: request.id,
+    result: {
+      ok: true,
+      value: [{ ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 }],
+    },
+  });
+  assert.deepEqual(reconciled.model.content, {
+    kind: "console",
+    id: "a-run",
+    page: "targets",
+  });
+  const view = sessionView(reconciled.model);
+  assert.equal(view.console?.id, "a-run");
 });

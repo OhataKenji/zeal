@@ -114,7 +114,7 @@ async fn admit_stream(client: &mut EventClient) -> (EventSender, EventStream) {
         {
             Ok(response) => return (send, response.into_inner()),
             Err(status) if status.code() == tonic::Code::ResourceExhausted => {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Err(status) => panic!("unexpected stream error: {status}"),
         }

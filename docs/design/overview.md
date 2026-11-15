@@ -1,7 +1,7 @@
 # Zeal 設計: 全体構成
 
 _OhataKenji_
-_Last update: 2026/10/31_
+_Last update: 2026/11/15_
 _Status: Approved_
 
 ## Goal
@@ -56,7 +56,7 @@ flowchart LR
 ```
 
 データは二系統に分かれる。
-構造データのうち target の一覧は起動時に `bazel query --output=label_kind` で取得し、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
+構造データのうち target の一覧は workspace の選択時と手動 refresh で `bazel query --output=label_kind` を実行して取得し、セッション側のメモリに置く(永続化しない)。
 属性、依存、file は target を選んだときに proto query で取得する([Target の段階的な取得](./target-loading.md))。
 観測データは invocation ごとの BEP と profile に残す。
 invocationのevent fileは詳細表示のたびに一度parseし、入力、BEP時刻、build exitはSQLiteの共通invocation表に保存する。
@@ -74,14 +74,14 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ### コンポーネントと責務
 
-| コンポーネント | 責務 |
-| --- | --- |
-| WebView (`App.svelte`, `session_model.ts`, `session.ts`) | 選択と要求の状態、表示用データの導出、操作と IPC の接続 |
-| IPC (`lib.rs`) | 入力の受付、登録済み workspace の確認、処理の呼び出し |
-| workspace (`workspace.rs`, `state.rs`) | パスと Bazel の解決、workspace の登録、scope と snapshot の保持 |
-| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`) | invocation ごとの起動、停止、終了回収、Console の入出力と保持 |
-| target と query (`ingest.rs`, `query.rs`) | query の実行依頼と結果の解釈、workspace ごとの target データの更新 |
-| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`) | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
+| コンポーネント                                           | 責務                                                             |
+| -------------------------------------------------------- | ---------------------------------------------------------------- |
+| WebView (`App.svelte`, `session_model.ts`, `session.ts`) | 選択と要求の状態、表示用データの導出、操作と IPC の接続          |
+| IPC (`lib.rs`)                                           | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
+| workspace (`workspace.rs`, `state.rs`)                   | パスと Bazel の解決、workspace の登録と scope の保持             |
+| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)      | invocation ごとの起動、停止、終了回収、Console の入出力と保持    |
+| target と query (`ingest.rs`, `query.rs`)                | query の実行依頼、結果の解釈と呼出し元への返却                   |
+| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`)     | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
 
 表は既存コードの責務を示すもので、追加の管理層は設けない。
 起動 IPC は invocation ID だけを返し、実行状態は Rust core の通知から受け取る。
@@ -96,22 +96,25 @@ UI が直接プロセスやファイルを触る経路は作らない。
 Zeal は、起動した Bazel を invocation ごとに管理する。
 workspace を切り替えても、実行の所属と停止対象は変わらない。
 各コマンドに --noblock_for_lock を付け、output_base の排他は Bazel に任せる。
-build、test、query 系の終了コード 9 はロック競合として表示する。
+build、test の終了コード 9 はロック競合として表示する。
+query 系のロック競合は、取得処理が返す終了結果やエラーで表示する。
 run の終了コード 9 は、実行したプログラムが返す場合もあるため区別する。
 Stop は Zeal が所有する実行だけを対象にし、BES で受信した外部実行は停止しない。
 Console を持たない query 系の実行状態は、処理の完了時に破棄する。
 子プロセスを回収した時点で PGID を無効にし、以後は signal を送らない。
 出力の保存が終わるまでは完了待ちの状態を残し、終了後も Console は読める。
-取り込みは workspace を開いたときと手動 refresh のみ行う([m1](./m1-targets.md))。
-同じ workspace のターゲット一覧を取得中に届いた再取得要求だけを拒否する。
+ターゲット一覧は workspace の選択、scope の変更、手動 refresh で取得する([Target の段階的な取得](./target-loading.md))。
+refresh の結果は IPC の直接返却で届き、GUI は最新の要求 ID の応答だけを採用する。
 取り込み中も Send を使える。
 実行中はConsoleを表示する。
+実行が完了しても表示先は自動では変わらず、利用者が詳細を選ぶまでConsoleに留まる。
+Console はアプリの終了まで保持し、件数上限や自動削除は設けない。保持する実行が増えると、ファイル記述子・ログ容量・状態通知のサイズも増える。
 Bazelが待機する原因は推測しない。
 
 composerは `build` / `test` / `run` を受け付ける。
 spawn は独立したプロセスグループで行い、stop と hard kill をグループへ送る。
 子孫の完全回収は保証しない。
-中断のエスカレーションと判定規則は [m3](./m3-find-and-execute.md) で定める。
+中断のエスカレーションと確認は、所有する invocation ごとに適用する([m3](./m3-find-and-execute.md))。
 アプリ終了時に実行中の invocation があれば SIGINT を送り、猶予のあとでグループを kill してから終了する。
 
 履歴の結果が未観測なら不明のまま残す。

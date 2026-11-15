@@ -106,10 +106,13 @@ export interface TargetScope {
 export interface WorkspaceState {
   workspace: string;
   scope: TargetScope;
-  ingest: "idle" | "running";
-  /** `TargetIndex.meta.fetchedAt`; its data loads through `get_snapshot`. */
-  snapshotFetchedAt: number | null;
-  lastError: IngestError | null;
+}
+
+/** The result of one target-list refresh: the parsed index, or the error
+ * that prevented it. A partial fetch carries both. */
+export interface TargetLoad {
+  snapshot: TargetIndex | null;
+  error: IngestError | null;
 }
 
 /** One Bazel operation Zeal launched, owned by the core until it exits. */

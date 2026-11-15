@@ -212,8 +212,9 @@ pub fn stop(app: AppHandle, core: Arc<Core>, ws: &Path, id: &str) -> Result<(), 
     Ok(())
 }
 
-/// Signal the invocation's group once. A repeated stop for the same entry is
-/// a no-op; finished, reaped or foreign entries are rejected.
+/// Signal the invocation's group once. Unknown or foreign entries are
+/// rejected; a repeated stop, or one for an entry whose process already
+/// finished or was reaped, is a no-op.
 fn begin_stop(st: &mut CoreState, ws: &Path, id: &str) -> Result<(), String> {
     let invocation = st
         .invocations
@@ -222,15 +223,14 @@ fn begin_stop(st: &mut CoreState, ws: &Path, id: &str) -> Result<(), String> {
     if invocation.workspace != ws {
         return Err("invocation belongs to another workspace".to_string());
     }
-    let process = invocation
-        .process
-        .as_mut()
-        .ok_or_else(|| "invocation already finished".to_string())?;
+    let Some(process) = invocation.process.as_mut() else {
+        return Ok(());
+    };
     if process.stop_started.is_some() {
         return Ok(());
     }
     let Some(pgid) = process.pgid else {
-        return Err("invocation is not running".to_string());
+        return Ok(());
     };
     process.stop_started = Some(Instant::now());
     invocation.note = None;
@@ -370,14 +370,7 @@ fn apply_reap(st: &mut CoreState, id: &str, exit: &io::Result<i32>) -> bool {
     process.pgid = None;
     invocation.process_exit_code = exit.as_ref().ok().copied();
     invocation.note = match exit {
-        Ok(9)
-            if matches!(
-                invocation.cmd.as_str(),
-                "build" | "test" | "query" | "cquery" | "aquery"
-            ) =>
-        {
-            Some(BUSY_NOTE.to_string())
-        }
+        Ok(9) if matches!(invocation.cmd.as_str(), "build" | "test") => Some(BUSY_NOTE.to_string()),
         Ok(_) => None,
         Err(error) if error.kind() == io::ErrorKind::TimedOut => Some(STOP_UNCONFIRMED.to_string()),
         Err(error) => Some(format!("Could not confirm the exit: {error}")),
@@ -804,7 +797,7 @@ mod tests {
         {
             let mut state = core.state.lock().unwrap();
             assert!(apply_reap(&mut state, &id, &exit));
-            assert!(begin_stop(&mut state, &ws, &id).is_err());
+            assert!(begin_stop(&mut state, &ws, &id).is_ok());
         }
         release_process(&core, &id);
         assert!(store::read_record(&data, &ws, &id).is_err());
@@ -1695,7 +1688,7 @@ mod tests {
             7
         );
         let mut st = core.state.lock().unwrap();
-        assert!(begin_stop(&mut st, Path::new(WS), "invocation").is_err());
+        assert!(begin_stop(&mut st, Path::new(WS), "invocation").is_ok());
         assert!(held_pgid(&st, "invocation").is_none());
         assert!(!is_stopping(&st, "invocation"));
     }
@@ -1735,18 +1728,6 @@ mod tests {
         }
     }
 
-    fn kill_and_reap(core: &Core, mut child: Child, id: &str) {
-        let _guard = GroupGuard(child.id() as i32);
-        child.kill().unwrap();
-        assert_eq!(wait_child(core, id, &mut child), -1);
-        {
-            let mut st = core.state.lock().unwrap();
-            apply_reap(&mut st, id, &Ok(-1));
-        }
-        release_process(core, id);
-        assert!(!core.state.lock().unwrap().invocations.contains_key(id));
-    }
-
     #[test]
     fn two_invocations_in_one_workspace_and_two_workspaces_are_all_accepted() {
         let core = Core::new();
@@ -1755,12 +1736,15 @@ mod tests {
         let mut children = Vec::new();
         for (ws, id) in [(&ws_a, "a1"), (&ws_a, "a2"), (&ws_b, "b1")] {
             let mut command = Command::new("sh");
-            command.args(["-c", "exec sleep 60"]);
+            command.args(["-c", "exit 0"]);
             children.push((spawn_pipes(&core, ws, id, &mut command), id));
         }
         assert_three_owned_processes(&core.state.lock().unwrap());
-        for (child, id) in children {
-            kill_and_reap(&core, child, id);
+        for (mut child, id) in children {
+            assert_eq!(wait_child(&core, id, &mut child), 0);
+            apply_reap(&mut core.state.lock().unwrap(), id, &Ok(0));
+            release_process(&core, id);
+            assert!(!core.state.lock().unwrap().invocations.contains_key(id));
         }
     }
 
@@ -1794,6 +1778,11 @@ mod tests {
         }
         // A repeated stop for A is rejected now that its entry is gone.
         assert!(begin_stop(&mut core.state.lock().unwrap(), ws, "a").is_err());
+        // B's real child is still alive before its own stop.
+        assert!(
+            child_b.try_wait().unwrap().is_none(),
+            "stopping A terminated B"
+        );
         // B still waits and can be stopped independently.
         begin_stop(&mut core.state.lock().unwrap(), ws, "b").unwrap();
         assert_eq!(wait_child(&core, "b", &mut child_b), -1);
@@ -1841,6 +1830,38 @@ mod tests {
                 .as_ref()
                 .is_some_and(|process| process.stop_started.is_none())
         );
+    }
+
+    #[test]
+    fn stop_on_a_finished_console_entry_is_a_noop() {
+        let core = Core::new();
+        let ws = Path::new(WS);
+        let log = crate::terminal::session_log().unwrap();
+        {
+            let mut st = core.state.lock().unwrap();
+            register_ws(&mut st, ws);
+            st.invocations.insert(
+                "done".to_string(),
+                OwnedInvocation {
+                    workspace: ws.to_path_buf(),
+                    cmd: "run".to_string(),
+                    pattern: "//pkg:bin".to_string(),
+                    started_at: 1,
+                    process: None,
+                    console: Some(log),
+                    process_exit_code: Some(0),
+                    note: Some("finished note".to_string()),
+                },
+            );
+            assert!(begin_stop(&mut st, ws, "done").is_ok());
+            let invocation = &st.invocations["done"];
+            assert!(invocation.process.is_none());
+            assert_eq!(invocation.process_exit_code, Some(0));
+            assert_eq!(invocation.note.as_deref(), Some("finished note"));
+            // Once the entry itself is gone, its id is unknown again.
+            st.invocations.remove("done");
+            assert!(begin_stop(&mut st, ws, "done").is_err());
+        }
     }
 
     /// A console-less entry is pruned only when its worker's guard drops:
@@ -1984,18 +2005,18 @@ mod tests {
         let stopping_core = core.clone();
         let stopping = thread::spawn(move || {
             stopping_tx.send(()).unwrap();
-            // The reap already revoked the group: the late stop must fail
-            // without signalling a possibly recycled pid.
-            let _ = begin_stop(
+            // The reap already revoked the group: the late stop is a no-op
+            // and still never signals a possibly recycled pid.
+            begin_stop(
                 &mut stopping_core.state.lock().unwrap(),
                 Path::new(WS),
                 "invocation",
-            );
+            )
         });
         stopping_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(owner.join().unwrap().unwrap(), 0);
-        stopping.join().unwrap();
+        assert!(stopping.join().unwrap().is_ok());
         let st = core.state.lock().unwrap();
         assert!(held_pgid(&st, "invocation").is_none());
         assert!(!is_stopping(&st, "invocation"));
@@ -2062,13 +2083,13 @@ mod tests {
     }
 
     #[test]
-    fn exit_9_is_a_lock_note_for_build_test_and_queries_but_never_for_run() {
+    fn exit_9_is_a_lock_note_only_for_build_and_test_never_for_run_or_queries() {
         for (cmd, expect_note) in [
             ("build", true),
             ("test", true),
-            ("query", true),
-            ("cquery", true),
-            ("aquery", true),
+            ("query", false),
+            ("cquery", false),
+            ("aquery", false),
             ("run", false),
         ] {
             let core = Core::new();
@@ -2077,7 +2098,11 @@ mod tests {
             st.invocations.get_mut("invocation").unwrap().cmd = cmd.to_string();
             assert!(apply_reap(&mut st, "invocation", &Ok(9)));
             let invocation = &st.invocations["invocation"];
-            assert_eq!(invocation.note.is_some(), expect_note, "{cmd}");
+            assert_eq!(
+                invocation.note.as_deref(),
+                expect_note.then_some(BUSY_NOTE),
+                "{cmd}"
+            );
             assert_eq!(
                 invocation.process_exit_code,
                 Some(9),
