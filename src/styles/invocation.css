@@ -116,10 +116,8 @@
 }
 
 .invocation-summary h1 {
-  font-size: 21px;
-  font-weight: 700;
-  letter-spacing: -0.7px;
-  line-height: 1.3;
+  min-width: 0;
+  font: 600 21px/1.4 var(--mono);
   margin: 0;
   overflow-wrap: anywhere;
 }
@@ -136,9 +134,12 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 4px;
-  background: var(--muted);
-  border-radius: var(--radius-lg);
+  padding: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  flex-shrink: 0;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
 }
 
 .panel-loading {
@@ -159,12 +160,14 @@
 .invocation-section {
   flex: 0 0 auto;
   min-width: 0;
+}
+
+.invocation-all > .invocation-section {
   padding-top: 20px;
 }
 
 .invocation-all > .invocation-section + .invocation-section {
   margin-top: 24px;
-  border-top: 1px solid var(--border);
 }
 
 .invocation-section > .panel-heading {
@@ -175,6 +178,10 @@
 }
 
 .invocation-section > .panel-heading + .panel-subheading {
+  margin-top: 0;
+}
+
+.invocation-section > .panel-subheading:first-child {
   margin-top: 0;
 }
 
@@ -322,13 +329,6 @@
   min-width: 640px;
   border-collapse: collapse;
   table-layout: fixed;
-}
-
-.compare-table caption {
-  padding: 0 0 8px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  text-align: left;
 }
 
 .compare-table th,

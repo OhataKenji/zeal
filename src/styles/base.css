@@ -1,41 +1,43 @@
 :root {
-  --font-sans: -apple-system, "BlinkMacSystemFont", "Segoe UI", sans-serif;
-  --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+  --mono: "Menlo", "Consolas", monospace;
 
-  /* Surfaces & Canvas (Dark Zinc) */
-  --background: #09090b;
-  --foreground: #f4f4f5;
-  --border: #27272a;
-  --muted: #141416;
-  --muted-foreground: #a1a1aa;
-  --accent: #1e293b;
-  --sidebar: #101012;
-  --input: #27272a;
+  /* Surfaces & Canvas (Dark Blue-Gray) */
+  --background: #182129;
+  --foreground: #e1e8ed;
+  --border: #3a4a57;
+  --muted: #24313c;
+  --muted-foreground: #abbac6;
+  --accent: #2c4354;
+  --sidebar: #202b36;
+  --input: #718494;
 
   /* Brand Action Controls (Deep Teal: distinct from semantic success green) */
   --brand-mint: #34d399;
   --brand-teal: #0891b2;
-  --primary: #0891b2;
-  --primary-foreground: var(--foreground);
-  --primary-hover: #0e7490;
-  --ring: #00c3df;
-  --chart-bar: #00c3df;
+  --primary: #83bfd1;
+  --primary-foreground: #12212a;
+  --primary-hover: #a1d1de;
+  --ring: #83bfd1;
+  --chart-bar: #83bfd1;
 
-  /* Perceptually Calibrated Semantic Status Tokens (Equi-Luminance L=0.74, Equi-Chroma C=0.15 in OKLCH) */
-  --success: #38c789;
-  --success-muted: rgba(56, 199, 137, 0.15);
+  /* Semantic Status Tokens */
+  --success: #72cda0;
+  --success-muted: rgba(114, 205, 160, 0.12);
 
-  --destructive: #fb817a;
-  --destructive-muted: rgba(251, 129, 122, 0.15);
+  --destructive: #f3979b;
+  --destructive-muted: rgba(243, 151, 155, 0.12);
 
-  --warning: #e19b1b;
-  --warning-muted: rgba(225, 155, 27, 0.15);
+  --warning: #e3b765;
+  --warning-muted: rgba(227, 183, 101, 0.12);
 
-  --info: #00c3df;
-  --info-muted: rgba(0, 195, 223, 0.15);
+  --info: #83bfd1;
+  --info-muted: rgba(131, 191, 209, 0.12);
 
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+
+  color-scheme: dark;
 }
 
 * {
@@ -44,7 +46,7 @@
 
 body {
   margin: 0;
-  font: 13px var(--font-sans);
+  font: 14px/1.5 var(--font-sans);
   color: var(--foreground);
   background: var(--background);
 }
@@ -134,18 +136,15 @@ button:disabled {
 
 .badge {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--radius-lg);
-  background: var(--muted);
-  font: 11px/1.5 var(--mono);
+  padding: 0;
+  font: 12px/1.5 var(--font-sans);
   white-space: nowrap;
 }
 
 .tab-button[aria-selected="true"] {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--accent);
+  color: var(--primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .dim {
@@ -218,17 +217,20 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 
-button {
-  transition: background-color 120ms ease;
-}
-
 .relations,
 .invocation-details {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
   column-gap: 20px;
-  font: 12px var(--mono);
   margin: 0;
+}
+
+.relations {
+  font: 12px var(--mono);
+}
+
+.invocation-details {
+  font: 12px var(--font-sans);
 }
 
 .relations dt,
@@ -247,10 +249,4 @@ button {
   display: flex;
   flex-direction: column;
   justify-content: center;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  button {
-    transition: none;
-  }
 }

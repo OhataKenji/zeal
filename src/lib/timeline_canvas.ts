@@ -224,7 +224,7 @@ function drawEvent(
   const selected = selection?.tid === tid && selection.index === event.index;
   context.fillStyle = selected ? theme.foreground : eventColor(event.event);
   if (event.kind === "span") {
-    drawSpanBar(context, eventName(event.event), eventLeft, eventTop, eventWidth, selected, theme);
+    drawSpanBar(context, eventName(event.event), eventLeft, eventTop, eventWidth, theme);
   } else {
     drawMarkDiamond(context, eventLeft, eventTop);
   }
@@ -250,7 +250,6 @@ function drawSpanBar(
   left: number,
   top: number,
   width: number,
-  selected: boolean,
   theme: TimelineTheme,
 ) {
   context.fillRect(left, top, width, ROW_HEIGHT - 1);

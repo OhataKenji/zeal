@@ -19,7 +19,7 @@
           <span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span>
           <div class="result-identity">
             <code>{target.label}</code>
-            <div class="result-context">{#if target.aspect}Aspect: <code>{target.aspect}</code>{:else}Target{/if}</div>
+            {#if target.aspect}<div class="result-context">Aspect: <code>{target.aspect}</code></div>{/if}
             {#if target.configuration}<div class="result-context">Configuration: <code>{target.configuration}</code></div>{/if}
           </div>
           <span>{target.ok ? "Completed" : "Failed"}</span>

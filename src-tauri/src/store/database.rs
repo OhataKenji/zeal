@@ -252,6 +252,29 @@ pub fn list(data: &Path, ws: &Path) -> Result<Vec<InvocationRecord>, StoreError>
         .query_map([ws.as_os_str().as_bytes()], row_record)?
         .collect::<Result<_, _>>()?)
 }
+
+pub fn frequent_workspaces(data: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    let store = Store::open(data)?;
+    Ok(store
+        .conn
+        .prepare(
+            "WITH recent AS (
+                SELECT workspace_id,started_at_ms FROM invocation
+                ORDER BY started_at_ms DESC,id LIMIT 100
+            )
+            SELECT w.canonical_path FROM recent r
+            JOIN workspace w ON w.id=r.workspace_id
+            GROUP BY w.id
+            ORDER BY COUNT(*) DESC,MAX(r.started_at_ms) DESC,w.canonical_path
+            LIMIT 5",
+        )?
+        .query_map([], |row| {
+            let path: Vec<u8> = row.get(0)?;
+            Ok(PathBuf::from(std::ffi::OsString::from_vec(path)))
+        })?
+        .collect::<Result<_, _>>()?)
+}
+
 pub fn artifact(data: &Path, ws: &Path, invocation_id: &str, name: &str) -> io::Result<File> {
     attempt_artifact(data, ws, invocation_id, name)
         .map(|(file, _)| file)
@@ -327,6 +350,100 @@ mod tests {
     use crate::store::events::test_support::Fixture;
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn frequent_workspaces_ranks_paths_within_the_latest_hundred_invocations() {
+        let f = Fixture::new();
+        let mut store = Store::open(&f.data).unwrap();
+        let tx = store.conn.transaction().unwrap();
+        let workspaces = [
+            ("old", 200),
+            ("a", 40),
+            ("b", 25),
+            ("c", 15),
+            ("d", 10),
+            ("e", 5),
+            ("f", 5),
+        ];
+        for (name, _) in workspaces {
+            let path = f.root.join(name);
+            let repo = match name {
+                "a" | "b" => Some("https://example.com/shared.git"),
+                _ => None,
+            };
+            tx.execute(
+                "INSERT INTO workspace(id,canonical_path,repo_url) VALUES(?1,?2,?3)",
+                params![name, path.as_os_str().as_bytes(), repo],
+            )
+            .unwrap();
+        }
+        for (index, name) in workspaces
+            .into_iter()
+            .flat_map(|(name, count)| std::iter::repeat_n(name, count))
+            .enumerate()
+        {
+            tx.execute(
+                "INSERT INTO invocation(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
+                params![format!("{name}-{index}"), name, index as i64 + 1],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        drop(store);
+        let candidates = frequent_workspaces(&f.data).unwrap();
+        assert_eq!(
+            candidates,
+            ["a", "b", "c", "d", "f"].map(|name| f.root.join(name))
+        );
+        assert!(candidates.iter().all(|path| !path.exists()));
+    }
+
+    #[test]
+    fn frequent_workspaces_limits_before_discarding_records_without_a_workspace() {
+        let f = Fixture::new();
+        assert!(frequent_workspaces(&f.data).unwrap().is_empty());
+        f.complete();
+        let mut store = Store::open(&f.data).unwrap();
+        let tx = store.conn.transaction().unwrap();
+        for index in 0..100 {
+            tx.execute(
+                "INSERT INTO invocation(id,started_at_ms) VALUES(?1,?2)",
+                params![format!("unknown-{index}"), 3000 + index],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        drop(store);
+        assert!(frequent_workspaces(&f.data).unwrap().is_empty());
+    }
+
+    #[test]
+    fn frequent_workspaces_keeps_untimed_records_and_breaks_ties_by_path() {
+        let f = Fixture::new();
+        let store = Store::open(&f.data).unwrap();
+        for name in ["b", "a"] {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO workspace(id,canonical_path) VALUES(?1,?2)",
+                    params![name, f.root.join(name).as_os_str().as_bytes()],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO invocation(id,workspace_id) VALUES(?1,?1)",
+                    [name],
+                )
+                .unwrap();
+        }
+        drop(store);
+        assert_eq!(
+            frequent_workspaces(&f.data).unwrap(),
+            vec![f.root.join("a"), f.root.join("b")]
+        );
+    }
+
     #[test]
     fn schema_is_two_tables_and_old_schema_is_refused_without_modification() {
         let f = Fixture::new();

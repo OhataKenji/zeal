@@ -61,8 +61,7 @@
 </script>
 
 <div class="compare-scroll">
-  <table class="compare-table">
-    <caption>Invocation comparison</caption>
+  <table class="compare-table" aria-label="Invocation comparison">
     <thead>
       <tr>
         <td class="compare-item-head"></td>
@@ -83,7 +82,7 @@
         </th>
         <th scope="col" class="compare-side-head">
           <form class="compare-form" onsubmit={submit}>
-            <label class="compare-label" for="compare-invocation-id">Comparison invocation</label>
+            <label for="compare-invocation-id">Comparison invocation</label>
             <input
               id="compare-invocation-id"
               class="input compare-id-input"

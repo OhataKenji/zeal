@@ -187,7 +187,7 @@
       Unable to load analytics: {view.error}
     </Notice>{/if}
   {#if data}
-    <section class="analytics-card">
+    <section>
       <h2>Invocations</h2>
       <p class="dim">{data.filter.start} to {data.filter.end} · Invocations without a recorded start time are excluded.</p>
       <label class="breakdown"
@@ -244,7 +244,7 @@
         {/each}
       </p>
     </section>
-    <section class="analytics-card">
+    <section>
       <h2>Total duration</h2>
       <p class="dim">Total duration per day</p>
       <div class="chart-scroll" bind:clientWidth={chartWidth}>
@@ -275,7 +275,7 @@
         </svg>
       </div>
     </section>
-    <section class="analytics-card">
+    <section>
       <h2>Duration</h2>
       <p class="dim">Per-day invocation duration percentiles</p>
       <div class="chart-scroll" bind:clientWidth={chartWidth}>
@@ -333,9 +333,10 @@
       </p>
     </section>
     {#if data.patterns.length}
-      <section class="analytics-card">
+      <section>
         <h2>Target patterns</h2>
         <p class="dim">Complete pattern lists by total duration</p>
+        <div class="table-scroll">
         <table class="patterns">
           <thead
             ><tr
@@ -366,6 +367,7 @@
             {/each}
           </tbody>
         </table>
+        </div>
       </section>
     {/if}
   {/if}
@@ -379,6 +381,12 @@
     overflow: auto;
   }
 
+  @media (max-width: 600px) {
+    .analytics {
+      padding: 16px;
+    }
+  }
+
   .analytics h1 {
     margin: 0 0 24px;
     font-size: 22px;
@@ -389,16 +397,14 @@
     flex-wrap: wrap;
   }
 
-  .analytics-card {
-    background: var(--muted);
-    border-radius: var(--radius-lg);
-    padding: 22px;
-    margin-top: 20px;
+  .analytics > section {
+    padding: 24px 0 0;
+    margin-top: 24px;
   }
 
-  .analytics-card h2 {
+  .analytics > section h2 {
     margin: 0;
-    font-size: 13px;
+    font-size: 16px;
     font-weight: 600;
   }
 
@@ -523,8 +529,13 @@
     background: var(--warning);
   }
 
+  .table-scroll {
+    overflow-x: auto;
+  }
+
   .patterns {
     width: 100%;
+    min-width: 560px;
     margin-top: 10px;
     border-collapse: collapse;
   }

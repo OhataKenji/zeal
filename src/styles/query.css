@@ -34,9 +34,6 @@
   cursor: pointer;
   list-style: none;
   user-select: none;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease;
 }
 
 .query-examples-trigger::-webkit-details-marker {
@@ -53,7 +50,6 @@
   display: inline-flex;
   align-items: center;
   color: var(--muted-foreground);
-  transition: transform 0.15s ease;
 }
 
 .query-examples-wrap[open] .query-caret {
@@ -84,7 +80,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--sidebar);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 8px 24px #0004;
 }
 
 .query-examples-group {
@@ -103,8 +99,6 @@
   padding: 4px 8px 2px;
   font: 700 10px var(--font-sans);
   color: var(--muted-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .query-example-item {
@@ -144,7 +138,7 @@
 .query-main {
   flex: 1;
   min-width: 0;
-  padding: 24px 32px 40px;
+  padding: 28px;
   overflow: auto;
 }
 
@@ -153,21 +147,11 @@
   min-width: 0;
 }
 
-.query-page-header {
-  margin-bottom: 16px;
-}
-
-.query-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.query-title-row h1 {
+.query-title {
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.7px;
-  margin: 0;
+  margin: 0 0 16px;
 }
 
 .query-panel {
@@ -183,12 +167,6 @@
   margin: 20px 0 12px;
 }
 
-.query-panel-title-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .query-results-head {
   display: flex;
   align-items: center;
@@ -197,7 +175,6 @@
   margin: 20px 0 12px;
 }
 
-.query-panel-head h2,
 .query-results-head h2 {
   font-size: 14px;
   font-weight: 600;
@@ -221,10 +198,9 @@
 }
 
 .query-tabs [role="tab"][aria-selected="true"] {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--accent);
+  color: var(--primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .query-view code,
@@ -620,15 +596,14 @@
   right: 16px;
   bottom: 16px;
   background: var(--primary);
-  color: var(--background);
+  color: var(--primary-foreground);
   border: 1px solid var(--primary);
   font-size: 12px;
   border-radius: var(--radius-md);
   padding: 8px 12px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px #0004;
   z-index: 30;
 }
 
@@ -656,7 +631,6 @@
 @media (max-width: 820px) {
   .query-main {
     padding: 14px;
-    overflow: visible;
   }
 
   .query-examples-dropdown {

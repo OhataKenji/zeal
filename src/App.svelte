@@ -4,8 +4,10 @@
     CaretRight,
     ChartBar,
     ArrowClockwise,
-    Gear,
+    ClockCounterClockwise,
+    Folders,
     Play,
+    SlidersHorizontal,
     Stop,
     TreeStructure,
   } from "phosphor-svelte";
@@ -20,13 +22,19 @@
   import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
   import WorkspacePrompt from "./lib/WorkspacePrompt.svelte";
+  import WorkspaceSwitcher from "./lib/WorkspaceSwitcher.svelte";
   import InvocationStatus from "./lib/InvocationStatus.svelte";
   import Notice from "./lib/Notice.svelte";
   import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
   import SearchInput from "./lib/SearchInput.svelte";
-  import type { AppState, BazelCommand, ExplorerSelection } from "./lib/types";
+  import type {
+    AppState,
+    BazelCommand,
+    ExplorerSelection,
+    TargetScope,
+  } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
   function loadConsole() {
@@ -59,11 +67,54 @@
   let argumentsText = $state("");
   let argumentsOpen = $state(false);
   let argumentsToggle: HTMLButtonElement | undefined;
-  let argumentsPanel = $state<HTMLDivElement>();
   let argumentsInput = $state<HTMLInputElement>();
   const argumentsConfigured = $derived(argumentsText.trim() !== "");
   const switchingWs = $derived(app.view.workspacePromptOpen);
   const busy = $derived(sessionBusy(app.view));
+
+  let workspaceForm = $state<{
+    mode: "open" | "settings";
+    path: string;
+    scope: TargetScope;
+  } | null>(null);
+
+  function editWorkspace(mode: "open" | "settings", path = "") {
+    workspaceForm = {
+      mode,
+      path: mode === "settings" ? st?.workspace ?? "" : path,
+      scope:
+        mode === "settings"
+          ? st?.scope ?? { include: ["//..."] }
+          : { include: ["//..."] },
+    };
+    getSession().setWorkspacePromptOpen(true);
+  }
+
+  const settingsOpen = $derived(switchingWs && workspaceForm?.mode === "settings");
+
+  function workspaceHome() {
+    if (!st?.workspace || app.view.opening) return;
+    getSession().setWorkspacePromptOpen(false);
+    getSession().showPage("targets");
+  }
+
+  function toggleWorkspaceSettings() {
+    if (app.view.opening) return;
+    if (settingsOpen) getSession().setWorkspacePromptOpen(false);
+    else editWorkspace("settings");
+  }
+
+  let composerWorkspace: string | null = null;
+  $effect(() => {
+    const path = st?.workspace ?? null;
+    if (path !== composerWorkspace) {
+      composerWorkspace = path;
+      targetField = "";
+      argumentsText = "";
+      argumentsOpen = false;
+      cmd = "build";
+    }
+  });
   const running = $derived(!!st?.activeInvocation);
   const actionLabel = $derived(
     running ? "Stop" : cmd === "test" ? "Test" : cmd === "run" ? "Run" : "Build",
@@ -92,28 +143,15 @@
   }
 
   async function setArgumentsOpen(open: boolean) {
-    argumentsOpen = open;
+    argumentsOpen = open || argumentsConfigured;
     await tick();
-    if (argumentsOpen === open) {
-      (open ? argumentsInput : argumentsToggle)?.focus();
-    }
+    (open ? argumentsInput : argumentsToggle)?.focus();
   }
 
   function argumentsKey(event: KeyboardEvent) {
-    if (!argumentsOpen || event.isComposing || event.key !== "Escape") return;
+    if (event.isComposing || event.key !== "Escape") return;
     event.preventDefault();
     void setArgumentsOpen(false);
-  }
-
-  function dismissArguments(event: Event) {
-    if (
-      argumentsOpen &&
-      event.target instanceof Node &&
-      !argumentsPanel?.contains(event.target) &&
-      !argumentsToggle?.contains(event.target)
-    ) {
-      argumentsOpen = false;
-    }
   }
 
   // Sidebar split: share of height given to the targets pane, and per-pane
@@ -153,24 +191,26 @@
     class:collapsed={collapsed.targets}
     style:flex-grow={collapsed.targets ? 0 : targetsShare}
   >
-    <div class="pane-heading">
+    <div class="pane-toolbar">
       <button
         class="pane-head"
         aria-expanded={!collapsed.targets}
         onclick={() => (collapsed.targets = !collapsed.targets)}
       >
-        {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown
-            size={10}
-          />{/if} Targets
-        <span class="pane-count"
-          >{snap?.targets.length.toLocaleString() ?? "—"}</span
-        >
+        {#if collapsed.targets}<CaretRight size={10} />{:else}<CaretDown size={10} />{/if}
+        <Folders size={18} />
+        Targets
       </button>
       <button
-        class="analytics-link"
-        class:active={content.kind === "query"}
-        onclick={() => getSession().showPage("query")}><TreeStructure size={12} /> Query</button
+        type="button"
+        class="button button-ghost icon-button"
+        aria-label="Reload targets"
+        title="Reload targets"
+        onclick={refresh}
+        disabled={busy}
       >
+        <ArrowClockwise size={14} />
+      </button>
     </div>
     {#if !collapsed.targets}
       <div class="pane-body">
@@ -196,22 +236,15 @@
     class:collapsed={collapsed.invocations}
     style:flex-grow={collapsed.invocations ? 0 : 1 - targetsShare}
   >
-    <div class="pane-heading">
-      <button
-        class="pane-head"
-        aria-expanded={!collapsed.invocations}
-        onclick={() => (collapsed.invocations = !collapsed.invocations)}
-      >
-        {#if collapsed.invocations}<CaretRight size={10} />{:else}<CaretDown
-            size={10}
-          />{/if} Invocations
-      </button>
-      <button
-        class="analytics-link"
-        class:active={content.kind === "analytics"}
-        onclick={() => getSession().showPage("analytics")}><ChartBar size={12} /> Analytics</button
-      >
-    </div>
+    <button
+      class="pane-head"
+      aria-expanded={!collapsed.invocations}
+      onclick={() => (collapsed.invocations = !collapsed.invocations)}
+    >
+      {#if collapsed.invocations}<CaretRight size={10} />{:else}<CaretDown size={10} />{/if}
+      <ClockCounterClockwise size={18} />
+      Invocations
+    </button>
     {#if !collapsed.invocations}
       <div class="pane-body">
         <ul class="list">
@@ -224,7 +257,7 @@
             <li>
               <button
                 class="invocation-row"
-                title={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id} — ${status.label}`}
+                title={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id} — ${status.label}${inv.workspace ? ` — ${inv.workspace}` : ""}`}
                 aria-label={`${inv.cmd ?? "Command not recorded"} ${inv.pattern ?? inv.id}: ${status.label}`}
                 class:selected={active}
                 aria-current={active ? "true" : undefined}
@@ -338,7 +371,7 @@
         </p>
       {/if}
     {:else if snap}
-      <p class="dim">Select a target in the tree</p>
+      <p class="workspace-empty dim">Select a package or target in the sidebar, or search for a target above.</p>
     {:else if state.ingest !== "running" && !app.view.snapshotLoading && (app.view.snapshotError || state.lastError)}
       <Notice tone="error" announce={collapsed.targets} onaction={retryTargets}>
         {#if app.view.snapshotError}
@@ -352,109 +385,46 @@
   </main>
 {/snippet}
 
-<svelte:window
-  onpointerdown={dismissArguments}
-  onfocusin={dismissArguments}
-  onkeydown={argumentsKey}
-/>
-
 <div class="win">
   <div class="toolbar">
-    <div class="workspace-picker">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="76 76 360 360"
-        width="22"
-        height="22"
-        class="brand-icon zeal-logo"
-        aria-hidden="true"
-      >
-        <polygon points="84,104 428,104 428,216 276,216 164,304 84,304" fill="#34d399" />
-        <polygon points="428,208 348,208 236,296 84,296 84,408 428,408" fill="#0891b2" />
-      </svg>
-      {#if st?.workspace}
-        <span class="label" title={st.workspace}
-          >{st.workspace.split(/[\\/]/).filter(Boolean).at(-1) ??
-            st.workspace}</span
-        >
-        <div class="workspace-actions">
-          <button
-            type="button"
-            class="button button-ghost icon-button"
-            aria-label="Switch workspace"
-            aria-expanded={switchingWs}
-            title="Switch workspace"
-            disabled={busy}
-            onclick={() => getSession().setWorkspacePromptOpen(!switchingWs)}
-          >
-            <Gear size={14} />
-          </button>
-          <button
-            type="button"
-            class="button button-ghost icon-button"
-            aria-label="Reload targets"
-            title="Reload targets"
-            onclick={refresh}
-            disabled={busy}
-          >
-            <ArrowClockwise size={14} />
-          </button>
-        </div>
-      {:else}
-        <strong>Zeal</strong>
-      {/if}
-    </div>
+    <WorkspaceSwitcher
+      workspace={st?.workspace ?? null}
+      {busy}
+      {settingsOpen}
+      opening={app.view.opening}
+      onopen={(path) => editWorkspace("open", path)}
+      onsettings={toggleWorkspaceSettings}
+      onhome={workspaceHome}
+    />
     <div class="composer" class:composer-invalid={!!inputError}>
       <select class="select" aria-label="Bazel command" bind:value={cmd}>
         <option>build</option>
         <option>test</option>
         <option>run</option>
       </select>
-      <div class="composer-search">
-        <SearchInput
-          class="input composer-target"
-          aria-label="Target label or pattern"
-          aria-invalid={!!inputError}
-          aria-describedby={inputError ? "composer-target-error" : undefined}
-          placeholder="Fuzzy :all / //pkg:target"
-          {index}
-          value={targetField}
-          oninput={(v) => (targetField = v)}
-          onpick={pickTarget}
-        />
-      </div>
+      <SearchInput
+        class="input composer-target"
+        aria-label="Target label or pattern"
+        aria-invalid={!!inputError}
+        aria-describedby={inputError ? "composer-target-error" : undefined}
+        placeholder="Search targets or enter a pattern"
+        {index}
+        value={targetField}
+        oninput={(v) => (targetField = v)}
+        onpick={pickTarget}
+      />
       <button
         bind:this={argumentsToggle}
         type="button"
-        class="button button-ghost arguments-toggle"
-        aria-label={argumentsConfigured ? "Arguments (configured)" : "Arguments"}
+        class="button button-ghost icon-button arguments-toggle"
+        aria-label="Arguments"
         aria-expanded={argumentsOpen}
-        aria-controls="command-arguments-popover"
-        title={argumentsConfigured ? argumentsText : "Specify arguments"}
+        aria-controls={argumentsOpen ? "command-arguments" : undefined}
+        title="Arguments"
         onclick={() => setArgumentsOpen(!argumentsOpen)}
       >
-        Arguments
-        {#if argumentsConfigured}<span class="arguments-indicator" aria-hidden="true"></span>{/if}
+        <SlidersHorizontal size={16} />
       </button>
-      {#if argumentsOpen}
-        <div
-          bind:this={argumentsPanel}
-          class="arguments-popover"
-          id="command-arguments-popover"
-        >
-          <input
-            bind:this={argumentsInput}
-            bind:value={argumentsText}
-            id="command-arguments"
-            class="input arguments-input"
-            aria-label="Arguments"
-            placeholder="--config=dev; program arguments after --"
-            title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
-            autocomplete="off"
-            spellcheck={false}
-          />
-        </div>
-      {/if}
       <button
         type="button"
         class="button button-primary icon-button"
@@ -469,6 +439,22 @@
             weight="fill"
           />{/if}
       </button>
+      {#if argumentsOpen}
+        <div class="arguments-row">
+          <label for="command-arguments">Arguments</label>
+          <input
+            bind:this={argumentsInput}
+            bind:value={argumentsText}
+            id="command-arguments"
+            class="input arguments-input"
+            onkeydown={argumentsKey}
+            placeholder={cmd === "run" ? "--config=dev -- --port=8080" : "--config=dev --keep_going"}
+            title="Shell-style quotes and escapes. Quote # to keep it literal. No variable or command expansion."
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </div>
+      {/if}
     </div>
   </div>
   {#if app.view.error}<Notice tone="error">{app.view.error}</Notice>{/if}
@@ -482,12 +468,15 @@
     <div class="content dim">loading…</div>
   {:else if st.workspace === null || switchingWs}
     <div class="content">
-      <WorkspacePrompt
-        initial={st.workspace ?? ""}
-        initialScope={st.scope}
-        bazelAvailable={st.bazel !== null}
-        onclose={st.workspace ? () => getSession().setWorkspacePromptOpen(false) : undefined}
-      />
+      {#key `${workspaceForm?.mode ?? "open"}:${workspaceForm?.path ?? ""}`}
+        <WorkspacePrompt
+          mode={workspaceForm?.mode ?? "open"}
+          initial={workspaceForm?.path ?? st.workspace ?? ""}
+          initialScope={workspaceForm?.scope ?? st.scope}
+          bazelAvailable={st.bazel !== null}
+          onclose={st.workspace ? () => getSession().setWorkspacePromptOpen(false) : undefined}
+        />
+      {/key}
     </div>
   {:else}
     <div class="win-body">
@@ -501,6 +490,10 @@
           onpointerdown={dividerDown}
         ></div>
         {@render invocationPane(st)}
+        <nav class="workspace-nav" aria-label="Workspace views">
+          <button type="button" class="workspace-nav-link" class:active={content.kind === "query"} aria-current={content.kind === "query" ? "page" : undefined} onclick={() => getSession().showPage("query")}><TreeStructure size={18} />Query</button>
+          <button type="button" class="workspace-nav-link" class:active={content.kind === "analytics"} aria-current={content.kind === "analytics" ? "page" : undefined} onclick={() => getSession().showPage("analytics")}><ChartBar size={18} />Analytics</button>
+        </nav>
       </aside>
       {@render workspaceContent(st, st.workspace)}
     </div>

@@ -5,7 +5,7 @@
 }
 
 .tree {
-  font: 12px/1.6 var(--mono);
+  font: 12px/1.7 var(--mono);
 }
 
 .tree .row {
@@ -16,7 +16,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: none;
-  padding: 4px 8px;
+  padding: 5px 8px;
   color: var(--foreground);
   font: inherit;
   text-align: left;
@@ -36,12 +36,19 @@
 }
 
 .target-head {
-  padding: 28px 0 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  padding: 20px 0 16px;
   border-bottom: 1px solid var(--border);
 }
 
 .target-head .badge {
-  margin-bottom: 12px;
+  max-width: 100%;
+  color: var(--muted-foreground);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .outputs,
@@ -54,6 +61,12 @@
   margin: 0 0 10px;
   font-size: 13px;
   font-weight: 600;
+}
+
+.target-actions h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .actions-scroll {
@@ -222,25 +235,28 @@ details[open] .action-mnemonic::before {
 }
 
 .attributes-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
   padding: 20px 0 12px;
-}
-
-.attributes-head h2 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
 }
 
 .ws-prompt {
-  padding: 40px 12px;
+  padding: 48px 0;
   display: flex;
-  gap: 10px;
+  gap: 16px;
   flex-direction: column;
   max-width: 640px;
   margin: 0 auto;
+}
+
+.ws-prompt header h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.ws-prompt header p {
+  margin: 8px 0 12px;
 }
 
 .ws-prompt label {
@@ -248,7 +264,7 @@ details[open] .action-mnemonic::before {
   flex-direction: column;
   gap: 4px;
   flex: 1;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted-foreground);
 }
 
@@ -265,7 +281,7 @@ details[open] .action-mnemonic::before {
   flex: 1;
   gap: 4px;
   min-width: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted-foreground);
 }
 
@@ -282,7 +298,9 @@ details[open] .action-mnemonic::before {
 
 .scope-help {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 75ch;
   color: var(--muted-foreground);
 }
 
@@ -321,38 +339,18 @@ details[open] .action-mnemonic::before {
 
 .target-head h1 {
   font: 600 24px/1.4 var(--mono);
-  letter-spacing: -0.7px;
   margin: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
   min-width: 0;
 }
 
 .source-location {
-  display: block;
   max-width: 100%;
-  margin-top: 10px;
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   color: var(--muted-foreground);
   text-align: left;
   overflow-wrap: anywhere;
-}
-
-.relation-filter {
-  position: relative;
-  width: 220px;
-  max-width: 100%;
-  margin-left: auto;
-}
-
-.relation-filter .input {
-  padding-left: 32px;
-}
-
-.relation-filter > svg {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  color: var(--muted-foreground);
 }
 
 .relations dt small {
@@ -375,11 +373,11 @@ details[open] .action-mnemonic::before {
   align-items: center;
   gap: 4px 8px;
   max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--muted);
-  padding: 5px 9px;
-  font: 12px var(--mono);
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  padding: 4px 6px;
+  font: 12px/1.6 var(--mono);
   color: var(--foreground);
   overflow-wrap: anywhere;
   text-align: left;
@@ -387,11 +385,12 @@ details[open] .action-mnemonic::before {
 
 button.chip {
   cursor: pointer;
+  color: var(--primary);
+  background: var(--accent);
 }
 
 button.chip:hover {
-  background: var(--accent);
-  border-color: var(--ring);
+  background: color-mix(in oklch, var(--accent), var(--primary) 18%);
 }
 
 .chip small {
@@ -399,15 +398,8 @@ button.chip:hover {
   color: var(--muted-foreground);
 }
 
-.chip.file.local {
-  background: var(--muted);
-  border-color: var(--border);
-  color: var(--foreground);
-}
-
 .chip.file {
-  border-color: transparent;
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 .chip.more {
@@ -422,10 +414,6 @@ button.chip:hover {
 
   .tree .row small {
     display: none;
-  }
-
-  .attributes-head {
-    flex-wrap: wrap;
   }
 
   .relations {

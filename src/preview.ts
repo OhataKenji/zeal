@@ -150,7 +150,12 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
     const startedAt = dayDate.getTime() - invocationIndex * 600000;
     return {
       id: `preview-${dayIndex}-${invocationIndex}`,
-      workspace: (dayIndex + invocationIndex) % 2 === 0 ? WORKSPACE : `${WORKSPACE}-worktree`,
+      workspace:
+        invocationIndex === 2
+          ? "/workspaces/build-tools"
+          : (dayIndex + invocationIndex) % 2 === 0
+            ? WORKSPACE
+            : `${WORKSPACE}-worktree`,
       cmd: invocationIndex % 3 === 1 ? "test" : "build",
       pattern: PREVIEW_TARGETS[(dayIndex + invocationIndex) % PREVIEW_TARGETS.length],
       startedAt,
@@ -347,7 +352,7 @@ function getInvocation(id: unknown) {
 function startInvocation(cmd: string, pattern: string) {
   const record: PreviewRecord = {
     id: `preview-${crypto.randomUUID()}`,
-    workspace: WORKSPACE,
+    workspace: state.workspace ?? WORKSPACE,
     cmd,
     pattern,
     startedAt: Date.now(),
@@ -398,6 +403,20 @@ export function installPreview() {
     state.workspace = null;
     state.snapshotFetchedAt = null;
     currentSnapshot = null;
+  }
+  function candidates(): string[] {
+    const counts = new Map<string, { count: number; last: number }>();
+    for (const inv of records
+      .toSorted((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id))
+      .slice(0, 100)) {
+      const rank = counts.get(inv.workspace);
+      if (rank) rank.count++;
+      else counts.set(inv.workspace, { count: 1, last: inv.startedAt });
+    }
+    return [...counts]
+      .sort(([a, x], [b, y]) => y.count - x.count || y.last - x.last || a.localeCompare(b))
+      .slice(0, 5)
+      .map(([path]) => path);
   }
   // Every command the app invokes needs a handler; the Record type makes a
   // missing one a typecheck error instead of a runtime surprise.
@@ -490,12 +509,18 @@ export function installPreview() {
     get_analytics: (payload) =>
       previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
     open_workspace: (payload) => {
-      state.workspace = String(payload?.path ?? WORKSPACE);
-      state.scope = structuredClone(payload?.scope as AppState["scope"]);
+      if (bazelBusyReason(state)) {
+        throw new Error("cannot change workspace while bazel is busy");
+      }
+      const path = String(payload?.path ?? WORKSPACE);
+      const scope = structuredClone(payload?.scope as AppState["scope"]);
+      state.workspace = path;
+      state.scope = scope;
       state.snapshotFetchedAt = SNAPSHOT.meta.fetchedAt;
       currentSnapshot = SNAPSHOT;
       return structuredClone(state);
     },
+    list_workspaces: () => structuredClone(candidates()),
     refresh: () => void emit("app-state", structuredClone(state)),
     start_invocation: (payload) => startInvocation(String(payload?.cmd), String(payload?.pattern)),
     stop_invocation: () => stopInvocation(),

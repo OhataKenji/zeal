@@ -150,6 +150,7 @@ fn open_workspace(
     if !workspace::is_workspace(&ws) {
         return Err("no MODULE.bazel / WORKSPACE at this path".to_string());
     }
+    let ws = std::fs::canonicalize(&ws).map_err(|error| error.to_string())?;
     let bazel = workspace::resolve_bazel();
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
@@ -185,6 +186,19 @@ fn open_workspace(
 #[tracing::instrument(target = "zeal::operations", name = "workspace.refresh", skip_all)]
 fn refresh(app: AppHandle, core: State<Arc<Core>>) -> Result<(), String> {
     ingest::request(app, core.inner().clone())
+}
+
+#[tauri::command]
+async fn list_workspaces(app: AppHandle) -> Result<Vec<PathBuf>, String> {
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        store::frequent_workspaces(&data).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "workspace list worker failed".to_string())?
 }
 
 /// Start `bazel build|test|run <target>`. Fails while bazel is busy.
@@ -478,6 +492,7 @@ pub fn run() {
             resize_console,
             open_workspace,
             refresh,
+            list_workspaces,
             start_invocation,
             stop_invocation,
             run_query,

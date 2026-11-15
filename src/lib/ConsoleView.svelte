@@ -73,7 +73,6 @@
   <InvocationHeader {record} {status} />
   {#if error}<Notice tone="error">{error}</Notice>{/if}
   <div class="invocation-panel">
-    <div class="panel-heading console-log-spacer" aria-hidden="true">Logs</div>
     <div class="console-terminal" bind:this={host}></div>
   </div>
 </section>
@@ -82,10 +81,6 @@
 
   .console-page {
     height: 100%;
-  }
-
-  .console-log-spacer {
-    visibility: hidden;
   }
 
   .console-terminal {
