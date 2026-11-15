@@ -22,8 +22,7 @@ export type WorkspacePage = "targets" | "analytics" | "query";
 
 export type SessionContent =
   | { readonly kind: WorkspacePage }
-  | { readonly kind: "invocation"; readonly id: string; readonly page: WorkspacePage }
-  | { readonly kind: "console"; readonly id: string; readonly page: WorkspacePage };
+  | { readonly kind: "invocation"; readonly id: string; readonly page: WorkspacePage };
 
 interface Reader<T> {
   value: T | null;
@@ -194,7 +193,6 @@ export type SessionMessage =
   | { readonly type: "select"; readonly selection: ExplorerSelection }
   | { readonly type: "selectInvocation"; readonly id: string }
   | { readonly type: "showPage"; readonly page: WorkspacePage }
-  | { readonly type: "openConsole"; readonly id: string }
   | { readonly type: "loadDetail" }
   | { readonly type: "loadProfile" }
   | {
@@ -259,14 +257,15 @@ function selectedInvocation(model: SessionModel): string | null {
   return content.kind === "invocation" ? content.id : null;
 }
 
-function contentInvocationId(model: SessionModel): string | null {
-  const content = model.content;
-  return content.kind === "invocation" || content.kind === "console" ? content.id : null;
+/** The live owned entry behind the selected invocation, if it still exists. */
+function selectedExecution(model: SessionModel): OwnedInvocation | null {
+  const entry = ownedEntry(model.connection.state, selectedInvocation(model));
+  return entry && entry.workspace === model.workspace ? entry : null;
 }
 
 function workspacePage(model: SessionModel): WorkspacePage {
   const content = model.content;
-  return content.kind === "invocation" || content.kind === "console" ? content.page : content.kind;
+  return content.kind === "invocation" ? content.page : content.kind;
 }
 
 function savedEligible(model: SessionModel): boolean {
@@ -275,6 +274,7 @@ function savedEligible(model: SessionModel): boolean {
     id &&
     model.connection.state !== null &&
     model.workspace &&
+    !selectedExecution(model)?.console &&
     model.history.records.some((record) => record.id === id)
   );
 }
@@ -282,37 +282,32 @@ function savedEligible(model: SessionModel): boolean {
 export function sessionView(model: SessionModel): SessionView {
   const eligible = savedEligible(model);
   const core = model.connection.state;
-  const owned = (core?.invocations ?? []).filter((entry) => entry.workspace === model.workspace);
-  const ownedById = new Map(owned.map((entry) => [entry.id, entry]));
-  const historyById = new Map(model.history.records.map((record) => [record.id, record]));
-  const pinned = owned
-    .filter((entry) => entry.running || (entry.console && !historyById.has(entry.id)))
+  // Every owned entry is a live worker: all are pinned, and a released
+  // invocation simply leaves the map so its history row stands alone.
+  const owned = (core?.invocations ?? [])
+    .filter((entry) => entry.workspace === model.workspace)
     .sort((a, b) => b.startedAt - a.startedAt);
-  const pinnedIds = new Set(pinned.map((entry) => entry.id));
+  const pinnedIds = new Set(owned.map((entry) => entry.id));
+  const historyById = new Map(model.history.records.map((record) => [record.id, record]));
   const invocationRows = [
-    ...pinned.map((execution) => ({
+    ...owned.map((execution) => ({
       record: historyById.get(execution.id) ?? execution,
       execution,
     })),
     ...model.history.records
       .filter((record) => !pinnedIds.has(record.id))
-      .map((record) => ({ record, execution: ownedById.get(record.id) })),
+      .map((record) => ({ record })),
   ];
-  let consoleRecord: InvocationRecord | null = null;
-  if (model.content.kind === "console") {
-    const execution = ownedById.get(model.content.id);
-    if (execution?.console) {
-      consoleRecord = historyById.get(model.content.id) ?? execution;
-    }
-  }
-  const selectedId = contentInvocationId(model);
+  const execution = selectedExecution(model);
+  const consoleRecord =
+    execution?.console === true ? (historyById.get(execution.id) ?? execution) : null;
   return {
     content: model.content,
     console: consoleRecord,
     core,
     state: wsEntry(core, model.workspace),
     invocationRows,
-    execution: selectedId === null ? null : (ownedById.get(selectedId) ?? null),
+    execution,
     snapshot: model.targets.snapshot.value,
     snapshotLoading: model.targets.snapshot.requestId !== null,
     snapshotError: model.targets.snapshot.error,
@@ -577,9 +572,6 @@ function retryProfile(draft: Draft) {
 function sameContent(left: SessionContent, right: SessionContent): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === "invocation" && right.kind === "invocation") {
-    return left.id === right.id && left.page === right.page;
-  }
-  if (left.kind === "console" && right.kind === "console") {
     return left.id === right.id && left.page === right.page;
   }
   return true;
@@ -945,7 +937,7 @@ function startResult(draft: Draft, requestId: number, result: Result<string>) {
     draft.connection.error = result.error;
     return;
   }
-  showContent(draft, { kind: "console", id: result.value, page: workspacePage(draft) });
+  showContent(draft, { kind: "invocation", id: result.value, page: workspacePage(draft) });
 }
 
 function stateResult(draft: Draft, result: Result<AppState>) {
@@ -954,12 +946,6 @@ function stateResult(draft: Draft, result: Result<AppState>) {
   } else if (draft.connection.state === null) {
     draft.connection.error = `Could not connect: ${result.error}`;
   }
-}
-
-function openConsole(draft: Draft, id: string) {
-  const owned = ownedEntry(draft.connection.state, id);
-  if (!owned?.console || owned.workspace !== draft.workspace) return;
-  showContent(draft, { kind: "console", id, page: workspacePage(draft) });
 }
 
 function setWorkspacePromptOpen(draft: Draft, open: boolean) {
@@ -1042,9 +1028,6 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
     case "showPage":
       showPage(next, message.page);
       break;
-    case "openConsole":
-      openConsole(next, message.id);
-      break;
     case "loadDetail":
       retryDetail(next);
       break;
@@ -1070,7 +1053,7 @@ export function update(model: SessionModel, message: SessionMessage): SessionTra
       requestStop(next, message.id);
       break;
     case "stopResult":
-      if (!message.result.ok && contentInvocationId(next) === message.id) {
+      if (!message.result.ok && selectedInvocation(next) === message.id) {
         next.connection.error = message.result.error;
       }
       break;

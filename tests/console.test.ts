@@ -14,7 +14,7 @@ test("a successful output read clears its previous error and retries the same of
         assert.equal(command, "read_console");
         assert.equal(args?.offset, 0);
         if (fail) throw new Error("history storage permission or file safety error");
-        return { data: [65], offset: 1, done: true } as T;
+        return { data: [65], offset: 1 } as T;
       },
     },
     async (data) => {
@@ -46,7 +46,7 @@ test("successful reads do not hide failed input or resize operations", async () 
           return 1 as T;
         }
         if (command === "resize_console" && failResize) throw new Error("resize failed");
-        return { data: [], offset: 0, done: false } as T;
+        return { data: [], offset: 0 } as T;
       },
     },
     async () => {},
@@ -81,11 +81,7 @@ test("output is delivered once in byte order, including split UTF-8", async () =
         offsets.push(Number(args?.offset));
         const offset = Number(args?.offset);
         const data = Array.from(bytes.slice(offset, offset + 2));
-        return {
-          data,
-          offset: offset + data.length,
-          done: offset + data.length === bytes.length,
-        } as T;
+        return { data, offset: offset + data.length } as T;
       },
     },
     async (data) => {
@@ -100,9 +96,9 @@ test("output is delivered once in byte order, including split UTF-8", async () =
   await console.poll();
   await console.poll();
   await console.poll();
-  await console.poll();
   assert.deepEqual(offsets, [0, 2, 4, 6]);
   assert.deepEqual(displayed, Array.from(bytes));
+  console.dispose();
 });
 
 test("partial writes and backpressure keep key bytes in order", async () => {
@@ -114,7 +110,7 @@ test("partial writes and backpressure keep key bytes in order", async () => {
     {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
         assert.equal(args?.id, "owned");
-        if (command === "read_console") return { data: [], offset: 0, done: false } as T;
+        if (command === "read_console") return { data: [], offset: 0 } as T;
         const data = args?.data as number[];
         if (blocked) return 0 as T;
         received.push(data[0]);
@@ -162,19 +158,20 @@ test("closing a Console ignores late output without stopping the process", async
   );
   const reading = console.poll();
   console.dispose();
-  resolve({ data: [65], offset: 1, done: false });
+  resolve({ data: [65], offset: 1 });
   await reading;
   console.input(Uint8Array.from([3]));
   await console.poll();
   assert.deepEqual(calls, ["read_console"]);
 });
 
-test("completed Console drains its final output without further process operations", async () => {
+test("a non-writable Console stops input and resize but keeps reading", async () => {
   const calls: string[] = [];
   const displayed: number[] = [];
   const replies = [
-    { data: [65], offset: 1, done: false },
-    { data: [66, 67], offset: 3, done: true },
+    { data: [65], offset: 1 },
+    { data: [66, 67], offset: 3 },
+    { data: [], offset: 3 },
   ];
   const console = createConsole(
     "/workspace",
@@ -194,13 +191,13 @@ test("completed Console drains its final output without further process operatio
     },
   );
   await console.poll();
-  console.setRunning(false);
+  console.setWritable(false);
   console.input(Uint8Array.of(68));
   await console.resize(80, 24);
   await console.poll();
   await console.poll();
   assert.deepEqual(displayed, [65, 66, 67]);
-  assert.deepEqual(calls, ["read_console", "read_console"]);
+  assert.deepEqual(calls, ["read_console", "read_console", "read_console"]);
 });
 
 test("read, write, and resize payloads carry the captured workspace and id", async () => {
@@ -213,7 +210,7 @@ test("read, write, and resize payloads carry the captured workspace and id", asy
         calls.push({ command, args: args ?? {} });
         if (command === "write_console") return 1 as T;
         if (command === "resize_console") return undefined as T;
-        return { data: [], offset: 0, done: false } as T;
+        return { data: [], offset: 0 } as T;
       },
     },
     async () => {},
@@ -235,7 +232,7 @@ test("read, write, and resize payloads carry the captured workspace and id", asy
   }
 });
 
-test("process completion discards pending input under backpressure but keeps reading", async () => {
+test("a non-writable Console discards pending input under backpressure but keeps reading", async () => {
   const calls: string[] = [];
   const console = createConsole(
     "/workspace",
@@ -243,7 +240,7 @@ test("process completion discards pending input under backpressure but keeps rea
     {
       invoke: async <T>(command: string) => {
         calls.push(command);
-        return (command === "write_console" ? 0 : { data: [], offset: 0, done: false }) as T;
+        return (command === "write_console" ? 0 : { data: [], offset: 0 }) as T;
       },
     },
     async () => {},
@@ -254,7 +251,7 @@ test("process completion discards pending input under backpressure but keeps rea
   console.input(Uint8Array.of(65));
   await console.poll();
   const writes = calls.filter((command) => command === "write_console").length;
-  console.setRunning(false);
+  console.setWritable(false);
   await console.poll();
   assert.equal(calls.filter((command) => command === "write_console").length, writes);
   assert.equal(calls.at(-1), "read_console");

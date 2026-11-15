@@ -363,23 +363,22 @@ mod tests {
         let invocation = st.invocations.get(id).unwrap();
         assert_eq!(invocation.cmd, "query");
         assert_eq!(invocation.workspace, PathBuf::from(ws));
-        let process = invocation.process.as_ref().unwrap();
+        let process = &invocation.process;
         assert!(process.terminal.is_none());
         assert!(process.pgid.is_some());
     }
 
     fn assert_reap_state(st: &crate::state::CoreState, reaped: &str, other: &str) {
-        // The reap revokes signal ownership; the slot releases at guard drop.
-        let process = st.invocations[reaped].process.as_ref().unwrap();
+        // The reap revokes signal ownership; the entry releases at guard drop.
+        let process = &st.invocations[reaped].process;
         assert!(process.pgid.is_none());
-        assert_eq!(st.invocations[reaped].process_exit_code, Some(0));
-        assert!(st.invocations[other].process.is_some());
+        assert!(st.invocations.contains_key(other));
     }
 
     fn assert_slot_released(st: &crate::state::CoreState, released: &str, held: &str) {
-        // A console-less entry is pruned entirely when its guard drops.
+        // Release removes the entry entirely.
         assert!(!st.invocations.contains_key(released));
-        assert!(st.invocations[held].process.is_some());
+        assert!(st.invocations.contains_key(held));
     }
 
     #[test]

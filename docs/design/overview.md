@@ -27,7 +27,7 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 - **workspace**: main repository と定義された外部 repository を含む Bazel の環境。Zeal では workspace root（main repository のルート）を開く
 - **target / label / package / rule class**: Bazel の通常の意味。`//app/lib:parser` の `java_library` が rule class
 - **composer**: toolbar にある build / test / run の実行入口。cmd 選択・target 欄・Send の三点
-- **content**: ウィンドウ本体の表示先（targets / invocation / console / analytics / query）
+- **content**: ウィンドウ本体の表示先（targets / invocation / analytics / query）
 - **invocation**: 一回のBazelコマンド呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
 - **BEP**: Build Event Protocol。Bazelが報告する呼び出し単位のイベント列。送信先のBuild Event Service(BES)をZeal内のreceiverが受け付ける
@@ -79,7 +79,7 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 | WebView (`App.svelte`, `session_model.ts`, `session.ts`) | 選択と要求の状態、表示用データの導出、操作と IPC の接続          |
 | IPC (`lib.rs`)                                           | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
 | workspace (`workspace.rs`, `state.rs`)                   | パスと Bazel の解決、workspace の登録と scope の保持             |
-| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)      | invocation ごとの起動、停止、終了回収、Console の入出力と保持    |
+| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)      | invocation ごとの起動、停止、終了回収、Console の入出力          |
 | target と query (`ingest.rs`, `query.rs`)                | query の実行依頼、結果の解釈と呼出し元への返却                   |
 | 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`)     | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
 
@@ -96,19 +96,19 @@ UI が直接プロセスやファイルを触る経路は作らない。
 Zeal は、起動した Bazel を invocation ごとに管理する。
 workspace を切り替えても、実行の所属と停止対象は変わらない。
 各コマンドに --noblock_for_lock を付け、output_base の排他は Bazel に任せる。
-build、test の終了コード 9 はロック競合として表示する。
-query 系のロック競合は、取得処理が返す終了結果やエラーで表示する。
-run の終了コード 9 は、実行したプログラムが返す場合もあるため区別する。
+実行後の結果とログは BEP の観測記録に従う。query の取得エラーは呼び出し元に返す。
 Stop は Zeal が所有する実行だけを対象にし、BES で受信した外部実行は停止しない。
-Console を持たない query 系の実行状態は、処理の完了時に破棄する。
+実行状態は capture の終了時に破棄する。
 子プロセスを回収した時点で PGID を無効にし、以後は signal を送らない。
-出力の保存が終わるまでは完了待ちの状態を残し、終了後も Console は読める。
+出力の保存が終わるまでは entry を残し、保存後は Console を含む実行状態を破棄する。
 ターゲット一覧は workspace の選択、scope の変更、手動 refresh で取得する([Target の段階的な取得](./target-loading.md))。
 refresh の結果は IPC の直接返却で届き、GUI は最新の要求 ID の応答だけを採用する。
 取り込み中も Send を使える。
 実行中はConsoleを表示する。
-実行が完了しても表示先は自動では変わらず、利用者が詳細を選ぶまでConsoleに留まる。
-Console はアプリの終了まで保持し、件数上限や自動削除は設けない。保持する実行が増えると、ファイル記述子・ログ容量・状態通知のサイズも増える。
+プロセスが終わるとConsoleは畳まれ、同じ選択先は保存済みのBEP結果を表示する。
+Consoleはliveの間はworkspace切替をまたいで再表示できるが、完了後はterminal出力を保持しない。
+履歴とログはBEPの観測記録を使い、`run`のprogram出力はBEPに含まれないため残らない。
+他の画面やworkspaceの選択は完了で変わらない。
 Bazelが待機する原因は推測しない。
 
 composerは `build` / `test` / `run` を受け付ける。
@@ -170,8 +170,8 @@ permission、disk full、新しすぎる schema は別のエラーとして扱�
 
 build / test / run は toolbar の composer から、query は Query 画面から起動する。
 tree・dropdown・target 画面での選択は、すべて composer の target 欄への文字列挿入である(詳細は [m3](./m3-find-and-execute.md))。
-表示先は targets / invocation / console / analytics / query とし、SessionModel が選択を管理する。
-Stop は invocation と Console の画面から、対象の invocation ID を指定して行う。
+表示先は targets / invocation / analytics / query とし、SessionModel が選択を管理する。
+Stop は invocation の表示から、対象の invocation ID を指定して行う。
 
 ## Alternatives Considered
 

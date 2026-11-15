@@ -23,41 +23,37 @@ function owned(over: Partial<OwnedInvocation> = {}): OwnedInvocation {
     cmd: "build",
     pattern: "//:app",
     startedAt: 1,
-    running: true,
     stoppable: true,
     stopping: false,
     console: true,
-    processExitCode: null,
-    note: null,
     ...over,
   };
 }
 
-test("outcome distinguishes active, stopping, unfinished, succeeded and failed records", () => {
+test("a live owned entry always reads running or stopping", () => {
   assert.equal(invocationStatus(RECORD, owned()).label, "● running");
   assert.equal(invocationStatus(RECORD, owned({ stopping: true })).label, "■ stopping");
+  // A BEP result that already arrived cannot outrank the live process: a
+  // `run` program may still be going after its build succeeded.
+  const runDone = { ...RECORD, cmd: "run", finishedAt: 2, exitCode: 0 };
+  assert.equal(invocationStatus(runDone, owned({ cmd: "run" })).label, "● running");
+  assert.equal(
+    invocationStatus(runDone, owned({ cmd: "run", stopping: true })).label,
+    "■ stopping",
+  );
   assert.equal(invocationStatus(RECORD).label, "? outcome unknown");
-  assert.equal(
-    invocationStatus(RECORD, owned({ running: false, stoppable: false })).label,
-    "? outcome unknown",
-  );
-  assert.equal(
-    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, owned()).label,
-    "✓ succeeded",
-  );
-  assert.equal(
-    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, owned()).label,
-    "✗ failed (exit 3)",
-  );
 });
 
-test("stopping never replaces a result the observation already confirmed", () => {
+test("a finished run reports its build result, never the program's", () => {
+  const run = { ...RECORD, cmd: "run" };
+  assert.equal(invocationStatus({ ...run, finishedAt: 2, exitCode: 0 }).label, "✓ build succeeded");
   assert.equal(
-    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, owned({ stopping: true })).label,
-    "✓ succeeded",
+    invocationStatus({ ...run, finishedAt: 2, exitCode: 3 }).label,
+    "✗ build failed (exit 3)",
   );
+  assert.equal(invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }).label, "✓ succeeded");
   assert.equal(
-    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, owned({ stopping: true })).label,
+    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }).label,
     "✗ failed (exit 3)",
   );
 });
@@ -106,12 +102,6 @@ test("build exit determines outcome even when its finish time was not recorded",
 test("missing build exit remains unknown even when its finish time was recorded", () => {
   assert.equal(invocationStatus({ ...RECORD, finishedAt: 2 }).kind, "unknown");
   assert.equal(invocationStatus(undefined).kind, "unknown");
-  // A finished owned process without BEP data reports its process exit separately.
-  assert.equal(
-    invocationStatus(undefined, owned({ running: false, stoppable: false, processExitCode: 7 }))
-      .kind,
-    "unknown",
-  );
 });
 
 test("an unobserved invocation has no invented input or result", () => {
@@ -122,21 +112,7 @@ test("an unobserved invocation has no invented input or result", () => {
   assert.equal(invocationStatus(undefined, owned({ id: "reserved" })).kind, "running");
 });
 
-test("icon status and description agree when completion races with stop", () => {
-  assert.deepEqual(
-    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }, owned({ stopping: true })),
-    {
-      kind: "succeeded",
-      label: "✓ succeeded",
-    },
-  );
-  assert.deepEqual(
-    invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }, owned({ stopping: true })),
-    {
-      kind: "failed",
-      label: "✗ failed (exit 3)",
-    },
-  );
+test("icon status and description agree for live and finished invocations", () => {
   assert.deepEqual(invocationStatus(RECORD, owned()), {
     kind: "running",
     label: "● running",
@@ -144,5 +120,13 @@ test("icon status and description agree when completion races with stop", () => 
   assert.deepEqual(invocationStatus(RECORD, owned({ stopping: true })), {
     kind: "stopping",
     label: "■ stopping",
+  });
+  assert.deepEqual(invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 0 }), {
+    kind: "succeeded",
+    label: "✓ succeeded",
+  });
+  assert.deepEqual(invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }), {
+    kind: "failed",
+    label: "✗ failed (exit 3)",
   });
 });

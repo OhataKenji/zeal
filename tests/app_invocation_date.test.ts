@@ -134,7 +134,7 @@ test("App shows snapshot errors alongside retained targets", async (t) => {
   });
 });
 
-test("App shows a pending Console placeholder before the owned entry arrives", async (t) => {
+test("App shows the neutral invocation page before the owned entry arrives", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { app } = await load("/src/lib/state.svelte.ts");
   const { default: App } = await load("/src/App.svelte");
@@ -143,14 +143,16 @@ test("App shows a pending Console placeholder before the owned entry arrives", a
     ready: true,
     core: CORE,
     state: WS,
-    content: { kind: "console", id: "pending", page: "targets" },
+    content: { kind: "invocation", id: "pending", page: "targets" },
     console: null,
     execution: null,
     invocations: [],
     invocationRows: [],
     invocationsError: null,
+    detail: null,
+    detailLoading: false,
+    detailError: null,
   });
   const html = render(App).body;
-  assert.ok(html.includes('role="status"'));
-  assert.ok(html.includes("Waiting for Console…"));
+  assert.ok(html.includes("No local process or saved record is available."));
 });

@@ -15,12 +15,11 @@
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { formatOptions } from "./invocation/options";
 
-  let { view, reload, reloadProfile, onstop, onconsole }: {
+  let { view, reload, reloadProfile, onstop }: {
     view: SessionView;
     reload: () => void;
     reloadProfile: () => void;
     onstop: (id: string) => void;
-    onconsole: (id: string) => void;
   } = $props();
   const selectedInvocation = $derived(view.content.kind === "invocation" ? view.content.id : null);
   const record = $derived(
@@ -29,7 +28,7 @@
   );
   const execution = $derived(view.execution);
   const shown = $derived<InvocationRecord | undefined>(record ?? execution ?? undefined);
-  const running = $derived(execution?.running === true);
+  const running = $derived(execution != null);
   const profile = $derived(sectionData(view.profile ?? undefined));
   const bep = $derived(sectionData(view.detail?.bep));
   const status = $derived(invocationStatus(record, execution ?? undefined));
@@ -96,13 +95,6 @@
     </div>
     {#if execution}
       <div class="invocation-actions">
-        {#if execution.console}
-          <button
-            type="button"
-            class="button button-ghost"
-            onclick={() => onconsole(execution.id)}>Console</button
-          >
-        {/if}
         {#if execution.stoppable}
           <button
             type="button"
@@ -113,7 +105,6 @@
           >
         {/if}
       </div>
-      {#if execution.note}<Notice tone="warning">{execution.note}</Notice>{/if}
     {/if}
   </InvocationHeader>
 
@@ -140,7 +131,7 @@
           leftLoading={view.detailLoading}
           leftError={view.detailError}
           workspace={view.state?.workspace ?? ""}
-          runningIds={view.core?.invocations.filter((entry) => entry.running).map((entry) => entry.id) ?? []}
+          runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
         />
       {/key}
     {/if}
@@ -178,10 +169,6 @@
                 </dd>
                 <dt>Exit code</dt>
                 <dd>{shown.exitCode ?? "Unknown"}</dd>
-                {#if !record && execution?.processExitCode != null}
-                  <dt>Process</dt>
-                  <dd>Exited (code {execution.processExitCode})</dd>
-                {/if}
                 {#if shown.startedAt !== undefined && shown.finishedAt !== undefined}<dt>Wall time</dt>
                   <dd>
                     {((shown.finishedAt - shown.startedAt) / 1000).toFixed(3)}s

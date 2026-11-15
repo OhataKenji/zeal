@@ -8,7 +8,6 @@ use std::os::unix::fs::FileExt;
 pub struct Output {
     data: Vec<u8>,
     offset: u64,
-    done: bool,
 }
 
 fn unavailable() -> io::Error {
@@ -20,7 +19,7 @@ fn unavailable() -> io::Error {
 
 #[tracing::instrument(target = "zeal::operations", name = "console.read", skip_all)]
 pub fn read(core: &Core, ws: &str, id: &str, offset: u64) -> io::Result<Output> {
-    let (file, released) = {
+    let file = {
         let state = core.state.lock().expect("application state lock poisoned");
         let ws = state
             .workspace_path(ws)
@@ -34,7 +33,7 @@ pub fn read(core: &Core, ws: &str, id: &str, offset: u64) -> io::Result<Output> 
         let Some(console) = invocation.console.as_ref() else {
             return Err(unavailable());
         };
-        (console.try_clone()?, invocation.process.is_none())
+        console.try_clone()?
     };
     let length = file.metadata()?.len();
     if offset > length {
@@ -46,7 +45,6 @@ pub fn read(core: &Core, ws: &str, id: &str, offset: u64) -> io::Result<Output> 
     Ok(Output {
         data: bytes,
         offset,
-        done: released && offset == length,
     })
 }
 
@@ -95,10 +93,8 @@ mod tests {
                     cmd: "build".to_string(),
                     pattern: "//:b".to_string(),
                     started_at: 1,
-                    process: Some(ActiveInvocation::stub(Some(42))),
+                    process: ActiveInvocation::stub(Some(42)),
                     console: Some(session_log),
-                    process_exit_code: None,
-                    note: None,
                 },
             );
             drop(state);
@@ -120,7 +116,7 @@ mod tests {
             read(&self.core, self.ws(), &self.id, offset).unwrap()
         }
 
-        /// The child was reaped; the capture worker still owns the slot.
+        /// The child was reaped; the worker still owns the entry.
         fn reap(&self) {
             self.core
                 .state
@@ -130,21 +126,12 @@ mod tests {
                 .get_mut(&self.id)
                 .unwrap()
                 .process
-                .as_mut()
-                .unwrap()
                 .pgid = None;
         }
 
-        /// The worker released the process slot after its final drain.
+        /// The worker released the entry: its console is gone with it.
         fn release(&self) {
-            self.core
-                .state
-                .lock()
-                .unwrap()
-                .invocations
-                .get_mut(&self.id)
-                .unwrap()
-                .process = None;
+            self.core.state.lock().unwrap().invocations.remove(&self.id);
         }
     }
 
@@ -155,50 +142,29 @@ mod tests {
     }
 
     #[test]
-    fn process_exit_does_not_end_drain() {
+    fn a_live_console_serves_bounded_chunks_while_draining() {
         let fixture = Fixture::new();
         (&fixture.log).write_all(&vec![0xff; 70 * 1024]).unwrap();
         let first = fixture.read(0);
         assert_eq!(first.data.len(), 64 * 1024);
-        assert!(!first.done);
         fixture.reap();
         let middle = fixture.read(first.offset);
         assert_eq!(middle.data, vec![0xff; 6 * 1024]);
-        assert!(!middle.done);
-        fixture.release();
-        assert!(fixture.read(middle.offset).done);
+        // Still owned while the capture drains: reads keep working.
+        assert_eq!(fixture.read(middle.offset).data.len(), 0);
     }
 
     #[test]
-    fn a_finished_capture_serves_its_final_bytes_and_replays_the_log() {
+    fn a_released_console_rejects_reads_and_writes() {
         let fixture = Fixture::new();
-        (&fixture.log).write_all(&vec![0xff; 70 * 1024]).unwrap();
-        fixture.reap();
-        (&fixture.log).write_all(b"program tail\n").unwrap();
-        fixture.release();
-        let last = fixture.read(70 * 1024);
-        assert_eq!(last.data, b"program tail\n");
-        assert!(last.done);
-        let reopened = fixture.read(0);
-        assert_eq!(reopened.data, vec![0xff; 64 * 1024]);
-        assert!(!reopened.done);
-        assert!(read(&fixture.core, fixture.ws(), &fixture.id, last.offset + 1).is_err());
-    }
-
-    #[test]
-    fn unobserved_invocation_keeps_its_failure_output_after_capture_finishes() {
-        let fixture = Fixture::new();
-        (&fixture.log).write_all(b"startup failed\n").unwrap();
         fixture.reap();
         fixture.release();
-        assert!(
-            crate::store::read_record(&fixture.root.join("data"), &fixture.workspace, &fixture.id)
-                .is_err()
+        assert_eq!(
+            read(&fixture.core, fixture.ws(), &fixture.id, 0)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
         );
-        let output = fixture.read(0);
-        assert_eq!(output.data, b"startup failed\n");
-        assert!(output.done);
-        assert_eq!(fixture.read(0).data, output.data);
         assert!(
             crate::terminal::write(&fixture.core, fixture.ws(), &fixture.id, b"input").is_err()
         );

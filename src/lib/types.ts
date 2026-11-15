@@ -115,19 +115,17 @@ export interface TargetLoad {
   error: IngestError | null;
 }
 
-/** One Bazel operation Zeal launched, owned by the core until it exits. */
+/** One Bazel operation Zeal launched; presence in `invocations` means the
+ * core still owns its worker, including the final output drain. */
 export interface OwnedInvocation {
   id: string;
   workspace: string;
   cmd: string;
   pattern: string;
   startedAt: number;
-  running: boolean;
   stoppable: boolean;
   stopping: boolean;
   console: boolean;
-  processExitCode: number | null;
-  note: string | null;
 }
 
 /** The aggregate core snapshot pushed on every change; `revision` grows

@@ -245,7 +245,6 @@ export function createSession(
     refresh: () => dispatch({ type: "refresh" }),
     selectInvocation: (id: string) => dispatch({ type: "selectInvocation", id }),
     showPage: (page: WorkspacePage) => dispatch({ type: "showPage", page }),
-    openConsole: (id: string) => dispatch({ type: "openConsole", id }),
     loadDetail: () => dispatch({ type: "loadDetail" }),
     loadProfile: () => dispatch({ type: "loadProfile" }),
     loadInvocations: () => dispatch({ type: "loadInvocations" }),

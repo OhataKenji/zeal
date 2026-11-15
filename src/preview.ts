@@ -300,7 +300,6 @@ function readConsole(workspace: string, id: string, offset: number) {
   return {
     data,
     offset: offset + data.length,
-    done: !owned.running && offset + data.length === bytes.length,
   };
 }
 
@@ -310,13 +309,16 @@ function writeConsole(workspace: string, id: string, data: unknown) {
   if (owned && owned.workspace !== workspace) {
     throw new Error("Preview invocation belongs to another workspace");
   }
-  if (!owned?.running) throw new Error("Preview process has ended");
+  if (!owned) throw new Error("Preview process has ended");
+  if (!owned.console || !owned.stoppable || owned.stopping) {
+    throw new Error("Preview console is not writable");
+  }
   if (!Array.isArray(data)) throw new Error("Preview console input must be a byte array.");
   const text = new TextDecoder().decode(Uint8Array.from(data));
   const result = interpretConsoleInput(consoleInput.get(id) ?? "", text);
   consoleInput.set(id, result.input);
   consoleOutput.set(id, (consoleOutput.get(id) ?? "") + result.output);
-  if (result.exitCode !== null) finishOwned(id, result.exitCode);
+  if (result.exitCode !== null) finishOwned(id);
   return data.length;
 }
 
@@ -327,9 +329,7 @@ function getInvocation(workspace: string, id: unknown) {
     record,
     log: {
       status: "ok",
-      data:
-        consoleOutput.get(record.id) ??
-        `INFO: ${record.cmd} ${record.pattern}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Invocation ended with exit ${record.exitCode}`}\n`,
+      data: `INFO: ${record.cmd} ${record.pattern}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Invocation ended with exit ${record.exitCode}`}\n`,
     },
     bep: {
       status: "ok",
@@ -370,34 +370,27 @@ function getInvocation(workspace: string, id: unknown) {
   };
 }
 
-function finishOwned(id: string, exitCode: number) {
-  const owned = ownedFor(id);
-  const record = records.find((inv) => inv.id === id);
-  if (owned) {
-    owned.running = false;
-    owned.stoppable = false;
-    owned.stopping = false;
-    owned.processExitCode = exitCode;
-    if (!owned.console) {
-      state.invocations = state.invocations.filter((entry) => entry.id !== id);
-    }
-  }
-  if (record && record.finishedAt === undefined) {
-    record.finishedAt = Date.now();
-    record.exitCode = exitCode;
-  }
+function finishOwned(id: string) {
+  state.invocations = state.invocations.filter((entry) => entry.id !== id);
+  consoleOutput.delete(id);
+  consoleInput.delete(id);
   emitState();
 }
 
 function startInvocation(workspace: string, cmd: string, pattern: string) {
   wsEntry(workspace);
   const id = `preview-${crypto.randomUUID()}`;
+  const now = Date.now();
+  // The BEP build result exists independently of the owned process: a `run`
+  // program may outlive it, and its own output is never BEP history.
   const record: PreviewRecord = {
     id,
     workspace,
     cmd,
     pattern,
-    startedAt: Date.now(),
+    startedAt: now,
+    finishedAt: now,
+    exitCode: 0,
   };
   records.unshift(record);
   const owned: OwnedInvocation = {
@@ -406,12 +399,9 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
     cmd,
     pattern,
     startedAt: record.startedAt,
-    running: cmd === "run",
-    stoppable: cmd === "run",
+    stoppable: true,
     stopping: false,
     console: true,
-    processExitCode: cmd === "run" ? null : 0,
-    note: null,
   };
   state.invocations.unshift(owned);
   consoleOutput.set(
@@ -419,10 +409,11 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
     `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
   );
   if (cmd !== "run") {
-    record.finishedAt = Date.now();
-    record.exitCode = 0;
+    // build/test finish on their own; `run` stays live until input or Stop.
+    setTimeout(() => finishOwned(id), 800);
   }
   emitState();
+  void emit("invocations-changed");
   return id;
 }
 
@@ -432,10 +423,10 @@ function stopInvocation(workspace: string, id: string) {
   if (owned && owned.workspace !== workspace) {
     throw new Error("Preview invocation belongs to another workspace");
   }
-  if (!owned?.running || !owned.stoppable) return;
+  if (!owned?.stoppable) return;
   owned.stopping = true;
   emitState();
-  finishOwned(id, 8);
+  finishOwned(id);
 }
 
 function actionMnemonic(path: string): string {
@@ -627,19 +618,16 @@ export function installPreview() {
         cmd: "query",
         pattern: expr,
         startedAt: Date.now(),
-        running: true,
         stoppable: true,
         stopping: false,
         console: false,
-        processExitCode: null,
-        note: null,
       };
       state.invocations.unshift(owned);
       emitState();
       return new Promise((resolve, reject) => {
         setTimeout(() => {
-          const stopped = owned.processExitCode === 8 || owned.stopping;
-          if (!stopped) finishOwned(id, 0);
+          const stopped = owned.stopping;
+          if (!stopped) finishOwned(id);
           if (stopped) reject(new Error("Query stopped"));
           else resolve(finished);
         }, 800);

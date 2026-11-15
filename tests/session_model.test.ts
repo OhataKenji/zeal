@@ -43,12 +43,9 @@ function owned(
     cmd: "build",
     pattern: "//:app",
     startedAt: 1,
-    running: true,
     stoppable: true,
     stopping: false,
     console: true,
-    processExitCode: null,
-    note: null,
     ...over,
   };
 }
@@ -308,12 +305,16 @@ test("start captures workspace and navigates only while it stays current", () =>
     requestId: request.id,
     result: { ok: true, value: "inv-1" },
   });
-  assert.deepEqual(replied.model.content, { kind: "console", id: "inv-1", page: "targets" });
+  assert.deepEqual(replied.model.content, {
+    kind: "invocation",
+    id: "inv-1",
+    page: "targets",
+  });
   assert.deepEqual(replied.effects, []);
   assert.equal(replied.model.startRequest, null);
 });
 
-test("manual navigation after start blocks the console jump", () => {
+test("manual navigation after start blocks the invocation jump", () => {
   const model = indexedModel();
   const started = update(model, {
     type: "start",
@@ -341,8 +342,8 @@ test("stop targets the owned execution's own workspace and id", () => {
   assert.equal(request.id, "b-run");
 });
 
-test("stop rejects finished, stopping, and external invocations", () => {
-  const finished = owned("done", WS, { running: false, stoppable: false });
+test("stop rejects non-stoppable, stopping, and external invocations", () => {
+  const finished = owned("done", WS, { stoppable: false });
   const stopping = owned("halting", WS, { stopping: true });
   const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [finished, stopping]));
   for (const id of ["done", "halting", "external-bep-only"]) {
@@ -371,26 +372,14 @@ test("stop stays available for a run whose BEP record already succeeded", () => 
   assert.equal(effect(stopped.effects, "stop").workspace, WS);
 });
 
-test("invocation rows pin live entries, prefer saved records, and stay workspace-scoped", () => {
+test("invocation rows pin every live entry, prefer saved records, and stay workspace-scoped", () => {
   const a = owned("a-run", WS, { startedAt: 3 });
-  const finished = owned("a-done", WS, {
-    running: false,
-    stoppable: false,
-    processExitCode: 0,
-    console: true,
-    startedAt: 1,
-  });
-  const bepBacked = owned("a-bep", WS, { running: false, stoppable: false });
   const query = owned("a-query", WS, { cmd: "query", console: false, startedAt: 2 });
+  const bepLive = owned("a-bep", WS, { startedAt: 1 });
   const foreignMatch = owned("shared-id", OTHER);
-  const savedShared = { ...RECORD, id: "shared-id" };
   const other = owned("b-run", OTHER);
   const model = connectedModel(
-    state(
-      { revision: 2 },
-      [wsEntry(WS), wsEntry(OTHER)],
-      [a, finished, bepBacked, query, foreignMatch, other],
-    ),
+    state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)], [a, query, bepLive, foreignMatch, other]),
   );
   const withHistory = {
     ...model,
@@ -399,13 +388,13 @@ test("invocation rows pin live entries, prefer saved records, and stay workspace
       records: [
         { ...RECORD, id: "a-bep", workspace: WS },
         { ...RECORD, id: "a-run", workspace: WS, exitCode: 0 },
-        savedShared,
+        { ...RECORD, id: "shared-id" },
       ],
     },
   };
   const view = sessionView(withHistory);
   const ids = view.invocationRows.map((row) => row.record.id);
-  assert.deepEqual(ids, ["a-run", "a-query", "a-done", "a-bep", "shared-id"]);
+  assert.deepEqual(ids, ["a-run", "a-query", "a-bep", "shared-id"]);
   assert.equal(new Set(ids).size, ids.length);
   const runRow = view.invocationRows.find((row) => row.record.id === "a-run");
   assert.equal(runRow?.record, withHistory.history.records[1]);
@@ -420,29 +409,167 @@ test("invocation rows pin live entries, prefer saved records, and stay workspace
   );
 });
 
-test("console content carries its invocation id and derives the display record", () => {
-  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [owned("inv-1", WS)]));
-  const opened = update(model, { type: "openConsole", id: "inv-1" });
-  assert.deepEqual(opened.model.content, { kind: "console", id: "inv-1", page: "targets" });
-  const view = sessionView(opened.model);
-  assert.equal(view.console?.id, "inv-1");
-  assert.equal(view.console?.workspace, WS);
-  assert.equal(view.execution?.id, "inv-1");
+test("a selected live invocation derives its Console from the owned entry", () => {
+  const live = owned("inv-1", WS);
+  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [live]));
+  const selected = update(model, { type: "selectInvocation", id: "inv-1" });
+  assert.deepEqual(selected.model.content, {
+    kind: "invocation",
+    id: "inv-1",
+    page: "targets",
+  });
+  const view = sessionView(selected.model);
+  assert.equal(view.console?.exitCode, undefined);
+  assert.equal(view.console, live);
+  assert.equal(view.execution, live);
+  // No BEP record exists yet, so no saved reads are attempted.
+  assert.equal(
+    selected.effects.some((item) => item.type === "getInvocation" || item.type === "getProfile"),
+    false,
+  );
 });
 
-test("openConsole is a no-op for missing, foreign, and console-less entries", () => {
-  const foreign = owned("b-run", OTHER);
-  const consoleless = owned("q-1", WS, { cmd: "query", console: false });
-  const model = connectedModel(
-    state({ revision: 2 }, [wsEntry(WS), wsEntry(OTHER)], [foreign, consoleless]),
+test("a live console blocks saved reads; release resumes them for the same id", () => {
+  const live = owned("a-run", WS);
+  const base = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [live]));
+  const withHistory = {
+    ...base,
+    history: {
+      ...base.history,
+      records: [{ ...RECORD, id: "a-run", workspace: WS }],
+    },
+  };
+  const selected = update(withHistory, { type: "selectInvocation", id: "a-run" });
+  // The console is live, so BEP detail/profile stay ineligible.
+  assert.equal(
+    selected.effects.some((item) => item.type === "getInvocation" || item.type === "getProfile"),
+    false,
   );
-  for (const id of ["missing", "b-run", "q-1"]) {
-    const opened = update(model, { type: "openConsole", id });
-    assert.deepEqual(opened.model.content, { kind: "targets" }, id);
-    assert.deepEqual(opened.effects, [], id);
-  }
-  const view = sessionView(model);
+  assert.equal(sessionView(selected.model).console?.id, "a-run");
+
+  // The worker releases the entry: the same destination derives the BEP
+  // result, and the saved readers resume for that id and workspace.
+  const released = update(selected.model, {
+    type: "appState",
+    state: state({ revision: 3 }, [wsEntry(WS)], []),
+  });
+  assert.deepEqual(released.model.content, {
+    kind: "invocation",
+    id: "a-run",
+    page: "targets",
+  });
+  const releasedView = sessionView(released.model);
+  assert.equal(releasedView.console, null);
+  assert.equal(releasedView.execution, null);
+  const detail = effect(released.effects, "getInvocation");
+  const profile = effect(released.effects, "getProfile");
+  assert.equal(detail.workspace, WS);
+  assert.equal(detail.invocationId, "a-run");
+  assert.equal(profile.workspace, WS);
+  assert.equal(profile.invocationId, "a-run");
+
+  // A repeated state delivery cannot retrigger the saved reads.
+  const again = update(released.model, {
+    type: "appState",
+    state: state({ revision: 4 }, [wsEntry(WS)], []),
+  });
+  assert.equal(
+    again.effects.some((item) => item.type === "getInvocation" || item.type === "getProfile"),
+    false,
+  );
+});
+
+test("releasing an invocation elsewhere never moves the current destination", () => {
+  const live = owned("a-run", WS);
+  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [live]));
+  const selected = update(model, { type: "selectInvocation", id: "a-run" });
+  const browsing = update(selected.model, { type: "showPage", page: "query" });
+  const released = update(browsing.model, {
+    type: "appState",
+    state: state({ revision: 3 }, [wsEntry(WS)], []),
+  });
+  assert.deepEqual(released.model.content, { kind: "query" });
+  assert.equal(sessionView(released.model).console, null);
+});
+
+test("a start reply after the entry already left renders results, not a console wait", () => {
+  const live = owned("inv-x", WS);
+  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], []));
+  const started = update(model, {
+    type: "start",
+    cmd: "build",
+    pattern: "//app:first",
+    argumentsText: "",
+  });
+  const request = effect(started.effects, "startInvocation");
+  // The worker already finished: the entry arrived and left before the
+  // start reply, and history carries the completed BEP record.
+  const arrived = update(started.model, {
+    type: "appState",
+    state: state({ revision: 3 }, [wsEntry(WS)], [live]),
+  });
+  const released = update(arrived.model, {
+    type: "appState",
+    state: state({ revision: 4 }, [wsEntry(WS)], []),
+  });
+  const withHistory = {
+    ...released.model,
+    history: {
+      ...released.model.history,
+      records: [{ ...RECORD, id: "inv-x", workspace: WS, finishedAt: 2, exitCode: 0 }],
+    },
+  };
+  const replied = update(withHistory, {
+    type: "startResult",
+    requestId: request.id,
+    result: { ok: true, value: "inv-x" },
+  });
+  assert.deepEqual(replied.model.content, {
+    kind: "invocation",
+    id: "inv-x",
+    page: "targets",
+  });
+  // No owned entry remains: the reply renders the saved result directly.
+  const view = sessionView(replied.model);
+  assert.equal(view.console, null);
   assert.equal(view.execution, null);
+  const detail = effect(replied.effects, "getInvocation");
+  const profile = effect(replied.effects, "getProfile");
+  assert.equal(detail.workspace, WS);
+  assert.equal(detail.invocationId, "inv-x");
+  assert.equal(profile.workspace, WS);
+  assert.equal(profile.invocationId, "inv-x");
+});
+
+test("a late state delivery renders the live console without moving navigation", () => {
+  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], []));
+  const started = update(model, {
+    type: "start",
+    cmd: "run",
+    pattern: "//app:first",
+    argumentsText: "",
+  });
+  const request = effect(started.effects, "startInvocation");
+  const replied = update(started.model, {
+    type: "startResult",
+    requestId: request.id,
+    result: { ok: true, value: "inv-y" },
+  });
+  const navigation = replied.model.navigation;
+  const live = owned("inv-y", WS, { cmd: "run" });
+  const arrived = update(replied.model, {
+    type: "appState",
+    state: state({ revision: 3 }, [wsEntry(WS)], [live]),
+  });
+  assert.equal(arrived.model.navigation, navigation);
+  assert.deepEqual(arrived.model.content, {
+    kind: "invocation",
+    id: "inv-y",
+    page: "targets",
+  });
+  const view = sessionView(arrived.model);
+  assert.equal(view.console, live);
+  assert.equal(view.execution, live);
 });
 
 test("saved reads require the id in BEP history, not just an owned entry", () => {
@@ -911,7 +1038,7 @@ test("a failed A start cannot clear B's pending start or show an error", () => {
     result: { ok: true, value: "inv-b" },
   });
   assert.deepEqual(repliedB.model.content, {
-    kind: "console",
+    kind: "invocation",
     id: "inv-b",
     page: "targets",
   });
@@ -960,22 +1087,13 @@ test("returning to a workspace issues a fresh start the abandoned reply cannot c
     result: { ok: true, value: "inv-new" },
   });
   assert.deepEqual(replied.model.content, {
-    kind: "console",
+    kind: "invocation",
     id: "inv-new",
     page: "targets",
   });
 });
 
-test("the console display record is the owned entry itself, with no invented exit", () => {
-  const live = owned("inv-1", WS, { running: true });
-  const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [live]));
-  const opened = update(model, { type: "openConsole", id: "inv-1" });
-  const view = sessionView(opened.model);
-  assert.equal(view.console?.exitCode, undefined);
-  assert.equal(view.console, live);
-});
-
-test("a completed console-less query keeps navigation and offers no stop or reads", () => {
+test("a finished invocation keeps navigation and offers no stop or reads", () => {
   const query = owned("q-1", WS, { cmd: "query", console: false });
   const model = connectedModel(state({ revision: 2 }, [wsEntry(WS)], [query]));
   const selected = update(model, { type: "selectInvocation", id: "q-1" });
@@ -1391,42 +1509,4 @@ test("a package selection issues no target reads and drops stale detail replies"
   assert.deepEqual(stale.model.targets.selection, { kind: "package", path: "app" });
   assert.equal(stale.model.targets.detail.value, null);
   assert.equal(stale.model.targets.detail.error, null);
-});
-
-test("a finished owned invocation keeps its Console destination", () => {
-  const settled = settleHistory(
-    connectedModel(state({ revision: 2 }, [wsEntry(WS)], [owned("a-run", WS)])),
-  );
-  const opened = update(settled, { type: "openConsole", id: "a-run" });
-  assert.deepEqual(opened.model.content, {
-    kind: "console",
-    id: "a-run",
-    page: "targets",
-  });
-  const finished = owned("a-run", WS, {
-    running: false,
-    stoppable: false,
-    processExitCode: 0,
-  });
-  const completed = update(opened.model, {
-    type: "appState",
-    state: state({ revision: 3 }, [wsEntry(WS)], [finished]),
-  });
-  const changed = update(completed.model, { type: "historyChanged" });
-  const request = effect(changed.effects, "listInvocations");
-  const reconciled = update(changed.model, {
-    type: "invocationsResult",
-    requestId: request.id,
-    result: {
-      ok: true,
-      value: [{ ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 }],
-    },
-  });
-  assert.deepEqual(reconciled.model.content, {
-    kind: "console",
-    id: "a-run",
-    page: "targets",
-  });
-  const view = sessionView(reconciled.model);
-  assert.equal(view.console?.id, "a-run");
 });

@@ -45,10 +45,5 @@ Background threads use separate traces; exit may drop traces.
 
 ## BES receiver
 
-The Build Event Protocol receiver accepts at most 32 concurrent streams by
-default. `ZEAL_BES_MAX_STREAMS` overrides the limit (for example
-`ZEAL_BES_MAX_STREAMS=64 pnpm tauri dev`); the accepted range is
-`1..=4294967295` on 64-bit platforms. A zero, non-integer, out-of-range, or
-non-UTF-8 value prevents the BES receiver from starting, which blocks
-`build`, `test`, and `run` — they require BES — while query commands and
-history viewing stay usable.
+The Build Event Protocol receiver accepts at most 32 concurrent streams; the
+limit is fixed and not configurable.

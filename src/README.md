@@ -30,12 +30,13 @@ the result and requests outputs. The UI never has to close Console first.
   so delayed start replies cannot reroute the view. `startRequest` is the one
   foreground launch awaiting its reply; switching workspaces clears it while
   the native execution stays owned by the core.
-- `content` is the current destination: targets, invocation, Console, Analytics,
-  or Query. Invocation and Console destinations carry the workspace page to
-  return to; workspace-page destinations are authoritative on their own.
+- `content` is the current destination: targets, invocation, Analytics, or
+  Query. The invocation destination carries the workspace page to return to;
+  workspace-page destinations are authoritative on their own.
 - Target selection is independent of visibility. The Console component mounts
-  only while it is the current destination; native capture keeps draining while
-  it is unmounted, and reopening replays the captured bytes.
+  only while the selected invocation has a live owned entry; once capture
+  finishes the core releases the entry and the same destination shows the
+  saved BEP result instead.
 - Form input, focus, expanded panels, and the native folder picker stay local to
   Svelte. Console byte streams and terminal handles also stay outside the Model.
 

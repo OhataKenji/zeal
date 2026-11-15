@@ -56,20 +56,20 @@ Console の byte stream・入力キュー・xterm は専用処理に残す。メ
 - **Model に重複状態を持たせない。** loading は要求状態から導出する。Rust の実行状態、frontend の起動要求、表示先は区別する。
 
 Model は `connection`・`workspacePrompt`・`execution`・`targets`・`history`・`saved` と `nextRequestId` に分ける。`SessionView` は Model から作る flat な表示用 projection とし、状態を重複して保存しない。
-表示先は `content` の union（targets / invocation / console / analytics / query）で表す。invocation ID と戻り先の page は invocation / console に含め、workspace page は `content.kind` 自体で表す。`consoleOpen`・`selectedInvocation`・別の `workspacePage`・Svelte の表示フラグの優先順位では画面を決めない。
+表示先は `content` の union（targets / invocation / analytics / query）で表す。invocation ID と戻り先の page は invocation に含め、workspace page は `content.kind` 自体で表す。`selectedInvocation`・別の `workspacePage`・Svelte の表示フラグの優先順位では画面を決めない。
 UI は target 選択など一つの操作を一つの Message で伝え、update が表示先・選択・取得要求をまとめて更新する。Query / Analytics の切替も同じ入口を通る。
-表示中でない target の選択や Console の記録は保持する。
+表示中でない target の選択は保持する。
 
 `runEffect(effect): Promise<SessionMessage>` は IPC の成功・失敗を結果 Message として返し、呼び出し側が dispatch する。戻り値を必須にすることで、Effect を追加して処理を忘れると型エラーになる。採否や画面遷移は update が決める。継続的な通知の購読は一回限りの Effect と区別する。
 コードの配置と具体的な更新例は [frontend README](../../src/README.md) に置く。
 
-| API                                                     | 戻り値                   |
-| ------------------------------------------------------- | ------------------------ |
-| `select`, `selectInvocation`, `openConsole`, `showPage` | `void`                   |
-| `start`, `stop`, `refresh`                              | `void`                   |
-| `loadDetail`, `loadProfile`, `loadInvocations`          | `void`                   |
-| `openWorkspace`, `setWorkspacePromptOpen`               | `void`                   |
-| `init` / `dispose`                                      | `Promise<void>` / `void` |
+| API                                            | 戻り値                   |
+| ---------------------------------------------- | ------------------------ |
+| `select`, `selectInvocation`, `showPage`       | `void`                   |
+| `start`, `stop`, `refresh`                     | `void`                   |
+| `loadDetail`, `loadProfile`, `loadInvocations` | `void`                   |
+| `openWorkspace`, `setWorkspacePromptOpen`      | `void`                   |
+| `init` / `dispose`                             | `Promise<void>` / `void` |
 
 Promise と listener 解除関数は実行層に置く。`init` は重複を防ぎ、`dispose` は結果を無視する。購読登録中の dispose でも、登録された listener を解除する。
 **Promise Map・`waitFor`・公開 API への完了配送は持たない。** Effect の重複防止は Model に任せる。
@@ -126,9 +126,9 @@ state 比較・無効化・次の要求は用途内でまとめ、多数の変�
 
 ### 5. 完了しても表示先は自動で変わらない
 
-- **起動からの遷移は start 応答で決める。** 現在の navigation が一致する間だけ Console を開く。
-- **完了は表示先を変えない。** プロセス終了も履歴更新も現在の destination を変えない。詳細は利用者が明示的に選ぶ。
-- **再表示は保持された owned entry を使う。** Console を閉じても invocation は core が保持し、開き直すと capture 済みの出力を再生する。
+- **起動からの遷移は start 応答で決める。** 現在の navigation が一致する間だけ invocation を表示先にする。
+- **完了は表示先を変えない。** プロセス終了も履歴更新も現在の destination を変えない。他の画面や workspace の選択も奪わない。
+- **Console は live の間だけ存在する。** core は capture が終わると entry を破棄し、Console の内容は保持しない。同じ選択先は保存済みの BEP 結果を表示する。
 
 ## Alternatives Considered
 

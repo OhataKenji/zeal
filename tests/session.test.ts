@@ -43,12 +43,9 @@ function owned(
     cmd: "build",
     pattern: "//:app",
     startedAt: 1,
-    running: true,
     stoppable: true,
     stopping: false,
     console: true,
-    processExitCode: null,
-    note: null,
     ...over,
   };
 }
@@ -266,14 +263,13 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   await settle();
   assert.equal(lastPendingRequest(h, "start_invocation").args?.workspace, OTHER);
   // An app-state reporting A's completion does not navigate away from B.
-  const done = owned("a-run", WS, { running: false, stoppable: false, processExitCode: 0 });
   h.emit(
     "app-state",
-    coreState({ revision: 4, workspaces: result.state.workspaces, invocations: [done] }),
+    coreState({ revision: 4, workspaces: result.state.workspaces, invocations: [] }),
   );
   await settle();
   assert.equal(h.view.state?.workspace, OTHER);
-  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "targets" });
 });
 
 test("a delayed A start reply cannot route to A's console or error in B", async () => {
@@ -296,7 +292,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
   assert.equal(h.view.state?.workspace, OTHER);
   aStart.reply.resolve("a-inv");
   await settle();
-  assert.notEqual(h.view.content.kind, "console");
+  assert.deepEqual(h.view.content, { kind: "targets" });
   assert.equal(h.view.error, null);
   // No fresh get_state follows the start; app-state events carry the entry.
   assert.equal(h.stateReads(), 1);
@@ -337,7 +333,7 @@ test("the start reply navigates; the app-state event supplies the owned entry", 
   const launched = owned("a-inv", WS, { cmd: "run" });
   start.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "console", id: "a-inv", page: "targets" });
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "a-inv", page: "targets" });
   // The reply alone carries no core entry; console and execution wait for it.
   assert.equal(h.view.console, null);
   assert.equal(h.view.execution, null);
@@ -366,13 +362,14 @@ test("stop sends the owned workspace and id even after other work finishes", asy
   await settle();
   const stop = pendingRequest(h, "stop_invocation");
   assert.deepEqual(stop.args, { workspace: WS, id: "a-run" });
-  // B completes first; the stop reply still targets A.
+  // B completes first — its entry leaves the map; the stop reply still
+  // targets A.
   h.emit(
     "app-state",
     coreState({
       revision: 3,
       workspaces: [wsEntry(WS), wsEntry(OTHER)],
-      invocations: [a, { ...b, running: false, stoppable: false, processExitCode: 0 }],
+      invocations: [a],
     }),
   );
   await settle();
@@ -381,8 +378,8 @@ test("stop sends the owned workspace and id even after other work finishes", asy
   assert.equal(h.view.error, null);
 });
 
-test("external and finished invocations expose no stop", async () => {
-  const finished = owned("done", WS, { running: false, stoppable: false });
+test("external and non-stoppable invocations expose no stop", async () => {
+  const finished = owned("done", WS, { stoppable: false });
   const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [finished] })));
   await initReady(h);
   h.session.stop("done");
@@ -391,39 +388,37 @@ test("external and finished invocations expose no stop", async () => {
   assert.equal(requestCount(h, "stop_invocation"), 0);
 });
 
-test("a finished owned console reopens while another invocation runs", async () => {
-  const done = owned("a-done", WS, { running: false, stoppable: false, processExitCode: 0 });
-  const running = owned("b-run", WS, { cmd: "run" });
-  const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [done, running] })));
+test("a live console shows until release, then the BEP record takes over", async () => {
+  const live = owned("a-run", WS);
+  const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [live] })));
   await initReady(h);
-  h.session.openConsole("a-done");
+  h.session.selectInvocation("a-run");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "console", id: "a-done", page: "targets" });
-  assert.equal(h.view.console?.id, "a-done");
-  assert.equal(h.view.execution?.id, "a-done");
-  // Input is disabled for the finished process: not stoppable.
-  assert.equal(h.view.execution?.stoppable, false);
-});
-
-test("openConsole is a no-op for foreign, missing, and console-less entries", async () => {
-  const foreign = owned("b-run", OTHER);
-  const consoleless = owned("q-1", WS, { cmd: "query", console: false });
-  const h = harness(
-    Promise.resolve(
-      coreState({
-        revision: 2,
-        workspaces: [wsEntry(WS), wsEntry(OTHER)],
-        invocations: [foreign, consoleless],
-      }),
-    ),
-  );
-  await initReady(h);
-  for (const id of ["missing", "b-run", "q-1"]) {
-    h.session.openConsole(id);
-    await settle();
-    assert.deepEqual(h.view.content, { kind: "targets" }, id);
-    assert.equal(h.view.execution, null, id);
-  }
+  assert.deepEqual(h.view.content, {
+    kind: "invocation",
+    id: "a-run",
+    page: "targets",
+  });
+  assert.equal(h.view.console?.id, "a-run");
+  assert.equal(h.view.execution?.id, "a-run");
+  // The entry leaves the map; history then carries the finished record.
+  h.emit("app-state", coreState({ revision: 3, invocations: [] }));
+  await settle();
+  assert.equal(h.view.console, null);
+  assert.equal(h.view.execution, null);
+  h.session.loadInvocations();
+  await settle();
+  pendingRequest(h, "list_invocations").reply.resolve([
+    { ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 },
+  ]);
+  await settle();
+  assert.equal(h.view.console, null);
+  assert.equal(h.view.execution, null);
+  assert.deepEqual(h.view.content, {
+    kind: "invocation",
+    id: "a-run",
+    page: "targets",
+  });
 });
 
 test("scope change invalidates stale target results and readers name the workspace", async () => {

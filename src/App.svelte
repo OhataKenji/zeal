@@ -227,9 +227,7 @@
 {#snippet invocationRow(record: InvocationRecord, execution?: OwnedInvocation)}
   {@const startedAt = new Date(record.startedAt ?? NaN)}
   {@const status = invocationStatus(record, execution)}
-  {@const active =
-    (content.kind === "invocation" && content.id === record.id) ||
-    (content.kind === "console" && content.id === record.id)}
+  {@const active = content.kind === "invocation" && content.id === record.id}
   <li>
     <button
       class="invocation-row"
@@ -237,10 +235,7 @@
       aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}`}
       class:selected={active}
       aria-current={active ? "true" : undefined}
-      onclick={() =>
-        execution?.running && execution.console
-          ? getSession().openConsole(record.id)
-          : getSession().selectInvocation(record.id)}
+      onclick={() => getSession().selectInvocation(record.id)}
     >
       <span class="invocation-label"
         ><InvocationStatus {...status} compact /><span class="invocation-command"
@@ -298,7 +293,7 @@
     class="content"
     class:invocation-content={content.kind !== "targets"}
   >
-    {#if content.kind === "console" && consoleView}
+    {#if consoleView}
       {#key `${consoleView.execution.workspace}:${consoleView.execution.id}`}
         <div class="console-container">
           {#await loadConsole() then { default: ConsoleView }}
@@ -308,10 +303,7 @@
           {/await}
         </div>
       {/key}
-    {:else if content.kind === "console"}
-      <p class="dim" role="status">Waiting for Console…</p>
-    {/if}
-    {#if content.kind !== "console"}
+    {:else}
     {#if snap?.meta.status === "partial"}
       <Notice tone="warning">
         Partial target list{app.view.snapshotError ? ` — ${app.view.snapshotError}` : ""}
@@ -333,7 +325,6 @@
           reload={getSession().loadDetail}
           reloadProfile={getSession().loadProfile}
           onstop={getSession().stop}
-          onconsole={getSession().openConsole}
         />
       {/key}
     {:else if content.kind === "analytics"}

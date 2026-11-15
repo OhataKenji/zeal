@@ -216,9 +216,7 @@ pub fn write(core: &Core, ws: &str, id: &str, bytes: &[u8]) -> Result<usize, Str
     if invocation.workspace != ws {
         return Err("terminal is no longer running".into());
     }
-    let Some(process) = invocation.process.as_mut() else {
-        return Err("terminal is no longer running".into());
-    };
+    let process = &mut invocation.process;
     if process.pgid.is_none() || process.stop_started.is_some() {
         return Err("terminal is no longer running".into());
     }
@@ -239,7 +237,7 @@ pub fn resize(core: &Core, ws: &str, id: &str, cols: u16, rows: u16) -> Result<(
         .invocations
         .get(id)
         .filter(|invocation| invocation.workspace == ws)
-        .and_then(|invocation| invocation.process.as_ref())
+        .map(|invocation| &invocation.process)
     else {
         return Ok(());
     };
@@ -285,14 +283,12 @@ mod tests {
                     cmd: "build".to_string(),
                     pattern: "//:b".to_string(),
                     started_at: 1,
-                    process: Some(ActiveInvocation {
+                    process: ActiveInvocation {
                         terminal: Some(control),
                         pgid: Some(child.id() as i32),
                         stop_started: None,
-                    }),
+                    },
                     console: None,
-                    process_exit_code: None,
-                    note: None,
                 },
             );
             drop(st);
@@ -322,14 +318,10 @@ mod tests {
     }
     fn revoke_fixture_pgid(core: &Core, id: &str) {
         let mut st = core.state.lock().unwrap();
-        let Some(process) = st
-            .invocations
-            .get_mut(id)
-            .and_then(|invocation| invocation.process.as_mut())
-        else {
+        let Some(invocation) = st.invocations.get_mut(id) else {
             return;
         };
-        process.pgid = None;
+        invocation.process.pgid = None;
     }
 
     fn wait_for_output(fixture: &Fixture, text: &str) {
@@ -397,8 +389,7 @@ mod tests {
                 .unwrap()
                 .invocations
                 .get(&f.id)
-                .and_then(|invocation| invocation.process.as_ref())
-                .and_then(|process| process.terminal.as_ref())
+                .and_then(|invocation| invocation.process.terminal.as_ref())
                 .and_then(Control::foreground_group),
             Some(f.child.id() as i32)
         );
@@ -411,8 +402,7 @@ mod tests {
                 .unwrap()
                 .invocations
                 .get(&f.id)
-                .and_then(|invocation| invocation.process.as_ref())
-                .and_then(|process| process.terminal.as_ref())
+                .and_then(|invocation| invocation.process.terminal.as_ref())
                 .and_then(Control::foreground_group),
             None
         );

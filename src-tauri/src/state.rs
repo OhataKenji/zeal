@@ -52,18 +52,12 @@ pub struct OwnedInvocationDto {
     pub pattern: String,
     /// Milliseconds since the Unix epoch, the store's timestamp convention.
     pub started_at: i64,
-    /// A process is still owned, including the final output drain.
-    pub running: bool,
     /// The owned process group may still be signalled.
     pub stoppable: bool,
     /// A stop was accepted; it stays until the process leaves the entry.
     pub stopping: bool,
-    /// Retained console output exists for this invocation.
+    /// Captured terminal output exists for this invocation.
     pub console: bool,
-    /// The owned process's exit code, kept apart from any BEP exit code.
-    pub process_exit_code: Option<i32>,
-    /// Why the process exit is unknown or noteworthy (e.g. lock contention).
-    pub note: Option<String>,
 }
 
 /// Result of registering a workspace: its canonical path plus the new state.
@@ -115,24 +109,18 @@ impl WorkspaceState {
     }
 }
 
-/// One locally launched Bazel operation. A console keeps its entry for the
-/// app's lifetime so finished consoles stay readable; a console-less entry is
-/// released when its worker finishes.
+/// One locally launched Bazel operation. The entry exists exactly while its
+/// worker owns the process, including the final capture drain; the worker's
+/// release removes it.
 pub struct OwnedInvocation {
     pub workspace: PathBuf,
     pub cmd: String,
     pub pattern: String,
     pub started_at: i64,
-    /// `None` once the worker released the slot after its final drain.
-    pub process: Option<ActiveInvocation>,
+    pub process: ActiveInvocation,
     /// The session's captured terminal output; an already-unlinked temp file.
-    /// This outlives the process slot, which is released only after the
-    /// capture's final drain.
+    /// The process slot is released only after the capture's final drain.
     pub console: Option<std::fs::File>,
-    /// The owned process's exit code, separate from any BEP exit code.
-    pub process_exit_code: Option<i32>,
-    /// Message for the UI about an unknown or noteworthy process exit.
-    pub note: Option<String>,
 }
 
 pub struct CoreState {
@@ -184,18 +172,9 @@ fn owned_dto(id: &str, invocation: &OwnedInvocation) -> OwnedInvocationDto {
         cmd: invocation.cmd.clone(),
         pattern: invocation.pattern.clone(),
         started_at: invocation.started_at,
-        running: invocation.process.is_some(),
-        stoppable: invocation
-            .process
-            .as_ref()
-            .is_some_and(|process| process.pgid.is_some()),
-        stopping: invocation
-            .process
-            .as_ref()
-            .is_some_and(|process| process.stop_started.is_some()),
+        stoppable: invocation.process.pgid.is_some(),
+        stopping: invocation.process.stop_started.is_some(),
         console: invocation.console.is_some(),
-        process_exit_code: invocation.process_exit_code,
-        note: invocation.note.clone(),
     }
 }
 
@@ -278,10 +257,8 @@ mod tests {
             cmd: "build".to_string(),
             pattern: "//pkg:b".to_string(),
             started_at: 1,
-            process: Some(ActiveInvocation::stub(Some(42))),
+            process: ActiveInvocation::stub(Some(42)),
             console: None,
-            process_exit_code: None,
-            note: None,
         }
     }
 
@@ -326,8 +303,7 @@ mod tests {
             );
             st.invocations.insert("one".to_string(), owned(&ws_a));
             st.invocations.insert("two".to_string(), owned(&ws_b));
-            st.invocations.get_mut("two").unwrap().process = None;
-            st.invocations.get_mut("two").unwrap().process_exit_code = Some(0);
+            st.invocations.get_mut("two").unwrap().process.pgid = None;
         }
         let first = core.dto();
         let second = core.dto();
@@ -336,17 +312,16 @@ mod tests {
         assert_eq!(json["workspaces"].as_array().unwrap().len(), 2);
         let invocations = json["invocations"].as_array().unwrap();
         assert_eq!(invocations.len(), 2);
-        let finished = invocations
+        let reaped = invocations
             .iter()
             .find(|invocation| invocation["id"] == "two")
             .unwrap();
-        assert_eq!(finished["running"], false);
-        assert_eq!(finished["stoppable"], false);
-        assert_eq!(finished["processExitCode"], 0);
+        assert_eq!(reaped["stoppable"], false);
+        assert_eq!(reaped["stopping"], false);
     }
 
     #[test]
-    fn dto_advertises_console_for_a_finished_invocation() {
+    fn dto_advertises_console_output() {
         let core = Core::new();
         let ws = PathBuf::from("/ws");
         {
@@ -356,14 +331,13 @@ mod tests {
                 WorkspaceState::new(crate::scope::Scope::default()),
             );
             let mut invocation = owned(&ws);
-            invocation.process = None;
             invocation.console = Some(crate::terminal::session_log().unwrap());
             st.invocations.insert("one".to_string(), invocation);
         }
         let json = serde_json::to_value(core.dto()).unwrap();
         let invocation = &json["invocations"][0];
         assert_eq!(invocation["console"], true);
-        assert_eq!(invocation["running"], false);
+        assert_eq!(invocation["stoppable"], true);
     }
 
     #[test]
