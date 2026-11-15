@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { app, getSession, openWorkspace } from "./state.svelte";
+  import { app, getSession } from "./state.svelte";
   import CopyButton from "./CopyButton.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
@@ -55,7 +55,7 @@
   function submit() {
     if (!canSubmit) return;
     error = null;
-    openWorkspace(path.trim(), {
+    getSession().openWorkspace(path.trim(), {
       include: include.split("\n"),
     });
   }

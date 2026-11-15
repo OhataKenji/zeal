@@ -1,155 +1,55 @@
-# Zeal 設計: セッション状態と副作用の分離
+# Zeal 設計: セッションの所有と非同期応答
 
-_Devin_
-_Last update: 2026/11/08_
-_Status: Approved_
+WebView は表示先と取得したデータを持ち、Rust core は実行中のプロセスを所有する。
+workspace を切り替えても Rust の実行は変わらない。
+全体の責務は [overview](./overview.md)、ファイルの配置は [frontend README](../../src/README.md) を参照する。
 
-> この文書はセッション更新方式を導入した時点の設計記録である。
-> 現在は、実行を invocation ごとに管理し、workspace の切替を busy で拒否しない。
-> 現行の状態と通知の扱いは [frontend README](../../src/README.md) を参照する。
+## 制御の経路
 
-## Goal
-
-Elm-like Architecture を採用して UI 更新のコードを整理する。実装は単純に保つ。
-
-機能は [PRD](../prd.md)、画面は [mock](../mock/) に従う。
-
-### Non Goals
-
-- Svelte の置換、新機能、Rust / IPC / 保存形式の変更。
-- 汎用取得エンジン、scheduler、状態管理ライブラリの追加。
-- 全 API の Promise 化や、古い戻り値との互換性維持。
-
-## Background
-
-**Session** は、Rust の状態通知と UI の選択から、必要な取得と表示を決める処理。
-**Model** は状態、**Message** は操作・通知・結果、**Effect** は実行する IPC の指示を表す。
-
-状態更新を純粋な関数に集め、副作用の実行と分離する。既存の動作を保ちながら、不要な Promise 管理や条件の受け渡しを取り除く。
-[Atwood](https://blog.codinghorror.com/the-best-code-is-no-code-at-all/) と [Worse is Better](https://www.jwz.org/doc/worse-is-better.html) は、この構造を単純に実装するための参考とする。
-
-## Overview
-
-**変更するのは WebView 内の session 制御だけ。** 開発者 → Zeal → Bazel の関係と、WebView / Rust core / SQLite / 観測ファイルの境界は維持する。[全体構成](./overview.md)を参照。
-
-状態の更新は純粋な `update` に集め、現在の Model と Message から、次の Model と副作用の指示を返す。Svelte は表示、実行層は IPC を担当する。
-workspace を含む session の UI 操作は `void` とし、完了は Model から導出する画面状態で表す。IPC の応答は実行層で await し、結果 Message として戻す。
+`session.ts` が画面の操作を受け、直接 IPC を await する。
+内部の Message / Effect への変換と状態全体の複製を削除し、要求と応答の扱いを同じ関数に置く。
+Svelte には状態から導出した `SessionView` を渡す。
+フォーム入力、展開状態、Console の byte stream は各画面の処理に残す。
 
 ```mermaid
-flowchart TD
-  UI[Svelte: workspace を含む UI 操作] -->|Message / void| Update[純粋な update]
-  Update -->|Model から View を導出| UI
-  Update -->|Effect| Runner[IPC 実行]
-  Runner -->|結果 Message| Update
-  Runner -->|await IPC| Core[Rust core]
+flowchart LR
+  UI[Svelte] -->|操作| Session[session.ts]
+  Session -->|表示用データ| UI
+  Session -->|workspace と invocation を指定| Core[Rust core]
+  Core -->|応答と状態通知| Session
 ```
 
-図は責務を示すもので、箱ごとにクラスやファイルを増やさない。
-Console の byte stream・入力キュー・xterm は専用処理に残す。メニューや hover も Svelte の局所状態のままにする。
+## 古い応答を捨てる境界
 
-## Detailed Design
+選択中の workspace だけが target 一覧と履歴を持つ。
+切替時に新しい Workspace object を作るため、A→B→A でも最初の A の応答は採用されない。
+ターゲット選択と保存済み結果にも、それぞれの取得先 object を使う。
+refresh と workspace open は要求ごとの token、start は要求の同一性と navigation の世代を照合する。
+core の状態通知は revision が新しいものだけを採用する。
 
-### 1. 状態更新の入口を一つにする
+開始済み IPC の取消は行わない。
+古い応答は現在の値を上書きせず、古いターゲットの次の取得段階にも進まない。
+`dispose` は購読を解除し、以後の応答と操作を無視する。
+購読登録が遅れて完了した場合も直ちに解除する。
 
-- **`session_model.ts`：** `update(model, message) → { model, effects }`。入力を変更せず、同じ入力に同じ結果を返す。IPC・時刻取得・DOM 操作はしない。
-- **`session.ts`：** update → Model の置換 → publish → Effect 実行。IPC の失敗も結果 Message にし、未処理の Promise rejection を残さない。
-- **Model に重複状態を持たせない。** loading は要求状態から導出する。Rust の実行状態、frontend の起動要求、表示先は区別する。
+## 必要な取得順序
 
-Model は `connection`・`workspacePrompt`・`execution`・`targets`・`history`・`saved` と `nextRequestId` に分ける。`SessionView` は Model から作る flat な表示用 projection とし、状態を重複して保存しない。
-表示先は `content` の union（targets / invocation / analytics / query）で表す。invocation ID と戻り先の page は invocation に含め、workspace page は `content.kind` 自体で表す。`selectedInvocation`・別の `workspacePage`・Svelte の表示フラグの優先順位では画面を決めない。
-UI は target 選択など一つの操作を一つの Message で伝え、update が表示先・選択・取得要求をまとめて更新する。Query / Analytics の切替も同じ入口を通る。
-表示中でない target の選択は保持する。
+同じ workspace の target 読み取りは detail → outputs → actions の順に await する。
+取得中に選択が変わったら、その応答を捨てて最新の選択から始める。
+outputs が失敗しても actions は取得する。
+workspace を切り替えた場合は、古い workspace の読み取りを待たない。
 
-`runEffect(effect): Promise<SessionMessage>` は IPC の成功・失敗を結果 Message として返し、呼び出し側が dispatch する。戻り値を必須にすることで、Effect を追加して処理を忘れると型エラーになる。採否や画面遷移は update が決める。継続的な通知の購読は一回限りの Effect と区別する。
-コードの配置と具体的な更新例は [frontend README](../../src/README.md) に置く。
+履歴の取得中に複数の更新通知が来た場合だけ、後続の取得一回にまとめる。
+履歴の選択中 record が変われば、同じ invocation の detail と profile を読み直す。
+再取得の失敗時は、取得済みの値とエラーを併せて表示する。
+関係ない core 通知では再取得しない。
 
-| API                                            | 戻り値                   |
-| ---------------------------------------------- | ------------------------ |
-| `select`, `selectInvocation`, `showPage`       | `void`                   |
-| `start`, `stop`, `refresh`                     | `void`                   |
-| `loadDetail`, `loadProfile`, `loadInvocations` | `void`                   |
-| `openWorkspace`, `setWorkspacePromptOpen`      | `void`                   |
-| `init` / `dispose`                             | `Promise<void>` / `void` |
+## Console と結果画面
 
-Promise と listener 解除関数は実行層に置く。`init` は重複を防ぎ、`dispose` は結果を無視する。購読登録中の dispose でも、登録された listener を解除する。
-**Promise Map・`waitFor`・公開 API への完了配送は持たない。** Effect の重複防止は Model に任せる。
+表示先は invocation ID を保持する。
+その invocation の live Console があれば Console を表示し、core が所有を解放したら同じ ID の BEP 結果を表示する。
+完了通知は表示先を変えないため、別の画面を見ている場合は移動しない。
+BEP のビルド成功と、`bazel run` のプログラム終了は区別する。
 
-### 2. workspace も Message → update → Effect で扱う
-
-1. `openWorkspace` Message を update で受ける。busy なら画面用のエラーを設定し、Effect は発行しない。
-2. `workspacePrompt.status = "opening"` にし、古いエラーを消す。現在の `connection.revision` と入力を持つ Effect を発行する。
-3. 実行層が既存 IPC を一度呼び、成功・失敗を revision 付きの結果 Message にする。
-4. 成功なら status を `closed`、失敗なら `editing` にする。成功時は revision が一致する場合だけ state を受理する。失敗なら入力を残してエラーを表示する。**失敗・古い成功でも、待機 target の再開を判定する。**
-
-`workspacePrompt.status`（`closed` / `editing` / `opening`）とエラーは Model に置き、表示用の開閉・処理中フラグはそこから導出する。入力とフォルダ選択ダイアログの状態は UI に残す。
-状態通知では status を変えないため、通知が応答より先に来ても処理は重ならず、入力も失わない。処理中の閉じる操作は無視する。
-dispose 後は Message を無視する。開始済み IPC は取り消さず、汎用 resolver や Promise Map は作らない。
-
-### 3. 古い応答を捨てても、実行中の要求は忘れない
-
-target detail / outputs / saved detail / profile は、それぞれ Reader として `value`・`error`・`running`・`wanted` を持つ。saved detail / profile の再取得が失敗した場合は、前の `value` を残して `error` と共存させる。
-
-- **running：** 実行中の要求 ID。応答まで worker を占有する。
-- **wanted：** 今必要な要求 ID。選択やデータ条件が変われば置き換える。
-
-応答が wanted と一致するときだけ採用する。古い応答でも worker を解放し、その用途の最新要求だけを進める。
-同じ要求への Retry は共有する。成功・失敗で要求を完了させ、無関係な通知で失敗を再試行しない。
-
-| 用途     | 別に残す規則                                                                                                                                 |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 履歴     | request status は `current` / `refresh` / `invalidated`。通知を後続1回にまとめ、workspace 変更時は旧結果を捨てて worker 解放後に再取得する。 |
-| snapshot | workspace 選択と scope 変更で取得し直す。古い応答は request ID で捨てる。snapshot はセッション側の状態で、core には保持しない。              |
-
-workspace を離れると旧要求の受理権を失う。**A→B→A でも旧応答を採用しない。** 直列 worker の占有は応答まで維持する。
-ID は Model の単一カウンタで生成し、保留引数は発行時の選択から得る。読み取り、refresh、start の応答を照合し、stop には対象の invocation ID を使う。
-
-### 4. 出来事から、必要な取得だけを進める
-
-**全体同期 `syncAll` は置かない。** 次の5経路を直接書く。
-
-| 出来事                                           | 進める処理                                                                                                                     |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| 初期 state・workspace 変更                       | 旧表示と受理権を破棄し、履歴を読み、ターゲット一覧を取得する。                                                                 |
-| 履歴通知・active invocation 変更・readiness 回復 | 履歴を要求する。履歴受理時は選択中 record の変更、または idle・エラーなしの detail との不一致で detail/profile を更新する。    |
-| scope の変更                                     | target を無効化して snapshot を読み直す。保存済み invocation は維持する。snapshot 受理時に選択を検証し、待機 target を進める。 |
-| target / saved invocation の選択                 | target は detail → outputs の順。saved detail/profile は独立に要求し、一方の失敗で他方を隠さない。                             |
-| 結果・busy 終了・Retry                           | 関係する用途の結果反映と待機要求の再開だけを行う。Retry 開始時は対象の error を消す。                                          |
-
-**見落としやすい例外**
-
-- 履歴一覧が同じでも、取得済み detail との不一致は確認する。profile が取得中でも、更新が必要なら wanted を更新する。
-- snapshot の失敗は明示 Retry で再試行する。workspace を選び直しても再取得する。
-- busy 中は最新の target 選択を待つ。再開時に取得済みデータまで再取得しない。
-
-target は選択・snapshot の一致・workspace・取得中でないことを1か所で判定し、取得可能なら `{ workspace, label }`、不可能なら `null` を返す。outputs 側には対応する detail の確認だけを足す。
-state 比較・無効化・次の要求は用途内でまとめ、多数の変更フラグを helper 間で渡さない。
-
-### 5. 完了しても表示先は自動で変わらない
-
-- **起動からの遷移は start 応答で決める。** 現在の navigation が一致する間だけ invocation を表示先にする。
-- **完了は表示先を変えない。** プロセス終了も履歴更新も現在の destination を変えない。他の画面や workspace の選択も奪わない。
-- **Console は live の間だけ存在する。** core は capture が終わると entry を破棄し、Console の内容は保持しない。同じ選択先は保存済みの BEP 結果を表示する。
-
-## Alternatives Considered
-
-| 採らない案                                       | 理由                                                                                        |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| 汎用 Slice・policy 設定表                        | 個別規則に加えて共通 runtime も読む必要がある。                                             |
-| 全公開操作の Promise 化                          | UI の完了追跡と Model の状態管理が二重になる。workspace も結果 Message で開閉を決められる。 |
-| backend revision / IPC の拡張                    | 必要性を確認していない保証へ変更を広げることになる。                                        |
-| Svelte effect に分散・元の imperative 実装へ戻す | 記述量は減らせても、明示的で純粋な状態遷移を失う。                                          |
-| Effect を closure にする                         | union / switch は減るが、Effect をデータとして比較するテストを失う。                        |
-
-## Caveats
-
-- 通知欠落・backend 再起動からの回復、artifact の同時点整合性、開始済み IPC の取消は保証しない。
-- プロセス終了と観測データの完成は別。欠損・不完全・終了不明を推測で補わない。
-- API の戻り値は全取得の完了保証ではない。TypeScript が Elm の純粋性を保証するわけでもない。
-
-## Security Concerns
-
-認可・workspace 検証・停止・ファイル権限は Rust core に残す。古い応答の破棄は、取消や認可の代わりではない。新しい権限や IPC は追加しない。
-
-## Privacy Concerns
-
-外部送信や全 Message の logging は追加しない。パス・引数を公開診断資料へ出さない。
+[セッションのテスト](../../tests/session.test.ts) は公開操作、IPC の引数、表示結果でこれらの境界を検証する。
+有限モデルの検査範囲と限界は [Invocation lifecycle model check](./invocation-lifecycle-check.md) に記載する。

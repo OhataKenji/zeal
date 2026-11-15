@@ -74,14 +74,14 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ### コンポーネントと責務
 
-| コンポーネント                                           | 責務                                                             |
-| -------------------------------------------------------- | ---------------------------------------------------------------- |
-| WebView (`App.svelte`, `session_model.ts`, `session.ts`) | 選択と要求の状態、表示用データの導出、操作と IPC の接続          |
-| IPC (`lib.rs`)                                           | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
-| workspace (`workspace.rs`, `state.rs`)                   | パスと Bazel の解決、workspace の登録と scope の保持             |
-| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)      | invocation ごとの起動、停止、終了回収、Console の入出力          |
-| target と query (`ingest.rs`, `query.rs`)                | query の実行依頼、結果の解釈と呼出し元への返却                   |
-| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`)     | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
+| コンポーネント                                       | 責務                                                             |
+| ---------------------------------------------------- | ---------------------------------------------------------------- |
+| WebView (`App.svelte`, `session.ts`)                 | 選択と要求の状態、表示用データの導出、操作と IPC の接続          |
+| IPC (`lib.rs`)                                       | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
+| workspace (`workspace.rs`, `state.rs`)               | パスと Bazel の解決、workspace の登録と scope の保持             |
+| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)  | invocation ごとの起動、停止、終了回収、Console の入出力          |
+| target と query (`ingest.rs`, `query.rs`)            | query の実行依頼、結果の解釈と呼出し元への返却                   |
+| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`) | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
 
 表は既存コードの責務を示すもので、追加の管理層は設けない。
 起動 IPC は invocation ID だけを返し、実行状態は Rust core の通知から受け取る。
@@ -102,7 +102,7 @@ Stop は Zeal が所有する実行だけを対象にし、BES で受信した�
 子プロセスを回収した時点で PGID を無効にし、以後は signal を送らない。
 出力の保存が終わるまでは entry を残し、保存後は Console を含む実行状態を破棄する。
 ターゲット一覧は workspace の選択、scope の変更、手動 refresh で取得する([Target の段階的な取得](./target-loading.md))。
-refresh の結果は IPC の直接返却で届き、GUI は最新の要求 ID の応答だけを採用する。
+refresh の結果は IPC の直接返却で届き、GUI は最新の要求の応答だけを採用する。
 取り込み中も Send を使える。
 実行中はConsoleを表示する。
 プロセスが終わるとConsoleは畳まれ、同じ選択先は保存済みのBEP結果を表示する。
@@ -170,7 +170,7 @@ permission、disk full、新しすぎる schema は別のエラーとして扱�
 
 build / test / run は toolbar の composer から、query は Query 画面から起動する。
 tree・dropdown・target 画面での選択は、すべて composer の target 欄への文字列挿入である(詳細は [m3](./m3-find-and-execute.md))。
-表示先は targets / invocation / analytics / query とし、SessionModel が選択を管理する。
+表示先は targets / invocation / analytics / query とし、session が選択を管理する。
 Stop は invocation の表示から、対象の invocation ID を指定して行う。
 
 ## Alternatives Considered

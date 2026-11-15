@@ -1,66 +1,71 @@
 # Frontend
 
-Svelte renders the UI. Session state follows an Elm-like loop: a Message enters
-`update`, which returns the next Model and Effects. The runner executes each
-Effect and returns a result Message to the same loop.
+Svelte renders the UI. `lib/session.ts` owns the session's mutable state and
+drives every IPC read directly: each async operation captures the workspace,
+target selection, or reader it belongs to, and a `current()` predicate rejects
+late replies that no longer match.
 
 ## Code map
 
-| File                                         | Responsibility                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------ |
-| [App.svelte](App.svelte)                     | Render the current content and send user actions.                        |
-| [lib/state.svelte.ts](lib/state.svelte.ts)   | Connect the session to Svelte's reactive view and Tauri transport.       |
-| [lib/session_model.ts](lib/session_model.ts) | Model, Message, Effect, pure `update`, and derived loading state.        |
-| [lib/session.ts](lib/session.ts)             | Dispatch messages, publish the view, execute IPC, and own subscriptions. |
+| File                                       | Responsibility                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [App.svelte](App.svelte)                   | Render the current content and send user actions.                                    |
+| [lib/state.svelte.ts](lib/state.svelte.ts) | Connect the session to Svelte's reactive view and Tauri transport.                   |
+| [lib/session.ts](lib/session.ts)           | Private session state, stale guards, IPC reads, subscriptions, and the derived view. |
 
-For example, selecting a target sends one `select` Message. `update` switches
-content to targets, clears the saved invocation selection, and requests target
-detail when eligible. The runner returns `targetDetailResult`; `update` accepts
-the result and requests outputs. The UI never has to close Console first.
+For example, selecting a target calls `select`, which replaces the workspace's
+target context and runs one detail -> outputs -> actions chain. The UI never
+has to close Console first.
 
 ## State ownership
 
-- The Model groups state by ownership: `connection`, `workspace`, `navigation`,
-  `workspacePrompt`, `startRequest`, `targets`, `history`, `saved`, and
-  `nextRequestId`. `SessionView` is a flat projection, not stored state.
-- `connection.state` is the aggregate `AppState`: registered workspaces plus
-  every owned invocation, delivered as snapshots guarded by the backend
-  `revision`. `workspace` is the
-  selected canonical id; `navigation` is an epoch bumped by explicit navigation
-  so delayed start replies cannot reroute the view. `startRequest` is the one
-  foreground launch awaiting its reply; switching workspaces clears it while
-  the native execution stays owned by the core.
+- `SessionState` groups state by ownership: `core` (the revisioned `AppState`
+  aggregate), `workspace` (snapshot, target context, history), `content` (the
+  displayed destination), `navigation` (an epoch bumped by explicit navigation),
+  `start` (the one foreground launch awaiting its reply), `prompt` (the
+  workspace-open dialog), `error`, and `saved` (the selected invocation's
+  detail/profile readers). `SessionView` is a flat projection, not stored state.
+- `core` carries registered workspaces plus every owned invocation, guarded by
+  the backend `revision`; older or equal pushes are ignored.
 - `content` is the current destination: targets, invocation, Analytics, or
-  Query. The invocation destination carries the workspace page to return to;
-  workspace-page destinations are authoritative on their own.
+  Query. The invocation destination carries the workspace page to return to.
 - Target selection is independent of visibility. The Console component mounts
   only while the selected invocation has a live owned entry; once capture
   finishes the core releases the entry and the same destination shows the
   saved BEP result instead.
-- Form input, focus, expanded panels, and the native folder picker stay local to
-  Svelte. Console byte streams and terminal handles also stay outside the Model.
+- Form input, focus, expanded panels, and the native folder picker stay local
+  to Svelte. Console byte streams and terminal handles also stay outside the
+  session state.
 
 ## Asynchronous results
 
-Each Reader stores `value`, `error`, `running`, and `wanted`. A refresh failure
-can leave the previous value alongside an error. `running` is the in-flight
-request ID; `wanted` is the request ID whose result is still needed. Changing
-selection invalidates the wanted result, not the IPC operation. An old response
-releases `running` and starts the latest wanted request, but cannot restore
-obsolete data.
+Each reader is `{ value, error, loading }`; a failed refresh can leave the
+previous value alongside an error. Every async operation captures the object
+it belongs to — the `Workspace`, the `TargetSelection`, the `Saved` readers,
+the refresh token, the start token, or the prompt request — and `current()`
+re-checks that identity plus `disposed` before writing. A stale reply may
+finish but cannot publish, overwrite current values, or continue obsolete
+target work; its completion can still start the latest selection's chain.
+A->B->A invalidates the first A as well.
 
-History keeps one request with status `current`, `refresh`, or `invalidated`.
-Repeated notifications coalesce into one follow-up; a workspace change
-invalidates the in-flight result and still releases the worker when it returns.
+Target reads form one sequential chain per displayed workspace
+(detail -> outputs -> actions) because those RPCs share the Bazel
+output_base. Only the latest selection proceeds when the previous chain
+finishes; outputs may fail while actions still load, and a detail failure
+suppresses both.
 
-`update` never performs IPC. `runEffect` returns `Promise<SessionMessage>` and
-converts IPC failures to result Messages; it does not decide whether results are
-current or change navigation. Every Effect carries the workspace captured when
-it was requested, never the live selection. Event subscriptions send Messages
-independently. Disposal stops dispatching results, not already-started IPC.
+History keeps one request per workspace. Notifications received while a read
+is in flight coalesce into a single follow-up; owned-state-only pushes do not
+refetch history. A history update re-reads the selected invocation's saved
+detail/profile when the record changed or no longer matches the cached detail.
+
+`init` registers the `invocations-changed` then `app-state` listeners before
+the initial `get_state`, shares concurrent calls, and `dispose` removes the
+listeners and makes every later callback and reply a no-op. A listener that
+finishes registering during disposal is removed immediately, and a failed
+second registration cleans up the first.
 
 See the [session design](../docs/design/session-state.md) for rationale and
-ordering rules, [pure transition tests](../tests/session_model.test.ts) for
-Model/Message examples, and [session tests](../tests/session.test.ts) for transport
-and notification ordering. Setup and checks are in the
+ordering rules and the [session tests](../tests/session.test.ts) for transport
+and race coverage. Setup and checks are in the
 [development guide](../docs/development.md).

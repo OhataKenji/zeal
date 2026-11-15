@@ -89,6 +89,15 @@ const COMPLETED: InvocationDetail = {
   bep: { status: "missing" },
 };
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
+const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
+const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
+const THIRD = "/third";
+
+function targetDetail(label: string): TargetDetail {
+  const target = SNAPSHOT.targets.find((item) => item.label === label);
+  assert.ok(target);
+  return { target, edges: [], files: [], status: "ok" };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -190,6 +199,16 @@ async function initReady(h: ReturnType<typeof harness>) {
   await settle();
 }
 
+async function loadSnapshot(h: ReturnType<typeof harness>) {
+  lastPendingRequest(h, "refresh").reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+}
+
+async function loadHistory(h: ReturnType<typeof harness>, records: InvocationRecord[]) {
+  lastPendingRequest(h, "list_invocations").reply.resolve(records);
+  await settle();
+}
+
 test("initial page survives the initial state fetch", async () => {
   const h = harness(Promise.resolve(READY), "query");
   await h.session.init();
@@ -251,10 +270,17 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   open.reply.resolve(result);
   await settle();
   assert.equal(h.view.state?.workspace, OTHER);
-  // The in-flight A history read is invalidated; its reply triggers B's read.
-  pendingRequest(h, "list_invocations").reply.resolve([]);
+  // B's reads start while A's are still in flight; A's late replies cannot
+  // populate B.
+  assert.ok(
+    h.pending.some((call) => call.command === "list_invocations" && call.args?.workspace === OTHER),
+  );
+  pendingRequest(h, "list_invocations").reply.resolve([{ ...RECORD, id: "a-done" }]);
   await settle();
-  assert.equal(lastPendingRequest(h, "list_invocations").args?.workspace, OTHER);
+  assert.deepEqual(h.view.invocations, []);
+  lastPendingRequest(h, "list_invocations").reply.resolve([OTHER_RECORD]);
+  await settle();
+  assert.deepEqual(h.view.invocations, [OTHER_RECORD]);
   assert.equal(lastPendingRequest(h, "refresh").args?.workspace, OTHER);
   // A remains owned in the aggregate.
   assert.equal(h.view.core?.invocations[0]?.id, "a-run");
@@ -312,6 +338,15 @@ test("same-workspace navigation after start is not overridden by the reply", asy
   start.reply.resolve("a-inv");
   await settle();
   assert.deepEqual(h.view.content, { kind: "query" });
+  // A rejected reply after navigation likewise shows no stale error.
+  h.session.start("build", "//app:second");
+  await settle();
+  const second = lastPendingRequest(h, "start_invocation");
+  h.session.showPage("analytics");
+  second.reply.reject(new Error("spawn failed"));
+  await settle();
+  assert.equal(h.view.error, null);
+  assert.deepEqual(h.view.content, { kind: "analytics" });
 });
 
 test("the start reply navigates; the app-state event supplies the owned entry", async () => {
@@ -342,6 +377,8 @@ test("the start reply navigates; the app-state event supplies the owned entry", 
   const after = h.view;
   assert.equal(after.console?.id, "a-inv");
   assert.equal(after.execution?.id, "a-inv");
+  // The state push derives the console in place; it does not navigate.
+  assert.deepEqual(after.content, { kind: "invocation", id: "a-inv", page: "targets" });
   assert.equal(h.stateReads(), 1);
 });
 
@@ -430,7 +467,12 @@ test("scope change invalidates stale target results and readers name the workspa
   await settle();
   const detail = pendingRequest(h, "get_target_detail");
   assert.equal(detail.args?.workspace, WS);
-  // Rescoped state arrives: selection and in-flight detail are dropped.
+  // A manual refresh under the old scope is still in flight at the change.
+  h.session.refresh();
+  await settle();
+  const oldScopeRefresh = lastPendingRequest(h, "refresh");
+  assert.deepEqual(oldScopeRefresh.args?.scope, { include: ["//app/..."] });
+  // Rescoped state arrives: selection, snapshot, and in-flight detail drop.
   h.emit(
     "app-state",
     coreState({
@@ -439,7 +481,19 @@ test("scope change invalidates stale target results and readers name the workspa
     }),
   );
   await settle();
+  const newScopeRefresh = lastPendingRequest(h, "refresh");
+  assert.deepEqual(newScopeRefresh.args?.scope, { include: ["//other/..."] });
   assert.equal(h.view.selection, null);
+  const clearedSnapshot = h.view.snapshot;
+  assert.equal(clearedSnapshot, null);
+  newScopeRefresh.reply.resolve({
+    snapshot: { ...SNAPSHOT, meta: { fetchedAt: 2, status: "ok" }, targets: [] },
+    error: null,
+  });
+  await settle();
+  // Late replies cannot publish: neither the old-scope refresh nor the old
+  // detail may replace the new snapshot or restart the old target chain.
+  oldScopeRefresh.reply.resolve({ snapshot: SNAPSHOT, error: null });
   detail.reply.resolve({
     target: SNAPSHOT.targets[0],
     edges: [],
@@ -447,7 +501,12 @@ test("scope change invalidates stale target results and readers name the workspa
     status: "ok",
   } satisfies TargetDetail);
   await settle();
+  assert.equal(h.view.snapshot?.meta.fetchedAt, 2);
+  assert.equal(h.view.snapshot?.targets.length, 0);
+  assert.equal(h.view.selection, null);
   assert.equal(h.view.targetDetail, null);
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+  assert.equal(requestCount(h, "get_target_actions"), 0);
 });
 
 test("late history/detail/profile replies cannot populate another workspace", async () => {
@@ -535,17 +594,31 @@ test("dispose removes listeners and ignores late reads", async () => {
   ]);
   await settle();
   h.session.selectInvocation("run-a");
+  await settle();
+  const detailA = pendingRequest(h, "get_invocation");
+  const profileA = pendingRequest(h, "get_invocation_profile");
   h.session.selectInvocation("run-b");
   await settle();
+  const detailB = lastPendingRequest(h, "get_invocation");
+  const profileB = lastPendingRequest(h, "get_invocation_profile");
+  // Each selection issued its own saved reads; A's were orphaned by B's.
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
   h.session.dispose();
-  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  // Late replies cannot publish values or start further work.
+  detailA.reply.resolve(COMPLETED);
+  profileA.reply.resolve(PROFILE);
+  detailB.reply.resolve({
+    ...COMPLETED,
+    record: { ...COMPLETED.record, id: "run-b" },
+  });
+  profileB.reply.resolve(PROFILE);
   await settle();
   assert.equal(h.listeners.size, 0);
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
-  assert.equal(requestCount(h, "get_invocation"), 1);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
 });
 
 test("unmount during listener registration immediately cleans the late subscription", async () => {
@@ -591,4 +664,562 @@ test("failed state subscription removes the history subscription", async () => {
   assert.deepEqual(removed, ["invocations-changed"]);
   assert.match(view.error ?? "", /state listener unavailable/);
   session.dispose();
+});
+
+test("outstanding refresh replies cannot overwrite the latest workspace's snapshot", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  // A manual refresh stays in flight across both workspace switches.
+  h.session.refresh();
+  await settle();
+  const abandonedA = lastPendingRequest(h, "refresh");
+  assert.equal(abandonedA.args?.workspace, WS);
+  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({
+      revision: 3,
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    }),
+  });
+  await settle();
+  const staleB = lastPendingRequest(h, "refresh");
+  assert.equal(staleB.args?.workspace, OTHER);
+  h.session.openWorkspace(WS, { include: ["//app/..."] });
+  lastPendingRequest(h, "open_workspace").reply.resolve({
+    workspace: WS,
+    state: coreState({
+      revision: 4,
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    }),
+  });
+  await settle();
+  const currentA = lastPendingRequest(h, "refresh");
+  assert.equal(currentA.args?.workspace, WS);
+  assert.deepEqual(currentA.args?.scope, { include: ["//app/..."] });
+  // Older replies and errors are dropped; only the newest A reply lands.
+  staleB.reply.resolve({ snapshot: null, error: { exitCode: 1, summary: "stale B" } });
+  abandonedA.reply.reject(new Error("old A failed"));
+  await settle();
+  const droppedSnapshot = h.view.snapshot;
+  assert.equal(droppedSnapshot, null);
+  assert.equal(h.view.snapshotError, null);
+  currentA.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(h.view.snapshot?.meta.fetchedAt, 1);
+  assert.equal(h.view.snapshotError, null);
+});
+
+test("an accepted refresh re-reads the selected target even when fetchedAt is unchanged", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  const staleDetail = pendingRequest(h, "get_target_detail");
+  h.session.refresh();
+  await settle();
+  lastPendingRequest(h, "refresh").reply.resolve({
+    snapshot: { ...SNAPSHOT, meta: { fetchedAt: 1, status: "ok" } },
+    error: null,
+  });
+  await settle();
+  staleDetail.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  const droppedDetail = h.view.targetDetail;
+  assert.equal(droppedDetail, null);
+  const freshDetail = lastPendingRequest(h, "get_target_detail");
+  assert.equal(freshDetail.args?.label, "//app:first");
+  freshDetail.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  assert.equal(h.view.targetDetail?.target.label, "//app:first");
+});
+
+test("a failed foreground start shows the error and restores send readiness", async () => {
+  const h = harness();
+  await initReady(h);
+  h.session.start("build", "//app:first");
+  await settle();
+  pendingRequest(h, "start_invocation").reply.reject(new Error("spawn failed"));
+  await settle();
+  assert.match(h.view.error ?? "", /spawn failed/);
+  assert.equal(h.view.starting, false);
+  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(canSend(h.view, "//app:first"), true);
+});
+
+test("a failed A start cannot clear B's pending start", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  h.session.start("build", "//app:first");
+  await settle();
+  const aStart = pendingRequest(h, "start_invocation");
+  assert.equal(aStart.args?.workspace, WS);
+  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({
+      revision: 3,
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    }),
+  });
+  await settle();
+  h.session.start("build", "//app:first");
+  await settle();
+  const bStart = lastPendingRequest(h, "start_invocation");
+  assert.equal(bStart.args?.workspace, OTHER);
+  aStart.reply.reject(new Error("spawn failed"));
+  await settle();
+  assert.equal(h.view.starting, true);
+  assert.equal(h.view.error, null);
+  bStart.reply.resolve("inv-b");
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "inv-b", page: "targets" });
+});
+
+test("a start reply after release renders the saved result and reads for the same id", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, []);
+  h.session.start("build", "//app:first");
+  await settle();
+  const start = pendingRequest(h, "start_invocation");
+  // The worker already finished: its entry arrived and left, and history
+  // carries the completed record before the start reply lands.
+  h.emit("app-state", coreState({ revision: 2, invocations: [owned("inv-x", WS)] }));
+  await settle();
+  h.emit("app-state", coreState({ revision: 3, invocations: [] }));
+  await settle();
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...RECORD, id: "inv-x", finishedAt: 2, exitCode: 0 }]);
+  start.reply.resolve("inv-x");
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "inv-x", page: "targets" });
+  assert.equal(h.view.console, null);
+  assert.equal(h.view.execution, null);
+  const detail = pendingRequest(h, "get_invocation");
+  const profile = pendingRequest(h, "get_invocation_profile");
+  assert.equal(detail.args?.workspace, WS);
+  assert.equal(detail.args?.id, "inv-x");
+  assert.equal(profile.args?.workspace, WS);
+  assert.equal(profile.args?.id, "inv-x");
+});
+
+test("a live Console suppresses saved reads until the entry is released", async () => {
+  const live = owned("a-run", WS);
+  const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [live] })));
+  await initReady(h);
+  await loadHistory(h, [
+    { ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 },
+    { ...RECORD, id: "old-1" },
+  ]);
+  // Live entries pin first and prefer their saved record for display.
+  assert.equal(h.view.invocationRows.length, 2);
+  assert.equal(h.view.invocationRows[0]?.execution?.id, "a-run");
+  assert.equal(h.view.invocationRows[0]?.record.finishedAt, 2);
+  assert.equal(h.view.invocationRows[1]?.record.id, "old-1");
+  assert.equal(h.view.invocationRows[1]?.execution, undefined);
+  h.session.selectInvocation("a-run");
+  await settle();
+  assert.equal(h.view.console?.id, "a-run");
+  assert.equal(h.view.execution?.id, "a-run");
+  // The BEP record exists, but the live Console keeps saved reads ineligible.
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  h.emit("app-state", coreState({ revision: 3, invocations: [] }));
+  await settle();
+  assert.equal(h.view.console, null);
+  assert.equal(h.view.execution, null);
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "a-run", page: "targets" });
+  const detail = pendingRequest(h, "get_invocation");
+  const profile = pendingRequest(h, "get_invocation_profile");
+  assert.equal(detail.args?.workspace, WS);
+  assert.equal(detail.args?.id, "a-run");
+  assert.equal(profile.args?.workspace, WS);
+  assert.equal(profile.args?.id, "a-run");
+});
+
+test("saved reads require the record in history, not just an owned entry", async () => {
+  const h = harness(
+    Promise.resolve(
+      coreState({
+        revision: 2,
+        invocations: [owned("q-1", WS, { cmd: "query", console: false })],
+      }),
+    ),
+  );
+  await initReady(h);
+  await loadHistory(h, []);
+  h.session.selectInvocation("q-1");
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "invocation", id: "q-1", page: "targets" });
+  assert.equal(h.view.execution?.id, "q-1");
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+});
+
+test("releasing an invocation elsewhere never moves the current destination", async () => {
+  const live = owned("a-run", WS);
+  const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [live] })));
+  await initReady(h);
+  h.session.selectInvocation("a-run");
+  await settle();
+  h.session.showPage("query");
+  h.emit("app-state", coreState({ revision: 3, invocations: [] }));
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "query" });
+  assert.equal(h.view.console, null);
+  assert.equal(h.view.execution, null);
+});
+
+test("rapid target selection queues the newest target without concurrent detail reads", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  const first = pendingRequest(h, "get_target_detail");
+  assert.equal(first.args?.label, "//app:first");
+  h.session.select({ kind: "target", label: "//app:second" });
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  // The newest selection waits; no second detail call runs concurrently.
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  first.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  // The stale detail never launches outputs/actions for the old context.
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+  const latest = lastPendingRequest(h, "get_target_detail");
+  assert.equal(latest.args?.label, "//app:first");
+  latest.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  const outputs = pendingRequest(h, "get_target_outputs");
+  assert.equal(outputs.args?.label, "//app:first");
+  outputs.reply.resolve({ paths: ["out"], truncated: false });
+  await settle();
+  const actions = pendingRequest(h, "get_target_actions");
+  assert.equal(actions.args?.label, "//app:first");
+  actions.reply.resolve({ actions: [], truncated: false });
+  await settle();
+  assert.equal(h.view.targetDetail?.target.label, "//app:first");
+  assert.deepEqual(h.view.selection, { kind: "target", label: "//app:first" });
+});
+
+test("a package selection issues no target reads and drops the in-flight detail", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  const detail = pendingRequest(h, "get_target_detail");
+  h.session.select({ kind: "package", path: "app" });
+  await settle();
+  assert.deepEqual(h.view.selection, { kind: "package", path: "app" });
+  detail.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  assert.equal(h.view.targetDetail, null);
+  assert.equal(h.view.targetDetailError, null);
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+});
+
+test("target actions still load when outputs fails", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  pendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
+  await settle();
+  pendingRequest(h, "get_target_outputs").reply.reject(new Error("cquery failed"));
+  await settle();
+  const actions = pendingRequest(h, "get_target_actions");
+  actions.reply.resolve({ actions: [], truncated: false });
+  await settle();
+  assert.deepEqual(h.view.targetActions, { actions: [], truncated: false });
+  assert.match(h.view.targetOutputsError ?? "", /cquery failed/);
+});
+
+test("a failed detail read blocks outputs and actions; reselecting retries it", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  pendingRequest(h, "get_target_detail").reply.reject(new Error("detail failed"));
+  await settle();
+  assert.match(h.view.targetDetailError ?? "", /detail failed/);
+  assert.equal(requestCount(h, "get_target_outputs"), 0);
+  assert.equal(requestCount(h, "get_target_actions"), 0);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  const retry = lastPendingRequest(h, "get_target_detail");
+  retry.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  assert.equal(h.view.targetDetail?.target.label, "//app:first");
+  assert.equal(h.view.targetDetailError, null);
+});
+
+test("history notifications coalesce and owned-state pushes do not refetch", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, []);
+  const base = requestCount(h, "list_invocations");
+  h.emit("invocations-changed", null);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), base + 1);
+  // A burst while that read is in flight collapses into one follow-up.
+  h.emit("invocations-changed", null);
+  h.emit("invocations-changed", null);
+  h.emit("invocations-changed", null);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), base + 1);
+  lastPendingRequest(h, "list_invocations").reply.resolve([]);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), base + 2);
+  lastPendingRequest(h, "list_invocations").reply.resolve([]);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), base + 2);
+  // An owned-state-only app-state push touches neither history nor targets.
+  const refreshes = requestCount(h, "refresh");
+  h.emit(
+    "app-state",
+    coreState({
+      revision: 2,
+      invocations: [owned("q-1", WS, { cmd: "query", console: false })],
+    }),
+  );
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), base + 2);
+  assert.equal(requestCount(h, "refresh"), refreshes);
+});
+
+test("a history record change refreshes saved readers; retries stay per-reader", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [COMPLETED_RECORD]);
+  h.session.selectInvocation(RECORD.id);
+  await settle();
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.view.detail?.record.exitCode, 0);
+  assert.deepEqual(h.view.profile, PROFILE);
+  // The selected record changes: both saved readers refetch, targets do not.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...COMPLETED_RECORD, exitCode: 1 }]);
+  await settle();
+  const detailRefresh = lastPendingRequest(h, "get_invocation");
+  const profileRefresh = lastPendingRequest(h, "get_invocation_profile");
+  detailRefresh.reply.reject(new Error("detail refresh failed"));
+  profileRefresh.reply.reject(new Error("profile refresh failed"));
+  await settle();
+  // Cached values stay visible alongside the new errors.
+  assert.equal(h.view.detail?.record.exitCode, 0);
+  assert.match(h.view.detailError ?? "", /detail refresh failed/);
+  assert.deepEqual(h.view.profile, PROFILE);
+  assert.match(h.view.profileError ?? "", /profile refresh failed/);
+  // An unrelated push does not retry the failed readers.
+  h.emit("app-state", coreState({ revision: 2 }));
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  // Explicit retries hit only their own reader.
+  h.session.loadDetail();
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.equal(h.view.detailError, null);
+  assert.match(h.view.profileError ?? "", /profile refresh failed/);
+  h.session.loadProfile();
+  await settle();
+  assert.equal(requestCount(h, "get_invocation_profile"), 3);
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.view.detailError, null);
+  assert.equal(h.view.profileError, null);
+});
+
+test("a failed refresh retains the snapshot and selection and exposes the error", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  // The first detail stays in flight through the failed refresh.
+  const firstDetail = pendingRequest(h, "get_target_detail");
+  assert.equal(firstDetail.args?.label, "//app:first");
+  h.session.refresh();
+  await settle();
+  lastPendingRequest(h, "refresh").reply.reject(new Error("query exploded"));
+  await settle();
+  assert.equal(h.view.snapshot?.meta.fetchedAt, 1);
+  assert.deepEqual(h.view.selection, { kind: "target", label: "//app:first" });
+  assert.match(h.view.snapshotError ?? "", /query exploded/);
+  // Refresh reset the target readers up front; nothing refetches while the
+  // orphaned chain still holds the busy slot.
+  assert.equal(h.view.targetDetail, null);
+  // The stale detail's completion frees the chain, which then reads the
+  // current selection exactly once.
+  firstDetail.reply.resolve(targetDetail("//app:first"));
+  await settle();
+  assert.equal(requestCount(h, "get_target_detail"), 2);
+  assert.equal(h.view.targetDetail, null);
+  lastPendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
+  await settle();
+  // A partial load still installs its snapshot and surfaces the summary; the
+  // pending refresh clears the previous error up front.
+  h.session.refresh();
+  await settle();
+  assert.equal(h.view.snapshotError, null);
+  lastPendingRequest(h, "refresh").reply.resolve({
+    snapshot: { ...SNAPSHOT, meta: { fetchedAt: 2, status: "partial" } },
+    error: { exitCode: 9, summary: "skipped pkg" },
+  });
+  await settle();
+  assert.equal(h.view.snapshot?.meta.fetchedAt, 2);
+  assert.equal(h.view.snapshotError, "skipped pkg");
+});
+
+test("a failed history read surfaces an error and loadInvocations retries", async () => {
+  const h = harness();
+  await initReady(h);
+  pendingRequest(h, "list_invocations").reply.reject(new Error("history unavailable"));
+  await settle();
+  assert.match(h.view.invocationsError ?? "", /history unavailable/);
+  assert.deepEqual(h.view.invocations, []);
+  h.session.loadInvocations();
+  await settle();
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED_RECORD]);
+  await settle();
+  assert.deepEqual(h.view.invocations, [COMPLETED_RECORD]);
+  assert.equal(h.view.invocationsError, null);
+});
+
+test("stale open replies update core but not the prompt or selection", async () => {
+  const h = harness(
+    Promise.resolve(
+      coreState({
+        revision: 2,
+        workspaces: [wsEntry(WS), wsEntry(OTHER), wsEntry(THIRD)],
+      }),
+    ),
+  );
+  await initReady(h);
+  h.session.openWorkspace(OTHER, { include: ["//a"] });
+  const openA = pendingRequest(h, "open_workspace");
+  h.session.openWorkspace(THIRD, { include: ["//b"] });
+  const openB = lastPendingRequest(h, "open_workspace");
+  // A's late success still applies its newer aggregate but not the prompt.
+  openA.reply.resolve({
+    workspace: OTHER,
+    state: coreState({
+      revision: 5,
+      workspaces: [wsEntry(WS), wsEntry(OTHER), wsEntry(THIRD)],
+    }),
+  });
+  await settle();
+  assert.equal(h.view.state?.workspace, WS);
+  assert.equal(h.view.opening, true);
+  assert.equal(h.view.core?.revision, 5);
+  // B's reply embeds an older aggregate: core stays at 5, yet B's canonical
+  // workspace is still selected.
+  openB.reply.resolve({
+    workspace: THIRD,
+    state: coreState({
+      revision: 3,
+      workspaces: [wsEntry(WS), wsEntry(OTHER), wsEntry(THIRD)],
+    }),
+  });
+  await settle();
+  assert.equal(h.view.core?.revision, 5);
+  assert.equal(h.view.state?.workspace, THIRD);
+  assert.equal(h.view.opening, false);
+  assert.equal(h.view.workspacePromptOpen, false);
+  assert.equal(lastPendingRequest(h, "refresh").args?.workspace, THIRD);
+});
+
+test("workspace prompt lifecycle: errors surface and close is ignored while opening", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.reject(new Error("open failed"));
+  await settle();
+  assert.equal(h.view.workspacePromptOpen, true);
+  assert.equal(h.view.opening, false);
+  assert.match(h.view.workspaceError ?? "", /open failed/);
+  assert.equal(h.view.state?.workspace, WS);
+  h.session.setWorkspacePromptOpen(true);
+  await settle();
+  assert.equal(h.view.workspaceError, null);
+  h.session.setWorkspacePromptOpen(false);
+  await settle();
+  assert.equal(h.view.workspacePromptOpen, false);
+  // Reopen: a close attempt while opening is ignored.
+  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  const reopen = lastPendingRequest(h, "open_workspace");
+  h.session.setWorkspacePromptOpen(false);
+  await settle();
+  assert.equal(h.view.opening, true);
+  assert.equal(h.view.workspacePromptOpen, true);
+  reopen.reply.resolve({
+    workspace: OTHER,
+    state: coreState({
+      revision: 3,
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    }),
+  });
+  await settle();
+  assert.equal(h.view.state?.workspace, OTHER);
+  assert.equal(h.view.workspacePromptOpen, false);
+});
+
+test("a failed initial get_state keeps a pushed state's readiness without error", async () => {
+  const initial = deferred<AppState>();
+  const h = harness(initial.promise);
+  const initialized = h.session.init();
+  await h.stateRequested;
+  h.emit("app-state", coreState({ revision: 7 }));
+  await settle();
+  assert.equal(h.view.ready, true);
+  initial.reject(new Error("ipc down"));
+  await initialized;
+  await settle();
+  assert.equal(h.view.ready, true);
+  assert.equal(h.view.core?.revision, 7);
+  assert.equal(h.view.error, null);
+  assert.equal(h.stateReads(), 1);
+  assert.equal(h.listeners.size, 2);
+});
+
+test("a stop failure surfaces only while its invocation is displayed", async () => {
+  const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [owned("a-run", WS)] })));
+  await initReady(h);
+  h.session.stop("a-run");
+  await settle();
+  pendingRequest(h, "stop_invocation").reply.reject(new Error("stop failed"));
+  await settle();
+  assert.equal(h.view.error, null);
+  h.session.selectInvocation("a-run");
+  await settle();
+  h.session.stop("a-run");
+  await settle();
+  lastPendingRequest(h, "stop_invocation").reply.reject(new Error("stop failed"));
+  await settle();
+  assert.match(h.view.error ?? "", /stop failed/);
 });

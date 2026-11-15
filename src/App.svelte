@@ -11,7 +11,7 @@
     TreeStructure,
   } from "phosphor-svelte";
   import { onMount, tick } from "svelte";
-  import { app, connect, getSession, refresh } from "./lib/state.svelte";
+  import { app, connect, getSession } from "./lib/state.svelte";
   import { canSend } from "./lib/session";
   import { invocationStatus } from "./lib/invocation";
   import { createIndex } from "./lib/search";
@@ -77,6 +77,10 @@
     path: string;
     scope: TargetScope;
   } | null>(null);
+
+  function refresh() {
+    getSession().refresh();
+  }
 
   function editWorkspace(mode: "open" | "settings", path = "") {
     workspaceForm = {

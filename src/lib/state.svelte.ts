@@ -1,4 +1,3 @@
-import type { TargetScope } from "./types.ts";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSession, emptyView, type WorkspacePage } from "./session";
@@ -47,14 +46,4 @@ export function connect(page: WorkspacePage = "targets") {
   return () => {
     current.dispose();
   };
-}
-
-/** Opens a workspace through the current session. */
-export function openWorkspace(path: string, scope: TargetScope) {
-  return session.openWorkspace(path, scope);
-}
-
-/** Requests a workspace refresh through the current session. */
-export function refresh() {
-  return session.refresh();
 }
