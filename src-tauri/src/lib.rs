@@ -33,7 +33,6 @@ use query::QueryOutput;
 use state::{AppStateDto, Core, OpenWorkspaceResult};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 #[tauri::command]
@@ -339,27 +338,7 @@ async fn get_analytics(
     .map_err(|_| "analytics worker failed".to_string())?
 }
 
-static DETAIL_BUSY: AtomicBool = AtomicBool::new(false);
-static PROFILE_BUSY: AtomicBool = AtomicBool::new(false);
-
-/// A non-queuing permit for one active artifact read per flag.
-/// The blocking worker owns it until completion, even if its caller stops waiting.
-struct ArtifactWorker(&'static AtomicBool);
-impl ArtifactWorker {
-    fn acquire(busy: &'static AtomicBool, error: &str) -> Result<Self, String> {
-        busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| error.to_string())?;
-        Ok(Self(busy))
-    }
-}
-impl Drop for ArtifactWorker {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 /// Return the saved record, log and build results.
-/// Reject the request if another detail read is active.
 #[tauri::command]
 #[tracing::instrument(
     target = "zeal::operations",
@@ -377,9 +356,7 @@ async fn get_invocation(
         .to_string();
     let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let worker = ArtifactWorker::acquire(&DETAIL_BUSY, "invocation detail worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _worker = worker;
         detail::invocation_detail(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
@@ -387,7 +364,6 @@ async fn get_invocation(
 }
 
 /// Return the saved timing profile and its availability status.
-/// Reject the request if another profile read is active.
 #[tauri::command]
 #[tracing::instrument(
     target = "zeal::operations",
@@ -405,9 +381,7 @@ async fn get_invocation_profile(
         .to_string();
     let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let worker = ArtifactWorker::acquire(&PROFILE_BUSY, "profile worker busy")?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _worker = worker;
         detail::invocation_profile(&data, &ws, &id).map_err(|e| e.to_string())
     })
     .await
@@ -530,20 +504,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtifactWorker, DETAIL_BUSY, PROFILE_BUSY, canonical_workspace_path};
-
-    #[test]
-    fn readers_are_independent_and_each_stays_busy_until_its_worker_is_dropped() {
-        let detail = ArtifactWorker::acquire(&DETAIL_BUSY, "detail busy").unwrap();
-        let profile = ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").unwrap();
-        assert!(ArtifactWorker::acquire(&DETAIL_BUSY, "detail busy").is_err());
-        assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_err());
-        drop(detail);
-        assert!(ArtifactWorker::acquire(&DETAIL_BUSY, "detail busy").is_ok());
-        assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_err());
-        drop(profile);
-        assert!(ArtifactWorker::acquire(&PROFILE_BUSY, "profile busy").is_ok());
-    }
+    use super::canonical_workspace_path;
 
     #[cfg(unix)]
     #[test]

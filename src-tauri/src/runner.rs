@@ -1289,7 +1289,6 @@ mod tests {
         .unwrap_err();
         let st = core.state.lock().unwrap();
         assert!(held_pgid(&st, "invocation").is_none());
-        assert!(st.invocations.contains_key("next"));
         assert_eq!(held_pgid(&st, "next"), Some(i32::MAX));
         drop(st);
         release_process(&core, "invocation");

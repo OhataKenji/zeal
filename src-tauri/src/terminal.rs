@@ -181,7 +181,7 @@ pub fn spawn(command: &mut Command, log: &File) -> io::Result<(Child, Control, C
                         Err(e) => return Err(e),
                     }
                 }
-                log.sync_all()
+                Ok(())
             })();
             failed_worker.store(result.is_err(), Ordering::Release);
             result

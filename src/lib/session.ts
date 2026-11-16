@@ -27,40 +27,6 @@ export type SessionContent =
   | { readonly kind: WorkspacePage }
   | { readonly kind: "invocation"; readonly id: string; readonly page: WorkspacePage };
 
-/** Flat projection of session state consumed by the Svelte views. */
-export interface SessionView {
-  content: SessionContent;
-  console: InvocationRecord | null;
-  core: AppState | null;
-  state: WorkspaceState | null;
-  invocationRows: Array<{ record: InvocationRecord; execution?: OwnedInvocation }>;
-  execution: OwnedInvocation | null;
-  snapshot: TargetIndex | null;
-  snapshotLoading: boolean;
-  snapshotError: string | null;
-  selection: ExplorerSelection;
-  targetDetail: TargetDetail | null;
-  targetDetailError: string | null;
-  targetOutputs: TargetOutputs | null;
-  targetOutputsError: string | null;
-  targetActions: TargetActions | null;
-  targetActionsError: string | null;
-  ready: boolean;
-  starting: boolean;
-  opening: boolean;
-  workspacePromptOpen: boolean;
-  workspaceError: string | null;
-  error: string | null;
-  invocations: InvocationRecord[];
-  invocationsError: string | null;
-  detail: InvocationDetail | null;
-  detailError: string | null;
-  profile: Section<Profile> | null;
-  detailLoading: boolean;
-  profileLoading: boolean;
-  profileError: string | null;
-}
-
 /** IPC boundary used by a session to call the core and subscribe to events. */
 export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -192,7 +158,10 @@ function sameContent(left: SessionContent, right: SessionContent): boolean {
   return true;
 }
 
-function sessionView(state: SessionState): SessionView {
+/** Flat projection of session state consumed by the Svelte views. */
+export type SessionView = ReturnType<typeof sessionView>;
+
+function sessionView(state: SessionState) {
   const eligible = savedEligible(state);
   const core = state.core;
   const ws = state.workspace;
@@ -203,7 +172,7 @@ function sessionView(state: SessionState): SessionView {
     .sort((a, b) => b.startedAt - a.startedAt);
   const pinnedIds = new Set(owned.map((entry) => entry.id));
   const historyById = new Map((ws?.history ?? []).map((record) => [record.id, record]));
-  const invocationRows = [
+  const invocationRows: Array<{ record: InvocationRecord; execution?: OwnedInvocation }> = [
     ...owned.map((execution) => ({
       record: historyById.get(execution.id) ?? execution,
       execution,
@@ -213,7 +182,7 @@ function sessionView(state: SessionState): SessionView {
       .map((record) => ({ record })),
   ];
   const execution = selectedExecution(state);
-  const consoleRecord =
+  const consoleRecord: InvocationRecord | null =
     execution?.console === true ? (historyById.get(execution.id) ?? execution) : null;
   const target = ws?.target ?? null;
   const saved = state.saved;

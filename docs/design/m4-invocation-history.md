@@ -120,7 +120,8 @@ Progressのログはstderr、stdoutの順に取り込む。
 
 一つのイベントを長さ付きで格納した単位を**frame**と呼ぶ。
 
-解析workerは同時1件とし、処理中の追加要求は待たせず拒否する。
+詳細と profile は要求ごとに読み取り、別の読み取りが進行中であることを理由に拒否しない。
+各読み取りの表示データと profile の解析量には既存の上限を維持する。
 解析結果のfile、永続cache、offset表は作らない。
 
 #### 読めない場合
@@ -140,11 +141,11 @@ DBの入力やビルド結果は維持する。
 Console、stdin、停止はCoreがメモリで保持するlive processを使う。
 履歴が確定してもその操作を続けられる。
 
-process終了後も最後のConsoleを保持して末尾を読む。
-Consoleを表示中のprocessが終了すると、そのinvocationの詳細へ一度だけ自動で移る。
-別画面を表示中は移らず、終了済みConsoleを開き直した場合も表示を維持する。
-詳細画面から戻って端末出力を確認できる。
-終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
+Console は core が実行を所有する間だけ読み取れる。
+process の終了と出力の取得が完了したら、core は実行の entry と Console を解放する。
+その Console を表示中なら、同じ invocation の保存済み BEP 結果を表示する。
+別画面を表示中は移動しない。
+終了済みの履歴を選ぶと BEP 結果を表示し、Console は再表示しない。
 
 履歴がまだ一覧に出ない間も、live processからConsoleを開ける。
 再起動後の以前のprocessへのsignal送信は行わない。
