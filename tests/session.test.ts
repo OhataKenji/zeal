@@ -348,6 +348,57 @@ test("same-workspace navigation after start is not overridden by the reply", asy
   assert.deepEqual(h.view.content, { kind: "analytics" });
 });
 
+test("a start reply after browsing away and back does not navigate", async () => {
+  const h = harness();
+  await initReady(h);
+  h.session.start("build", "//app:first");
+  await settle();
+  const start = pendingRequest(h, "start_invocation");
+  h.session.showPage("query");
+  h.session.showPage("targets");
+  start.reply.resolve("a-inv");
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.error, null);
+});
+
+test("a start reply after a rejected workspace open does not navigate or error", async () => {
+  const h = harness();
+  await initReady(h);
+  h.session.start("build", "//app:first");
+  await settle();
+  const start = pendingRequest(h, "start_invocation");
+  const opened = h.session.openWorkspace(OTHER, { include: ["//..."] });
+  const rejection = assert.rejects(opened, /open failed/);
+  pendingRequest(h, "open_workspace").reply.reject(new Error("open failed"));
+  await rejection;
+  assert.equal(h.view.state?.workspace, WS);
+  start.reply.resolve("a-inv");
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.error, null);
+});
+
+test("a start reply after reselecting targets does not navigate", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  h.session.start("build", "//app:first");
+  await settle();
+  const start = pendingRequest(h, "start_invocation");
+  h.session.select({ kind: "target", label: "//app:second" });
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  start.reply.resolve("a-inv");
+  await settle();
+  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.deepEqual(h.view.selection, { kind: "target", label: "//app:first" });
+  assert.equal(h.view.starting, false);
+  assert.equal(h.view.error, null);
+});
+
 test("the start reply navigates; the app-state event supplies the owned entry", async () => {
   const h = harness();
   await initReady(h);
@@ -1232,11 +1283,11 @@ test("a failed initial get_state keeps a pushed state's readiness without error"
   await h.stateRequested;
   h.emit("app-state", coreState({ revision: 7 }));
   await settle();
-  assert.equal(h.view.ready, true);
+  assert.notEqual(h.view.core, null);
   initial.reject(new Error("ipc down"));
   await initialized;
   await settle();
-  assert.equal(h.view.ready, true);
+  assert.notEqual(h.view.core, null);
   assert.equal(h.view.core?.revision, 7);
   assert.equal(h.view.error, null);
   assert.equal(h.stateReads(), 1);

@@ -96,19 +96,6 @@ impl ActiveInvocation {
     }
 }
 
-/// Discovery scope for one registered workspace. It owns no execution
-/// slot: Bazel operations live in [`CoreState::invocations`] instead, and
-/// the target list itself is fetched on demand by `ingest`.
-pub struct WorkspaceState {
-    pub scope: crate::scope::Scope,
-}
-
-impl WorkspaceState {
-    pub fn new(scope: crate::scope::Scope) -> Self {
-        Self { scope }
-    }
-}
-
 /// One locally launched Bazel operation. The entry exists exactly while its
 /// worker owns the process, including the final capture drain; the worker's
 /// release removes it.
@@ -130,8 +117,8 @@ pub struct CoreState {
     pub bazel: Option<PathBuf>,
     /// Saved preference only; operations always name their workspace.
     pub last_workspace: Option<PathBuf>,
-    /// Registered workspaces by canonical path.
-    pub workspaces: BTreeMap<PathBuf, WorkspaceState>,
+    /// Registered workspaces by canonical path, each with its discovery scope.
+    pub workspaces: BTreeMap<PathBuf, crate::scope::Scope>,
     /// Every Bazel operation Zeal launched, by invocation id.
     pub invocations: BTreeMap<String, OwnedInvocation>,
     /// Set at app exit: new starts are rejected while owned children stop.
@@ -147,12 +134,6 @@ impl CoreState {
             .get_key_value(Path::new(ws))
             .map(|(path, _)| path.clone())
             .ok_or_else(|| "workspace is not open".to_string())
-    }
-
-    /// Register `ws` (already canonicalized) under `scope`, replacing any
-    /// previous entry's scope without touching executions.
-    pub fn register_workspace(&mut self, ws: PathBuf, scope: crate::scope::Scope) {
-        self.workspaces.insert(ws, WorkspaceState::new(scope));
     }
 }
 
@@ -220,9 +201,9 @@ impl Core {
             workspaces: st
                 .workspaces
                 .iter()
-                .map(|(path, state)| WorkspaceDto {
+                .map(|(path, scope)| WorkspaceDto {
                     workspace: path.to_string_lossy().into_owned(),
-                    scope: state.scope.clone(),
+                    scope: scope.clone(),
                 })
                 .collect(),
             invocations: st
@@ -293,14 +274,10 @@ mod tests {
         let ws_b = PathBuf::from("/ws/b");
         {
             let mut st = core.state.lock().unwrap();
-            st.workspaces.insert(
-                ws_a.clone(),
-                WorkspaceState::new(crate::scope::Scope::default()),
-            );
-            st.workspaces.insert(
-                ws_b.clone(),
-                WorkspaceState::new(crate::scope::Scope::default()),
-            );
+            st.workspaces
+                .insert(ws_a.clone(), crate::scope::Scope::default());
+            st.workspaces
+                .insert(ws_b.clone(), crate::scope::Scope::default());
             st.invocations.insert("one".to_string(), owned(&ws_a));
             st.invocations.insert("two".to_string(), owned(&ws_b));
             st.invocations.get_mut("two").unwrap().process.pgid = None;
@@ -326,10 +303,8 @@ mod tests {
         let ws = PathBuf::from("/ws");
         {
             let mut st = core.state.lock().unwrap();
-            st.workspaces.insert(
-                ws.clone(),
-                WorkspaceState::new(crate::scope::Scope::default()),
-            );
+            st.workspaces
+                .insert(ws.clone(), crate::scope::Scope::default());
             let mut invocation = owned(&ws);
             invocation.console = Some(crate::terminal::session_log().unwrap());
             st.invocations.insert("one".to_string(), invocation);
@@ -338,26 +313,6 @@ mod tests {
         let invocation = &json["invocations"][0];
         assert_eq!(invocation["console"], true);
         assert_eq!(invocation["stoppable"], true);
-    }
-
-    #[test]
-    fn register_workspace_replaces_scope_without_touching_other_entries() {
-        let core = Core::new();
-        let ws = PathBuf::from("/ws");
-        let other = PathBuf::from("/other");
-        let scope = crate::scope::Scope::default();
-        let mut st = core.state.lock().unwrap();
-        st.register_workspace(ws.clone(), scope.clone());
-        st.register_workspace(other.clone(), scope.clone());
-        st.invocations.insert("run".to_string(), owned(&other));
-        // Re-registering under a new scope replaces only that entry's scope.
-        let narrow = crate::scope::Scope {
-            include: vec!["//app/...".to_string()],
-        };
-        st.register_workspace(ws.clone(), narrow.clone());
-        assert_eq!(st.workspaces[&ws].scope, narrow);
-        assert_eq!(st.workspaces[&other].scope, scope);
-        assert!(st.invocations.contains_key("run"));
     }
 
     #[test]
@@ -375,7 +330,8 @@ mod tests {
         );
         {
             let mut st = core.state.lock().unwrap();
-            st.register_workspace(canonical.clone(), crate::scope::Scope::default());
+            st.workspaces
+                .insert(canonical.clone(), crate::scope::Scope::default());
         }
         assert_eq!(
             core.state

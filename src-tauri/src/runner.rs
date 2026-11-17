@@ -307,13 +307,6 @@ pub(crate) struct InvocationGuard<'a, F: Fn()> {
     pub(crate) id: &'a str,
     pub(crate) emit: F,
 }
-/// The owning worker finished: release the process slot. The entry leaves
-/// the map entirely, including after a panic, so a finished invocation's
-/// console and process are gone together.
-fn release_invocation(st: &mut CoreState, id: &str) {
-    st.invocations.remove(id);
-}
-
 impl<F: Fn()> Drop for InvocationGuard<'_, F> {
     fn drop(&mut self) {
         let mut st = self
@@ -321,7 +314,10 @@ impl<F: Fn()> Drop for InvocationGuard<'_, F> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        release_invocation(&mut st, self.id);
+        // The owning worker finished: release the process slot. The entry
+        // leaves the map entirely, including after a panic, so a finished
+        // invocation's console and process are gone together.
+        st.invocations.remove(self.id);
         self.core.invocation_finished.notify_all();
         drop(st);
         // Avoid a second panic from an event emission while unwinding.
@@ -438,16 +434,14 @@ fn signal_process(process: &ActiveInvocation, pgid: i32, signal: Signal) -> io::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{OwnedInvocation, WorkspaceState};
+    use crate::state::OwnedInvocation;
     use crate::store;
     use std::path::{Path, PathBuf};
 
     const WS: &str = "/ws";
 
     fn register_ws(st: &mut CoreState, ws: &Path) {
-        st.workspaces
-            .entry(ws.to_path_buf())
-            .or_insert_with(|| WorkspaceState::new(crate::scope::Scope::default()));
+        st.workspaces.entry(ws.to_path_buf()).or_default();
     }
 
     /// The state `start` leaves around a spawned child: its invocation entry

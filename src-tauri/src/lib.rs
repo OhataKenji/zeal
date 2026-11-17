@@ -139,7 +139,7 @@ fn open_workspace(
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
         store::analytics::refresh_timezone();
-        st.register_workspace(ws.clone(), scope.clone());
+        st.workspaces.insert(ws.clone(), scope.clone());
         st.bazel = bazel;
         st.last_workspace = Some(ws.clone());
     }
@@ -427,7 +427,7 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
         {
             let mut st = core.state.lock().expect("application state lock poisoned");
             store::analytics::refresh_timezone();
-            st.register_workspace(ws.clone(), saved.scope);
+            st.workspaces.insert(ws.clone(), saved.scope);
             st.last_workspace = Some(ws);
         }
     }

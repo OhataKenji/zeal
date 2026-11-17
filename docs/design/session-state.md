@@ -32,7 +32,8 @@ flowchart LR
 選択中の workspace だけが target 一覧と履歴を持つ。
 切替時に新しい Workspace object を作るため、A→B→A でも最初の A の応答は採用されない。
 ターゲット選択と保存済み結果にも、それぞれの取得先 object を使う。
-refresh と workspace open は要求ごとの token、start は要求の同一性と navigation の世代を照合する。
+target/package の選択変更は content object を新しくし、進行中の start の遅れた応答が表示先を奪わないようにする。
+refresh と workspace open は要求ごとの token、start は開始時の content object・workspace open token・選択中の workspace object の同一性を照合する。
 workspace open の token は session 内の `workspaceRequest` が保持し、view には出さない。最新の token は settle 後もクリアしない。
 core の状態通知は revision が新しいものだけを採用する。
 
@@ -40,6 +41,7 @@ core の状態通知は revision が新しいものだけを採用する。
 古い応答は現在の値を上書きせず、古いターゲットの次の取得段階にも進まない。
 `dispose` は購読を解除し、以後の応答と操作を無視する。
 購読登録が遅れて完了した場合も直ちに解除する。
+`init` は mount した session ごとに一度だけ呼び、root が `dispose` と対にして寿命を管理する。
 
 ## 必要な取得順序
 

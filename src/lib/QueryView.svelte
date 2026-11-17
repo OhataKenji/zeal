@@ -166,10 +166,10 @@
   );
 
   $effect.pre(() => {
-    const expr = exprText;
-    const view = resultView;
-    const options = flags;
-    untrack(() => controller?.select(expr, view, options));
+    void exprText;
+    void resultView;
+    void flags;
+    untrack(() => controller?.select());
   });
 
   // Each editor owns one in-flight query for its workspace; other workspaces
@@ -187,7 +187,7 @@
           : null)),
   );
 
-  // Input changes restore a cached result, or leave the result empty.
+  // Input changes clear the displayed result.
   const stored = $derived(qstate.result);
   // Only one invocation is ever in flight; which view started it does not matter —
   // either pane may as well show the spinner.

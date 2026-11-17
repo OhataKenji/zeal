@@ -27,11 +27,11 @@ has to close Console first.
 
 - `SessionState` groups state by ownership: `core` (the revisioned `AppState`
   aggregate), `workspace` (snapshot, target context, history), `content` (the
-  displayed destination), `navigation` (an epoch bumped by explicit navigation),
-  `start` (the one foreground launch awaiting its reply), `error`, and `saved`
-  (the selected invocation's detail/profile readers). `SessionView` is a flat
-  projection, not stored state. The latest workspace-open request is tracked by
-  a `workspaceRequest` token inside the session, not in the view.
+  displayed destination), `start` (the destination a pending foreground launch
+  must still match), `error`, and `saved` (the selected invocation's
+  detail/profile readers). `SessionView` is a flat projection, not stored
+  state. The latest workspace-open request is tracked by a `workspaceRequest`
+  token inside the session, not in the view.
 - `core` carries registered workspaces plus every owned invocation, guarded by
   the backend `revision`; older or equal pushes are ignored.
 - `content` is the current destination: targets, invocation, Analytics, or
@@ -49,11 +49,14 @@ has to close Console first.
 Each reader is `{ value, error, loading }`; a failed refresh can leave the
 previous value alongside an error. Every async operation captures the object
 it belongs to — the `Workspace`, the `TargetSelection`, the `Saved` readers,
-the refresh token, the start token, or the workspace-open token — and `current()`
+the refresh token, the content and workspace-open captures of a pending start,
+or the latest workspace-open token — and `current()`
 re-checks that identity plus `disposed` before writing. A stale reply may
 finish but cannot publish, overwrite current values, or continue obsolete
 target work; its completion can still start the latest selection's chain.
-A->B->A invalidates the first A as well.
+A->B->A invalidates the first A as well. Selecting a different target or
+package also replaces the content object, so a pending start's late reply
+cannot navigate.
 
 Target reads form one sequential chain per displayed workspace
 (detail -> outputs -> actions) because those RPCs share the Bazel
@@ -66,11 +69,12 @@ is in flight coalesce into a single follow-up; owned-state-only pushes do not
 refetch history. A history update re-reads the selected invocation's saved
 detail/profile when the record changed or no longer matches the cached detail.
 
-`init` registers the `invocations-changed` then `app-state` listeners before
-the initial `get_state`, shares concurrent calls, and `dispose` removes the
-listeners and makes every later callback and reply a no-op. A listener that
-finishes registering during disposal is removed immediately, and a failed
-second registration cleans up the first.
+`init` runs once per mounted session — the root pairs it with `dispose` — and
+registers the `invocations-changed` then `app-state` listeners before the
+initial `get_state`. `dispose` removes the listeners and makes every later
+callback and reply a no-op. A listener that finishes registering during
+disposal is removed immediately, and a failed second registration cleans up
+the first.
 
 See the [session design](../docs/design/session-state.md) for rationale and
 ordering rules and the [session tests](../tests/session.test.ts) for transport

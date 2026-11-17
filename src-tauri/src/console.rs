@@ -51,7 +51,7 @@ pub fn read(core: &Core, ws: &str, id: &str, offset: u64) -> io::Result<Output> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ActiveInvocation, OwnedInvocation, WorkspaceState};
+    use crate::state::{ActiveInvocation, OwnedInvocation};
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -78,14 +78,12 @@ mod tests {
             let log = session_log.try_clone().unwrap();
             let core = Core::new();
             let mut state = core.state.lock().unwrap();
-            state.workspaces.insert(
-                workspace.clone(),
-                WorkspaceState::new(crate::scope::Scope::default()),
-            );
-            state.workspaces.insert(
-                other.clone(),
-                WorkspaceState::new(crate::scope::Scope::default()),
-            );
+            state
+                .workspaces
+                .insert(workspace.clone(), crate::scope::Scope::default());
+            state
+                .workspaces
+                .insert(other.clone(), crate::scope::Scope::default());
             state.invocations.insert(
                 id.clone(),
                 OwnedInvocation {

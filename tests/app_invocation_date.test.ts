@@ -39,7 +39,6 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
   function output(startedAt: number | undefined): string {
     const record = { id: "invocation", cmd: "build", pattern: "//app:app", startedAt };
     const view = Object.assign(emptyView("targets"), {
-      ready: true,
       core: CORE,
       state: WS,
       invocations: [record],
@@ -103,7 +102,6 @@ test("AppView shows snapshot errors alongside retained targets", async (t) => {
 
   function output(snapshot: TargetIndex | null, snapshotError: string | null): string {
     const view = Object.assign(emptyView("targets"), {
-      ready: true,
       core: CORE,
       state: WS,
       content: { kind: "targets" },
@@ -153,7 +151,6 @@ test("AppView shows the neutral invocation page before the owned entry arrives",
   const session = renderSession();
 
   const view = Object.assign(emptyView("targets"), {
-    ready: true,
     core: CORE,
     state: WS,
     content: { kind: "invocation", id: "pending", page: "targets" },

@@ -68,8 +68,7 @@ interface SessionState {
   core: AppState | null;
   workspace: Workspace | null;
   content: SessionContent;
-  navigation: number;
-  start: { navigation: number } | null;
+  start: SessionContent | null;
   error: string | null;
   saved: Saved;
 }
@@ -91,7 +90,6 @@ function initialState(page: WorkspacePage): SessionState {
     core: null,
     workspace: null,
     content: { kind: page },
-    navigation: 0,
     start: null,
     error: null,
     saved: savedReaders(),
@@ -197,7 +195,6 @@ function sessionView(state: SessionState) {
     targetOutputsError: target?.outputs.error ?? null,
     targetActions: target?.actions.value ?? null,
     targetActionsError: target?.actions.error ?? null,
-    ready: core !== null,
     starting: state.start !== null,
     error: state.error,
     invocations: ws?.history ?? [],
@@ -214,7 +211,6 @@ function sessionView(state: SessionState) {
 /** Whether the composer may send: connected, scoped workspace, Bazel and BES up. */
 export function canSend(view: SessionView, target: string): boolean {
   return !!(
-    view.ready &&
     view.state &&
     view.core?.bazel &&
     view.core.besReady &&
@@ -231,7 +227,9 @@ export function emptyView(page: WorkspacePage = "targets"): SessionView {
  * Owns the session's mutable state and drives every IPC read directly.
  * Stale async results are rejected by captured object identity: workspace,
  * target selection, saved readers, refresh token, start token, and
- * workspace-open token each invalidate only their own pending work.
+ * workspace-open token each invalidate only their own pending work. A
+ * target/package selection also replaces the content object a pending start
+ * captured, so its late reply cannot navigate.
  */
 export function createSession(
   transport: Transport,
@@ -242,8 +240,6 @@ export function createSession(
   let disposed = false;
   // After an explicit open, saved preferences no longer choose the workspace.
   let workspaceRequest: object | null = null;
-  let subscribed = false;
-  let initializing: Promise<void> | undefined;
   const unlistens: Array<() => void> = [];
 
   function publish() {
@@ -541,7 +537,6 @@ export function createSession(
       historyBusy: false,
       historyDirty: false,
     };
-    state.navigation++;
     state.start = null;
     state.error = null;
     state.saved = savedReaders();
@@ -553,7 +548,6 @@ export function createSession(
 
   function showContent(content: SessionContent) {
     if (disposed || sameContent(state.content, content)) return;
-    state.navigation++;
     const previousId = selectedInvocationId(state);
     state.content = content;
     if (previousId !== selectedInvocationId(state)) {
@@ -591,7 +585,9 @@ export function createSession(
       }
       return;
     }
-    state.navigation++;
+    // A changed selection also refreshes the content object a pending start
+    // captured, so its late reply cannot navigate after the user moves on.
+    state.content = { kind: "targets" };
     ws.target = targetSelection(selection);
     publish();
     void loadTarget();
@@ -635,7 +631,8 @@ export function createSession(
   async function start(cmd: BazelCommand, pattern: string, argumentsText: string) {
     const ws = state.workspace;
     if (disposed || !ws || !canSend(sessionView(state), pattern)) return;
-    const pending = { navigation: state.navigation };
+    const pending = state.content;
+    const openRequest = workspaceRequest;
     state.start = pending;
     state.error = null;
     publish();
@@ -648,7 +645,7 @@ export function createSession(
       });
       if (disposed || state.start !== pending) return;
       state.start = null;
-      if (pending.navigation !== state.navigation || state.workspace !== ws) {
+      if (state.content !== pending || workspaceRequest !== openRequest || state.workspace !== ws) {
         publish();
         return;
       }
@@ -656,7 +653,7 @@ export function createSession(
     } catch (error) {
       if (disposed || state.start !== pending) return;
       state.start = null;
-      if (pending.navigation !== state.navigation || state.workspace !== ws) {
+      if (state.content !== pending || workspaceRequest !== openRequest || state.workspace !== ws) {
         publish();
         return;
       }
@@ -690,7 +687,6 @@ export function createSession(
    */
   async function openWorkspace(path: string, scope: TargetScope): Promise<boolean> {
     if (disposed) return false;
-    state.navigation++;
     const request = {};
     workspaceRequest = request;
     try {
@@ -729,7 +725,6 @@ export function createSession(
         return false;
       }
       unlistens.push(removeState);
-      subscribed = true;
       return true;
     } catch (error) {
       unlistens.splice(0).forEach((remove) => remove());
@@ -741,7 +736,9 @@ export function createSession(
     }
   }
 
-  async function initialize() {
+  /** Runs once per mounted session; the root pairs it with dispose. */
+  async function init() {
+    if (disposed) return;
     if (!(await subscribe()) || disposed) return;
     try {
       const snapshot = await transport.invoke<AppState>(COMMANDS.getState);
@@ -752,15 +749,6 @@ export function createSession(
         publish();
       }
     }
-  }
-
-  function init(): Promise<void> {
-    if (initializing) return initializing;
-    if (subscribed || disposed) return Promise.resolve();
-    initializing = initialize().finally(() => {
-      initializing = undefined;
-    });
-    return initializing;
   }
 
   function dispose() {

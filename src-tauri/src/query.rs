@@ -395,7 +395,8 @@ mod tests {
         let core = Core::new();
         let ws = workspace.to_str().unwrap().to_string();
         let mut st = core.state.lock().unwrap();
-        st.register_workspace(workspace, crate::scope::Scope::default());
+        st.workspaces
+            .insert(workspace, crate::scope::Scope::default());
         st.bazel = Some(bazel);
         drop(st);
         // Queries never serialize each other: both register before either ends.

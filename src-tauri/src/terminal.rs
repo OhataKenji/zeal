@@ -252,7 +252,7 @@ pub fn resize(core: &Core, ws: &str, id: &str, cols: u16, rows: u16) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ActiveInvocation, OwnedInvocation, WorkspaceState};
+    use crate::state::{ActiveInvocation, OwnedInvocation};
     use std::path::PathBuf;
 
     const WS: &str = "/ws-terminal";
@@ -272,10 +272,8 @@ mod tests {
                 spawn(Command::new("sh").args(["-c", script]), &log).unwrap();
             let core = Core::new();
             let mut st = core.state.lock().unwrap();
-            st.workspaces.insert(
-                PathBuf::from(WS),
-                WorkspaceState::new(crate::scope::Scope::default()),
-            );
+            st.workspaces
+                .insert(PathBuf::from(WS), crate::scope::Scope::default());
             st.invocations.insert(
                 id.clone(),
                 OwnedInvocation {
