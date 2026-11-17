@@ -61,18 +61,3 @@ workspace を切り替えた場合は、古い workspace の読み取りを待�
 その invocation の live Console があれば Console を表示し、core が所有を解放したら同じ ID の BEP 結果を表示する。
 完了通知は表示先を変えないため、別の画面を見ている場合は移動しない。
 BEP のビルド成功と、`bazel run` のプログラム終了は区別する。
-
-## 参照した実装
-
-Bruno は実行ごとの `cancelTokenUid` でキャンセルハンドルを管理する。
-Insomnia の main process は `requestId` を curl の停止処理に対応付け、renderer は自分のキャンセル対応表を `finally` で片付ける。
-pidfd はプロセスの同一性を安定して参照する仕組みの例であり、UI の選択対象とは別に native 側で実行を追跡する考え方の参考にとどめる。
-
-- <https://github.com/usebruno/bruno/blob/be54cd0a264ab2edfeea8171815bbf9ea00f1c96/packages/bruno-electron/src/utils/cancel-token.js>
-- <https://github.com/usebruno/bruno/blob/be54cd0a264ab2edfeea8171815bbf9ea00f1c96/packages/bruno-electron/src/ipc/network/index.js>
-- <https://github.com/Kong/insomnia/blob/51e449474b832760d6cdd1e47d53b572d2b24ddf/packages/insomnia/src/main/network/libcurl-promise.ts>
-- <https://github.com/Kong/insomnia/blob/51e449474b832760d6cdd1e47d53b572d2b24ddf/packages/insomnia/src/network/cancellation.renderer.ts>
-- <https://man7.org/linux/man-pages/man2/pidfd_open.2.html>
-
-[セッションのテスト](../../tests/session.test.ts) は公開操作、IPC の引数、表示結果でこれらの境界を検証する。
-有限モデルの検査範囲と限界は [Invocation lifecycle model check](./invocation-lifecycle-check.md) に記載する。
