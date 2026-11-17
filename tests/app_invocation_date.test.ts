@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createSession, emptyView } from "../src/lib/session.ts";
 import type { AppState, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
@@ -18,21 +19,33 @@ const CORE: AppState = {
   invocations: [],
 };
 
-test("App renders workspace navigation and invocation history", async (t) => {
+function renderSession() {
+  return createSession(
+    {
+      invoke: async () => {
+        throw new Error("render tests do not call the core");
+      },
+      listen: async () => () => {},
+    },
+    () => {},
+  );
+}
+
+test("AppView renders workspace navigation and invocation history", async (t) => {
   const { load, render } = await createSvelteHarness(t);
-  const { app } = await load("/src/lib/state.svelte.ts");
-  const { default: App } = await load("/src/App.svelte");
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
 
   function output(startedAt: number | undefined): string {
     const record = { id: "invocation", cmd: "build", pattern: "//app:app", startedAt };
-    Object.assign(app.view, {
+    const view = Object.assign(emptyView("targets"), {
       ready: true,
       core: CORE,
       state: WS,
       invocations: [record],
       invocationRows: [{ record }],
     });
-    return render(App).body;
+    return render(AppView, { props: { view, session } }).body;
   }
 
   for (const startedAt of [undefined, NaN, Infinity, -Infinity, 8.64e15 + 1]) {
@@ -70,10 +83,10 @@ test("App renders workspace navigation and invocation history", async (t) => {
   });
 });
 
-test("App shows snapshot errors alongside retained targets", async (t) => {
+test("AppView shows snapshot errors alongside retained targets", async (t) => {
   const { load, render } = await createSvelteHarness(t);
-  const { app } = await load("/src/lib/state.svelte.ts");
-  const { default: App } = await load("/src/App.svelte");
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
 
   const CACHED: TargetIndex = {
     meta: { fetchedAt: 1, status: "ok" },
@@ -89,7 +102,7 @@ test("App shows snapshot errors alongside retained targets", async (t) => {
   };
 
   function output(snapshot: TargetIndex | null, snapshotError: string | null): string {
-    Object.assign(app.view, {
+    const view = Object.assign(emptyView("targets"), {
       ready: true,
       core: CORE,
       state: WS,
@@ -108,7 +121,7 @@ test("App shows snapshot errors alongside retained targets", async (t) => {
       invocationRows: [],
       invocationsError: null,
     });
-    return render(App).body;
+    return render(AppView, { props: { view, session } }).body;
   }
 
   await t.test("a refresh error keeps the previous tree visible", () => {
@@ -134,12 +147,12 @@ test("App shows snapshot errors alongside retained targets", async (t) => {
   });
 });
 
-test("App shows the neutral invocation page before the owned entry arrives", async (t) => {
+test("AppView shows the neutral invocation page before the owned entry arrives", async (t) => {
   const { load, render } = await createSvelteHarness(t);
-  const { app } = await load("/src/lib/state.svelte.ts");
-  const { default: App } = await load("/src/App.svelte");
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
 
-  Object.assign(app.view, {
+  const view = Object.assign(emptyView("targets"), {
     ready: true,
     core: CORE,
     state: WS,
@@ -153,6 +166,6 @@ test("App shows the neutral invocation page before the owned entry arrives", asy
     detailLoading: false,
     detailError: null,
   });
-  const html = render(App).body;
+  const html = render(AppView, { props: { view, session } }).body;
   assert.ok(html.includes("No local process or saved record is available."));
 });

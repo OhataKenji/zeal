@@ -74,14 +74,14 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ### コンポーネントと責務
 
-| コンポーネント                                       | 責務                                                             |
-| ---------------------------------------------------- | ---------------------------------------------------------------- |
-| WebView (`App.svelte`, `session.ts`)                 | 選択と要求の状態、表示用データの導出、操作と IPC の接続          |
-| IPC (`lib.rs`)                                       | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
-| workspace (`workspace.rs`, `state.rs`)               | パスと Bazel の解決、workspace の登録と scope の保持             |
-| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)  | invocation ごとの起動、停止、終了回収、Console の入出力          |
-| target と query (`ingest.rs`, `query.rs`)            | query の実行依頼、結果の解釈と呼出し元への返却                   |
-| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`) | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
+| コンポーネント                                         | 責務                                                             |
+| ------------------------------------------------------ | ---------------------------------------------------------------- |
+| WebView (`App.svelte`, `AppView.svelte`, `session.ts`) | session の寿命、表示用データの導出、操作と IPC の接続            |
+| IPC (`lib.rs`)                                         | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
+| workspace (`workspace.rs`, `state.rs`)                 | パスと Bazel の解決、workspace の登録と scope の保持             |
+| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)    | invocation ごとの起動、停止、終了回収、Console の入出力          |
+| target と query (`ingest.rs`, `query.rs`)              | query の実行依頼、結果の解釈と呼出し元への返却                   |
+| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`)   | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
 
 表は既存コードの責務を示すもので、追加の管理層は設けない。
 起動 IPC は invocation ID だけを返し、実行状態は Rust core の通知から受け取る。

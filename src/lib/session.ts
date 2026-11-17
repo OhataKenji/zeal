@@ -70,11 +70,6 @@ interface SessionState {
   content: SessionContent;
   navigation: number;
   start: { navigation: number } | null;
-  prompt: {
-    status: "closed" | "editing" | "opening";
-    error: string | null;
-    request: object | null;
-  };
   error: string | null;
   saved: Saved;
 }
@@ -98,7 +93,6 @@ function initialState(page: WorkspacePage): SessionState {
     content: { kind: page },
     navigation: 0,
     start: null,
-    prompt: { status: "closed", error: null, request: null },
     error: null,
     saved: savedReaders(),
   };
@@ -205,9 +199,6 @@ function sessionView(state: SessionState) {
     targetActionsError: target?.actions.error ?? null,
     ready: core !== null,
     starting: state.start !== null,
-    opening: state.prompt.status === "opening",
-    workspacePromptOpen: state.prompt.status !== "closed",
-    workspaceError: state.prompt.error,
     error: state.error,
     invocations: ws?.history ?? [],
     invocationsError: ws?.historyError ?? null,
@@ -239,8 +230,8 @@ export function emptyView(page: WorkspacePage = "targets"): SessionView {
 /**
  * Owns the session's mutable state and drives every IPC read directly.
  * Stale async results are rejected by captured object identity: workspace,
- * target selection, saved readers, refresh token, start token, and prompt
- * request each invalidate only their own pending work.
+ * target selection, saved readers, refresh token, start token, and
+ * workspace-open token each invalidate only their own pending work.
  */
 export function createSession(
   transport: Transport,
@@ -249,6 +240,8 @@ export function createSession(
 ) {
   const state = initialState(page);
   let disposed = false;
+  // After an explicit open, saved preferences no longer choose the workspace.
+  let workspaceRequest: object | null = null;
   let subscribed = false;
   let initializing: Promise<void> | undefined;
   const unlistens: Array<() => void> = [];
@@ -606,6 +599,7 @@ export function createSession(
 
   function restorableWorkspace(snapshot: AppState): string | null {
     if (
+      workspaceRequest !== null ||
       state.workspace !== null ||
       snapshot.lastWorkspace === null ||
       !snapshot.workspaces.some((entry) => entry.workspace === snapshot.lastWorkspace)
@@ -689,41 +683,33 @@ export function createSession(
     }
   }
 
-  async function openWorkspace(path: string, scope: TargetScope) {
-    if (disposed) return;
+  /**
+   * Opens a workspace. Resolves true when this request selected the canonical
+   * workspace, false when a newer request or disposal superseded it, and
+   * rejects only when the current request itself failed.
+   */
+  async function openWorkspace(path: string, scope: TargetScope): Promise<boolean> {
+    if (disposed) return false;
     state.navigation++;
-    state.prompt = { status: "opening", error: null, request: {} };
-    publish();
-    const request = state.prompt.request;
+    const request = {};
+    workspaceRequest = request;
     try {
       const result = await transport.invoke<OpenWorkspaceResult>(COMMANDS.openWorkspace, {
         path,
         scope,
       });
-      if (disposed) return;
+      if (disposed) return false;
       // The embedded aggregate is revision-guarded, so even a stale reply may
-      // apply; only the latest request owns the prompt and the selection.
+      // apply; only the latest request owns the selection.
       applyState(result.state);
-      if (state.prompt.request !== request) return;
-      state.prompt.request = null;
-      state.prompt.status = "closed";
-      state.prompt.error = null;
+      if (workspaceRequest !== request) return false;
       selectWorkspace(result.workspace);
       publish();
+      return true;
     } catch (error) {
-      if (disposed || state.prompt.request !== request) return;
-      state.prompt.request = null;
-      state.prompt.status = "editing";
-      state.prompt.error = String(error);
-      publish();
+      if (disposed || workspaceRequest !== request) return false;
+      throw error;
     }
-  }
-
-  function setWorkspacePromptOpen(open: boolean) {
-    if (disposed || state.prompt.status === "opening") return;
-    state.prompt.status = open ? "editing" : "closed";
-    state.prompt.error = null;
-    publish();
   }
 
   /** Registers both event listeners; false means init must not proceed. */
@@ -788,8 +774,7 @@ export function createSession(
     start: (cmd: BazelCommand, pattern: string, argumentsText = "") =>
       void start(cmd, pattern, argumentsText),
     stop: (id: string) => void stop(id),
-    openWorkspace: (path: string, scope: TargetScope) => void openWorkspace(path, scope),
-    setWorkspacePromptOpen,
+    openWorkspace,
     refresh: () => void refreshSnapshot(),
     selectInvocation,
     showPage,

@@ -6,18 +6,26 @@ workspace を切り替えても Rust の実行は変わらない。
 
 ## 制御の経路
 
+`App.svelte` が session の寿命を所有し、Tauri transport で `createSession` を一度だけ作る。
+公開された `SessionView` と session を `AppView` へ props で渡し、view は操作を session の公開 API に委ねる。
 `session.ts` が画面の操作を受け、直接 IPC を await する。
 内部の Message / Effect への変換と状態全体の複製を削除し、要求と応答の扱いを同じ関数に置く。
-Svelte には状態から導出した `SessionView` を渡す。
-フォーム入力、展開状態、Console の byte stream は各画面の処理に残す。
+フォーム入力、展開状態、workspace open/settings ダイアログ、Console の byte stream は各画面の処理に残る。
 
 ```mermaid
 flowchart LR
-  UI[Svelte] -->|操作| Session[session.ts]
-  Session -->|表示用データ| UI
+  Root[App.svelte] -->|view と session| View[AppView.svelte]
+  Root -->|生成・破棄| Session[session.ts]
+  View -->|操作| Session
+  Session -->|SessionView| Root
   Session -->|workspace と invocation を指定| Core[Rust core]
   Core -->|応答と状態通知| Session
 ```
+
+`openWorkspace` は Promise を返す。
+現在の要求が canonical workspace を選択したとき `true`、後続の要求や dispose に追い越されたとき `false`、現在の要求自体が失敗したときだけ reject する。
+フォームは reject をローカルの error として表示し、成功時だけ閉じる。
+最新の要求を表す token は settle 後も残り、明示的な open が始まった時点で保存済み `lastWorkspace` による自動選択を以後は行わない。open が失敗した場合も同様である。
 
 ## 古い応答を捨てる境界
 
@@ -25,6 +33,7 @@ flowchart LR
 切替時に新しい Workspace object を作るため、A→B→A でも最初の A の応答は採用されない。
 ターゲット選択と保存済み結果にも、それぞれの取得先 object を使う。
 refresh と workspace open は要求ごとの token、start は要求の同一性と navigation の世代を照合する。
+workspace open の token は session 内の `workspaceRequest` が保持し、view には出さない。最新の token は settle 後もクリアしない。
 core の状態通知は revision が新しいものだけを採用する。
 
 開始済み IPC の取消は行わない。
@@ -50,6 +59,18 @@ workspace を切り替えた場合は、古い workspace の読み取りを待�
 その invocation の live Console があれば Console を表示し、core が所有を解放したら同じ ID の BEP 結果を表示する。
 完了通知は表示先を変えないため、別の画面を見ている場合は移動しない。
 BEP のビルド成功と、`bazel run` のプログラム終了は区別する。
+
+## 参照した実装
+
+Bruno は実行ごとの `cancelTokenUid` でキャンセルハンドルを管理する。
+Insomnia の main process は `requestId` を curl の停止処理に対応付け、renderer は自分のキャンセル対応表を `finally` で片付ける。
+pidfd はプロセスの同一性を安定して参照する仕組みの例であり、UI の選択対象とは別に native 側で実行を追跡する考え方の参考にとどめる。
+
+- <https://github.com/usebruno/bruno/blob/be54cd0a264ab2edfeea8171815bbf9ea00f1c96/packages/bruno-electron/src/utils/cancel-token.js>
+- <https://github.com/usebruno/bruno/blob/be54cd0a264ab2edfeea8171815bbf9ea00f1c96/packages/bruno-electron/src/ipc/network/index.js>
+- <https://github.com/Kong/insomnia/blob/51e449474b832760d6cdd1e47d53b572d2b24ddf/packages/insomnia/src/main/network/libcurl-promise.ts>
+- <https://github.com/Kong/insomnia/blob/51e449474b832760d6cdd1e47d53b572d2b24ddf/packages/insomnia/src/network/cancellation.renderer.ts>
+- <https://man7.org/linux/man-pages/man2/pidfd_open.2.html>
 
 [セッションのテスト](../../tests/session.test.ts) は公開操作、IPC の引数、表示結果でこれらの境界を検証する。
 有限モデルの検査範囲と限界は [Invocation lifecycle model check](./invocation-lifecycle-check.md) に記載する。

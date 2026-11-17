@@ -61,7 +61,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { app } from "./state.svelte";
   import { createIndex } from "./search";
   import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
@@ -85,7 +84,11 @@
   } from "./query";
   import type { TargetIndex } from "./types";
 
-  let { snap, workspace }: { snap: TargetIndex | null; workspace: string } = $props();
+  let {
+    snap,
+    workspace,
+    bazelAvailable,
+  }: { snap: TargetIndex | null; workspace: string; bazelAvailable: boolean } = $props();
 
   const searchIndex = $derived(
     snap ? createIndex(snap.targets) : null,
@@ -171,11 +174,7 @@
 
   // Each editor owns one in-flight query for its workspace; other workspaces
   // run independently in the core.
-  const busyReason = $derived.by((): string | null => {
-    if (!app.view.ready) return "not connected";
-    if (!app.view.core?.bazel) return "Bazel is not available";
-    return null;
-  });
+  const busyReason = $derived(bazelAvailable ? null : "Bazel is not available");
   const canRun = $derived(valid && !busyReason && !qstate.running);
   const runBlockReason = $derived(
     qstate.running

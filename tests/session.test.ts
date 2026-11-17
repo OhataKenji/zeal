@@ -217,14 +217,13 @@ test("initial page survives the initial state fetch", async () => {
 
 test("initial restore selects lastWorkspace and loads its readers", async () => {
   const h = harness(
-    Promise.resolve(
-      coreState({
-        workspaces: [wsEntry(WS)],
-        lastWorkspace: WS,
-      }),
-    ),
+    Promise.resolve(coreState({ revision: 1, workspaces: [], lastWorkspace: null })),
   );
   await initReady(h);
+  const noSelection = h.view.state;
+  assert.equal(noSelection, null);
+  h.emit("app-state", coreState({ revision: 2, workspaces: [wsEntry(WS)], lastWorkspace: WS }));
+  await settle();
   assert.equal(h.view.state?.workspace, WS);
   assert.equal(pendingRequest(h, "list_invocations").args?.workspace, WS);
   assert.equal(pendingRequest(h, "refresh").args?.workspace, WS);
@@ -253,7 +252,7 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
     ),
   );
   await initReady(h);
-  h.session.openWorkspace("/alias/other", { include: ["//..."] });
+  void h.session.openWorkspace("/alias/other", { include: ["//..."] });
   const open = pendingRequest(h, "open_workspace");
   assert.deepEqual(open.args, {
     path: "/alias/other",
@@ -306,7 +305,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
   const aStart = pendingRequest(h, "start_invocation");
   assert.equal(aStart.args?.workspace, WS);
   // User explicitly switches to B before the reply lands.
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
@@ -520,7 +519,7 @@ test("late history/detail/profile replies cannot populate another workspace", as
   const profileReq = pendingRequest(h, "get_invocation_profile");
   assert.equal(detailReq.args?.workspace, WS);
   // Switch to B before replies land.
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
@@ -544,7 +543,7 @@ test("returning to a workspace refetches and the reply loads without app-state",
   await settle();
   assert.equal(h.view.snapshot?.meta.fetchedAt, 1);
   // Switch away and back: each selection issues its own refresh.
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
@@ -554,7 +553,7 @@ test("returning to a workspace refetches and the reply loads without app-state",
   });
   await settle();
   const refreshes = requestCount(h, "refresh");
-  h.session.openWorkspace(WS, { include: ["//app/..."] });
+  void h.session.openWorkspace(WS, { include: ["//app/..."] });
   lastPendingRequest(h, "open_workspace").reply.resolve({
     workspace: WS,
     state: coreState({
@@ -679,7 +678,7 @@ test("outstanding refresh replies cannot overwrite the latest workspace's snapsh
   await settle();
   const abandonedA = lastPendingRequest(h, "refresh");
   assert.equal(abandonedA.args?.workspace, WS);
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
@@ -690,7 +689,7 @@ test("outstanding refresh replies cannot overwrite the latest workspace's snapsh
   await settle();
   const staleB = lastPendingRequest(h, "refresh");
   assert.equal(staleB.args?.workspace, OTHER);
-  h.session.openWorkspace(WS, { include: ["//app/..."] });
+  void h.session.openWorkspace(WS, { include: ["//app/..."] });
   lastPendingRequest(h, "open_workspace").reply.resolve({
     workspace: WS,
     state: coreState({
@@ -762,7 +761,7 @@ test("a failed A start cannot clear B's pending start", async () => {
   await settle();
   const aStart = pendingRequest(h, "start_invocation");
   assert.equal(aStart.args?.workspace, WS);
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
@@ -1109,7 +1108,7 @@ test("a failed history read surfaces an error and loadInvocations retries", asyn
   assert.equal(h.view.invocationsError, null);
 });
 
-test("stale open replies update core but not the prompt or selection", async () => {
+test("stale open replies update core but not the selection", async () => {
   const h = harness(
     Promise.resolve(
       coreState({
@@ -1119,74 +1118,111 @@ test("stale open replies update core but not the prompt or selection", async () 
     ),
   );
   await initReady(h);
-  h.session.openWorkspace(OTHER, { include: ["//a"] });
-  const openA = pendingRequest(h, "open_workspace");
-  h.session.openWorkspace(THIRD, { include: ["//b"] });
-  const openB = lastPendingRequest(h, "open_workspace");
-  // A's late success still applies its newer aggregate but not the prompt.
-  openA.reply.resolve({
-    workspace: OTHER,
+  // Three opens race: A fails stale, B succeeds stale, C is current.
+  const openA = h.session.openWorkspace(OTHER, { include: ["//a"] });
+  const openB = h.session.openWorkspace(THIRD, { include: ["//b"] });
+  const openC = h.session.openWorkspace(OTHER, { include: ["//c"] });
+  const requestA = pendingRequest(h, "open_workspace");
+  const requests = h.pending.filter((call) => call.command === "open_workspace");
+  const requestB = requests[1];
+  const requestC = requests[2];
+  assert.ok(requestB && requestC);
+  // A's late failure resolves false instead of rejecting; nothing else changes.
+  requestA.reply.reject(new Error("open failed"));
+  assert.equal(await openA, false);
+  assert.equal(h.view.state?.workspace, WS);
+  // B's late success still applies its newer aggregate but cannot select.
+  requestB.reply.resolve({
+    workspace: THIRD,
     state: coreState({
       revision: 5,
       workspaces: [wsEntry(WS), wsEntry(OTHER), wsEntry(THIRD)],
     }),
   });
-  await settle();
+  assert.equal(await openB, false);
   assert.equal(h.view.state?.workspace, WS);
-  assert.equal(h.view.opening, true);
   assert.equal(h.view.core?.revision, 5);
-  // B's reply embeds an older aggregate: core stays at 5, yet B's canonical
+  // C's reply embeds an older aggregate: core stays at 5, yet C's canonical
   // workspace is still selected.
-  openB.reply.resolve({
-    workspace: THIRD,
+  requestC.reply.resolve({
+    workspace: OTHER,
     state: coreState({
       revision: 3,
       workspaces: [wsEntry(WS), wsEntry(OTHER), wsEntry(THIRD)],
     }),
   });
-  await settle();
+  assert.equal(await openC, true);
   assert.equal(h.view.core?.revision, 5);
-  assert.equal(h.view.state?.workspace, THIRD);
-  assert.equal(h.view.opening, false);
-  assert.equal(h.view.workspacePromptOpen, false);
-  assert.equal(lastPendingRequest(h, "refresh").args?.workspace, THIRD);
+  assert.equal(h.view.state?.workspace, OTHER);
+  assert.equal(lastPendingRequest(h, "refresh").args?.workspace, OTHER);
 });
 
-test("workspace prompt lifecycle: errors surface and close is ignored while opening", async () => {
+test("explicit open intent blocks saved-workspace restore, even after failure", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 1, workspaces: [], lastWorkspace: null })),
+  );
+  await initReady(h);
+  assert.equal(h.view.state, null);
+  const openA = h.session.openWorkspace(OTHER, { include: ["//a"] });
+  const openB = h.session.openWorkspace(THIRD, { include: ["//b"] });
+  const requests = h.pending.filter((call) => call.command === "open_workspace");
+  const requestA = requests[0];
+  const requestB = requests[1];
+  assert.ok(requestA && requestB);
+  const rejection = assert.rejects(openB, /open failed/);
+  // A preference push while B is outstanding cannot select a workspace.
+  h.emit(
+    "app-state",
+    coreState({ revision: 2, workspaces: [wsEntry(OTHER)], lastWorkspace: OTHER }),
+  );
+  await settle();
+  assert.equal(h.view.state, null);
+  // A's stale success still applies its newer aggregate but cannot select.
+  requestA.reply.resolve({
+    workspace: OTHER,
+    state: coreState({
+      revision: 3,
+      workspaces: [wsEntry(OTHER)],
+      lastWorkspace: OTHER,
+    }),
+  });
+  assert.equal(await openA, false);
+  assert.equal(h.view.core?.revision, 3);
+  assert.equal(h.view.state, null);
+  requestB.reply.reject(new Error("open failed"));
+  await rejection;
+  // Even after the failed open, later preference pushes cannot select.
+  h.emit(
+    "app-state",
+    coreState({ revision: 4, workspaces: [wsEntry(OTHER)], lastWorkspace: OTHER }),
+  );
+  await settle();
+  assert.equal(h.view.state, null);
+  assert.equal(requestCount(h, "list_invocations"), 0);
+  assert.equal(requestCount(h, "refresh"), 0);
+});
+
+test("a failed workspace open rejects while the current selection remains", async () => {
   const h = harness(
     Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
   );
   await initReady(h);
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
+  const failed = h.session.openWorkspace(OTHER, { include: ["//..."] });
+  const rejection = assert.rejects(failed, /open failed/);
   pendingRequest(h, "open_workspace").reply.reject(new Error("open failed"));
-  await settle();
-  assert.equal(h.view.workspacePromptOpen, true);
-  assert.equal(h.view.opening, false);
-  assert.match(h.view.workspaceError ?? "", /open failed/);
+  await rejection;
   assert.equal(h.view.state?.workspace, WS);
-  h.session.setWorkspacePromptOpen(true);
-  await settle();
-  assert.equal(h.view.workspaceError, null);
-  h.session.setWorkspacePromptOpen(false);
-  await settle();
-  assert.equal(h.view.workspacePromptOpen, false);
-  // Reopen: a close attempt while opening is ignored.
-  h.session.openWorkspace(OTHER, { include: ["//..."] });
-  const reopen = lastPendingRequest(h, "open_workspace");
-  h.session.setWorkspacePromptOpen(false);
-  await settle();
-  assert.equal(h.view.opening, true);
-  assert.equal(h.view.workspacePromptOpen, true);
-  reopen.reply.resolve({
+  // The form retries the same open; success selects the canonical workspace.
+  const retried = h.session.openWorkspace(OTHER, { include: ["//..."] });
+  lastPendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({
       revision: 3,
       workspaces: [wsEntry(WS), wsEntry(OTHER)],
     }),
   });
-  await settle();
+  assert.equal(await retried, true);
   assert.equal(h.view.state?.workspace, OTHER);
-  assert.equal(h.view.workspacePromptOpen, false);
 });
 
 test("a failed initial get_state keeps a pushed state's readiness without error", async () => {
