@@ -335,7 +335,7 @@ mod tests {
         let data = fixture.data.clone();
         let workspace = fixture.ws.clone();
         let notify = Arc::new(move || {
-            let invocations = store::list(&data, &workspace).unwrap();
+            let invocations = store::list(&data, &workspace, &[]).unwrap();
             seen.lock().unwrap().push(invocations[0].exit_code);
         });
         Receiver::new(fixture.data.clone(), notify)
@@ -388,7 +388,7 @@ mod tests {
             .unwrap();
         let (_stream, range) = stream.finish().await.unwrap();
         assert_eq!((range.first, range.last), (1, 2));
-        let invocations = store::list(&fixture.data, &fixture.ws).unwrap();
+        let invocations = store::list(&fixture.data, &fixture.ws, &[]).unwrap();
         assert_eq!(invocations.len(), 1);
         assert_eq!(invocations[0].id, fixture.stream.invocation_id);
     }

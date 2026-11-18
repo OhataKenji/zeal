@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { invocationStatus } from "../src/lib/invocation.ts";
 import { createSession, emptyView } from "../src/lib/session.ts";
-import type { AppState, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
+import type { AppState, OwnedInvocation, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 const WS: WorkspaceState = {
@@ -80,6 +81,51 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     assert.match(toggle, /aria-expanded="false"/);
     assert.doesNotMatch(html, /id="command-arguments"/);
   });
+
+  await t.test("distinguishes simultaneous live rows by workspace", () => {
+    const local: OwnedInvocation = {
+      id: "local",
+      workspace: WS.workspace,
+      cmd: "run",
+      pattern: "//app:app",
+      startedAt: 1_700_000_000_000,
+      console: true,
+      stoppable: true,
+      stopping: false,
+    };
+    const foreign = { ...local, id: "foreign", workspace: "/other/workspace" };
+    const view = {
+      ...emptyView(),
+      core: CORE,
+      state: WS,
+      invocationRows: [
+        { record: local, execution: local },
+        { record: foreign, execution: foreign },
+      ],
+    };
+    const html = render(AppView, { props: { view, session } }).body;
+    assert.match(html, /aria-label="run \/\/app:app: ● running — \/workspace"/);
+    assert.match(html, /aria-label="run \/\/app:app: ● running — \/other\/workspace"/);
+    assert.match(html, />\/other\/workspace<\/small>/);
+  });
+
+  await t.test("shows the owning workspace next to the Stop control", async () => {
+    const { default: InvocationHeader } = await load("/src/lib/InvocationHeader.svelte");
+    const record = { id: "foreign", cmd: "run", pattern: "//app:app" };
+    const execution: OwnedInvocation = {
+      ...record,
+      workspace: "/other/workspace",
+      startedAt: 1_700_000_000_000,
+      console: true,
+      stoppable: true,
+      stopping: false,
+    };
+    const html = render(InvocationHeader, {
+      props: { record, status: invocationStatus(record, execution), execution, onstop: () => {} },
+    }).body;
+    assert.match(html, />Workspace \/other\/workspace<\/p>/);
+    assert.match(html, /<button[^>]*aria-label="Stop in \/other\/workspace"/);
+  });
 });
 
 test("AppView shows snapshot errors alongside retained targets", async (t) => {
@@ -145,7 +191,7 @@ test("AppView shows snapshot errors alongside retained targets", async (t) => {
   });
 });
 
-test("AppView shows the neutral invocation page before the owned entry arrives", async (t) => {
+test("AppView shows a diagnostic without invocation tabs when the record is unavailable", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: AppView } = await load("/src/AppView.svelte");
   const session = renderSession();
@@ -154,8 +200,6 @@ test("AppView shows the neutral invocation page before the owned entry arrives",
     core: CORE,
     state: WS,
     content: { kind: "invocation", id: "pending", page: "targets" },
-    console: null,
-    execution: null,
     invocations: [],
     invocationRows: [],
     invocationsError: null,
@@ -164,5 +208,6 @@ test("AppView shows the neutral invocation page before the owned entry arrives",
     detailError: null,
   });
   const html = render(AppView, { props: { view, session } }).body;
-  assert.ok(html.includes("No local process or saved record is available."));
+  assert.match(html, /No live process or Bazel build record is available/);
+  assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
 });

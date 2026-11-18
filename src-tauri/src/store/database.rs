@@ -205,7 +205,7 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
 }
 
 const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,w.canonical_path FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 WHERE (w.id=current.id OR w.repo_url=current.repo_url)";
-/// [`list`] returns at most this many records, newest first.
+/// Number of recent records returned by [`list`], before any pinned records.
 pub const LIST_LIMIT: usize = 100;
 fn row_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRecord> {
     fn time(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Option<u64>> {
@@ -241,15 +241,24 @@ pub fn read_record(
         row_record,
     )?)
 }
-pub fn list(data: &Path, ws: &Path) -> Result<Vec<InvocationRecord>, StoreError> {
+/// List the newest records and any pinned IDs in the same repository scope.
+pub fn list(
+    data: &Path,
+    ws: &Path,
+    pinned_ids: &[String],
+) -> Result<Vec<InvocationRecord>, StoreError> {
     let ws = workspace_path(ws)?;
     let store = Store::open(data)?;
+    let pinned_ids = serde_json::to_string(pinned_ids).expect("serialize pinned invocation IDs");
     Ok(store
         .conn
         .prepare(&format!(
-            "{SELECT} ORDER BY r.started_at_ms DESC,r.id LIMIT {LIST_LIMIT}"
+            "WITH recent AS ({SELECT} ORDER BY r.started_at_ms DESC,r.id LIMIT {LIST_LIMIT})
+             SELECT * FROM recent
+             UNION {SELECT} AND r.id IN (SELECT value FROM json_each(?2))
+             ORDER BY started_at_ms DESC,id"
         ))?
-        .query_map([ws.as_os_str().as_bytes()], row_record)?
+        .query_map(params![ws.as_os_str().as_bytes(), pinned_ids], row_record)?
         .collect::<Result<_, _>>()?)
 }
 
@@ -496,7 +505,7 @@ mod tests {
         let invocation_id = &f.stream.invocation_id;
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
-        assert!(list(&f.data, &other).unwrap().is_empty());
+        assert!(list(&f.data, &other, &[]).unwrap().is_empty());
         assert_eq!(
             read_record(&f.data, &other, invocation_id)
                 .unwrap_err()
@@ -512,8 +521,8 @@ mod tests {
         let alias = f.root.join("alias");
         symlink(&f.ws, &alias).unwrap();
         assert_eq!(
-            list(&f.data, &alias).unwrap(),
-            list(&f.data, &f.ws).unwrap()
+            list(&f.data, &alias, &[]).unwrap(),
+            list(&f.data, &f.ws, &[]).unwrap()
         );
     }
     #[test]
@@ -538,17 +547,11 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         fs::remove_dir_all(f.dir()).unwrap();
-        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
+        assert_eq!(list(&f.data, &f.ws, &[]).unwrap().len(), 1);
     }
     #[test]
-    fn list_returns_at_most_list_limit_newest_records() {
-        let f = Fixture::new();
-        let mut sibling = Fixture::new();
-        sibling.data = f.data.clone();
-        crate::workspace::test_support::repo(&f.ws, "https://example.com/shared.git");
-        crate::workspace::test_support::repo(&sibling.ws, "https://example.com/shared.git");
-        crate::store::refresh_workspace(&f.data, &sibling.ws).unwrap();
-        f.complete();
+    fn list_includes_pinned_records_older_than_its_recent_limit() {
+        let (f, sibling) = shared_repo_pair();
         let store = Store::open(&f.data).unwrap();
         let ws_id = |ws: &Path| -> String {
             store
@@ -560,45 +563,34 @@ mod tests {
                 )
                 .unwrap()
         };
-        let first_id = ws_id(&f.ws);
-        let second_id = ws_id(&sibling.ws);
-        let ids = [first_id, second_id];
-        for i in 0..LIST_LIMIT {
+        let ids = [ws_id(&f.ws), ws_id(&sibling.ws)];
+        let recent_ids: Vec<_> = (0..LIST_LIMIT).map(|i| format!("recent-{i}")).collect();
+        for (i, id) in recent_ids.iter().enumerate() {
             store
                 .conn
                 .execute(
                     "INSERT INTO invocation(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
-                    params![
-                        uuid::Uuid::new_v4().to_string(),
-                        &ids[i % 2],
-                        2000 + i as i64
-                    ],
+                    params![id, &ids[i % 2], 2000 + i as i64],
                 )
                 .unwrap();
         }
         drop(store);
-        let invocations = list(&f.data, &f.ws).unwrap();
-        assert_eq!(invocations.len(), LIST_LIMIT);
-        assert_eq!(
-            invocations[0].started_at,
-            Some(2000 + LIST_LIMIT as u64 - 1)
-        );
-        assert!(
-            invocations
-                .iter()
-                .all(|invocation| invocation.id != f.stream.invocation_id)
-        );
-        let sibling_path = sibling
-            .ws
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            invocations.iter().any(|invocation| {
-                invocation.workspace.as_deref() == Some(sibling_path.as_str())
-            })
-        );
+        let recent = list(&f.data, &f.ws, &[]).unwrap();
+        assert!(recent.iter().map(|r| &r.id).eq(recent_ids.iter().rev()));
+
+        let selected_id = &f.stream.invocation_id;
+        let live_id = &sibling.stream.invocation_id;
+        let pinned = [
+            selected_id.clone(),
+            live_id.clone(),
+            recent_ids.last().unwrap().clone(),
+            live_id.clone(),
+        ];
+        let invocations = list(&f.data, &f.ws, &pinned).unwrap();
+        assert_eq!(&invocations[..LIST_LIMIT], recent.as_slice());
+        let mut expected = [selected_id, live_id];
+        expected.sort();
+        assert!(invocations[LIST_LIMIT..].iter().map(|r| &r.id).eq(expected));
     }
 
     fn shared_repo_pair() -> (Fixture, Fixture) {
@@ -625,8 +617,8 @@ mod tests {
             .to_string_lossy()
             .into_owned();
 
-        let from_first = list(&f.data, &f.ws).unwrap();
-        let from_second = list(&f.data, &sibling.ws).unwrap();
+        let from_first = list(&f.data, &f.ws, &[]).unwrap();
+        let from_second = list(&f.data, &sibling.ws, &[]).unwrap();
         assert_eq!(from_first, from_second);
         assert_eq!(from_first.len(), 2);
         assert_eq!(
@@ -679,7 +671,10 @@ mod tests {
         other.complete();
         let other_id = other.stream.invocation_id.clone();
 
-        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 2);
+        assert_eq!(
+            list(&f.data, &f.ws, std::slice::from_ref(&other_id)).unwrap(),
+            list(&f.data, &f.ws, &[]).unwrap(),
+        );
         assert_eq!(
             read_record(&f.data, &f.ws, &other_id).unwrap_err().kind,
             ErrorKind::Missing
@@ -701,8 +696,8 @@ mod tests {
         plain.complete();
         other_plain.complete();
 
-        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
-        let plain_list = list(&f.data, &plain.ws).unwrap();
+        assert_eq!(list(&f.data, &f.ws, &[]).unwrap().len(), 1);
+        let plain_list = list(&f.data, &plain.ws, &[]).unwrap();
         assert_eq!(plain_list.len(), 1);
         assert_eq!(plain_list[0].id, plain.stream.invocation_id);
         assert_eq!(
@@ -746,7 +741,7 @@ mod tests {
 
     fn read_history_repeatedly(f: &Fixture) {
         for _ in 0..10 {
-            assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
+            assert_eq!(list(&f.data, &f.ws, &[]).unwrap().len(), 1);
         }
     }
 }

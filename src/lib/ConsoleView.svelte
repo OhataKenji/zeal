@@ -14,7 +14,7 @@
   let { record, execution, onstop }: {
     record: InvocationRecord;
     execution: OwnedInvocation;
-    onstop: () => void;
+    onstop: (id: string) => void;
   } = $props();
   let host: HTMLDivElement;
   let terminal = $state.raw<Terminal>();
@@ -68,16 +68,7 @@
 </script>
 
 <section class="invocation-page console-page">
-  <InvocationHeader {record} {status}>
-    {#if execution.stoppable}
-      <button
-        type="button"
-        class="button button-ghost"
-        disabled={execution.stopping}
-        onclick={onstop}
-      >{execution.stopping ? "Stopping…" : "Stop"}</button>
-    {/if}
-  </InvocationHeader>
+  <InvocationHeader {record} {status} {execution} {onstop} />
   {#if error}<Notice tone="error">{error}</Notice>{/if}
   <div class="invocation-panel">
     <div class="console-terminal" bind:this={host}></div>

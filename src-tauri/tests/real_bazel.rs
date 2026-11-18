@@ -15,7 +15,7 @@ async fn real_bazel_records_invocation_and_accepts_standard_input() {
     fixture.records_invocation("test", "//:check").await;
     fixture.accepts_standard_input().await;
     assert_eq!(
-        zeal_lib::list_invocation_records(&fixture.data, &fixture.ws)
+        zeal_lib::list_invocation_records(&fixture.data, &fixture.ws, &[])
             .unwrap()
             .len(),
         3

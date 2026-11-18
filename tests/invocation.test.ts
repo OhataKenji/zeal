@@ -97,6 +97,7 @@ test("section notices distinguish broken reads, partial data, and absent records
 test("build exit determines outcome even when its finish time was not recorded", () => {
   assert.equal(invocationStatus({ ...RECORD, exitCode: 0 }).kind, "succeeded");
   assert.equal(invocationStatus({ ...RECORD, exitCode: 3 }).kind, "failed");
+  assert.equal(invocationStatus({ ...RECORD, exitCode: 8 }).kind, "interrupted");
 });
 
 test("missing build exit remains unknown even when its finish time was recorded", () => {

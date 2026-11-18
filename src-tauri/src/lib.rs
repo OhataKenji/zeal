@@ -304,18 +304,26 @@ async fn read_console(
     .map_err(|_| "terminal read worker failed".to_string())?
 }
 
-/// Invocations of `workspace`, newest first, at most [`store::LIST_LIMIT`].
+/// Recent history plus live and selected records within the workspace's scope.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocations.list", skip_all)]
 async fn list_invocations(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     workspace: String,
+    selected_id: Option<String>,
 ) -> Result<Vec<InvocationRecord>, String> {
-    let ws = registered_workspace(&core, &workspace)?;
+    let (ws, mut pinned_ids) = {
+        let state = core.state.lock().expect("application state lock poisoned");
+        (
+            state.workspace_path(&workspace)?,
+            state.invocations.keys().cloned().collect::<Vec<_>>(),
+        )
+    };
+    pinned_ids.extend(selected_id);
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        store::list(&data, &ws).map_err(|error| error.to_string())
+        store::list(&data, &ws, &pinned_ids).map_err(|error| error.to_string())
     })
     .await
     .map_err(|_| "history list worker failed".to_string())?

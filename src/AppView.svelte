@@ -52,11 +52,7 @@
   const selection = $derived(view.selection);
   const selected = $derived(selection?.kind === "target" ? selection.label : null);
   const content = $derived(view.content);
-  const consoleView = $derived(
-    view.console && view.execution
-      ? { record: view.console, execution: view.execution }
-      : null,
-  );
+  const invocation = $derived(view.invocation);
 
   let revealRequest = $state(0);
   let targetField = $state("");
@@ -228,11 +224,13 @@
   {@const startedAt = new Date(record.startedAt ?? NaN)}
   {@const status = invocationStatus(record, execution)}
   {@const active = content.kind === "invocation" && content.id === record.id}
+  {@const owner = execution?.workspace}
+  {@const workspace = owner ?? record.workspace}
   <li>
     <button
       class="invocation-row"
-      title={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id} — ${status.label}${record.workspace ? ` — ${record.workspace}` : ""}`}
-      aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}`}
+      title={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id} — ${status.label}${workspace ? ` — ${workspace}` : ""}`}
+      aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}${owner ? ` — ${owner}` : ""}`}
       class:selected={active}
       aria-current={active ? "true" : undefined}
       onclick={() => session.selectInvocation(record.id)}
@@ -253,6 +251,9 @@
         >{:else}<span class="invocation-time">Time not recorded</span>{/if}</span
       >
       <span class="invocation-pattern">{record.pattern ?? record.id}</span>
+      {#if owner && owner !== st?.workspace}
+        <small class="invocation-owner">{owner}</small>
+      {/if}
     </button>
   </li>
 {/snippet}
@@ -293,13 +294,13 @@
     class="content"
     class:invocation-content={content.kind !== "targets"}
   >
-    {#if consoleView}
-      {#key `${consoleView.execution.workspace}:${consoleView.execution.id}`}
+    {#if invocation?.execution?.console}
+      {#key `${invocation.execution.workspace}:${invocation.execution.id}`}
         <div class="console-container">
           {#await loadConsole() then { default: ConsoleView }}
-          <ConsoleView record={consoleView.record}
-            execution={consoleView.execution}
-            onstop={() => session.stop(consoleView.execution.id)} />
+          <ConsoleView record={invocation.record}
+            execution={invocation.execution}
+            onstop={session.stop} />
           {/await}
         </div>
       {/key}

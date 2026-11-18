@@ -119,6 +119,7 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
       ...emptyView(),
       content: { kind: "invocation" as const, id: "left-id", page: "targets" as const },
       invocations: [left.record],
+      invocation: { record: left.record },
       detail: left,
     };
     const html = render(InvocationView, {
@@ -148,9 +149,9 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     const { default: InvocationHeader } = await load("/src/lib/InvocationHeader.svelte");
     const { invocationStatus } = await load("/src/lib/invocation.ts");
 
-    function header(record: InvocationRecord | undefined, fallback?: string | null): string {
+    function header(record: InvocationRecord): string {
       return render(InvocationHeader, {
-        props: { record, fallback, status: invocationStatus(record, null) },
+        props: { record, status: invocationStatus(record, null), onstop: () => {} },
       }).body.replace(/<!--[\s\S]*?-->/g, "");
     }
 
@@ -163,15 +164,11 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
         .trim();
     }
 
-    const withCmd = header({ id: "run-id", cmd: "build", pattern: "//app:server" }, null);
+    const withCmd = header({ id: "run-id", cmd: "build", pattern: "//app:server" });
     assert.equal(h1Text(withCmd), "build //app:server");
     assert.ok(!withCmd.includes('class="badge"'));
 
-    assert.equal(h1Text(header({ id: "run-id", pattern: "//app:server" }, null)), "//app:server");
-    assert.equal(
-      h1Text(header({ id: "run-id", cmd: "build" }, "selected-id")),
-      "build selected-id",
-    );
-    assert.equal(h1Text(header(undefined, "selected-id")), "selected-id");
+    assert.equal(h1Text(header({ id: "run-id", pattern: "//app:server" })), "//app:server");
+    assert.equal(h1Text(header({ id: "run-id", cmd: "build" })), "build run-id");
   });
 });
