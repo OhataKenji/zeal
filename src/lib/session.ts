@@ -101,18 +101,23 @@ function wsEntry(core: AppState | null, path: string | null): WorkspaceState | n
   return core.workspaces.find((entry) => entry.workspace === path) ?? null;
 }
 
-function ownedEntry(core: AppState | null, id: string | null): OwnedInvocation | null {
-  if (!core || id === null) return null;
-  return core.invocations.find((entry) => entry.id === id) ?? null;
+function matchesOwner(record: InvocationRecord, execution: OwnedInvocation): boolean {
+  return record.id === execution.id && record.workspace === execution.workspace;
+}
+
+function visibleExecution(state: SessionState, id: string | null): OwnedInvocation | null {
+  const ws = state.workspace;
+  const execution = state.core?.invocations.find((entry) => entry.id === id);
+  return ws &&
+    execution &&
+    (execution.workspace === ws.path ||
+      ws.history.some((record) => matchesOwner(record, execution)))
+    ? execution
+    : null;
 }
 
 function selectedInvocationId(state: SessionState): string | null {
   return state.content.kind === "invocation" ? state.content.id : null;
-}
-
-function selectedExecution(state: SessionState): OwnedInvocation | null {
-  const entry = ownedEntry(state.core, selectedInvocationId(state));
-  return entry && entry.workspace === state.workspace?.path ? entry : null;
 }
 
 function workspacePage(state: SessionState): WorkspacePage {
@@ -126,7 +131,7 @@ function savedEligible(state: SessionState): boolean {
     id &&
     state.core !== null &&
     state.workspace !== null &&
-    !selectedExecution(state)?.console &&
+    !visibleExecution(state, id)?.console &&
     state.workspace.history.some((record) => record.id === id)
   );
 }
@@ -157,34 +162,33 @@ function sessionView(state: SessionState) {
   const eligible = savedEligible(state);
   const core = state.core;
   const ws = state.workspace;
-  // Every owned entry is a live worker: all are pinned, and a released
-  // invocation simply leaves the map so its history row stands alone.
-  const owned = (core?.invocations ?? [])
+  const history = ws?.history ?? [];
+  const executions = core?.invocations ?? [];
+  const pinned = executions
     .filter((entry) => entry.workspace === ws?.path)
     .sort((a, b) => b.startedAt - a.startedAt);
-  const pinnedIds = new Set(owned.map((entry) => entry.id));
-  const historyById = new Map((ws?.history ?? []).map((record) => [record.id, record]));
+  const pinnedIds = new Set(pinned.map((entry) => entry.id));
   const invocationRows: Array<{ record: InvocationRecord; execution?: OwnedInvocation }> = [
-    ...owned.map((execution) => ({
-      record: historyById.get(execution.id) ?? execution,
+    ...pinned.map((execution) => ({
+      record: history.find((record) => matchesOwner(record, execution)) ?? execution,
       execution,
     })),
-    ...(ws?.history ?? [])
+    ...history
       .filter((record) => !pinnedIds.has(record.id))
-      .map((record) => ({ record })),
+      .map((record) => ({
+        record,
+        execution: executions.find((entry) => matchesOwner(record, entry)),
+      })),
   ];
-  const execution = selectedExecution(state);
-  const consoleRecord: InvocationRecord | null =
-    execution?.console === true ? (historyById.get(execution.id) ?? execution) : null;
+  const selected = invocationRows.find((row) => row.record.id === selectedInvocationId(state));
   const target = ws?.target ?? null;
   const saved = state.saved;
   return {
     content: state.content,
-    console: consoleRecord,
+    invocation: selected ?? null,
     core,
     state: wsEntry(core, ws?.path ?? null),
     invocationRows,
-    execution,
     snapshot: ws?.snapshot ?? null,
     snapshotLoading: ws !== null && ws.refresh !== null,
     snapshotError: ws?.snapshotError ?? null,
@@ -197,7 +201,7 @@ function sessionView(state: SessionState) {
     targetActionsError: target?.actions.error ?? null,
     starting: state.start !== null,
     error: state.error,
-    invocations: ws?.history ?? [],
+    invocations: history,
     invocationsError: ws?.historyError ?? null,
     detail: saved.detail.value,
     detailError: saved.detail.error,
@@ -664,7 +668,8 @@ export function createSession(
 
   async function stop(id: string) {
     if (disposed) return;
-    const execution = ownedEntry(state.core, id);
+    const ws = state.workspace;
+    const execution = visibleExecution(state, id);
     if (!execution?.stoppable || execution.stopping) return;
     try {
       await transport.invoke<void>(COMMANDS.stopInvocation, {
@@ -673,7 +678,7 @@ export function createSession(
       });
     } catch (error) {
       if (disposed) return;
-      if (state.workspace?.path === execution.workspace && selectedInvocationId(state) === id) {
+      if (state.workspace === ws && selectedInvocationId(state) === id) {
         state.error = String(error);
         publish();
       }

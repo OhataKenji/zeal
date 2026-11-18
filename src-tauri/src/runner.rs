@@ -12,6 +12,7 @@ use crate::state::{ActiveInvocation, Core, CoreState, OwnedInvocation, now_milli
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
+use std::fs::File;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -35,8 +36,8 @@ const EXIT_POLL: Duration = Duration::from_millis(25);
 /// Shown when the group was killed but no exit was confirmed.
 const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
-pub(crate) enum Output<'a> {
-    Terminal(&'a std::fs::File),
+pub(crate) enum Output {
+    Terminal(File),
     Pipes,
 }
 
@@ -56,7 +57,7 @@ pub(crate) fn spawn(
     state: &mut CoreState,
     command: &mut Command,
     meta: InvocationMeta<'_>,
-    output: Output<'_>,
+    output: Output,
 ) -> io::Result<(Child, Option<crate::terminal::Capture>)> {
     if state.shutting_down {
         return Err(io::Error::new(
@@ -70,10 +71,10 @@ pub(crate) fn spawn(
             "invocation id already in use",
         ));
     }
-    let (child, terminal, capture) = match output {
+    let (child, terminal, capture, console) = match output {
         Output::Terminal(log) => {
-            let (child, terminal, capture) = crate::terminal::spawn(command, log)?;
-            (child, Some(terminal), Some(capture))
+            let (child, terminal, capture) = crate::terminal::spawn(command, &log)?;
+            (child, Some(terminal), Some(capture), Some(log))
         }
         Output::Pipes => (
             command
@@ -82,6 +83,7 @@ pub(crate) fn spawn(
                 .stderr(Stdio::piped())
                 .process_group(0)
                 .spawn()?,
+            None,
             None,
             None,
         ),
@@ -98,7 +100,7 @@ pub(crate) fn spawn(
                 pgid: Some(child.id() as i32),
                 stop_started: None,
             },
-            console: None,
+            console,
         },
     );
     Ok((child, capture))
@@ -138,14 +140,10 @@ pub fn start(
             pattern,
             id: &id,
         },
-        Output::Terminal(&log),
+        Output::Terminal(log),
     )
     .map_err(|e| format!("failed to spawn {}: {e}", bazel.display()))?;
     let capture = capture.expect("terminal output capture");
-    st.invocations
-        .get_mut(&id)
-        .expect("just registered")
-        .console = Some(log);
     let result = id.clone();
     drop(st);
     core.emit(&app);
@@ -210,18 +208,18 @@ fn begin_stop(st: &mut CoreState, ws: &Path, id: &str) -> Result<(), String> {
     if invocation.workspace != ws {
         return Err("invocation belongs to another workspace".to_string());
     }
-    let process = &mut invocation.process;
-    if process.stop_started.is_some() {
-        return Ok(());
-    }
-    let Some(pgid) = process.pgid else {
-        return Ok(());
+    interrupt(&mut invocation.process);
+    Ok(())
+}
+
+fn interrupt(process: &mut ActiveInvocation) {
+    let Some(pgid) = process.pgid.filter(|_| process.stop_started.is_none()) else {
+        return;
     };
     process.stop_started = Some(Instant::now());
     if let Err(e) = signal_process(process, pgid, Signal::INT) {
         log::warn!("SIGINT to invocation group failed: {e}");
     }
-    Ok(())
 }
 
 fn wait(core: &Core, id: &str, poll: impl FnMut() -> io::Result<Option<i32>>) -> io::Result<i32> {
@@ -348,32 +346,20 @@ fn revoke_unconfirmed_groups(st: &mut CoreState) {
     }
 }
 
-fn interrupt_invocations(st: &mut CoreState) {
-    st.shutting_down = true;
-    for invocation in st.invocations.values_mut() {
-        let process = &mut invocation.process;
-        let Some(pgid) = process.pgid.filter(|_| process.stop_started.is_none()) else {
-            continue;
-        };
-        process.stop_started = Some(Instant::now());
-        if let Err(e) = signal_process(process, pgid, Signal::INT) {
-            log::warn!("SIGINT to invocation group failed: {e}");
-        }
-    }
-}
-
 /// Bound process stopping to the short exit grace, shared across every owned
 /// invocation: one common deadline, not one per child. Children already
 /// reaped have nothing left to signal; their in-progress saves are joined
 /// through the condvar. New starts are rejected by `shutting_down`.
 pub fn exit_stop(core: &Core) {
-    let owned = {
+    {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        interrupt_invocations(&mut st);
-        !st.invocations.is_empty()
-    };
-    if !owned {
-        return;
+        st.shutting_down = true;
+        for invocation in st.invocations.values_mut() {
+            interrupt(&mut invocation.process);
+        }
+        if st.invocations.is_empty() {
+            return;
+        }
     }
     let kill_at = Instant::now() + EXIT_GRACE;
     let finish_at = kill_at + STOP_CONFIRM;
@@ -495,10 +481,8 @@ mod tests {
         let read_log = log.try_clone().unwrap();
         let mut st = core.state.lock().unwrap();
         register_ws(&mut st, meta.workspace);
-        let id = meta.id.to_string();
         let (child, capture) =
-            spawn(&mut st, command, meta, Output::Terminal(&log)).expect("gui child spawn");
-        st.invocations.get_mut(&id).unwrap().console = Some(log);
+            spawn(&mut st, command, meta, Output::Terminal(log)).expect("gui child spawn");
         drop(st);
         (child, capture.expect("terminal capture"), read_log)
     }

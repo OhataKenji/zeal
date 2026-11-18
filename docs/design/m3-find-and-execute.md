@@ -1,7 +1,7 @@
 # Zeal 設計 M3: target を見つけて実行する
 
 _OhataKenji_
-_Last update: 2026/10/31_
+_Last update: 2026/11/18_
 _Status: 過去の仕様。現行の設計は [overview](./overview.md) を参照。_
 
 ## Goal
@@ -55,8 +55,9 @@ cmdは `build` / `test` / `run` を受け付ける。
 対象全体を shell を介さず `Command.arg` の1引数で渡し、分割、trim、quote の解釈をしない。
 `//...` / `:all` / `:*` の意味と構文エラーは Bazel に委ねる。
 
-workspace と bazel が利用可能で、取り込みと実行のどちらも動いていなければ Send を受け付ける。
+workspace、Bazel、BES が利用可能なら Send を受け付ける。
 snapshot がなくても手入力で実行できる。
+同じ output base を使うコマンドの排他は Bazel が行う。
 擬似端末(**PTY**)、Bazelイベントを受けるreceiverの準備に失敗したらspawnしない。
 cwdはworkspace root、stdinはPTYで扱い、観測flagはZealが組み立てる([M2](./m2-invocation-detail.md))。
 
@@ -69,16 +70,14 @@ Bazel clientのwaitはlive実行枠を解放し、UIへ状態を通知する。
 保存済みのBEPとprofileは詳細要求時に読む。
 
 target の取り込みは workspace を開いたときと手動 refresh のみ行う。
-query または invocation の実行中の refresh は予約せず拒否し、invocation が終わっても自動取り込みしない。
-workspace 切替も処理中は拒否する。
+実行中に workspace を切り替えると、表示と次の操作対象が変わる。
+対象一覧の取得が Bazel の排他で失敗した場合は、手動で refresh できる。
 古い snapshot と部分結果は状態と時刻を示す。
 
 ### 中断と不明な結果
 
 stop は現在保持しているプロセスグループへ SIGINT を送り、3秒後も invocation を保持していれば SIGKILL を送る。
-さらに2秒経っても終了を確認できなければ「停止を確認できません」と示し、実行枠を解放する。
-wait エラーでも理由を示して実行枠を解放する。
-この場合、processの終了は不明と示す。
+さらに2秒経っても終了を確認できない場合と wait エラー時は、process の終了を不明のまま実行枠を解放する。
 履歴のビルド結果はBEPの事実を維持し、processの状態から補完しない。
 自動再実行、自動 query、無期限の復旧ループを持たず、残存プロセスへの対処を利用者に任せる。
 以前のセッションのプロセスには signal を送らない。

@@ -145,7 +145,7 @@ test("AppView shows snapshot errors alongside retained targets", async (t) => {
   });
 });
 
-test("AppView shows the neutral invocation page before the owned entry arrives", async (t) => {
+test("AppView shows a diagnostic without invocation tabs when the record is unavailable", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: AppView } = await load("/src/AppView.svelte");
   const session = renderSession();
@@ -154,8 +154,6 @@ test("AppView shows the neutral invocation page before the owned entry arrives",
     core: CORE,
     state: WS,
     content: { kind: "invocation", id: "pending", page: "targets" },
-    console: null,
-    execution: null,
     invocations: [],
     invocationRows: [],
     invocationsError: null,
@@ -164,5 +162,6 @@ test("AppView shows the neutral invocation page before the owned entry arrives",
     detailError: null,
   });
   const html = render(AppView, { props: { view, session } }).body;
-  assert.ok(html.includes("No local process or saved record is available."));
+  assert.match(html, /No live process or Bazel build record is available/);
+  assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
 });

@@ -15,6 +15,7 @@
   class:compact
   class:success={kind === "succeeded"}
   class:failed={kind === "failed"}
+  class:interrupted={kind === "interrupted"}
   class:running={kind === "running"}
   role="img"
   aria-label={label}
@@ -23,7 +24,7 @@
   {#if kind === "succeeded"}<Check {size} />
   {:else if kind === "failed"}<X {size} />
   {:else if kind === "running"}<ArrowClockwise {size} />
-  {:else if kind === "stopping"}<Stop {size} weight="fill" />
+  {:else if kind === "stopping" || kind === "interrupted"}<Stop {size} weight="fill" />
   {:else}<Circle {size} />{/if}
 </span>
 
@@ -67,6 +68,11 @@
   .failed {
     color: var(--destructive);
     background: color-mix(in oklch, var(--destructive) 10%, var(--background));
+  }
+
+  .interrupted {
+    color: var(--warning);
+    background: var(--warning-muted);
   }
 
   .running {

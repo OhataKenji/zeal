@@ -419,14 +419,12 @@ test("the start reply navigates; the app-state event supplies the owned entry", 
   start.reply.resolve("a-inv");
   await settle();
   assert.deepEqual(h.view.content, { kind: "invocation", id: "a-inv", page: "targets" });
-  // The reply alone carries no core entry; console and execution wait for it.
-  assert.equal(h.view.console, null);
-  assert.equal(h.view.execution, null);
+  // The reply alone carries no core entry.
+  assert.equal(h.view.invocation, null);
   h.emit("app-state", coreState({ revision: 2, invocations: [launched] }));
   await settle();
   const after = h.view;
-  assert.equal(after.console?.id, "a-inv");
-  assert.equal(after.execution?.id, "a-inv");
+  assert.deepEqual(after.invocation, { record: launched, execution: launched });
   // The state push derives the console in place; it does not navigate.
   assert.deepEqual(after.content, { kind: "invocation", id: "a-inv", page: "targets" });
   assert.equal(h.stateReads(), 1);
@@ -475,6 +473,51 @@ test("external and non-stoppable invocations expose no stop", async () => {
   assert.equal(requestCount(h, "stop_invocation"), 0);
 });
 
+test("a live run in shared history opens the owner's console and stops at its owner", async () => {
+  const other = owned("b-run", OTHER, { cmd: "run" });
+  const h = harness(
+    Promise.resolve(
+      coreState({
+        workspaces: [wsEntry(WS), wsEntry(OTHER)],
+        invocations: [other],
+      }),
+    ),
+  );
+  await initReady(h);
+  const record = { ...OTHER_RECORD, cmd: "run", exitCode: 0, finishedAt: 2 };
+  await loadHistory(h, [record]);
+  assert.deepEqual(h.view.invocationRows, [{ record, execution: other }]);
+  h.session.selectInvocation(record.id);
+  assert.deepEqual(h.view.invocation, { record, execution: other });
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  const stopped = h.session.stop(record.id);
+  pendingRequest(h, "stop_invocation").reply.resolve(undefined);
+  await stopped;
+  assert.deepEqual(pendingRequest(h, "stop_invocation").args, { workspace: OTHER, id: record.id });
+});
+
+test("history must match both the ID and workspace to expose a foreign live execution", async () => {
+  const other = owned("b-run", OTHER);
+  const hidden = owned("invisible", OTHER);
+  const h = harness(
+    Promise.resolve(
+      coreState({
+        workspaces: [wsEntry(WS), wsEntry(OTHER)],
+        invocations: [other, hidden],
+      }),
+    ),
+  );
+  await initReady(h);
+  const record = { ...OTHER_RECORD, workspace: WS };
+  await loadHistory(h, [record]);
+  assert.equal(h.view.invocationRows.length, 1);
+  assert.equal(h.view.invocationRows[0]?.execution, undefined);
+  h.session.selectInvocation(record.id);
+  assert.equal(h.view.invocation?.execution, undefined);
+  await h.session.stop(record.id);
+  assert.equal(requestCount(h, "stop_invocation"), 0);
+});
+
 test("a live console shows until release, then the BEP record takes over", async () => {
   const live = owned("a-run", WS);
   const h = harness(Promise.resolve(coreState({ revision: 2, invocations: [live] })));
@@ -486,21 +529,21 @@ test("a live console shows until release, then the BEP record takes over", async
     id: "a-run",
     page: "targets",
   });
-  assert.equal(h.view.console?.id, "a-run");
-  assert.equal(h.view.execution?.id, "a-run");
+  const running = h.view;
+  assert.deepEqual(running.invocation, { record: live, execution: live });
   // The entry leaves the map; history then carries the finished record.
   h.emit("app-state", coreState({ revision: 3, invocations: [] }));
   await settle();
-  assert.equal(h.view.console, null);
-  assert.equal(h.view.execution, null);
+  const released = h.view;
+  assert.equal(released.invocation, null);
   h.session.loadInvocations();
   await settle();
   pendingRequest(h, "list_invocations").reply.resolve([
     { ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 },
   ]);
   await settle();
-  assert.equal(h.view.console, null);
-  assert.equal(h.view.execution, null);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.equal(h.view.invocation?.execution, undefined);
   assert.deepEqual(h.view.content, {
     kind: "invocation",
     id: "a-run",
@@ -853,8 +896,8 @@ test("a start reply after release renders the saved result and reads for the sam
   start.reply.resolve("inv-x");
   await settle();
   assert.deepEqual(h.view.content, { kind: "invocation", id: "inv-x", page: "targets" });
-  assert.equal(h.view.console, null);
-  assert.equal(h.view.execution, null);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.equal(h.view.invocation?.execution, undefined);
   const detail = pendingRequest(h, "get_invocation");
   const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
@@ -879,15 +922,14 @@ test("a live Console suppresses saved reads until the entry is released", async 
   assert.equal(h.view.invocationRows[1]?.execution, undefined);
   h.session.selectInvocation("a-run");
   await settle();
-  assert.equal(h.view.console?.id, "a-run");
-  assert.equal(h.view.execution?.id, "a-run");
+  assert.equal(h.view.invocation?.execution?.console, true);
   // The BEP record exists, but the live Console keeps saved reads ineligible.
   assert.equal(requestCount(h, "get_invocation"), 0);
   assert.equal(requestCount(h, "get_invocation_profile"), 0);
   h.emit("app-state", coreState({ revision: 3, invocations: [] }));
   await settle();
-  assert.equal(h.view.console, null);
-  assert.equal(h.view.execution, null);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.equal(h.view.invocation?.execution, undefined);
   assert.deepEqual(h.view.content, { kind: "invocation", id: "a-run", page: "targets" });
   const detail = pendingRequest(h, "get_invocation");
   const profile = pendingRequest(h, "get_invocation_profile");
@@ -911,7 +953,7 @@ test("saved reads require the record in history, not just an owned entry", async
   h.session.selectInvocation("q-1");
   await settle();
   assert.deepEqual(h.view.content, { kind: "invocation", id: "q-1", page: "targets" });
-  assert.equal(h.view.execution?.id, "q-1");
+  assert.equal(h.view.invocation?.execution?.id, "q-1");
   assert.equal(requestCount(h, "get_invocation"), 0);
   assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
@@ -926,8 +968,7 @@ test("releasing an invocation elsewhere never moves the current destination", as
   h.emit("app-state", coreState({ revision: 3, invocations: [] }));
   await settle();
   assert.deepEqual(h.view.content, { kind: "query" });
-  assert.equal(h.view.console, null);
-  assert.equal(h.view.execution, null);
+  assert.equal(h.view.invocation, null);
 });
 
 test("rapid target selection queues the newest target without concurrent detail reads", async () => {

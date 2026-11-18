@@ -2,7 +2,7 @@ import type { InvocationRecord, OwnedInvocation, Section } from "./types.ts";
 
 /** Display status and label for one invocation record. */
 export interface InvocationStatus {
-  kind: "succeeded" | "failed" | "running" | "stopping" | "unknown";
+  kind: "succeeded" | "failed" | "interrupted" | "running" | "stopping" | "unknown";
   label: string;
 }
 
@@ -10,6 +10,7 @@ export interface InvocationStatus {
  * the program's exit. */
 function bepStatus(record: InvocationRecord): InvocationStatus {
   const subject = record.cmd === "run" ? "build " : "";
+  if (record.exitCode === 8) return { kind: "interrupted", label: `■ ${subject}interrupted` };
   return record.exitCode === 0
     ? { kind: "succeeded", label: `✓ ${subject}succeeded` }
     : { kind: "failed", label: `✗ ${subject}failed (exit ${record.exitCode})` };

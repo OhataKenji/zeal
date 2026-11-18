@@ -52,11 +52,7 @@
   const selection = $derived(view.selection);
   const selected = $derived(selection?.kind === "target" ? selection.label : null);
   const content = $derived(view.content);
-  const consoleView = $derived(
-    view.console && view.execution
-      ? { record: view.console, execution: view.execution }
-      : null,
-  );
+  const invocation = $derived(view.invocation);
 
   let revealRequest = $state(0);
   let targetField = $state("");
@@ -293,13 +289,13 @@
     class="content"
     class:invocation-content={content.kind !== "targets"}
   >
-    {#if consoleView}
-      {#key `${consoleView.execution.workspace}:${consoleView.execution.id}`}
+    {#if invocation?.execution?.console}
+      {#key `${invocation.execution.workspace}:${invocation.execution.id}`}
         <div class="console-container">
           {#await loadConsole() then { default: ConsoleView }}
-          <ConsoleView record={consoleView.record}
-            execution={consoleView.execution}
-            onstop={() => session.stop(consoleView.execution.id)} />
+          <ConsoleView record={invocation.record}
+            execution={invocation.execution}
+            onstop={session.stop} />
           {/await}
         </div>
       {/key}

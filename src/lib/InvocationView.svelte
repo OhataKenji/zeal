@@ -1,6 +1,5 @@
 <script lang="ts">
   import InvocationHeader from "./InvocationHeader.svelte";
-  import type { InvocationRecord } from "./types";
   import type { SessionView } from "./session";
   import {
     invocationStatus,
@@ -21,17 +20,12 @@
     reloadProfile: () => void;
     onstop: (id: string) => void;
   } = $props();
-  const selectedInvocation = $derived(view.content.kind === "invocation" ? view.content.id : null);
-  const record = $derived(
-    view.detail?.record ??
-      view.invocations.find((inv) => inv.id === selectedInvocation),
-  );
-  const execution = $derived(view.execution);
-  const shown = $derived<InvocationRecord | undefined>(record ?? execution ?? undefined);
-  const running = $derived(execution != null);
+  const selected = $derived(view.invocation);
+  const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
+  const execution = $derived(selected?.execution);
   const profile = $derived(sectionData(view.profile ?? undefined));
   const bep = $derived(sectionData(view.detail?.bep));
-  const status = $derived(invocationStatus(record, execution ?? undefined));
+  const status = $derived(invocationStatus(shown, execution));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections, "Compare"] as const;
   let active = $state<(typeof tabs)[number]>("All");
@@ -39,7 +33,6 @@
 
   $effect(() => {
     void active;
-    void selectedInvocation;
     if (panel) panel.scrollTop = 0;
   });
 
@@ -73,29 +66,29 @@
   }
 </script>
 
-<div class="invocation-page">
-  <InvocationHeader record={shown} {status} fallback={selectedInvocation ?? execution?.id}>
-    <div class="invocation-tabs" role="tablist" aria-label="Invocation views">
-      {#each tabs as tab, index}
-        <button
-          type="button"
-          class="button button-ghost tab-button"
-          id="invocation-tab-{tab}"
-          role="tab"
-          aria-selected={active === tab}
-          aria-controls="invocation-panel-{tab}"
-          tabindex={active === tab ? 0 : -1}
-          onclick={() => (active = tab)}
-          onkeydown={(event) => tabKey(event, index)}
-        >{tab}</button>
-      {/each}
-      {#if view.detailLoading}<span class="panel-loading" role="status"
-          >Loading invocation…</span
-        >{/if}
-    </div>
-    {#if execution}
-      <div class="invocation-actions">
-        {#if execution.stoppable}
+{#if shown}
+  <div class="invocation-page">
+    <InvocationHeader record={shown} {status}>
+      <div class="invocation-tabs" role="tablist" aria-label="Invocation views">
+        {#each tabs as tab, index}
+          <button
+            type="button"
+            class="button button-ghost tab-button"
+            id="invocation-tab-{tab}"
+            role="tab"
+            aria-selected={active === tab}
+            aria-controls="invocation-panel-{tab}"
+            tabindex={active === tab ? 0 : -1}
+            onclick={() => (active = tab)}
+            onkeydown={(event) => tabKey(event, index)}
+          >{tab}</button>
+        {/each}
+        {#if view.detailLoading}<span class="panel-loading" role="status"
+            >Loading invocation…</span
+          >{/if}
+      </div>
+      {#if execution?.stoppable}
+        <div class="invocation-actions">
           <button
             type="button"
             class="button button-ghost"
@@ -103,53 +96,43 @@
             onclick={() => onstop(execution.id)}
             >{execution.stopping ? "Stopping…" : "Stop"}</button
           >
-        {/if}
-      </div>
-    {/if}
-  </InvocationHeader>
+        </div>
+      {/if}
+    </InvocationHeader>
 
-  {#if view.detailError}
-    <Notice tone="error" onaction={reload}>Could not load invocation details: {view.detailError}</Notice>
-  {/if}
-  {#if !shown && !view.detailLoading}
-    <Notice tone="neutral">No local process or saved record is available.</Notice>
-  {/if}
-
-  <div
-    class="invocation-panel"
-    bind:this={panel}
-    class:invocation-all={active === "All"}
-    class:invocation-timing={active === "Timing"}
-    id="invocation-panel-{active}"
-    role="tabpanel"
-    aria-labelledby="invocation-tab-{active}"
-  >
-    {#if active === "Compare"}
-      {#key `${view.state?.workspace ?? ""}:${selectedInvocation ?? ""}`}
-        <ComparisonPanel
-          left={view.detail?.record.id === selectedInvocation ? view.detail : null}
-          leftLoading={view.detailLoading}
-          leftError={view.detailError}
-          workspace={view.state?.workspace ?? ""}
-          runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
-        />
-      {/key}
+    {#if view.detailError}
+      <Notice tone="error" onaction={reload}>Could not load invocation details: {view.detailError}</Notice>
     {/if}
-    {#each sections as section}
-      {#if active === "All" || active === section}
-        <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
-          {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
-          {#if section === "Targets"}
-            <TargetsPanel section={view.detail?.bep} />
-          {:else if section === "Logs"}
-            {#key selectedInvocation}
-            <LogPanel
-              section={view.detail?.log}
-              loading={view.detailLoading}
-            />
-            {/key}
-          {:else if section === "Details"}
-            {#if shown}
+
+    <div
+      class="invocation-panel"
+      bind:this={panel}
+      class:invocation-all={active === "All"}
+      class:invocation-timing={active === "Timing"}
+      id="invocation-panel-{active}"
+      role="tabpanel"
+      aria-labelledby="invocation-tab-{active}"
+    >
+      {#if active === "Compare"}
+        {#key `${view.state?.workspace ?? ""}:${shown.id}`}
+          <ComparisonPanel
+            left={view.detail?.record.id === shown.id ? view.detail : null}
+            leftLoading={view.detailLoading}
+            leftError={view.detailError}
+            workspace={view.state?.workspace ?? ""}
+            runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
+          />
+        {/key}
+      {/if}
+      {#each sections as section}
+        {#if active === "All" || active === section}
+          <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
+            {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
+            {#if section === "Targets"}
+              <TargetsPanel section={view.detail?.bep} />
+            {:else if section === "Logs"}
+              <LogPanel section={view.detail?.log} loading={view.detailLoading} />
+            {:else if section === "Details"}
               <dl class="invocation-details">
                 <dt>Command</dt>
                 <dd>{#if shown.cmd}<code>{shown.cmd}</code>{:else}Not recorded{/if}</dd>
@@ -225,26 +208,30 @@
                   {/if}
                 </details>
               {/if}
+            {:else}
+              {#if execution}<p class="panel-empty">
+                  Timing is available after the invocation finishes.
+                </p>
+              {:else if view.profileLoading}<p class="panel-empty" role="status">
+                  Loading profile…
+                </p>
+              {:else if view.profileError}<Notice tone="error" onaction={reloadProfile}
+                  >Could not load timing data: {view.profileError}</Notice
+                >
+              {:else if view.profile}
+                {#if view.profile.status !== "ok"}<Notice tone={sectionNoticeTone(view.profile)}
+                    >{sectionMessage(view.profile)}</Notice
+                  >{/if}
+                {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
+              {/if}
             {/if}
-          {:else}
-            {#if running}<p class="panel-empty">
-                Timing is available after the invocation finishes.
-              </p>
-            {:else if view.profileLoading}<p class="panel-empty" role="status">
-                Loading profile…
-              </p>
-            {:else if view.profileError}<Notice tone="error" onaction={reloadProfile}
-                >Could not load timing data: {view.profileError}</Notice
-              >
-            {:else if view.profile}
-              {#if view.profile.status !== "ok"}<Notice tone={sectionNoticeTone(view.profile)}
-                  >{sectionMessage(view.profile)}</Notice
-                >{/if}
-              {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
-            {/if}
-          {/if}
-        </section>
-      {/if}
-    {/each}
+          </section>
+        {/if}
+      {/each}
+    </div>
   </div>
-</div>
+{:else}
+  <Notice tone="neutral">
+    No live process or Bazel build record is available. The command may have exited before sending build events.
+  </Notice>
+{/if}

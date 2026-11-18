@@ -4,9 +4,8 @@
   import type { InvocationStatus as Status } from "./invocation";
   import InvocationStatus from "./InvocationStatus.svelte";
 
-  let { record, fallback, status, children }: {
-    record?: InvocationRecord;
-    fallback?: string | null;
+  let { record, status, children }: {
+    record: InvocationRecord;
     status: Status;
     children?: Snippet;
   } = $props();
@@ -15,7 +14,7 @@
 <div class="invocation-header">
   <header class="invocation-summary">
     <InvocationStatus {...status} />
-    <h1>{#if record?.cmd}{record.cmd}{" "}{/if}{record?.pattern ?? fallback ?? record?.id}</h1>
+    <h1>{#if record.cmd}{record.cmd}{" "}{/if}{record.pattern ?? record.id}</h1>
   </header>
   {@render children?.()}
 </div>

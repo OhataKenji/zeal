@@ -14,7 +14,7 @@
   let { record, execution, onstop }: {
     record: InvocationRecord;
     execution: OwnedInvocation;
-    onstop: () => void;
+    onstop: (id: string) => void;
   } = $props();
   let host: HTMLDivElement;
   let terminal = $state.raw<Terminal>();
@@ -74,7 +74,7 @@
         type="button"
         class="button button-ghost"
         disabled={execution.stopping}
-        onclick={onstop}
+        onclick={() => onstop(execution.id)}
       >{execution.stopping ? "Stopping…" : "Stop"}</button>
     {/if}
   </InvocationHeader>
