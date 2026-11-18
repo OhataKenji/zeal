@@ -1,19 +1,21 @@
 import { COMMANDS } from "./commands.ts";
 import type { Transport } from "./session.ts";
 
-/** Bytes read from the core's durable console stream at a requested offset. */
+/** Bytes read from the core's live console stream at a requested offset. */
 export interface ConsoleOutput {
   data: number[];
   offset: number;
-  done: boolean;
 }
 
 /**
- * Creates a terminal stream reader and bounded input queue for one invocation.
- * Polling advances from the saved offset; a zero-length write waits for the
- * next poll to retry the same queued bytes.
+ * Creates a terminal stream reader and bounded input queue for one live
+ * invocation. Polling advances from the saved offset while the view is
+ * mounted; a zero-length write waits for the next poll to retry the same
+ * queued bytes. Releasing the invocation unmounts the view, which disposes
+ * the stream — there is no completion protocol.
  */
 export function createConsole(
+  workspace: string,
   id: string,
   transport: Pick<Transport, "invoke">,
   display: (bytes: Uint8Array) => Promise<void>,
@@ -21,8 +23,7 @@ export function createConsole(
 ) {
   let offset = 0;
   let disposed = false;
-  let done = false;
-  let running = true;
+  let writable = true;
   let reading = false;
   let writing = false;
   let pending = new Uint8Array();
@@ -46,7 +47,11 @@ export function createConsole(
   /** Sends one chunk of the input queue; false stops the flush loop. */
   async function writeChunk(): Promise<boolean> {
     const data = Array.from(pending.subarray(0, 8192));
-    const count = await transport.invoke<number>(COMMANDS.writeConsole, { id, data });
+    const count = await transport.invoke<number>(COMMANDS.writeConsole, {
+      workspace,
+      id,
+      data,
+    });
     if (disposed) return false;
     pending = pending.slice(count);
     if (count > 0) setError("write", null);
@@ -54,10 +59,10 @@ export function createConsole(
   }
 
   async function flush() {
-    if (disposed || done || !running || writing || !pending.length) return;
+    if (disposed || !writable || writing || !pending.length) return;
     writing = true;
     try {
-      while (!disposed && !done && running && pending.length) {
+      while (!disposed && writable && pending.length) {
         if (!(await writeChunk())) break;
       }
     } catch (error) {
@@ -69,7 +74,7 @@ export function createConsole(
   }
 
   function input(bytes: Uint8Array) {
-    if (disposed || done || !running) return;
+    if (disposed || !writable) return;
     if (pending.length + bytes.length > 1024 * 1024) {
       setError("write", "Terminal input is busy; paste a smaller selection.");
       return;
@@ -83,20 +88,22 @@ export function createConsole(
 
   /** Reads and displays one chunk; false stops the read loop. */
   async function readChunk(): Promise<boolean> {
-    const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, { id, offset });
+    const result = await transport.invoke<ConsoleOutput>(COMMANDS.readConsole, {
+      workspace,
+      id,
+      offset,
+    });
     if (disposed) return false;
     if (result.data.length) await display(Uint8Array.from(result.data));
     if (disposed) return false;
     offset = result.offset;
-    done = result.done;
     setError("read", null);
-    if (done) pending = new Uint8Array();
-    return result.data.length >= 64 * 1024 && !result.done;
+    return result.data.length >= 64 * 1024;
   }
 
   async function poll() {
     void flush();
-    if (disposed || done || reading) return;
+    if (disposed || reading) return;
     reading = true;
     try {
       do {
@@ -110,9 +117,9 @@ export function createConsole(
   }
 
   async function resize(cols: number, rows: number) {
-    if (disposed || done || !running) return;
+    if (disposed || !writable) return;
     try {
-      await transport.invoke(COMMANDS.resizeConsole, { id, cols, rows });
+      await transport.invoke(COMMANDS.resizeConsole, { workspace, id, cols, rows });
       setError("resize", null);
     } catch (error) {
       setError("resize", String(error));
@@ -120,8 +127,8 @@ export function createConsole(
   }
 
   return {
-    setRunning(active: boolean) {
-      running = active;
+    setWritable(active: boolean) {
+      writable = active;
       if (!active) pending = new Uint8Array();
     },
     input,

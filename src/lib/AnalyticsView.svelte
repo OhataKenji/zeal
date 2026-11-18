@@ -27,7 +27,7 @@
   $effect(() => {
     // A workspace change discards both the filters and pending responses.
     void workspace;
-    const next = createAnalytics({ invoke }, (value) => (view = value));
+    const next = createAnalytics(workspace, { invoke }, (value) => (view = value));
     controller = next;
     return next.dispose;
   });

@@ -2,7 +2,7 @@
 
 _OhataKenji_
 _Last update: 2026/10/31_
-_Status: Approved_
+_Status: 過去の仕様。現行の設計は [overview](./overview.md) を参照。_
 
 ## Goal
 

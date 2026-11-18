@@ -1,34 +1,50 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AppState } from "../src/lib/types.ts";
+import { createSession, emptyView } from "../src/lib/session.ts";
+import type { AppState, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
-const IDLE: AppState = {
-  besReady: false,
-  scope: { include: ["//app/..."] },
+const WS: WorkspaceState = {
   workspace: "/workspace",
-  bazel: "/bin/bazel",
-  ingest: "idle",
-  snapshotFetchedAt: null,
-  lastError: null,
-  activeInvocation: null,
-  stopping: false,
-  invocationNote: null,
-  detailQuery: "idle",
+  scope: { include: ["//app/..."] },
 };
 
-test("App renders workspace navigation and invocation history", async (t) => {
+const CORE: AppState = {
+  revision: 1,
+  besError: null,
+  besReady: true,
+  bazel: "/bin/bazel",
+  lastWorkspace: "/workspace",
+  workspaces: [WS],
+  invocations: [],
+};
+
+function renderSession() {
+  return createSession(
+    {
+      invoke: async () => {
+        throw new Error("render tests do not call the core");
+      },
+      listen: async () => () => {},
+    },
+    () => {},
+  );
+}
+
+test("AppView renders workspace navigation and invocation history", async (t) => {
   const { load, render } = await createSvelteHarness(t);
-  const { app } = await load("/src/lib/state.svelte.ts");
-  const { default: App } = await load("/src/App.svelte");
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
 
   function output(startedAt: number | undefined): string {
-    Object.assign(app.view, {
-      ready: true,
-      state: IDLE,
-      invocations: [{ id: "invocation", cmd: "build", pattern: "//app:app", startedAt }],
+    const record = { id: "invocation", cmd: "build", pattern: "//app:app", startedAt };
+    const view = Object.assign(emptyView("targets"), {
+      core: CORE,
+      state: WS,
+      invocations: [record],
+      invocationRows: [{ record }],
     });
-    return render(App).body;
+    return render(AppView, { props: { view, session } }).body;
   }
 
   for (const startedAt of [undefined, NaN, Infinity, -Infinity, 8.64e15 + 1]) {
@@ -64,4 +80,89 @@ test("App renders workspace navigation and invocation history", async (t) => {
     assert.match(toggle, /aria-expanded="false"/);
     assert.doesNotMatch(html, /id="command-arguments"/);
   });
+});
+
+test("AppView shows snapshot errors alongside retained targets", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
+
+  const CACHED: TargetIndex = {
+    meta: { fetchedAt: 1, status: "ok" },
+    targets: [
+      {
+        label: "//:cached",
+        pkg: "",
+        name: "cached",
+        ruleClass: "cc_library",
+        location: null,
+      },
+    ],
+  };
+
+  function output(snapshot: TargetIndex | null, snapshotError: string | null): string {
+    const view = Object.assign(emptyView("targets"), {
+      core: CORE,
+      state: WS,
+      content: { kind: "targets" },
+      selection: null,
+      snapshot,
+      snapshotError,
+      snapshotLoading: false,
+      targetDetail: null,
+      targetDetailError: null,
+      targetOutputs: null,
+      targetOutputsError: null,
+      targetActions: null,
+      targetActionsError: null,
+      invocations: [],
+      invocationRows: [],
+      invocationsError: null,
+    });
+    return render(AppView, { props: { view, session } }).body;
+  }
+
+  await t.test("a refresh error keeps the previous tree visible", () => {
+    const html = output(CACHED, "refresh test failure");
+    assert.ok(html.includes("refresh test failure"));
+    assert.ok(html.includes("//:cached"));
+  });
+
+  await t.test("a partial snapshot reports its cause", () => {
+    const html = output(
+      { ...CACHED, meta: { fetchedAt: 2, status: "partial" } },
+      "refresh test failure",
+    );
+    assert.ok(html.includes("Partial target list"));
+    assert.ok(html.includes("refresh test failure"));
+  });
+
+  await t.test("an error without a snapshot uses an alert", () => {
+    const html = output(null, "refresh test failure");
+    assert.ok(html.includes('role="alert"'));
+    assert.ok(html.includes("refresh test failure"));
+    assert.ok(!html.includes("//:cached"));
+  });
+});
+
+test("AppView shows the neutral invocation page before the owned entry arrives", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
+
+  const view = Object.assign(emptyView("targets"), {
+    core: CORE,
+    state: WS,
+    content: { kind: "invocation", id: "pending", page: "targets" },
+    console: null,
+    execution: null,
+    invocations: [],
+    invocationRows: [],
+    invocationsError: null,
+    detail: null,
+    detailLoading: false,
+    detailError: null,
+  });
+  const html = render(AppView, { props: { view, session } }).body;
+  assert.ok(html.includes("No local process or saved record is available."));
 });

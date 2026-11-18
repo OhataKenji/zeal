@@ -1016,24 +1016,25 @@ mod tests {
     fn autumn_day_boundaries() {
         refresh_timezone();
         let f = Fixture::new();
+        // Use the 2025 rollback: Havana stayed on daylight time in November 2026.
         let (from, until): (i64, i64) = Store::open(&f.data)
             .unwrap()
             .conn
             .query_row(
-                "SELECT unixepoch('2026-11-01 04:00:00')*1000,unixepoch('2026-11-02 05:00:00')*1000",
+                "SELECT unixepoch('2025-11-02 04:00:00')*1000,unixepoch('2025-11-03 05:00:00')*1000",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
         assert_eq!(until - from, 25 * 3_600_000);
-        let first = f.insert("2026-11-01 12:00:00", "build", Some(0));
-        let last = f.insert("2026-11-01 12:01:00", "build", Some(0));
+        let first = f.insert("2025-11-02 12:00:00", "build", Some(0));
+        let last = f.insert("2025-11-02 12:01:00", "build", Some(0));
         f.set_started_at(&first, from);
         f.set_started_at(&last, until - 1);
 
         let selected = f.query(Filter {
-            start: Some("2026-11-01".into()),
-            end: Some("2026-11-01".into()),
+            start: Some("2025-11-02".into()),
+            end: Some("2025-11-02".into()),
             ..Filter::default()
         });
         assert_eq!(total(&selected), 2);

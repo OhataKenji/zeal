@@ -15,9 +15,17 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     include = SCOPE.include,
     bazelAvailable = true,
     mode: "open" | "settings" = "open",
+    opening = false,
   ): string {
     return render(WorkspacePrompt, {
-      props: { mode, initial, initialScope: { include }, bazelAvailable },
+      props: {
+        mode,
+        initial,
+        initialScope: { include },
+        bazelAvailable,
+        onopen: async () => true,
+        opening,
+      },
     })
       .body.replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\s+/g, " ");
@@ -77,28 +85,23 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     assert.match(submitButton(html), /\bdisabled\b/);
   });
 
-  await t.test(
-    "an in-flight workspace open disables the path input, picker, and submit",
-    async () => {
-      const { app } = await load("/src/lib/state.svelte.ts");
-      const opening = app.view.opening;
-      Object.assign(app.view, { opening: true });
-      try {
-        const html = output("/workspace");
-        const input = workspaceField(html);
-        assert.match(input, /\bdisabled\b/);
-        const choose = chooseButton(html);
-        assert.match(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
-        assert.match(submitButton(html), /\bdisabled\b/);
-      } finally {
-        Object.assign(app.view, { opening });
-      }
-    },
-  );
+  await t.test("an in-flight workspace open disables the path input, picker, and submit", () => {
+    const html = output("/workspace", SCOPE.include, true, "open", true);
+    const input = workspaceField(html);
+    assert.match(input, /\bdisabled\b/);
+    const choose = chooseButton(html);
+    assert.match(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
+    assert.match(submitButton(html), /\bdisabled\b/);
+  });
 
   await t.test("CLI recording settings have a non-submitting copy button", () => {
     const html = render(WorkspacePrompt, {
-      props: { initial: "", initialScope: SCOPE, bazelAvailable: true },
+      props: {
+        initial: "",
+        initialScope: SCOPE,
+        bazelAvailable: true,
+        onopen: async () => true,
+      },
     }).body;
     assert.match(
       html,

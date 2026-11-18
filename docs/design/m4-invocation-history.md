@@ -2,7 +2,7 @@
 
 _OhataKenji_
 _Last update: 2026/10/31_
-_Status: Approved_
+_Status: 過去の仕様。現行の設計は [overview](./overview.md) を参照。_
 
 履歴の入力とビルド結果はDBから表示し、詳細は保存したイベントから読む。
 受信の扱いは[正常受信](#正常受信)、詳細表示は[詳細の読込](#詳細の読込)を参照する。
@@ -120,7 +120,7 @@ Progressのログはstderr、stdoutの順に取り込む。
 
 一つのイベントを長さ付きで格納した単位を**frame**と呼ぶ。
 
-解析workerは同時1件とし、処理中の追加要求は待たせず拒否する。
+詳細と profile は要求ごとに独立して読み取り、各解析量の上限を守る。
 解析結果のfile、永続cache、offset表は作らない。
 
 #### 読めない場合
@@ -140,11 +140,8 @@ DBの入力やビルド結果は維持する。
 Console、stdin、停止はCoreがメモリで保持するlive processを使う。
 履歴が確定してもその操作を続けられる。
 
-process終了後も最後のConsoleを保持して末尾を読む。
-Consoleを表示中のprocessが終了すると、そのinvocationの詳細へ一度だけ自動で移る。
-別画面を表示中は移らず、終了済みConsoleを開き直した場合も表示を維持する。
-詳細画面から戻って端末出力を確認できる。
-終了後のConsoleは読取だけを許し、workspace切替でその読取権限を破棄する。
+実行終了と出力の取得完了後、Console を解放する。
+表示中なら同じ invocation の BEP 結果に切り替え、別画面の選択は変えない。
 
 履歴がまだ一覧に出ない間も、live processからConsoleを開ける。
 再起動後の以前のprocessへのsignal送信は行わない。

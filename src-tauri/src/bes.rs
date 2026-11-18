@@ -14,7 +14,8 @@ use tonic::{Request, Response, Status};
 use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServer};
 
 pub const ADDRESS: &str = "127.0.0.1:4718";
-const MAX_STREAMS: usize = 4;
+/// Simultaneous BES streams the receiver admits; the 33rd is rejected.
+const MAX_STREAMS: usize = 32;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 type InvocationsChanged = Arc<dyn Fn() + Send + Sync>;
 
@@ -281,8 +282,6 @@ async fn serve_with_invocations_changed(
     invocations_changed: InvocationsChanged,
 ) -> Result<(), tonic::transport::Error> {
     tonic::transport::Server::builder()
-        .concurrency_limit_per_connection(MAX_STREAMS)
-        .max_concurrent_streams(MAX_STREAMS as u32)
         .add_service(
             PublishBuildEventServer::new(Receiver::new(data, invocations_changed))
                 .max_decoding_message_size(16 * 1024 * 1024),

@@ -61,8 +61,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { app } from "./state.svelte";
-  import { bazelBusyReason } from "./session";
   import { createIndex } from "./search";
   import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
@@ -86,7 +84,11 @@
   } from "./query";
   import type { TargetIndex } from "./types";
 
-  let { snap }: { snap: TargetIndex | null } = $props();
+  let {
+    snap,
+    workspace,
+    bazelAvailable,
+  }: { snap: TargetIndex | null; workspace: string; bazelAvailable: boolean } = $props();
 
   const searchIndex = $derived(
     snap ? createIndex(snap.targets) : null,
@@ -128,7 +130,9 @@
   let detailsEl = $state<HTMLDetailsElement>();
 
   $effect(() => {
-    const next = createQuery({ invoke }, (s) => (qstate = s));
+    const next = untrack(() =>
+      createQuery(workspace, { invoke }, (s) => (qstate = s)),
+    );
     controller = next;
     return next.dispose;
   });
@@ -140,7 +144,6 @@
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
 
-  const st = $derived(app.state);
   const flags = $derived<CommandFlags>({ noImplicit, noTool });
   const serialized = $derived(serialize(root));
   const builderOk = $derived(serialized.ok);
@@ -163,20 +166,15 @@
   );
 
   $effect.pre(() => {
-    const expr = exprText;
-    const view = resultView;
-    const options = flags;
-    untrack(() => controller?.select(expr, view, options));
+    void exprText;
+    void resultView;
+    void flags;
+    untrack(() => controller?.select());
   });
 
-  // Queries serialize with other Bazel commands and ingest in the core; the reason
-  // text doubles as the disabled-Execute explanation.
-  const busyReason = $derived.by((): string | null => {
-    if (!app.view.ready) return "not connected to Bazel";
-    if (app.view.opening) return "the workspace is changing";
-    if (app.view.starting) return "an invocation is starting";
-    return bazelBusyReason(st);
-  });
+  // Each editor owns one in-flight query for its workspace; other workspaces
+  // run independently in the core.
+  const busyReason = $derived(bazelAvailable ? null : "Bazel is not available");
   const canRun = $derived(valid && !busyReason && !qstate.running);
   const runBlockReason = $derived(
     qstate.running
@@ -189,7 +187,7 @@
           : null)),
   );
 
-  // Input changes restore a cached result, or leave the result empty.
+  // Input changes clear the displayed result.
   const stored = $derived(qstate.result);
   // Only one invocation is ever in flight; which view started it does not matter —
   // either pane may as well show the spinner.

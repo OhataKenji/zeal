@@ -181,7 +181,7 @@ pub fn spawn(command: &mut Command, log: &File) -> io::Result<(Child, Control, C
                         Err(e) => return Err(e),
                     }
                 }
-                log.sync_all()
+                Ok(())
             })();
             failed_worker.store(result.is_err(), Ordering::Release);
             result
@@ -204,18 +204,23 @@ pub fn spawn(command: &mut Command, log: &File) -> io::Result<(Child, Control, C
     }
 }
 
-pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
+pub fn write(core: &Core, ws: &str, id: &str, bytes: &[u8]) -> Result<usize, String> {
     if bytes.len() > 64 * 1024 {
         return Err("terminal input chunk is too large".into());
     }
     let mut st = core.state.lock().expect("application state lock poisoned");
-    let Some(invocation) = st.active_invocation.as_mut() else {
+    let ws = st.workspace_path(ws)?;
+    let Some(invocation) = st.invocations.get_mut(id) else {
         return Err("terminal is no longer running".into());
     };
-    if invocation.id.as_str() != id || invocation.pgid.is_none() || invocation.stopping {
+    if invocation.workspace != ws {
         return Err("terminal is no longer running".into());
     }
-    invocation
+    let process = &mut invocation.process;
+    if process.pgid.is_none() || process.stop_started.is_some() {
+        return Err("terminal is no longer running".into());
+    }
+    process
         .terminal
         .as_mut()
         .ok_or_else(|| "terminal is no longer running".to_string())?
@@ -223,15 +228,23 @@ pub fn write(core: &Core, id: &str, bytes: &[u8]) -> Result<usize, String> {
         .map_err(|e| e.to_string())
 }
 
-pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+pub fn resize(core: &Core, ws: &str, id: &str, cols: u16, rows: u16) -> Result<(), String> {
     let st = core.state.lock().expect("application state lock poisoned");
-    let Some(invocation) = st.active_invocation.as_ref() else {
+    let Ok(ws) = st.workspace_path(ws) else {
         return Ok(());
     };
-    if invocation.id.as_str() != id || invocation.pgid.is_none() {
+    let Some(process) = st
+        .invocations
+        .get(id)
+        .filter(|invocation| invocation.workspace == ws)
+        .map(|invocation| &invocation.process)
+    else {
+        return Ok(());
+    };
+    if process.pgid.is_none() {
         return Ok(());
     }
-    invocation.terminal.as_ref().map_or(Ok(()), |terminal| {
+    process.terminal.as_ref().map_or(Ok(()), |terminal| {
         terminal.resize(cols, rows).map_err(|e| e.to_string())
     })
 }
@@ -239,7 +252,10 @@ pub fn resize(core: &Core, id: &str, cols: u16, rows: u16) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ActiveInvocation;
+    use crate::state::{ActiveInvocation, OwnedInvocation};
+    use std::path::PathBuf;
+
+    const WS: &str = "/ws-terminal";
 
     struct Fixture {
         log: File,
@@ -256,13 +272,23 @@ mod tests {
                 spawn(Command::new("sh").args(["-c", script]), &log).unwrap();
             let core = Core::new();
             let mut st = core.state.lock().unwrap();
-            st.active_invocation = Some(ActiveInvocation {
-                id: id.clone().into(),
-                terminal: Some(control),
-                pgid: Some(child.id() as i32),
-                stopping: false,
-                stop_started: None,
-            });
+            st.workspaces
+                .insert(PathBuf::from(WS), crate::scope::Scope::default());
+            st.invocations.insert(
+                id.clone(),
+                OwnedInvocation {
+                    workspace: PathBuf::from(WS),
+                    cmd: "build".to_string(),
+                    pattern: "//:b".to_string(),
+                    started_at: 1,
+                    process: ActiveInvocation {
+                        terminal: Some(control),
+                        pgid: Some(child.id() as i32),
+                        stop_started: None,
+                    },
+                    console: None,
+                },
+            );
             drop(st);
             Self {
                 log,
@@ -279,22 +305,23 @@ mod tests {
             wait_for_output(self, text);
         }
         fn send(&self, data: &[u8]) {
-            assert_eq!(write(&self.core, &self.id, data).unwrap(), data.len());
+            assert_eq!(write(&self.core, WS, &self.id, data).unwrap(), data.len());
         }
         fn finish(&mut self) -> i32 {
             let code = wait_for_exit(&mut self.child, &self.log);
             self.capture.finish().unwrap();
-            _ = self
-                .core
-                .state
-                .lock()
-                .unwrap()
-                .active_invocation
-                .as_mut()
-                .map(|invocation| invocation.pgid = None);
+            revoke_fixture_pgid(&self.core, &self.id);
             code
         }
     }
+    fn revoke_fixture_pgid(core: &Core, id: &str) {
+        let mut st = core.state.lock().unwrap();
+        let Some(invocation) = st.invocations.get_mut(id) else {
+            return;
+        };
+        invocation.process.pgid = None;
+    }
+
     fn wait_for_output(fixture: &Fixture, text: &str) {
         let until = Instant::now() + Duration::from_secs(5);
         while !fixture.output().contains(text) {
@@ -358,13 +385,10 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .active_invocation
-                .as_ref()
-                .unwrap()
-                .terminal
-                .as_ref()
-                .unwrap()
-                .foreground_group(),
+                .invocations
+                .get(&f.id)
+                .and_then(|invocation| invocation.process.terminal.as_ref())
+                .and_then(Control::foreground_group),
             Some(f.child.id() as i32)
         );
         f.send(b"done\r");
@@ -374,13 +398,10 @@ mod tests {
                 .state
                 .lock()
                 .unwrap()
-                .active_invocation
-                .as_ref()
-                .unwrap()
-                .terminal
-                .as_ref()
-                .unwrap()
-                .foreground_group(),
+                .invocations
+                .get(&f.id)
+                .and_then(|invocation| invocation.process.terminal.as_ref())
+                .and_then(Control::foreground_group),
             None
         );
     }
@@ -388,16 +409,16 @@ mod tests {
     #[test]
     fn interactive_process_has_a_controlling_terminal_and_resizes() {
         let mut f = Fixture::new(
-            "test -t 0 && test -t 1 && test -t 2 || exit 9; printf 'ready>'; read value; stty size; printf 'answer=%s\\n' $((value * 2))",
+            "test -t 0 && test -t 1 && test -t 2 || exit 9; printf 'ready>'; read value; stty size; printf 'answer=%s\n' $((value * 2))",
         );
         f.wait_for("ready>");
-        assert!(write(&f.core, "old-invocation", b"999\n").is_err());
-        resize(&f.core, &f.id, 120, 40).unwrap();
+        assert!(write(&f.core, WS, "old-invocation", b"999\n").is_err());
+        resize(&f.core, WS, &f.id, 120, 40).unwrap();
         f.send(b"21\r");
         assert_eq!(f.finish(), 0);
         assert!(f.output().contains("40 120"));
         assert!(f.output().contains("answer=42"));
-        assert!(write(&f.core, &f.id, b"late").is_err());
+        assert!(write(&f.core, WS, &f.id, b"late").is_err());
     }
 
     #[test]

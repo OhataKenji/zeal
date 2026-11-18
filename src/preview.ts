@@ -7,18 +7,19 @@ import type {
   Edge,
   FileEntry,
   InvocationRecord,
+  OwnedInvocation,
   Profile,
   Target,
   TargetActions,
   TargetDetail,
   TargetIndex,
   TargetOutputs,
+  WorkspaceState,
 } from "./lib/types";
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
-import { bazelBusyReason } from "./lib/session.ts";
 
 const WORKSPACE = "/demo/cool-mono";
 const NOW = Date.now();
@@ -168,19 +169,35 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
   });
 }).flat();
 const state: AppState = {
+  revision: 0,
+  besError: null,
   besReady: true,
-  scope: { include: ["//app/..."] },
-  workspace: WORKSPACE,
   bazel: "8.7.0",
-  ingest: "idle",
-  snapshotFetchedAt: SNAPSHOT.meta.fetchedAt,
-  lastError: null,
-  activeInvocation: null,
-  stopping: false,
-  invocationNote: null,
-  detailQuery: "idle",
+  lastWorkspace: WORKSPACE,
+  workspaces: [
+    {
+      workspace: WORKSPACE,
+      scope: { include: ["//app/..."] },
+    },
+  ],
+  invocations: [],
 };
-let currentSnapshot: TargetIndex | null = SNAPSHOT;
+
+function emitState() {
+  state.revision += 1;
+  void emit("app-state", structuredClone(state));
+}
+
+function wsEntry(workspace: unknown): WorkspaceState {
+  const id = String(workspace ?? "");
+  const entry = state.workspaces.find((item) => item.workspace === id);
+  if (!entry) throw new Error(`Preview workspace is not open: ${id}`);
+  return entry;
+}
+
+function ownedFor(id: string): OwnedInvocation | undefined {
+  return state.invocations.find((entry) => entry.id === id);
+}
 const consoleOutput = new Map<string, string>();
 const consoleInput = new Map<string, string>();
 function span(name: string, ts: number, dur: number) {
@@ -271,44 +288,48 @@ const PROFILE: Profile = {
   ],
 };
 
-function readConsole(id: string, offset: number) {
+function readConsole(workspace: string, id: string, offset: number) {
+  wsEntry(workspace);
+  const owned = ownedFor(id);
+  if (!owned || !owned.console) throw new Error("Preview invocation not found");
+  if (owned.workspace !== workspace) {
+    throw new Error("Preview invocation belongs to another workspace");
+  }
   const bytes = new TextEncoder().encode(consoleOutput.get(id) ?? "");
   const data = Array.from(bytes.slice(offset, offset + 64 * 1024));
   return {
     data,
     offset: offset + data.length,
-    done: state.activeInvocation !== id && offset + data.length === bytes.length,
   };
 }
 
-function writeConsole(id: string, data: unknown) {
+function writeConsole(workspace: string, id: string, data: unknown) {
+  wsEntry(workspace);
+  const owned = ownedFor(id);
+  if (owned && owned.workspace !== workspace) {
+    throw new Error("Preview invocation belongs to another workspace");
+  }
+  if (!owned) throw new Error("Preview process has ended");
+  if (!owned.console || !owned.stoppable || owned.stopping) {
+    throw new Error("Preview console is not writable");
+  }
   if (!Array.isArray(data)) throw new Error("Preview console input must be a byte array.");
-  if (state.activeInvocation !== id) throw new Error("Preview process has ended");
   const text = new TextDecoder().decode(Uint8Array.from(data));
   const result = interpretConsoleInput(consoleInput.get(id) ?? "", text);
   consoleInput.set(id, result.input);
   consoleOutput.set(id, (consoleOutput.get(id) ?? "") + result.output);
-  if (result.exitCode !== null) {
-    const record = records.find((inv) => inv.id === id);
-    if (!record) throw new Error("Preview invocation was not found.");
-    record.finishedAt = Date.now();
-    record.exitCode = result.exitCode;
-    state.activeInvocation = null;
-    void emit("app-state", structuredClone(state));
-  }
+  if (result.exitCode !== null) finishOwned(id);
   return data.length;
 }
 
-function getInvocation(id: unknown) {
-  const record = records.find((inv) => inv.id === id);
+function getInvocation(workspace: string, id: unknown) {
+  const record = records.find((inv) => inv.id === id && inv.workspace === workspace);
   if (!record) throw new Error("Preview invocation not found");
   return {
     record,
     log: {
       status: "ok",
-      data:
-        consoleOutput.get(record.id) ??
-        `INFO: ${record.cmd} ${record.pattern}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Invocation ended with exit ${record.exitCode}`}\n`,
+      data: `INFO: ${record.cmd} ${record.pattern}\n${record.exitCode === 0 ? "INFO: Build completed successfully" : `ERROR: Invocation ended with exit ${record.exitCode}`}\n`,
     },
     bep: {
       status: "ok",
@@ -349,43 +370,63 @@ function getInvocation(id: unknown) {
   };
 }
 
-function startInvocation(cmd: string, pattern: string) {
-  const record: PreviewRecord = {
-    id: `preview-${crypto.randomUUID()}`,
-    workspace: state.workspace ?? WORKSPACE,
-    cmd,
-    pattern,
-    startedAt: Date.now(),
-  };
-  records.unshift(record);
-  state.activeInvocation = record.id;
-  state.consoleInvocation = record.id;
-  consoleOutput.set(
-    record.id,
-    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
-  );
-  if (record.cmd !== "run") {
-    record.finishedAt = Date.now();
-    record.exitCode = 0;
-    state.activeInvocation = null;
-  }
-  void emit("app-state", structuredClone(state));
-  return structuredClone(record);
+function finishOwned(id: string) {
+  state.invocations = state.invocations.filter((entry) => entry.id !== id);
+  consoleOutput.delete(id);
+  consoleInput.delete(id);
+  emitState();
 }
 
-function stopInvocation() {
-  const id = state.activeInvocation;
-  if (!id) return;
-  const record = records.find((inv) => inv.id === id);
-  state.stopping = true;
-  void emit("app-state", structuredClone(state));
-  if (record) {
-    record.finishedAt = Date.now();
-    record.exitCode = 8;
-    state.activeInvocation = null;
-    state.stopping = false;
-    void emit("app-state", structuredClone(state));
+function startInvocation(workspace: string, cmd: string, pattern: string) {
+  wsEntry(workspace);
+  const id = `preview-${crypto.randomUUID()}`;
+  const now = Date.now();
+  // The BEP build result exists independently of the owned process: a `run`
+  // program may outlive it, and its own output is never BEP history.
+  const record: PreviewRecord = {
+    id,
+    workspace,
+    cmd,
+    pattern,
+    startedAt: now,
+    finishedAt: now,
+    exitCode: 0,
+  };
+  records.unshift(record);
+  const owned: OwnedInvocation = {
+    id,
+    workspace,
+    cmd,
+    pattern,
+    startedAt: record.startedAt,
+    stoppable: true,
+    stopping: false,
+    console: true,
+  };
+  state.invocations.unshift(owned);
+  consoleOutput.set(
+    id,
+    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+  );
+  if (cmd !== "run") {
+    // build/test finish on their own; `run` stays live until input or Stop.
+    setTimeout(() => finishOwned(id), 800);
   }
+  emitState();
+  void emit("invocations-changed");
+  return id;
+}
+
+function stopInvocation(workspace: string, id: string) {
+  wsEntry(workspace);
+  const owned = ownedFor(id);
+  if (owned && owned.workspace !== workspace) {
+    throw new Error("Preview invocation belongs to another workspace");
+  }
+  if (!owned?.stoppable) return;
+  owned.stopping = true;
+  emitState();
+  finishOwned(id);
 }
 
 function actionMnemonic(path: string): string {
@@ -400,9 +441,8 @@ function actionMnemonic(path: string): string {
 export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
   if (new URLSearchParams(location.search).get("preview") === "empty") {
-    state.workspace = null;
-    state.snapshotFetchedAt = null;
-    currentSnapshot = null;
+    state.lastWorkspace = null;
+    state.workspaces = [];
   }
   function candidates(): string[] {
     const counts = new Map<string, { count: number; last: number }>();
@@ -422,11 +462,8 @@ export function installPreview() {
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
-    get_snapshot: () => structuredClone(currentSnapshot),
     get_target_detail: (payload): TargetDetail => {
-      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
-        throw new Error("Target list changed; select the target again");
-      }
+      wsEntry(payload?.workspace);
       const label = String(payload?.label);
       const selected = FULL_DATA.targets.find((item) => item.label === label);
       if (!selected) throw new Error("Target not found");
@@ -438,9 +475,7 @@ export function installPreview() {
       });
     },
     get_target_outputs: (payload): TargetOutputs => {
-      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
-        throw new Error("Target list changed; select the target again");
-      }
+      wsEntry(payload?.workspace);
       const label = String(payload?.label);
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
@@ -451,9 +486,7 @@ export function installPreview() {
       return { paths: paths.slice(0, 10), truncated: paths.length > 10 };
     },
     get_target_actions: (payload): TargetActions => {
-      if (payload?.fetchedAt !== currentSnapshot?.meta.fetchedAt) {
-        throw new Error("Target list changed; select the target again");
-      }
+      wsEntry(payload?.workspace);
       const label = String(payload?.label);
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
@@ -494,40 +527,70 @@ export function installPreview() {
         });
       return { actions: actions.slice(0, 100), truncated: actions.length > 100 };
     },
-    list_invocations: () => structuredClone(records),
-    read_console: (payload) => readConsole(String(payload?.id), Number(payload?.offset ?? 0)),
+    list_invocations: (payload) =>
+      structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),
+    read_console: (payload) =>
+      readConsole(
+        String(payload?.workspace ?? ""),
+        String(payload?.id),
+        Number(payload?.offset ?? 0),
+      ),
     resize_console: () => {},
-    write_console: (payload) => writeConsole(String(payload?.id), payload?.data),
-    get_invocation: (payload) => getInvocation(payload?.id),
+    write_console: (payload) =>
+      writeConsole(String(payload?.workspace ?? ""), String(payload?.id), payload?.data),
+    get_invocation: (payload) => {
+      const workspace = String(payload?.workspace ?? "");
+      wsEntry(workspace);
+      return getInvocation(workspace, payload?.id);
+    },
     get_invocation_profile: (payload) => {
-      if (!records.some((inv) => inv.id === payload?.id)) {
+      const workspace = String(payload?.workspace ?? "");
+      wsEntry(workspace);
+      if (!records.some((inv) => inv.id === payload?.id && inv.workspace === workspace)) {
         throw new Error("Preview invocation not found");
       }
       return { status: "ok", data: PROFILE };
     },
     // The app sends this command with the AnalyticsFilter shape.
-    get_analytics: (payload) =>
-      previewAnalytics(records, (payload?.filter ?? {}) as Partial<AnalyticsFilter>, NOW),
-    open_workspace: (payload) => {
-      if (bazelBusyReason(state)) {
-        throw new Error("cannot change workspace while bazel is busy");
-      }
-      const path = String(payload?.path ?? WORKSPACE);
-      const scope = structuredClone(payload?.scope as AppState["scope"]);
-      state.workspace = path;
-      state.scope = scope;
-      state.snapshotFetchedAt = SNAPSHOT.meta.fetchedAt;
-      currentSnapshot = SNAPSHOT;
-      return structuredClone(state);
+    get_analytics: (payload) => {
+      const workspace = String(payload?.workspace ?? "");
+      wsEntry(workspace);
+      return previewAnalytics(
+        records.filter((inv) => inv.workspace === workspace),
+        (payload?.filter ?? {}) as Partial<AnalyticsFilter>,
+        NOW,
+      );
     },
     list_workspaces: () => structuredClone(candidates()),
-    refresh: () => void emit("app-state", structuredClone(state)),
-    start_invocation: (payload) => startInvocation(String(payload?.cmd), String(payload?.pattern)),
-    stop_invocation: () => stopInvocation(),
-    run_query: (payload) => {
-      if (bazelBusyReason(state)) {
-        throw new Error("bazel is busy");
+    open_workspace: (payload) => {
+      const workspace = String(payload?.path ?? WORKSPACE);
+      const scope = structuredClone(payload?.scope) as WorkspaceState["scope"];
+      let entry = state.workspaces.find((item) => item.workspace === workspace);
+      if (!entry) {
+        entry = { workspace, scope };
+        state.workspaces.push(entry);
+      } else {
+        entry.scope = scope;
       }
+      state.lastWorkspace = workspace;
+      emitState();
+      return { workspace, state: structuredClone(state) };
+    },
+    refresh: (payload) => {
+      wsEntry(payload?.workspace);
+      return { snapshot: structuredClone(SNAPSHOT), error: null };
+    },
+    start_invocation: (payload) =>
+      startInvocation(
+        String(payload?.workspace ?? ""),
+        String(payload?.cmd),
+        String(payload?.pattern),
+      ),
+    stop_invocation: (payload) =>
+      stopInvocation(String(payload?.workspace ?? ""), String(payload?.id)),
+    run_query: (payload) => {
+      const workspace = String(payload?.workspace ?? "");
+      wsEntry(workspace);
       const id = `preview-query-${crypto.randomUUID()}`;
       const output = String(payload?.output ?? "label");
       const expr = String(payload?.expr ?? "");
@@ -549,17 +612,22 @@ export function installPreview() {
         truncated: false,
         stderrTail: "",
       };
-      state.activeInvocation = id;
-      state.stopping = false;
-      void emit("app-state", structuredClone(state));
+      const owned: OwnedInvocation = {
+        id,
+        workspace,
+        cmd: "query",
+        pattern: expr,
+        startedAt: Date.now(),
+        stoppable: true,
+        stopping: false,
+        console: false,
+      };
+      state.invocations.unshift(owned);
+      emitState();
       return new Promise((resolve, reject) => {
         setTimeout(() => {
-          const stopped = state.activeInvocation === id && state.stopping;
-          if (state.activeInvocation === id) {
-            state.activeInvocation = null;
-            state.stopping = false;
-            void emit("app-state", structuredClone(state));
-          }
+          const stopped = owned.stopping;
+          if (!stopped) finishOwned(id);
           if (stopped) reject(new Error("Query stopped"));
           else resolve(finished);
         }, 800);

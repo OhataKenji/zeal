@@ -6,7 +6,7 @@ _Last update: 2026/11/02_
 
 Zeal は workspace を開いたとき、Scope 内の rule を `bazel query --output=label_kind` で取得する。
 この結果にはツリーと検索に必要な label と rule class が入る。
-取得した一覧をメモリに保持し、refresh が成功したときに一括で置き換える。
+取得した一覧は GUI が表示中の workspace の分だけ保持し、refresh が成功したときに一括で置き換える。workspace を切り替えると破棄し、戻ったときは再取得する。
 
 利用者が target を選ぶと、Zeal はその rule と直接依存する source file だけを proto 形式で取得する。
 Bazel の query schema から生成した型で decode し、選択 target の属性、入出力ファイル、定義位置を求める。

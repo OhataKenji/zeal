@@ -1,7 +1,7 @@
 # Zeal 設計: 全体構成
 
 _OhataKenji_
-_Last update: 2026/10/31_
+_Last update: 2026/11/15_
 _Status: Approved_
 
 ## Goal
@@ -14,7 +14,6 @@ PRD の狙いは「Bazel に詳しい人が捉えている対象と関係を、G
 
 - RBE・cloud runner との連携
 - bazel の解析・実行ロジックの再実装
-- 複数 workspace の同時管理
 - 画面ごとの細部設計(各 M 文書で扱う)
 
 ## Background
@@ -27,8 +26,8 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 
 - **workspace**: main repository と定義された外部 repository を含む Bazel の環境。Zeal では workspace root（main repository のルート）を開く
 - **target / label / package / rule class**: Bazel の通常の意味。`//app/lib:parser` の `java_library` が rule class
-- **composer**: toolbar にある実行の唯一の入口。cmd 選択・target 欄・Send の三点
-- **content**: ウィンドウ本体の3状態(target / invocation / analytics)
+- **composer**: toolbar にある build / test / run の実行入口。cmd 選択・target 欄・Send の三点
+- **content**: ウィンドウ本体の表示先（targets / invocation / analytics / query）
 - **invocation**: 一回のBazelコマンド呼び出しと、その観測記録全体
 - **snapshot**: `bazel query` の結果を workspace 単位でメモリに取り込んだ構造データの世代(永続化しない)
 - **BEP**: Build Event Protocol。Bazelが報告する呼び出し単位のイベント列。送信先のBuild Event Service(BES)をZeal内のreceiverが受け付ける
@@ -41,21 +40,23 @@ Zeal は Bazel を使う SWE 向けの local first GUI で、要件と体験目�
 Zeal は Tauri v2 の単一ウィンドウアプリで、Rust core とシステム webview 上の Svelte 5 UI に分かれる。
 対象 OS は POSIX 系(macOS を第一対象)とし、中断処理が SIGINT とプロセスグループを前提とする([m3](./m3-find-and-execute.md))。
 
-Rust core が workspace の管理、bazel の子プロセス起動、観測データの読み取りを担い、UI は表示と入力だけを担う。
+Rust core が workspace の登録、子プロセスの所有、観測データの保存と読み取りを担う。
+WebView が表示先と workspace の選択を持ち、Bazel が output_base の排他を担う。
 bazel はライブラリとして組み込まず、常に子プロセスとして spawn する。
 
 ```mermaid
-flowchart TD
-    UI["Svelte UI (WebView)<br/>表示と入力。content = target / invocation / analytics"]
-    CORE["Rust core<br/>workspace / runner / ingest / store<br/>SQLiteの元事実とevent file"]
-    BAZEL["bazel CLI<br/>query ・ build/test/run"]
-    UI <-->|"Tauri commands / events"| CORE
-    CORE -->|"spawn + 観測 flag"| BAZEL
-    BAZEL -->|"BES event / profile(file) / query proto(stdout)"| CORE
+flowchart LR
+    subgraph Zeal
+        UI["WebView / Svelte"] <-->|"commands / events"| CORE["Rust core"]
+        CORE <-->|"保存 / 読込"| DATA[("SQLite / 観測ファイル")]
+    end
+    CORE -->|"所有する子の起動 / 入出力 / signal"| BAZEL["Bazel CLI"]
+    BAZEL -->|"BES / query 出力 / profile"| CORE
+    EXTERNAL["外部 CLI / agent"] -->|"起動"| BAZEL
 ```
 
 データは二系統に分かれる。
-構造データのうち target の一覧は起動時に `bazel query --output=label_kind` で取得し、workspace 単位の snapshot としてメモリ上に置く(永続化しない)。
+構造データのうち target の一覧は workspace の選択時と手動 refresh で `bazel query --output=label_kind` を実行して取得し、セッション側のメモリに置く(永続化しない)。
 属性、依存、file は target を選んだときに proto query で取得する([Target の段階的な取得](./target-loading.md))。
 観測データは invocation ごとの BEP と profile に残す。
 invocationのevent fileは詳細表示のたびに一度parseし、入力、BEP時刻、build exitはSQLiteの共通invocation表に保存する。
@@ -71,40 +72,22 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ## Detailed Design
 
-### コンポーネントと責務
+### 実行の所有
 
-| コンポーネント  | 責務                                                                                   |
-| --------------- | -------------------------------------------------------------------------------------- |
-| UI(Svelte)      | content 3状態(target / invocation / analytics)の表示、composer、tree、invocations 一覧 |
-| core::workspace | workspace の選択と検出、bazel 実行ファイルの解決                                       |
-| core::runner    | bazel 呼び出しの直列化、spawn、観測 flag の付与、stdout/stderr の捕捉、中断処理        |
-| core::ingest    | query proto / BEP / profile の parse。観測 file は詳細表示のたびに読む                 |
-| core::store     | BEPの元事実をSQLite、ログ込みeventと任意のprofileをfileへ保存する                      |
+起動 IPC は invocation ID を返し、操作は workspace と ID で対象を指定する。
+Stop は Zeal が所有するプロセスだけに送り、外部 CLI の実行は観測だけを行う。
+`--noblock_for_lock` により output_base の排他を Bazel に任せる。
 
-live ConsoleはPTYの出力を表示し、stdinと停止をメモリのprocess状態で制御する。
-保存済みのログはBEPのProgressから詳細要求時に組み立てる。
-UI が直接プロセスやファイルを触る経路は作らない。
+子プロセスの回収時に PGID を無効にし、出力の取得完了後に実行状態と Console を解放する。
+表示中の Console は同じ invocation の BEP 結果に切り替わり、他の選択は変えない。
+BEP のビルド成功後も `run` のプログラムが動いていれば実行中として扱う。
+プログラムの端末出力は BEP に含まれず、終了後は残らない。
 
-### bazel 呼び出しの直列化とプロセス管理
+停止はプロセスグループへ SIGINT、猶予後に SIGKILL を送る。
+アプリ終了時は全実行を共通の期限で停止するが、子孫の完全回収は保証しない。
+終了を確認できない場合も実行状態を解放し、BEP の結果は推測で補わない。
 
-bazel server は同一 output base 上で同時に一つのコマンドしか処理せず、後続の呼び出しは lock を待ってブロックする。
-このため runner は同一 workspace の bazel 呼び出しを同時に一つに限る(mutex)。
-invocation または query の実行中は snapshot 取り込み要求を予約せず拒否する。
-取り込みは workspace を開いたときと手動 refresh のみ行う([m1](./m1-targets.md))。
-M2 では取り込み中の Send を disabled にし、待ち行列を持たない([m2](./m2-invocation-detail.md))。
-実行中はConsoleを表示する。
-Bazelが待機する原因は推測しない。
-
-composerは `build` / `test` / `run` を受け付ける。
-spawn は独立したプロセスグループで行い、stop と hard kill をグループへ送る。
-子孫の完全回収は保証しない。
-中断のエスカレーションと判定規則は [m3](./m3-find-and-execute.md) で定める。
-アプリ終了時に実行中の invocation があれば SIGINT を送り、猶予のあとでグループを kill してから終了する。
-
-履歴の結果が未観測なら不明のまま残す。
-以前のprocessの照合やsignal送信は行わない。
-waitエラーでは実行枠を解放し、processの状態を不明と示す。
-履歴のビルド結果はBEPの事実を維持する([m3](./m3-find-and-execute.md)、[m4](./m4-invocation-history.md))。
+ターゲット取得は [target-loading](./target-loading.md)、画面側の制御は [src/README.md](../../src/README.md) を参照。
 
 ### invocation の定義
 
@@ -152,10 +135,10 @@ permission、disk full、新しすぎる schema は別のエラーとして扱�
 
 ### UI の一貫性
 
-実行の入口は toolbar の composer のみで、他の画面からは実行しない。
+build / test / run は toolbar の composer から、query は Query 画面から起動する。
 tree・dropdown・target 画面での選択は、すべて composer の target 欄への文字列挿入である(詳細は [m3](./m3-find-and-execute.md))。
-content は target / invocation / analytics の3状態で、sidebar の tree と invocations、composer の Send が状態遷移の起点になる。
-この構成は mock の「window 1種・content 3状態・実行入口は composer だけ」と対応する。
+表示先は targets / invocation / analytics / query とし、session が選択を管理する。
+Stop は invocation の表示から、対象の invocation ID を指定して行う。
 
 ## Alternatives Considered
 
@@ -170,7 +153,7 @@ content は target / invocation / analytics の3状態で、sidebar の tree と
 - `bazel query` は大きい repo で遅くなり得る。grpc/grpc でのツリー用 query は warm 時の中央値 194ms だった。cold 時の所要時間と画面表示までの時間は別に測る。
 - bazelisk 経由の初回呼び出しは bazel 本体の download で長時間ブロックし得る。実行中はConsoleを表示する。
 - workspace を移動・rename するとルートパスが変わり、履歴は新規 workspace として分断される。
-- 初版は同一 workspace で Zeal を二重起動しない前提で試す。取り込みや他の Bazel 処理の間は同じ process slot が解放されるまで Send を拒否する。
+- 初版は同一 workspace で Zeal を二重起動しない前提で試す。実行中の invocation や取り込みがあっても Send は拒否しない。
 
 ## Security Concerns
 

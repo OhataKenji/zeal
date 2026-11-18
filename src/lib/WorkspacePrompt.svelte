@@ -1,7 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { app, getSession, openWorkspace } from "./state.svelte";
   import CopyButton from "./CopyButton.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
@@ -11,13 +10,17 @@
     initial = "",
     initialScope,
     bazelAvailable,
+    onopen,
     onclose,
+    opening = $bindable(false),
   }: {
     mode?: "open" | "settings";
     initial?: string;
     initialScope: TargetScope;
     bazelAvailable: boolean;
+    onopen: (path: string, scope: TargetScope) => Promise<boolean>;
     onclose?: () => void;
+    opening?: boolean;
   } = $props();
 
   // Props seed this form once.
@@ -26,7 +29,7 @@
   let error = $state<string | null>(null);
   let choosing = $state(false);
   let copyError = $state("");
-  const busy = $derived(choosing || app.view.opening);
+  const busy = $derived(choosing || opening);
   const canSubmit = $derived(
     bazelAvailable && !busy && path.trim() !== "" && include.trim() !== "",
   );
@@ -36,7 +39,6 @@
     if (busy) return;
     choosing = true;
     error = null;
-    getSession().setWorkspacePromptOpen(true);
     try {
       const selected = await open({
         directory: true,
@@ -52,12 +54,17 @@
     }
   }
 
-  function submit() {
+  async function submit() {
     if (!canSubmit) return;
     error = null;
-    openWorkspace(path.trim(), {
-      include: include.split("\n"),
-    });
+    opening = true;
+    try {
+      if (await onopen(path.trim(), { include: include.split("\n") })) onclose?.();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      opening = false;
+    }
   }
 
   const BAZELRC = `build --bes_backend=grpc://127.0.0.1:4718
@@ -76,7 +83,7 @@ build --experimental_collect_system_network_usage`;
   class="ws-prompt"
   onsubmit={(e) => {
     e.preventDefault();
-    submit();
+    void submit();
   }}
 >
   <header>
@@ -140,8 +147,8 @@ build --experimental_collect_system_network_usage`;
       <button class="button" type="button" onclick={onclose} disabled={busy}>Cancel</button>
     {/if}
   </div>
-  {#if error ?? app.view.workspaceError}
-    <Notice tone="error">{error ?? app.view.workspaceError}</Notice>
+  {#if error}
+    <Notice tone="error">{error}</Notice>
   {/if}
   <div class="scope-help">
     <p class="scope-help">

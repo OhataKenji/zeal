@@ -5,51 +5,49 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { invoke } from "@tauri-apps/api/core";
   import "@xterm/xterm/css/xterm.css";
-  import type { InvocationRecord } from "./types";
+  import type { InvocationRecord, OwnedInvocation } from "./types";
   import { createConsole } from "./console";
   import { TERMINAL_FONT, TERMINAL_THEME } from "./terminal_style";
   import InvocationHeader from "./InvocationHeader.svelte";
   import { invocationStatus } from "./invocation";
 
-  let { record, running, stopping = false, visible }: {
+  let { record, execution, onstop }: {
     record: InvocationRecord;
-    running: boolean;
-    stopping?: boolean;
-    visible: boolean;
+    execution: OwnedInvocation;
+    onstop: () => void;
   } = $props();
   let host: HTMLDivElement;
   let terminal = $state.raw<Terminal>();
   let connection = $state.raw<ReturnType<typeof createConsole>>();
   let error = $state<string | null>(null);
-  const status = $derived(invocationStatus(record, running ? record.id : null, stopping));
+  const writable = $derived(execution.stoppable && !execution.stopping);
+  const status = $derived(invocationStatus(record, execution));
 
   $effect(() => {
-    if (terminal) terminal.options.disableStdin = !running;
-    connection?.setRunning(running);
+    if (terminal) terminal.options.disableStdin = !writable;
+    connection?.setWritable(writable);
   });
-
-  $effect(() => { if (visible && terminal) terminal.focus(); });
 
   onMount(() => {
     const term = new Terminal({
       ...TERMINAL_FONT, theme: TERMINAL_THEME,
       convertEol: false, cursorBlink: true, drawBoldTextInBrightColors: false,
-      scrollback: 5000, disableStdin: !running,
+      scrollback: 5000, disableStdin: !writable,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
     terminal = term;
-    const stream = createConsole(record.id, { invoke },
+    const stream = createConsole(execution.workspace, execution.id, { invoke },
       (bytes) => new Promise<void>((resolve) => term.write(bytes, resolve)),
       (message) => { error = message; });
-    stream.setRunning(running);
+    stream.setWritable(writable);
     connection = stream;
     const keys = term.onData((data) => {
-      if (running) stream.input(new TextEncoder().encode(data));
+      if (writable) stream.input(new TextEncoder().encode(data));
     });
     const binary = term.onBinary((data) => {
-      if (running) stream.input(Uint8Array.from(data, (ch) => ch.charCodeAt(0)));
+      if (writable) stream.input(Uint8Array.from(data, (ch) => ch.charCodeAt(0)));
     });
     const sizes = term.onResize(({ cols, rows }) => { void stream.resize(cols, rows); });
     const observer = new ResizeObserver(() => { if (host.clientWidth && host.clientHeight) fit.fit(); });
@@ -70,7 +68,16 @@
 </script>
 
 <section class="invocation-page console-page">
-  <InvocationHeader {record} {status} />
+  <InvocationHeader {record} {status}>
+    {#if execution.stoppable}
+      <button
+        type="button"
+        class="button button-ghost"
+        disabled={execution.stopping}
+        onclick={onstop}
+      >{execution.stopping ? "Stopping…" : "Stop"}</button>
+    {/if}
+  </InvocationHeader>
   {#if error}<Notice tone="error">{error}</Notice>{/if}
   <div class="invocation-panel">
     <div class="console-terminal" bind:this={host}></div>

@@ -102,26 +102,49 @@ export interface TargetScope {
   include: string[];
 }
 
-/** Current core state. A workspace switch clears workspace-scoped data. */
+/** Per-workspace state inside the aggregate snapshot. */
+export interface WorkspaceState {
+  workspace: string;
+  scope: TargetScope;
+}
+
+/** The result of one target-list refresh: the parsed index, or the error
+ * that prevented it. A partial fetch carries both. */
+export interface TargetLoad {
+  snapshot: TargetIndex | null;
+  error: IngestError | null;
+}
+
+/** One Bazel operation Zeal launched; presence in `invocations` means the
+ * core still owns its worker, including the final output drain. */
+export interface OwnedInvocation {
+  id: string;
+  workspace: string;
+  cmd: string;
+  pattern: string;
+  startedAt: number;
+  stoppable: boolean;
+  stopping: boolean;
+  console: boolean;
+}
+
+/** The aggregate core snapshot pushed on every change; `revision` grows
+ * monotonically so stale pushes cannot overwrite newer state. */
 export interface AppState {
-  besError?: string | null;
+  revision: number;
+  besError: string | null;
   /** A receiver is available for new Bazel invocations, even if its preferred port is occupied. */
   besReady: boolean;
-  workspace: string | null;
-  scope: TargetScope;
   bazel: string | null;
-  ingest: "idle" | "running";
-  /** `TargetIndex.meta.fetchedAt`; its data loads through `get_snapshot`. */
-  snapshotFetchedAt: number | null;
-  lastError: IngestError | null;
-  activeInvocation: string | null;
-  // The current workspace's last Console remains readable after process exit.
-  consoleInvocation?: string | null;
-  // Stop is best-effort. An unconfirmed exit releases the slot with invocationNote.
-  stopping: boolean;
-  invocationNote: string | null;
-  // A selected target's detail query, serialized with the other Bazel operations.
-  detailQuery: "idle" | "running";
+  lastWorkspace: string | null;
+  workspaces: WorkspaceState[];
+  invocations: OwnedInvocation[];
+}
+
+/** `open_workspace` reply: the canonical id plus the fresh aggregate state. */
+export interface OpenWorkspaceResult {
+  workspace: string;
+  state: AppState;
 }
 
 /** Commands accepted by the command composer. */

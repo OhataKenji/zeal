@@ -7,7 +7,6 @@
 
   let {
     workspace,
-    busy,
     settingsOpen,
     opening,
     onopen,
@@ -15,7 +14,6 @@
     onhome,
   }: {
     workspace: string | null;
-    busy: boolean;
     settingsOpen: boolean;
     opening: boolean;
     onopen: (path?: string) => void;
@@ -116,7 +114,7 @@
     aria-label="Workspace settings"
     title="Workspace settings"
     aria-pressed={settingsOpen}
-    disabled={!workspace || opening || (busy && !settingsOpen)}
+    disabled={!workspace || opening}
     onclick={() => navigate(onsettings)}
   >
     <Gear size={14} />
@@ -146,7 +144,7 @@
               <button
                 type="button"
                 class="ws-entry"
-                disabled={busy || path === workspace}
+                disabled={opening || path === workspace}
                 aria-current={path === workspace ? "true" : undefined}
                 title={path}
                 onclick={() => choose(path)}
@@ -165,16 +163,11 @@
             type="button"
             class="button ws-open"
             onclick={() => navigate(onopen)}
-            disabled={busy}
+            disabled={opening}
           >
             Open workspace…
           </button>
         </div>
-        {#if busy}
-          <p class="dim ws-note">
-            Wait for the current Bazel operation to finish before switching workspaces.
-          </p>
-        {/if}
       </div>
     </details>
   </div>

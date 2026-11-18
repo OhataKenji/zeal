@@ -1,4 +1,4 @@
-import type { InvocationRecord, Section } from "./types.ts";
+import type { InvocationRecord, OwnedInvocation, Section } from "./types.ts";
 
 /** Display status and label for one invocation record. */
 export interface InvocationStatus {
@@ -6,25 +6,28 @@ export interface InvocationStatus {
   label: string;
 }
 
-/** Resolves an invocation's result while preserving an unknown state for partial data. */
+/** Labels a finished record: a `run` reports its build's BEP result, never
+ * the program's exit. */
+function bepStatus(record: InvocationRecord): InvocationStatus {
+  const subject = record.cmd === "run" ? "build " : "";
+  return record.exitCode === 0
+    ? { kind: "succeeded", label: `✓ ${subject}succeeded` }
+    : { kind: "failed", label: `✗ ${subject}failed (exit ${record.exitCode})` };
+}
+
+/** Resolves an invocation's result: a live owned entry always reads as
+ * running/stopping (a `run` program may outlive its successful build), then
+ * the BEP exit code, then unknown. */
 export function invocationStatus(
   record: InvocationRecord | undefined,
-  running: string | null,
-  stopping = false,
+  execution?: OwnedInvocation,
 ): InvocationStatus {
-  if (record?.exitCode !== undefined) {
-    return record.exitCode === 0
-      ? { kind: "succeeded", label: "✓ succeeded" }
-      : {
-          kind: "failed",
-          label: `✗ failed (exit ${record.exitCode})`,
-        };
-  }
-  if (record && record.id === running) {
-    return stopping
+  if (execution) {
+    return execution.stopping
       ? { kind: "stopping", label: "■ stopping" }
       : { kind: "running", label: "● running" };
   }
+  if (record?.exitCode !== undefined) return bepStatus(record);
   return { kind: "unknown", label: "? outcome unknown" };
 }
 

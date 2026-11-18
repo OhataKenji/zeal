@@ -17,9 +17,11 @@ function harness() {
     reject: (error: Error) => void;
   }> = [];
   const model = createAnalytics(
+    "/workspace",
     {
       invoke: <T>(command: string, args?: Record<string, unknown>) => {
         assert.equal(command, "get_analytics");
+        assert.equal(args?.workspace, "/workspace");
         return new Promise<T>((resolve, reject) =>
           calls.push({ args, resolve: (v) => resolve(v as T), reject }),
         );
@@ -83,6 +85,7 @@ test("default request uses core calendar and refresh retains all filters", async
   const h = harness();
   const initial = h.model.load();
   assert.deepEqual(h.calls[0].args, {
+    workspace: "/workspace",
     filter: {
       start: null,
       end: null,
@@ -96,11 +99,11 @@ test("default request uses core calendar and refresh retains all filters", async
   await initial;
   const filter = { ...h.view.filter, cmd: "test" as const, outcome: "failed" as const };
   const changed = h.model.load(filter);
-  assert.deepEqual(h.calls[1].args, { filter });
+  assert.deepEqual(h.calls[1].args, { workspace: "/workspace", filter });
   h.calls[1].resolve({ ...RESULT, filter });
   await changed;
   const refreshed = h.model.load();
-  assert.deepEqual(h.calls[2].args, { filter });
+  assert.deepEqual(h.calls[2].args, { workspace: "/workspace", filter });
   h.calls[2].resolve({ ...RESULT, filter });
   await refreshed;
   assert.deepEqual(h.view.filter, filter);
@@ -166,17 +169,17 @@ test("equal dates and optional endpoints still query the core", async () => {
   const sameDay = { ...RESULT.filter, start: RESULT.filter.end };
   const equal = h.model.load(sameDay);
   assert.equal(analyticsDateError(h.view.filter), null);
-  assert.deepEqual(h.calls[0].args, { filter: sameDay });
+  assert.deepEqual(h.calls[0].args, { workspace: "/workspace", filter: sameDay });
   h.calls[0].resolve({ ...RESULT, filter: sameDay });
   await equal;
   const noStart = { ...RESULT.filter, start: null };
   const optionalStart = h.model.load(noStart);
-  assert.deepEqual(h.calls[1].args, { filter: noStart });
+  assert.deepEqual(h.calls[1].args, { workspace: "/workspace", filter: noStart });
   h.calls[1].resolve(RESULT);
   await optionalStart;
   const noEnd = { ...RESULT.filter, end: null };
   const optionalEnd = h.model.load(noEnd);
-  assert.deepEqual(h.calls[2].args, { filter: noEnd });
+  assert.deepEqual(h.calls[2].args, { workspace: "/workspace", filter: noEnd });
   h.calls[2].resolve(RESULT);
   await optionalEnd;
 });
@@ -238,7 +241,7 @@ test("correcting either reversed endpoint clears validation and resumes loading"
   const earlierStart = h.model.load(RESULT.filter);
   assert.equal(analyticsDateError(h.view.filter), null);
   assert.equal(h.view.loading, true);
-  assert.deepEqual(h.calls[0].args, { filter: RESULT.filter });
+  assert.deepEqual(h.calls[0].args, { workspace: "/workspace", filter: RESULT.filter });
   h.calls[0].resolve(RESULT);
   await earlierStart;
   assert.equal(h.view.data?.days[0].count, 2);
@@ -247,7 +250,7 @@ test("correcting either reversed endpoint clears validation and resumes loading"
   const laterEnd = h.model.load(filter);
   assert.equal(analyticsDateError(h.view.filter), null);
   assert.equal(h.view.loading, true);
-  assert.deepEqual(h.calls[1].args, { filter });
+  assert.deepEqual(h.calls[1].args, { workspace: "/workspace", filter });
   h.calls[1].resolve({ ...RESULT, filter });
   await laterEnd;
   assert.equal(h.view.error, null);
@@ -267,11 +270,11 @@ test("workspace selection is sent, retained on refresh, and candidates survive r
 
   const selected = { ...h.view.filter, workspaceId: "ws-2" };
   const changed = h.model.load(selected);
-  assert.deepEqual(h.calls[1].args, { filter: selected });
+  assert.deepEqual(h.calls[1].args, { workspace: "/workspace", filter: selected });
   h.calls[1].resolve({ ...RESULT, filter: selected, workspaces });
   await changed;
   const refreshed = h.model.load();
-  assert.deepEqual(h.calls[2].args, { filter: selected });
+  assert.deepEqual(h.calls[2].args, { workspace: "/workspace", filter: selected });
   h.calls[2].resolve({ ...RESULT, filter: selected, workspaces });
   await refreshed;
   assert.equal(h.view.filter.workspaceId, "ws-2");
@@ -280,6 +283,7 @@ test("workspace selection is sent, retained on refresh, and candidates survive r
   const next = harness();
   const fresh = next.model.load();
   assert.deepEqual(next.calls[0].args, {
+    workspace: "/workspace",
     filter: {
       start: null,
       end: null,

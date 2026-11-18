@@ -11,15 +11,20 @@
     left,
     leftLoading,
     leftError,
-    activeInvocation,
-    load = (id: string) => invoke<InvocationDetail>(COMMANDS.getInvocation, { id }),
+    workspace,
+    runningIds,
+    load,
   }: {
     left: InvocationDetail | null;
     leftLoading: boolean;
     leftError: string | null;
-    activeInvocation: string | null;
+    workspace: string;
+    runningIds: readonly string[];
     load?: (id: string) => Promise<InvocationDetail>;
   } = $props();
+  const fetchDetail = $derived(
+    load ?? ((id: string) => invoke<InvocationDetail>(COMMANDS.getInvocation, { workspace, id })),
+  );
 
   let input = $state("");
   let right = $state.raw<ComparisonInvocation | null>(null);
@@ -31,11 +36,11 @@
   });
 
   const leftReady = $derived(
-    !!left && !leftLoading && !leftError && left.record.id !== activeInvocation,
+    !!left && !leftLoading && !leftError && !runningIds.includes(left.record.id),
   );
-  const leftActive = $derived(!!left && left.record.id === activeInvocation);
-  const rightReady = $derived(right !== null && right.record.id !== activeInvocation);
-  const rightActive = $derived(right !== null && right.record.id === activeInvocation);
+  const leftActive = $derived(!!left && runningIds.includes(left.record.id));
+  const rightReady = $derived(right !== null && !runningIds.includes(right.record.id));
+  const rightActive = $derived(right !== null && runningIds.includes(right.record.id));
   const rows = $derived(comparisonRows(leftReady ? left : null, rightReady ? right : null));
 
   async function submit(event: SubmitEvent) {
@@ -44,13 +49,13 @@
     if (!id || loading || !leftReady) return;
     right = null;
     error = null;
-    if (id === activeInvocation) {
+    if (runningIds.includes(id)) {
       error = "Comparison is available after the invocation finishes.";
       return;
     }
     loading = true;
     try {
-      const detail = await load(id);
+      const detail = await fetchDetail(id);
       if (!disposed) right = { record: detail.record, bep: detail.bep };
     } catch (cause) {
       if (!disposed) error = String(cause);
