@@ -90,7 +90,7 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
     let file = zeal_lib::open_invocation_artifact(&data, &temp.0, &id, "bep.binpb.gz").unwrap();
     assert!(file.metadata().unwrap().len() > 0);
     assert_eq!(
-        zeal_lib::list_invocation_records(&data, &temp.0)
+        zeal_lib::list_invocation_records(&data, &temp.0, &[])
             .unwrap()
             .len(),
         1

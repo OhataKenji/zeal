@@ -770,7 +770,10 @@ mod tests {
         check_gui_run(&fixture, "build", "//:double").await;
         check_gui_run(&fixture, "test", "//:check").await;
         check_gui_run(&fixture, "run", "//:double").await;
-        assert_eq!(store::list(&fixture.data, &fixture.ws).unwrap().len(), 3);
+        assert_eq!(
+            store::list(&fixture.data, &fixture.ws, &[]).unwrap().len(),
+            3
+        );
     }
 
     struct GuiBazelFixture {

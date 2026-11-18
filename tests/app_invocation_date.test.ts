@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { invocationStatus } from "../src/lib/invocation.ts";
 import { createSession, emptyView } from "../src/lib/session.ts";
-import type { AppState, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
+import type { AppState, OwnedInvocation, TargetIndex, WorkspaceState } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 const WS: WorkspaceState = {
@@ -79,6 +80,51 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     assert.ok(toggle, "arguments toggle is missing");
     assert.match(toggle, /aria-expanded="false"/);
     assert.doesNotMatch(html, /id="command-arguments"/);
+  });
+
+  await t.test("distinguishes simultaneous live rows by workspace", () => {
+    const local: OwnedInvocation = {
+      id: "local",
+      workspace: WS.workspace,
+      cmd: "run",
+      pattern: "//app:app",
+      startedAt: 1_700_000_000_000,
+      console: true,
+      stoppable: true,
+      stopping: false,
+    };
+    const foreign = { ...local, id: "foreign", workspace: "/other/workspace" };
+    const view = {
+      ...emptyView(),
+      core: CORE,
+      state: WS,
+      invocationRows: [
+        { record: local, execution: local },
+        { record: foreign, execution: foreign },
+      ],
+    };
+    const html = render(AppView, { props: { view, session } }).body;
+    assert.match(html, /aria-label="run \/\/app:app: ● running — \/workspace"/);
+    assert.match(html, /aria-label="run \/\/app:app: ● running — \/other\/workspace"/);
+    assert.match(html, />\/other\/workspace<\/small>/);
+  });
+
+  await t.test("shows the owning workspace next to the Stop control", async () => {
+    const { default: InvocationHeader } = await load("/src/lib/InvocationHeader.svelte");
+    const record = { id: "foreign", cmd: "run", pattern: "//app:app" };
+    const execution: OwnedInvocation = {
+      ...record,
+      workspace: "/other/workspace",
+      startedAt: 1_700_000_000_000,
+      console: true,
+      stoppable: true,
+      stopping: false,
+    };
+    const html = render(InvocationHeader, {
+      props: { record, status: invocationStatus(record, execution), execution, onstop: () => {} },
+    }).body;
+    assert.match(html, />Workspace \/other\/workspace<\/p>/);
+    assert.match(html, /<button[^>]*aria-label="Stop in \/other\/workspace"/);
   });
 });
 

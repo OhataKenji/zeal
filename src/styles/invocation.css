@@ -60,6 +60,11 @@
   font: 11px var(--mono);
 }
 
+.invocation-row .invocation-owner {
+  display: block;
+  margin-left: 20px;
+}
+
 .invocation-row .invocation-time {
   margin-left: auto;
   font: 11px var(--font-sans);
@@ -115,10 +120,20 @@
   align-items: center;
 }
 
-.invocation-summary h1 {
+.invocation-heading {
   min-width: 0;
+}
+
+.invocation-summary h1 {
   font: 600 21px/1.4 var(--mono);
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.invocation-owner {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font: 11px/1.4 var(--mono);
   overflow-wrap: anywhere;
 }
 

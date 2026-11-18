@@ -68,7 +68,7 @@
 
 {#if shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status}>
+    <InvocationHeader record={shown} {status} {execution} {onstop}>
       <div class="invocation-tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab, index}
           <button
@@ -87,17 +87,6 @@
             >Loading invocation…</span
           >{/if}
       </div>
-      {#if execution?.stoppable}
-        <div class="invocation-actions">
-          <button
-            type="button"
-            class="button button-ghost"
-            disabled={execution.stopping}
-            onclick={() => onstop(execution.id)}
-            >{execution.stopping ? "Stopping…" : "Stop"}</button
-          >
-        </div>
-      {/if}
     </InvocationHeader>
 
     {#if view.detailError}

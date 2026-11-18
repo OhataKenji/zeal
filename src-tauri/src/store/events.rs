@@ -644,9 +644,9 @@ mod tests {
             ..Default::default()
         };
         receipt.append(&f.ordered(1, progress)).unwrap();
-        assert!(list(&f.data, &f.ws).unwrap().is_empty());
+        assert!(list(&f.data, &f.ws, &[]).unwrap().is_empty());
         receipt.append(&f.ordered(2, f.started())).unwrap();
-        assert_eq!(list(&f.data, &f.ws).unwrap().len(), 1);
+        assert_eq!(list(&f.data, &f.ws, &[]).unwrap().len(), 1);
         receipt.append(&f.ordered(3, f.finished())).unwrap();
         let ack = receipt.finish().unwrap();
         assert_eq!((ack.first, ack.last), (1, 3));

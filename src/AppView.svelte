@@ -224,11 +224,13 @@
   {@const startedAt = new Date(record.startedAt ?? NaN)}
   {@const status = invocationStatus(record, execution)}
   {@const active = content.kind === "invocation" && content.id === record.id}
+  {@const owner = execution?.workspace}
+  {@const workspace = owner ?? record.workspace}
   <li>
     <button
       class="invocation-row"
-      title={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id} — ${status.label}${record.workspace ? ` — ${record.workspace}` : ""}`}
-      aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}`}
+      title={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id} — ${status.label}${workspace ? ` — ${workspace}` : ""}`}
+      aria-label={`${record.cmd ?? "Command not recorded"} ${record.pattern ?? record.id}: ${status.label}${owner ? ` — ${owner}` : ""}`}
       class:selected={active}
       aria-current={active ? "true" : undefined}
       onclick={() => session.selectInvocation(record.id)}
@@ -249,6 +251,9 @@
         >{:else}<span class="invocation-time">Time not recorded</span>{/if}</span
       >
       <span class="invocation-pattern">{record.pattern ?? record.id}</span>
+      {#if owner && owner !== st?.workspace}
+        <small class="invocation-owner">{owner}</small>
+      {/if}
     </button>
   </li>
 {/snippet}

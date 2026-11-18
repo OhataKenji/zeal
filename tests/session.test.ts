@@ -496,6 +496,35 @@ test("a live run in shared history opens the owner's console and stops at its ow
   assert.deepEqual(pendingRequest(h, "stop_invocation").args, { workspace: OTHER, id: record.id });
 });
 
+test("history refresh preserves a newly selected shared run through release", async () => {
+  const execution = owned("b-run", OTHER, { cmd: "run" });
+  const state = coreState({ workspaces: [wsEntry(WS), wsEntry(OTHER)], invocations: [execution] });
+  const h = harness(Promise.resolve(state));
+  await initReady(h);
+  const record = { ...OTHER_RECORD, cmd: "run", exitCode: 0 };
+  await loadHistory(h, [record]);
+
+  h.session.loadInvocations();
+  h.session.selectInvocation(record.id);
+  // The in-flight request predates selection and lacks the selected record.
+  await loadHistory(h, [COMPLETED_RECORD]);
+  assert.deepEqual(h.view.invocation, { record, execution });
+  assert.deepEqual(lastPendingRequest(h, "list_invocations").args, {
+    workspace: WS,
+    selectedId: record.id,
+  });
+
+  h.emit("app-state", { ...state, revision: state.revision + 1, invocations: [] });
+  await loadHistory(h, [COMPLETED_RECORD, record]);
+  assert.deepEqual(h.view.invocation?.record, record);
+  assert.equal(h.view.invocation?.execution, undefined);
+  assert.deepEqual(pendingRequest(h, "get_invocation").args, { workspace: WS, id: record.id });
+  assert.deepEqual(pendingRequest(h, "get_invocation_profile").args, {
+    workspace: WS,
+    id: record.id,
+  });
+});
+
 test("history must match both the ID and workspace to expose a foreign live execution", async () => {
   const other = owned("b-run", OTHER);
   const hidden = owned("invisible", OTHER);

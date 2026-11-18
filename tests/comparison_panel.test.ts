@@ -151,7 +151,7 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
 
     function header(record: InvocationRecord): string {
       return render(InvocationHeader, {
-        props: { record, status: invocationStatus(record, null) },
+        props: { record, status: invocationStatus(record, null), onstop: () => {} },
       }).body.replace(/<!--[\s\S]*?-->/g, "");
     }
 

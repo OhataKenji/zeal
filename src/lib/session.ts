@@ -386,11 +386,16 @@ export function createSession(
     if (after !== null) void refreshSnapshot();
   }
 
-  function acceptHistory(ws: Workspace, records: InvocationRecord[]) {
-    const wasEligible = savedEligible(state);
+  function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {
     const id = selectedInvocationId(state);
-    const previous = ws.history.find((record) => record.id === id);
     const next = records.find((record) => record.id === id);
+    // Retry with the new selection pinned before replacing its history row.
+    if (id !== null && id !== selectedId && next === undefined) {
+      ws.historyDirty = true;
+      return;
+    }
+    const wasEligible = savedEligible(state);
+    const previous = ws.history.find((record) => record.id === id);
     const changed = JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
     const detail = state.saved.detail;
     const detailMismatch =
@@ -418,13 +423,15 @@ export function createSession(
   async function readHistory(ws: Workspace) {
     ws.historyBusy = true;
     ws.historyError = null;
+    const selectedId = selectedInvocationId(state);
     publish();
     const current = () => !disposed && state.workspace === ws;
     try {
       const records = await transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations, {
         workspace: ws.path,
+        selectedId,
       });
-      if (current()) acceptHistory(ws, records);
+      if (current()) acceptHistory(ws, records, selectedId);
     } catch (error) {
       if (current()) ws.historyError = String(error);
     } finally {
