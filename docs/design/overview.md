@@ -72,55 +72,22 @@ mock と記述が異なる箇所では、本設計の規則を優先する。
 
 ## Detailed Design
 
-### コンポーネントと責務
+### 実行の所有
 
-| コンポーネント                                         | 責務                                                             |
-| ------------------------------------------------------ | ---------------------------------------------------------------- |
-| WebView (`App.svelte`, `AppView.svelte`, `session.ts`) | session の寿命、表示用データの導出、操作と IPC の接続            |
-| IPC (`lib.rs`)                                         | 入力の受付、登録済み workspace の確認、処理の呼び出し            |
-| workspace (`workspace.rs`, `state.rs`)                 | パスと Bazel の解決、workspace の登録と scope の保持             |
-| 実行管理 (`runner.rs`, `terminal.rs`, `console.rs`)    | invocation ごとの起動、停止、終了回収、Console の入出力          |
-| target と query (`ingest.rs`, `query.rs`)              | query の実行依頼、結果の解釈と呼出し元への返却                   |
-| 観測 (`bes.rs`, `store/`, `detail.rs`, `profile.rs`)   | 外部起動を含む BES の受信、履歴の保存、詳細と profile の読み取り |
+起動 IPC は invocation ID を返し、操作は workspace と ID で対象を指定する。
+Stop は Zeal が所有するプロセスだけに送り、外部 CLI の実行は観測だけを行う。
+`--noblock_for_lock` により output_base の排他を Bazel に任せる。
 
-表は既存コードの責務を示すもので、追加の管理層は設けない。
-起動 IPC は invocation ID だけを返し、実行状態は Rust core の通知から受け取る。
-UI は workspace を離れると起動応答の待機を解除するが、Rust core の実行は止めない。
+子プロセスの回収時に PGID を無効にし、出力の取得完了後に実行状態と Console を解放する。
+表示中の Console は同じ invocation の BEP 結果に切り替わり、他の選択は変えない。
+BEP のビルド成功後も `run` のプログラムが動いていれば実行中として扱う。
+プログラムの端末出力は BEP に含まれず、終了後は残らない。
 
-live ConsoleはPTYの出力を表示し、stdinと停止をメモリのprocess状態で制御する。
-保存済みのログはBEPのProgressから詳細要求時に組み立てる。
-UI が直接プロセスやファイルを触る経路は作らない。
+停止はプロセスグループへ SIGINT、猶予後に SIGKILL を送る。
+アプリ終了時は全実行を共通の期限で停止するが、子孫の完全回収は保証しない。
+終了を確認できない場合も実行状態を解放し、BEP の結果は推測で補わない。
 
-### invocation ごとのプロセス管理
-
-Zeal は、起動した Bazel を invocation ごとに管理する。
-workspace を切り替えても、実行の所属と停止対象は変わらない。
-各コマンドに --noblock_for_lock を付け、output_base の排他は Bazel に任せる。
-実行後の結果とログは BEP の観測記録に従う。query の取得エラーは呼び出し元に返す。
-Stop は Zeal が所有する実行だけを対象にし、BES で受信した外部実行は停止しない。
-実行状態は capture の終了時に破棄する。
-子プロセスを回収した時点で PGID を無効にし、以後は signal を送らない。
-出力の保存が終わるまでは entry を残し、保存後は Console を含む実行状態を破棄する。
-ターゲット一覧は workspace の選択、scope の変更、手動 refresh で取得する([Target の段階的な取得](./target-loading.md))。
-refresh の結果は IPC の直接返却で届き、GUI は最新の要求の応答だけを採用する。
-取り込み中も Send を使える。
-実行中はConsoleを表示する。
-プロセスが終わるとConsoleは畳まれ、同じ選択先は保存済みのBEP結果を表示する。
-Consoleはliveの間はworkspace切替をまたいで再表示できるが、完了後はterminal出力を保持しない。
-履歴とログはBEPの観測記録を使い、`run`のprogram出力はBEPに含まれないため残らない。
-他の画面やworkspaceの選択は完了で変わらない。
-Bazelが待機する原因は推測しない。
-
-composerは `build` / `test` / `run` を受け付ける。
-spawn は独立したプロセスグループで行い、stop と hard kill をグループへ送る。
-子孫の完全回収は保証しない。
-中断のエスカレーションと確認は、所有する invocation ごとに適用する([m3](./m3-find-and-execute.md))。
-アプリ終了時に実行中の invocation があれば SIGINT を送り、猶予のあとでグループを kill してから終了する。
-
-履歴の結果が未観測なら不明のまま残す。
-以前のprocessの照合やsignal送信は行わない。
-waitエラーでは実行枠を解放し、processの状態を不明と示す。
-履歴のビルド結果はBEPの事実を維持する([m3](./m3-find-and-execute.md)、[m4](./m4-invocation-history.md))。
+ターゲット取得は [target-loading](./target-loading.md)、画面側の制御は [src/README.md](../../src/README.md) を参照。
 
 ### invocation の定義
 
