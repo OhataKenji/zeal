@@ -1,4 +1,11 @@
-import type { InvocationRecord, OwnedInvocation, Section } from "./types.ts";
+import { targetError } from "./target.ts";
+import type {
+  BazelCommand,
+  InvocationRecord,
+  OwnedInvocation,
+  RunnerCount,
+  Section,
+} from "./types.ts";
 
 /** Display status and label for one invocation record. */
 export interface InvocationStatus {
@@ -68,4 +75,44 @@ export function sectionMessage(section: Section<unknown>): string {
     case "not_available":
       return `not available — ${section.note}`;
   }
+}
+
+export interface RunnerSummary {
+  total: number;
+  cached: number;
+  hitPct: number;
+  runners: Array<{ name: string; count: number; cached: boolean }>;
+}
+
+/** Summarizes BEP `runner_count` entries, excluding non-spawn `"total"` and `"internal"` rows. */
+export function summarizeRunners(counts: RunnerCount[] | undefined): RunnerSummary | null {
+  if (!counts?.length) return null;
+  const runners = counts
+    .filter((entry) => entry.name !== "total" && entry.name !== "internal" && entry.count > 0)
+    .map((entry) => ({
+      name: entry.name,
+      count: entry.count,
+      cached: entry.name.toLowerCase().includes("cache"),
+    }));
+  const total = runners.reduce((sum, entry) => sum + entry.count, 0);
+  if (total === 0) return null;
+  const cached = runners
+    .filter((entry) => entry.cached)
+    .reduce((sum, entry) => sum + entry.count, 0);
+  return {
+    total,
+    cached,
+    hitPct: Math.round((cached / total) * 100),
+    runners,
+  };
+}
+
+/** Extracts a valid `(cmd, pattern)` pair when a finished invocation can be safely re-run. */
+export function rerunArgs(
+  record: InvocationRecord | undefined,
+): { cmd: BazelCommand; pattern: string } | null {
+  if (!record?.cmd || !record.pattern) return null;
+  if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") return null;
+  if (targetError(record.pattern) !== null) return null;
+  return { cmd: record.cmd, pattern: record.pattern };
 }

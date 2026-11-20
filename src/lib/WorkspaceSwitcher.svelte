@@ -1,23 +1,19 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { CaretDown, Check, Gear } from "phosphor-svelte";
+  import { CaretDown, Check } from "phosphor-svelte";
   import { COMMANDS } from "./commands";
   import Notice from "./Notice.svelte";
 
   let {
     workspace,
-    settingsOpen,
     opening,
     onopen,
-    onsettings,
     onhome,
   }: {
     workspace: string | null;
-    settingsOpen: boolean;
     opening: boolean;
     onopen: (path?: string) => void;
-    onsettings: () => void;
     onhome: () => void;
   } = $props();
 
@@ -108,17 +104,6 @@
     </svg>
     <span class="ws-name">{displayName}</span>
   </button>
-  <button
-    type="button"
-    class="button button-ghost icon-button"
-    aria-label="Workspace settings"
-    title="Workspace settings"
-    aria-pressed={settingsOpen}
-    disabled={!workspace || opening}
-    onclick={() => navigate(onsettings)}
-  >
-    <Gear size={14} />
-  </button>
   <div class="ws-path-row">
     {#if workspace}
       <span class="ws-path" title={workspace}>{workspace}</span>
@@ -183,16 +168,6 @@
     row-gap: 0;
     min-width: 0;
     padding: 0 12px;
-  }
-
-  .workspace-switcher > button[aria-pressed="true"] {
-    background: var(--accent);
-    color: var(--primary);
-  }
-
-  .workspace-switcher > .icon-button {
-    width: 24px;
-    height: 24px;
   }
 
   .ws-path-row {

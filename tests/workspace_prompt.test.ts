@@ -14,12 +14,10 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     initial: string,
     include = SCOPE.include,
     bazelAvailable = true,
-    mode: "open" | "settings" = "open",
     opening = false,
   ): string {
     return render(WorkspacePrompt, {
       props: {
-        mode,
         initial,
         initialScope: { include },
         bazelAvailable,
@@ -86,7 +84,7 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
   });
 
   await t.test("an in-flight workspace open disables the path input, picker, and submit", () => {
-    const html = output("/workspace", SCOPE.include, true, "open", true);
+    const html = output("/workspace", SCOPE.include, true, true);
     const input = workspaceField(html);
     assert.match(input, /\bdisabled\b/);
     const choose = chooseButton(html);
@@ -164,26 +162,5 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     const choose = chooseButton(html);
     assert.doesNotMatch(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
     assert.match(submitButton(html), /\bdisabled\b/);
-  });
-
-  await t.test("settings mode locks the path and offers Save settings", () => {
-    const html = output("/workspace", ["//app/..."], true, "settings");
-    assert.match(html, /<h1>Workspace settings<\/h1>/);
-    assert.match(html, /Choose which targets to discover in this workspace\./);
-    const input = workspaceField(html);
-    assert.match(input, /\breadonly\b/);
-    assert.match(input, /\bvalue="\/workspace"/);
-    assert.doesNotMatch(input, /\bdisabled\b/);
-    assert.doesNotMatch(html, /Choose folder…/);
-    assert.match(html, /<button[^>]*type="submit"[^>]*>[\s\S]*?Save settings<\/button>/);
-    assert.match(html, /Target patterns/);
-    assert.match(html, /scope-patterns/);
-  });
-
-  await t.test("settings mode keeps the scope editable and warns on //...", () => {
-    const html = output("/workspace", SCOPE.include, true, "settings");
-    assert.match(tag(html, /<textarea\b[^>]*>[\s\S]*?<\/textarea>/), />\/\/\.\.\.</);
-    assert.match(html, /id="scope-warning"/);
-    assert.match(html, /<button[^>]*type="submit"[^>]*>[\s\S]*?Save settings<\/button>/);
   });
 });

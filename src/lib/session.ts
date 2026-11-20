@@ -16,16 +16,12 @@ import type {
   TargetLoad,
   TargetOutputs,
   TargetScope,
+  WorkspaceInfo,
   WorkspaceState,
 } from "./types.ts";
 
-/** Workspace page destinations inside the main content area. */
-export type WorkspacePage = "targets" | "analytics" | "query";
-
-/** The single destination the session is showing. */
-export type SessionContent =
-  | { readonly kind: WorkspacePage }
-  | { readonly kind: "invocation"; readonly id: string; readonly page: WorkspacePage };
+/** Top-level Lens Rail page destinations. */
+export type Page = "workspace" | "targets" | "history" | "query" | "analytics";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
 export interface Transport {
@@ -48,6 +44,7 @@ interface TargetSelection {
 
 interface Workspace {
   path: string;
+  info: Reader<WorkspaceInfo>;
   snapshot: TargetIndex | null;
   snapshotError: string | null;
   refresh: object | null;
@@ -67,8 +64,9 @@ interface Saved {
 interface SessionState {
   core: AppState | null;
   workspace: Workspace | null;
-  content: SessionContent;
-  start: SessionContent | null;
+  page: Page;
+  selectedInvocationId: string | null;
+  start: object | null;
   error: string | null;
   saved: Saved;
 }
@@ -85,11 +83,12 @@ function savedReaders(): Saved {
   return { detail: reader(), profile: reader() };
 }
 
-function initialState(page: WorkspacePage): SessionState {
+function initialState(page: Page): SessionState {
   return {
     core: null,
     workspace: null,
-    content: { kind: page },
+    page,
+    selectedInvocationId: null,
     start: null,
     error: null,
     saved: savedReaders(),
@@ -117,12 +116,7 @@ function visibleExecution(state: SessionState, id: string | null): OwnedInvocati
 }
 
 function selectedInvocationId(state: SessionState): string | null {
-  return state.content.kind === "invocation" ? state.content.id : null;
-}
-
-function workspacePage(state: SessionState): WorkspacePage {
-  const content = state.content;
-  return content.kind === "invocation" ? content.page : content.kind;
+  return state.page === "history" ? state.selectedInvocationId : null;
 }
 
 function savedEligible(state: SessionState): boolean {
@@ -145,14 +139,6 @@ function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boole
   if (left?.kind === "target" && right?.kind === "target") return left.label === right.label;
   if (left?.kind === "package" && right?.kind === "package") return left.path === right.path;
   return left === null && right === null;
-}
-
-function sameContent(left: SessionContent, right: SessionContent): boolean {
-  if (left.kind !== right.kind) return false;
-  if (left.kind === "invocation" && right.kind === "invocation") {
-    return left.id === right.id && left.page === right.page;
-  }
-  return true;
 }
 
 /** Flat projection of session state consumed by the Svelte views. */
@@ -180,14 +166,18 @@ function sessionView(state: SessionState) {
         execution: executions.find((entry) => matchesOwner(record, entry)),
       })),
   ];
-  const selected = invocationRows.find((row) => row.record.id === selectedInvocationId(state));
+  const selected = invocationRows.find((row) => row.record.id === state.selectedInvocationId);
   const target = ws?.target ?? null;
   const saved = state.saved;
   return {
-    content: state.content,
-    invocation: selected ?? null,
+    page: state.page,
+    selectedInvocationId: state.selectedInvocationId,
+    invocation: state.page === "history" ? (selected ?? null) : null,
     core,
     state: wsEntry(core, ws?.path ?? null),
+    workspaceInfo: ws?.info.value ?? null,
+    workspaceInfoLoading: ws?.info.loading ?? false,
+    workspaceInfoError: ws?.info.error ?? null,
     invocationRows,
     snapshot: ws?.snapshot ?? null,
     snapshotLoading: ws !== null && ws.refresh !== null,
@@ -223,22 +213,14 @@ export function canSend(view: SessionView, target: string): boolean {
   );
 }
 
-export function emptyView(page: WorkspacePage = "targets"): SessionView {
+export function emptyView(page: Page = "targets"): SessionView {
   return sessionView(initialState(page));
 }
 
-/**
- * Owns the session's mutable state and drives every IPC read directly.
- * Stale async results are rejected by captured object identity: workspace,
- * target selection, saved readers, refresh token, start token, and
- * workspace-open token each invalidate only their own pending work. A
- * target/package selection also replaces the content object a pending start
- * captured, so its late reply cannot navigate.
- */
 export function createSession(
   transport: Transport,
   changed: (view: SessionView) => void,
-  page: WorkspacePage = "targets",
+  page: Page = "targets",
 ) {
   const state = initialState(page);
   let disposed = false;
@@ -387,7 +369,7 @@ export function createSession(
   }
 
   function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {
-    const id = selectedInvocationId(state);
+    const id = state.selectedInvocationId;
     const next = records.find((record) => record.id === id);
     // Retry with the new selection pinned before replacing its history row.
     if (id !== null && id !== selectedId && next === undefined) {
@@ -423,7 +405,7 @@ export function createSession(
   async function readHistory(ws: Workspace) {
     ws.historyBusy = true;
     ws.historyError = null;
-    const selectedId = selectedInvocationId(state);
+    const selectedId = state.selectedInvocationId;
     publish();
     const current = () => !disposed && state.workspace === ws;
     try {
@@ -510,7 +492,11 @@ export function createSession(
 
   /** A history update re-reads saved results even when values are cached. */
   function refreshSavedFromHistory() {
-    if (selectedInvocationId(state) === null) return;
+    if (state.selectedInvocationId === null) return;
+    if (state.page !== "history") {
+      state.saved = savedReaders();
+      return;
+    }
     const saved = state.saved;
     // Replacing the wrapper orphans any in-flight read; the retained values
     // stay visible until the fresh pair lands or fails.
@@ -533,11 +519,22 @@ export function createSession(
     state.saved = savedReaders();
   }
 
+  function loadWorkspaceInfo() {
+    const ws = state.workspace;
+    if (disposed || !ws || !state.core?.bazel || !wsEntry(state.core, ws.path)) return;
+    const current = () => !disposed && state.workspace === ws;
+    void read(
+      ws.info,
+      () => transport.invoke<WorkspaceInfo>(COMMANDS.getWorkspaceInfo, { workspace: ws.path }),
+      current,
+    );
+  }
+
   function selectWorkspace(path: string) {
     if (disposed || state.workspace?.path === path) return;
-    const page = workspacePage(state);
     state.workspace = {
       path,
+      info: reader(),
       snapshot: null,
       snapshotError: null,
       refresh: null,
@@ -548,29 +545,27 @@ export function createSession(
       historyBusy: false,
       historyDirty: false,
     };
+    state.selectedInvocationId = null;
     state.start = null;
     state.error = null;
     state.saved = savedReaders();
-    state.content = { kind: page };
     publish();
     requestHistory();
     void refreshSnapshot();
-  }
-
-  function showContent(content: SessionContent) {
-    if (disposed || sameContent(state.content, content)) return;
-    const previousId = selectedInvocationId(state);
-    state.content = content;
-    if (previousId !== selectedInvocationId(state)) {
-      state.saved = savedReaders();
-    }
-    publish();
-    ensureSaved();
+    if (state.page === "workspace") loadWorkspaceInfo();
   }
 
   function selectInvocation(id: string) {
     if (disposed) return;
-    showContent({ kind: "invocation", id, page: workspacePage(state) });
+    const previousId = selectedInvocationId(state);
+    state.page = "history";
+    state.selectedInvocationId = id;
+    state.start = null;
+    if (previousId !== id) {
+      state.saved = savedReaders();
+    }
+    publish();
+    ensureSaved();
     const saved = state.saved;
     if (!savedEligible(state)) return;
     // Re-selecting the same invocation only retries failed readers.
@@ -578,27 +573,43 @@ export function createSession(
     if (saved.profile.error !== null) readSavedProfile();
   }
 
-  function showPage(page: WorkspacePage) {
-    showContent({ kind: page });
+  function showPage(page: Page) {
+    if (disposed) return;
+    const changed = state.page !== page;
+    state.page = page;
+    state.start = null;
+    if (changed) {
+      publish();
+      if (page === "history") ensureSaved();
+    }
+    if (page === "workspace") {
+      const ws = state.workspace;
+      if (ws && ws.info.value === null && ws.info.error === null && !ws.info.loading) {
+        loadWorkspaceInfo();
+      }
+    }
   }
 
   function select(selection: ExplorerSelection) {
     if (disposed) return;
-    showContent({ kind: "targets" });
+    state.page = "targets";
+    state.start = null;
     const ws = state.workspace;
-    if (!ws) return;
+    if (!ws) {
+      publish();
+      return;
+    }
     const target = ws.target;
     if (sameSelection(target.selection, selection)) {
       if (selection?.kind === "target" && target.detail.error !== null) {
         ws.target = targetSelection(selection);
         publish();
         void loadTarget();
+      } else {
+        publish();
       }
       return;
     }
-    // A changed selection also refreshes the content object a pending start
-    // captured, so its late reply cannot navigate after the user moves on.
-    state.content = { kind: "targets" };
     ws.target = targetSelection(selection);
     publish();
     void loadTarget();
@@ -642,9 +653,9 @@ export function createSession(
   async function start(cmd: BazelCommand, pattern: string, argumentsText: string) {
     const ws = state.workspace;
     if (disposed || !ws || !canSend(sessionView(state), pattern)) return;
-    const pending = state.content;
+    const token = {};
     const openRequest = workspaceRequest;
-    state.start = pending;
+    state.start = token;
     state.error = null;
     publish();
     try {
@@ -654,17 +665,17 @@ export function createSession(
         pattern,
         arguments: argumentsText,
       });
-      if (disposed || state.start !== pending) return;
+      if (disposed || state.start !== token) return;
       state.start = null;
-      if (state.content !== pending || workspaceRequest !== openRequest || state.workspace !== ws) {
+      if (workspaceRequest !== openRequest || state.workspace !== ws) {
         publish();
         return;
       }
-      showContent({ kind: "invocation", id, page: workspacePage(state) });
+      selectInvocation(id);
     } catch (error) {
-      if (disposed || state.start !== pending) return;
+      if (disposed || state.start !== token) return;
       state.start = null;
-      if (state.content !== pending || workspaceRequest !== openRequest || state.workspace !== ws) {
+      if (workspaceRequest !== openRequest || state.workspace !== ws) {
         publish();
         return;
       }
@@ -775,6 +786,7 @@ export function createSession(
       void start(cmd, pattern, argumentsText),
     stop: (id: string) => void stop(id),
     openWorkspace,
+    loadWorkspaceInfo,
     refresh: () => void refreshSnapshot(),
     selectInvocation,
     showPage,

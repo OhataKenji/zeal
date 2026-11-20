@@ -39,7 +39,7 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
 
   function output(startedAt: number | undefined): string {
     const record = { id: "invocation", cmd: "build", pattern: "//app:app", startedAt };
-    const view = Object.assign(emptyView("targets"), {
+    const view = Object.assign(emptyView("history"), {
       core: CORE,
       state: WS,
       invocations: [record],
@@ -68,18 +68,15 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     });
   }
 
-  await t.test("names workspace navigation and command controls accessibly", () => {
+  await t.test("names workspace rail domains accessibly", () => {
     const html = output(1_700_000_000_000);
-    const nav = html.match(/<nav[^>]*aria-label="Workspace views"[^>]*>([\s\S]*?)<\/nav>/)?.[1];
-    assert.ok(nav, "workspace navigation is missing");
-    assert.match(nav, /<button[^>]*>(?:(?!<\/button>)[\s\S])*?Query<\/button>/);
-    assert.match(nav, /<button[^>]*>(?:(?!<\/button>)[\s\S])*?Analytics<\/button>/);
-    assert.match(html, /<button[^>]*aria-label="Build"/);
-    assert.match(html, /<button[^>]*aria-label="Reload targets"/);
-    const toggle = html.match(/<button[^>]*aria-label="Arguments"[^>]*>/)?.[0];
-    assert.ok(toggle, "arguments toggle is missing");
-    assert.match(toggle, /aria-expanded="false"/);
-    assert.doesNotMatch(html, /id="command-arguments"/);
+    const nav = html.match(/<nav[^>]*aria-label="Workspace domains"[^>]*>([\s\S]*?)<\/nav>/)?.[1];
+    assert.ok(nav, "workspace rail navigation is missing");
+    assert.match(nav, /Workspace/);
+    assert.match(nav, /Targets/);
+    assert.match(nav, /Query/);
+    assert.match(nav, /History/);
+    assert.match(nav, /Analytics/);
   });
 
   await t.test("distinguishes simultaneous live rows by workspace", () => {
@@ -95,7 +92,7 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     };
     const foreign = { ...local, id: "foreign", workspace: "/other/workspace" };
     const view = {
-      ...emptyView(),
+      ...emptyView("history"),
       core: CORE,
       state: WS,
       invocationRows: [
@@ -196,10 +193,10 @@ test("AppView shows a diagnostic without invocation tabs when the record is unav
   const { default: AppView } = await load("/src/AppView.svelte");
   const session = renderSession();
 
-  const view = Object.assign(emptyView("targets"), {
+  const view = Object.assign(emptyView("history"), {
     core: CORE,
     state: WS,
-    content: { kind: "invocation", id: "pending", page: "targets" },
+    selectedInvocationId: "pending",
     invocations: [],
     invocationRows: [],
     invocationsError: null,
