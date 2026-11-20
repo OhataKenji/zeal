@@ -84,11 +84,11 @@ export interface RunnerSummary {
   runners: Array<{ name: string; count: number; cached: boolean }>;
 }
 
-/** Summarizes BEP `runner_count` entries, excluding Bazel's `"total"` rollup row. */
+/** Summarizes BEP `runner_count` entries, excluding non-spawn `"total"` and `"internal"` rows. */
 export function summarizeRunners(counts: RunnerCount[] | undefined): RunnerSummary | null {
   if (!counts?.length) return null;
   const runners = counts
-    .filter((entry) => entry.name !== "total" && entry.count > 0)
+    .filter((entry) => entry.name !== "total" && entry.name !== "internal" && entry.count > 0)
     .map((entry) => ({
       name: entry.name,
       count: entry.count,

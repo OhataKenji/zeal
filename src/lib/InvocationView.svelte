@@ -31,7 +31,11 @@
   const bep = $derived(sectionData(view.detail?.bep));
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
   const rerunCandidate = $derived(rerunArgs(shown));
-  const canRerun = $derived(rerunCandidate !== null && canSend(view, rerunCandidate.pattern));
+  const canRerun = $derived(
+    rerunCandidate !== null &&
+      shown?.workspace === view.state?.workspace &&
+      canSend(view, rerunCandidate.pattern),
+  );
   const status = $derived(invocationStatus(shown, execution));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections, "Compare"] as const;

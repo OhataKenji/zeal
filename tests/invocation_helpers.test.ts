@@ -21,6 +21,19 @@ test("summarizeRunners excludes total row and computes cache hit percentage", ()
   });
   assert.equal(summarizeRunners([]), null);
   assert.equal(summarizeRunners([{ name: "total", count: 5 }]), null);
+  assert.deepEqual(
+    summarizeRunners([
+      { name: "total", count: 10 },
+      { name: "disk cache hit", count: 9 },
+      { name: "internal", count: 1 },
+    ]),
+    {
+      total: 9,
+      cached: 9,
+      hitPct: 100,
+      runners: [{ name: "disk cache hit", count: 9, cached: true }],
+    },
+  );
 });
 
 test("rerunArgs allows build/test/run with valid patterns and rejects invalid ones", () => {

@@ -294,7 +294,7 @@
         </aside>
       {/if}
 
-      <main class="content" class:invocation-content={view.page !== "targets"}>
+      <main class="content" class:invocation-content={view.page === "history"}>
         {#if view.page === "workspace"}
           <div class="page-center">
             <WorkspaceView
@@ -319,7 +319,7 @@
               ).toLocaleTimeString()} ({view.snapshotError})
             </Notice>
           {/if}
-          {#if snap}
+          {#if snap && selectedPkg !== null}
             <PackageView
               index={snap}
               pkg={selectedPkg}
@@ -329,6 +329,8 @@
               onrun={(cmd, pattern) => session.start(cmd, pattern)}
               onopenflags={openRunDialog}
             />
+          {:else if snap}
+            <p class="workspace-empty dim">Select a package or target in the sidebar.</p>
           {:else if view.snapshotLoading}
             <p class="dim">Loading targets…</p>
           {:else if view.snapshotError}

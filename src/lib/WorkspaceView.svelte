@@ -23,14 +23,19 @@
   } = $props();
 
   const name = $derived(workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace);
+  const persistedScope = $derived(`${workspace}\0${scope.include.join("\n")}`);
   let includeText = $state(untrack(() => scope.include.join("\n")));
+  let lastScopeKey = untrack(() => `${workspace}\0${scope.include.join("\n")}`);
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let copiedKey = $state<string | null>(null);
   let copyError = $state("");
 
   $effect(() => {
-    includeText = scope.include.join("\n");
+    if (persistedScope !== lastScopeKey) {
+      lastScopeKey = persistedScope;
+      includeText = scope.include.join("\n");
+    }
   });
 
   const rows = $derived.by(() => {

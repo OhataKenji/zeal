@@ -12,7 +12,7 @@
     onopenflags,
   }: {
     index: TargetIndex;
-    pkg: string | null;
+    pkg: string;
     selectedLabel?: string | null;
     canRun?: boolean;
     onselect: (label: string) => void;
@@ -22,11 +22,11 @@
 
   const targets = $derived(
     index.targets
-      .filter((t) => pkg === null || t.pkg === pkg || t.pkg.startsWith(`${pkg}/`))
+      .filter((t) => t.pkg === pkg || t.pkg.startsWith(`${pkg}/`))
       .sort((a, b) => a.label.localeCompare(b.label)),
   );
-  const hasSub = $derived(pkg !== null && index.targets.some((t) => t.pkg.startsWith(`${pkg}/`)));
-  const pattern = $derived(pkg === null ? "//..." : hasSub ? `//${pkg}/...` : `//${pkg}:all`);
+  const hasSub = $derived(index.targets.some((t) => t.pkg.startsWith(`${pkg}/`)));
+  const pattern = $derived(hasSub ? `//${pkg}/...` : `//${pkg}:all`);
   const hasTests = $derived(targets.some((t) => t.ruleClass.endsWith("_test")));
 </script>
 
@@ -56,7 +56,7 @@
         class:selected={selectedLabel === target.label}
         onclick={() => onselect(target.label)}
       >
-        <td class="mono">{pkg !== null && target.pkg === pkg ? `:${target.name}` : target.label}</td>
+        <td class="mono">{target.pkg === pkg ? `:${target.name}` : target.label}</td>
         <td class="mono dim">{target.ruleClass}</td>
       </tr>
     {:else}

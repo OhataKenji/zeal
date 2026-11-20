@@ -369,7 +369,7 @@ export function createSession(
   }
 
   function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {
-    const id = selectedInvocationId(state);
+    const id = state.selectedInvocationId;
     const next = records.find((record) => record.id === id);
     // Retry with the new selection pinned before replacing its history row.
     if (id !== null && id !== selectedId && next === undefined) {
@@ -405,7 +405,7 @@ export function createSession(
   async function readHistory(ws: Workspace) {
     ws.historyBusy = true;
     ws.historyError = null;
-    const selectedId = selectedInvocationId(state);
+    const selectedId = state.selectedInvocationId;
     publish();
     const current = () => !disposed && state.workspace === ws;
     try {
