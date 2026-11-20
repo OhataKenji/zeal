@@ -1,11 +1,13 @@
 <script lang="ts">
   import InvocationHeader from "./InvocationHeader.svelte";
-  import type { SessionView } from "./session";
+  import { canSend, type SessionView } from "./session";
   import {
     invocationStatus,
+    rerunArgs,
     sectionData,
     sectionMessage,
     sectionNoticeTone,
+    summarizeRunners,
   } from "./invocation";
   import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
@@ -13,18 +15,23 @@
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { formatOptions } from "./invocation/options";
+  import type { BazelCommand } from "./types";
 
-  let { view, reload, reloadProfile, onstop }: {
+  let { view, reload, reloadProfile, onstop, onrerun }: {
     view: SessionView;
     reload: () => void;
     reloadProfile: () => void;
     onstop: (id: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string) => void;
   } = $props();
   const selected = $derived(view.invocation);
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
   const execution = $derived(selected?.execution);
   const profile = $derived(sectionData(view.profile ?? undefined));
   const bep = $derived(sectionData(view.detail?.bep));
+  const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
+  const rerunCandidate = $derived(rerunArgs(shown));
+  const canRerun = $derived(rerunCandidate !== null && canSend(view, rerunCandidate.pattern));
   const status = $derived(invocationStatus(shown, execution));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections, "Compare"] as const;
@@ -68,7 +75,7 @@
 
 {#if shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {execution} {onstop}>
+    <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
       <div class="invocation-tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab, index}
           <button
@@ -122,6 +129,25 @@
             {:else if section === "Logs"}
               <LogPanel section={view.detail?.log} loading={view.detailLoading} />
             {:else if section === "Details"}
+              {#if runnerSummary}
+                <div class="cache-summary">
+                  <div class="cache-summary-head">
+                    <h3 class="panel-subheading">Spawn Cache Hits (BEP)</h3>
+                    <span class="mono">{runnerSummary.cached} / {runnerSummary.total} cached ({runnerSummary.hitPct}%)</span>
+                  </div>
+                  <div class="cache-bar" aria-hidden="true">
+                    <div class="cache-bar-hit" style:width={`${runnerSummary.hitPct}%`}></div>
+                    <div class="cache-bar-exec" style:width={`${100 - runnerSummary.hitPct}%`}></div>
+                  </div>
+                  <div class="cache-legend">
+                    {#each runnerSummary.runners as r (r.name)}
+                      <span class="mono">
+                        <i class="cache-sw" class:hit={r.cached}></i>{r.name}: {r.count}
+                      </span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
               <dl class="invocation-details">
                 <dt>Command</dt>
                 <dd>{#if shown.cmd}<code>{shown.cmd}</code>{:else}Not recorded{/if}</dd>

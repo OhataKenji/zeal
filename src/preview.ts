@@ -462,6 +462,19 @@ export function installPreview() {
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
+    get_workspace_info: (payload) => {
+      const entry = wsEntry(payload?.workspace);
+      const ob = `/private/var/tmp/_bazel_dev/preview`;
+      return {
+        workspace: entry.workspace,
+        release: "release 8.7.0",
+        outputBase: ob,
+        executionRoot: `${ob}/execroot/_main`,
+        bazelBin: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
+        bazelTestlogs: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
+        repositoryCache: "/Users/dev/Library/Caches/bazel/repo_cache",
+      };
+    },
     get_target_detail: (payload): TargetDetail => {
       wsEntry(payload?.workspace);
       const label = String(payload?.label);

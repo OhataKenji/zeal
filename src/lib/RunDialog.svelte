@@ -1,0 +1,91 @@
+<script lang="ts">
+  import { targetError } from "./target";
+  import type { BazelCommand } from "./types";
+
+  let {
+    open = $bindable(false),
+    cmd = $bindable<BazelCommand>("build"),
+    pattern = $bindable("//..."),
+    flags = $bindable(""),
+    canRun,
+    onrun,
+  }: {
+    open: boolean;
+    cmd: BazelCommand;
+    pattern: string;
+    flags: string;
+    canRun: (target: string) => boolean;
+    onrun: (cmd: BazelCommand, pattern: string, flags: string) => void;
+  } = $props();
+
+  let dialog = $state<HTMLDialogElement>();
+  const error = $derived(pattern === "" ? null : targetError(pattern));
+  const preview = $derived(
+    `bazel ${cmd} ${pattern.trim() || "//..."}${flags.trim() ? ` ${flags.trim()}` : ""}`,
+  );
+  const submittable = $derived(pattern.trim() !== "" && error === null && canRun(pattern));
+
+  $effect(() => {
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    else if (!open && dialog.open) dialog.close();
+  });
+
+  function submit(event: SubmitEvent) {
+    event.preventDefault();
+    if (!submittable) return;
+    open = false;
+    onrun(cmd, pattern.trim(), flags.trim());
+  }
+</script>
+
+<dialog
+  class="modal"
+  bind:this={dialog}
+  aria-label="Run Bazel"
+  onclose={() => (open = false)}
+  onclick={(e) => {
+    if (e.target === dialog) open = false;
+  }}
+>
+  <div class="modal-head">
+    <span>Run Bazel</span>
+    <button type="button" class="button button-ghost" onclick={() => (open = false)}>Esc</button>
+  </div>
+  <form class="modal-body" onsubmit={submit}>
+    <div class="run-row">
+      <select class="select" aria-label="Bazel command" bind:value={cmd}>
+        <option value="build">build</option>
+        <option value="test">test</option>
+        <option value="run">run</option>
+      </select>
+      <input
+        class="input mono"
+        type="text"
+        aria-label="Target pattern"
+        aria-invalid={!!error}
+        placeholder="//..."
+        spellcheck={false}
+        autocomplete="off"
+        bind:value={pattern}
+      />
+    </div>
+    {#if error}
+      <p class="field-error" role="status">{error}</p>
+    {/if}
+    <input
+      class="input mono"
+      type="text"
+      aria-label="Arguments"
+      placeholder="Flags, e.g. --config=opt --test_output=errors"
+      spellcheck={false}
+      autocomplete="off"
+      bind:value={flags}
+    />
+    <pre class="code-box">{preview}</pre>
+    <div class="modal-actions">
+      <button type="button" class="button" onclick={() => (open = false)}>Cancel</button>
+      <button type="submit" class="button button-primary" disabled={!submittable}>Execute</button>
+    </div>
+  </form>
+</dialog>

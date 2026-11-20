@@ -5,8 +5,8 @@ import {
   canSend,
   createSession,
   emptyView,
+  type Page,
   type Transport,
-  type WorkspacePage,
 } from "../src/lib/session.ts";
 import type {
   AppState,
@@ -114,7 +114,7 @@ afterEach(() => {
   cleanup.splice(0).forEach((dispose) => dispose());
 });
 
-function harness(initial = Promise.resolve(READY), page: WorkspacePage = "targets") {
+function harness(initial = Promise.resolve(READY), page: Page = "targets") {
   let view = emptyView(page);
   let coreState = READY;
   let initialRequested = false;
@@ -212,7 +212,7 @@ async function loadHistory(h: ReturnType<typeof harness>, records: InvocationRec
 test("initial page survives the initial state fetch", async () => {
   const h = harness(Promise.resolve(READY), "query");
   await h.session.init();
-  assert.deepEqual(h.view.content, { kind: "query" });
+  assert.equal(h.view.page, "query");
 });
 
 test("initial restore selects lastWorkspace and loads its readers", async () => {
@@ -294,7 +294,7 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   );
   await settle();
   assert.equal(h.view.state?.workspace, OTHER);
-  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.page, "targets");
 });
 
 test("a delayed A start reply cannot route to A's console or error in B", async () => {
@@ -317,7 +317,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
   assert.equal(h.view.state?.workspace, OTHER);
   aStart.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.page, "targets");
   assert.equal(h.view.error, null);
   // No fresh get_state follows the start; app-state events carry the entry.
   assert.equal(h.stateReads(), 1);
@@ -336,7 +336,7 @@ test("same-workspace navigation after start is not overridden by the reply", asy
   h.session.showPage("query");
   start.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "query" });
+  assert.equal(h.view.page, "query");
   // A rejected reply after navigation likewise shows no stale error.
   h.session.start("build", "//app:second");
   await settle();
@@ -345,7 +345,7 @@ test("same-workspace navigation after start is not overridden by the reply", asy
   second.reply.reject(new Error("spawn failed"));
   await settle();
   assert.equal(h.view.error, null);
-  assert.deepEqual(h.view.content, { kind: "analytics" });
+  assert.equal(h.view.page, "analytics");
 });
 
 test("a start reply after browsing away and back does not navigate", async () => {
@@ -358,7 +358,7 @@ test("a start reply after browsing away and back does not navigate", async () =>
   h.session.showPage("targets");
   start.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.page, "targets");
   assert.equal(h.view.error, null);
 });
 
@@ -375,7 +375,7 @@ test("a start reply after a rejected workspace open does not navigate or error",
   assert.equal(h.view.state?.workspace, WS);
   start.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.page, "targets");
   assert.equal(h.view.error, null);
 });
 
@@ -393,7 +393,7 @@ test("a start reply after reselecting targets does not navigate", async () => {
   await settle();
   start.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.page, "targets");
   assert.deepEqual(h.view.selection, { kind: "target", label: "//app:first" });
   assert.equal(h.view.starting, false);
   assert.equal(h.view.error, null);
@@ -418,7 +418,8 @@ test("the start reply navigates; the app-state event supplies the owned entry", 
   const launched = owned("a-inv", WS, { cmd: "run" });
   start.reply.resolve("a-inv");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "a-inv", page: "targets" });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "a-inv");
   // The reply alone carries no core entry.
   assert.equal(h.view.invocation, null);
   h.emit("app-state", coreState({ revision: 2, invocations: [launched] }));
@@ -426,7 +427,8 @@ test("the start reply navigates; the app-state event supplies the owned entry", 
   const after = h.view;
   assert.deepEqual(after.invocation, { record: launched, execution: launched });
   // The state push derives the console in place; it does not navigate.
-  assert.deepEqual(after.content, { kind: "invocation", id: "a-inv", page: "targets" });
+  assert.equal(after.page, "history");
+  assert.equal(after.selectedInvocationId, "a-inv");
   assert.equal(h.stateReads(), 1);
 });
 
@@ -553,11 +555,8 @@ test("a live console shows until release, then the BEP record takes over", async
   await initReady(h);
   h.session.selectInvocation("a-run");
   await settle();
-  assert.deepEqual(h.view.content, {
-    kind: "invocation",
-    id: "a-run",
-    page: "targets",
-  });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "a-run");
   const running = h.view;
   assert.deepEqual(running.invocation, { record: live, execution: live });
   // The entry leaves the map; history then carries the finished record.
@@ -573,11 +572,8 @@ test("a live console shows until release, then the BEP record takes over", async
   await settle();
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
-  assert.deepEqual(h.view.content, {
-    kind: "invocation",
-    id: "a-run",
-    page: "targets",
-  });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "a-run");
 });
 
 test("scope change invalidates stale target results and readers name the workspace", async () => {
@@ -656,7 +652,7 @@ test("late history/detail/profile replies cannot populate another workspace", as
   await settle();
   assert.equal(h.view.detail, null);
   assert.equal(h.view.profile, null);
-  assert.notEqual(h.view.content.kind, "invocation");
+  assert.equal(h.view.selectedInvocationId, null);
 });
 
 test("returning to a workspace refetches and the reply loads without app-state", async () => {
@@ -871,7 +867,7 @@ test("a failed foreground start shows the error and restores send readiness", as
   await settle();
   assert.match(h.view.error ?? "", /spawn failed/);
   assert.equal(h.view.starting, false);
-  assert.deepEqual(h.view.content, { kind: "targets" });
+  assert.equal(h.view.page, "targets");
   assert.equal(canSend(h.view, "//app:first"), true);
 });
 
@@ -903,7 +899,8 @@ test("a failed A start cannot clear B's pending start", async () => {
   assert.equal(h.view.error, null);
   bStart.reply.resolve("inv-b");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "inv-b", page: "targets" });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "inv-b");
 });
 
 test("a start reply after release renders the saved result and reads for the same id", async () => {
@@ -924,7 +921,8 @@ test("a start reply after release renders the saved result and reads for the sam
   await loadHistory(h, [{ ...RECORD, id: "inv-x", finishedAt: 2, exitCode: 0 }]);
   start.reply.resolve("inv-x");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "inv-x", page: "targets" });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "inv-x");
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
   const detail = pendingRequest(h, "get_invocation");
@@ -959,7 +957,8 @@ test("a live Console suppresses saved reads until the entry is released", async 
   await settle();
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "a-run", page: "targets" });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "a-run");
   const detail = pendingRequest(h, "get_invocation");
   const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
@@ -981,7 +980,8 @@ test("saved reads require the record in history, not just an owned entry", async
   await loadHistory(h, []);
   h.session.selectInvocation("q-1");
   await settle();
-  assert.deepEqual(h.view.content, { kind: "invocation", id: "q-1", page: "targets" });
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "q-1");
   assert.equal(h.view.invocation?.execution?.id, "q-1");
   assert.equal(requestCount(h, "get_invocation"), 0);
   assert.equal(requestCount(h, "get_invocation_profile"), 0);
@@ -996,7 +996,7 @@ test("releasing an invocation elsewhere never moves the current destination", as
   h.session.showPage("query");
   h.emit("app-state", coreState({ revision: 3, invocations: [] }));
   await settle();
-  assert.deepEqual(h.view.content, { kind: "query" });
+  assert.equal(h.view.page, "query");
   assert.equal(h.view.invocation, null);
 });
 

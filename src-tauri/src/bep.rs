@@ -18,6 +18,13 @@ use std::io::{self, Read};
 
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunnerCount {
+    pub name: String,
+    pub count: u32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bep {
@@ -29,6 +36,8 @@ pub struct Bep {
     pub original_command_line: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_command_line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_counts: Option<Vec<RunnerCount>>,
     pub truncated: bool,
 }
 
@@ -326,6 +335,7 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
         24,
         size,
     );
+    bep.truncated |= !replace(&mut bep.runner_counts, delta.runner_counts, 16, size);
 }
 fn append_tail(log: &mut String, value: &str) {
     if value.len() >= LOG_LIMIT {
@@ -397,6 +407,24 @@ fn project(event: BuildEvent, bep: &mut Bep) {
             cmd_line: options.cmd_line.clone(),
             explicit_cmd_line: options.explicit_cmd_line.clone(),
         });
+    }
+    if let Some(Payload::BuildMetrics(metrics)) = &event.payload
+        && let Some(summary) = &metrics.action_summary
+    {
+        let counts: Vec<RunnerCount> = summary
+            .runner_count
+            .iter()
+            .filter_map(|rc| {
+                let count = u32::try_from(rc.count).ok()?;
+                (!rc.name.is_empty()).then(|| RunnerCount {
+                    name: rc.name.clone(),
+                    count,
+                })
+            })
+            .collect();
+        if !counts.is_empty() {
+            bep.runner_counts = Some(counts);
+        }
     }
     let Some(id) = event.id.and_then(|id| id.id) else {
         return;
@@ -1071,5 +1099,60 @@ mod gzip_tests {
         let parsed = parse_gzip(FailingRead, 1);
         assert!(parsed.invalid);
         assert!(parsed.read_error);
+    }
+
+    #[test]
+    fn projects_build_metrics_runner_counts_and_drops_negatives() {
+        use crate::protocol::bep::BuildMetrics;
+        use crate::protocol::bep::build_metrics::ActionSummary;
+        use crate::protocol::bep::build_metrics::action_summary::RunnerCount as ProtoRunner;
+
+        let event = BuildEvent {
+            payload: Some(Payload::BuildMetrics(BuildMetrics {
+                action_summary: Some(ActionSummary {
+                    runner_count: vec![
+                        ProtoRunner {
+                            name: "disk cache hit".into(),
+                            count: 12,
+                            exec_kind: String::new(),
+                        },
+                        ProtoRunner {
+                            name: "darwin-sandbox".into(),
+                            count: 4,
+                            exec_kind: String::new(),
+                        },
+                        ProtoRunner {
+                            name: "negative".into(),
+                            count: -3,
+                            exec_kind: String::new(),
+                        },
+                        ProtoRunner {
+                            name: String::new(),
+                            count: 5,
+                            exec_kind: String::new(),
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut raw = Vec::new();
+        event.encode_length_delimited(&mut raw).unwrap();
+        let parsed = parse(raw.as_slice());
+        assert_eq!(
+            parsed.runner_counts,
+            Some(vec![
+                RunnerCount {
+                    name: "disk cache hit".into(),
+                    count: 12,
+                },
+                RunnerCount {
+                    name: "darwin-sandbox".into(),
+                    count: 4,
+                },
+            ])
+        );
     }
 }

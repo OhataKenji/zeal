@@ -160,10 +160,16 @@ test("TargetView renders target details", async (t) => {
     assert.ok(!view({ actions: [], truncated: false }).includes("BUILD.bazel"));
 
     const pkgHtml = render(PackageView, {
-      props: { index: INDEX, pkg: "app/lib", onselect: () => {} },
+      props: {
+        index: INDEX,
+        pkg: "app/lib",
+        onselect: () => {},
+        onrun: () => {},
+        onopenflags: () => {},
+      },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
-    assert.match(pkgHtml, /<h1>\/\/app\/lib<\/h1>/);
-    assert.match(pkgHtml, />Package</);
+    assert.match(pkgHtml, /<h1[^>]*>\/\/app\/lib:all<\/h1>/);
+    assert.match(pkgHtml, />:parser</);
   });
 
   await t.test("attributes render without the label filter and keep Show more", () => {

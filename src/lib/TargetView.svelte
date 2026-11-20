@@ -2,12 +2,14 @@
   import { SvelteSet } from "svelte/reactivity";
   import { CaretDown, CaretUp } from "phosphor-svelte";
   import type {
+    BazelCommand,
     TargetActions,
     TargetDetail,
     TargetIndex,
     TargetOutputs,
   } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
+  import ActionPair from "./ActionPair.svelte";
   import ActionsSection from "./TargetActions.svelte";
 
   let {
@@ -18,7 +20,11 @@
     actions,
     actionsError,
     wsRoot,
+    canRun = true,
     onselect,
+    onrun,
+    onopenflags,
+    onclose,
   }: {
     index: TargetIndex;
     detail: TargetDetail;
@@ -27,10 +33,19 @@
     actions: TargetActions | null;
     actionsError: string | null;
     wsRoot: string;
+    canRun?: boolean;
     onselect: (label: string) => void;
+    onrun?: (cmd: BazelCommand, pattern: string) => void;
+    onopenflags?: (cmd: BazelCommand, pattern: string) => void;
+    onclose?: () => void;
   } = $props();
   const rel = $derived(relations(detail));
   const target = $derived(rel.target);
+  const primary = $derived.by((): { cmd: BazelCommand; label: string } => {
+    if (target.ruleClass.endsWith("_test")) return { cmd: "test", label: "Test" };
+    if (target.ruleClass.endsWith("_binary")) return { cmd: "run", label: "Run" };
+    return { cmd: "build", label: "Build" };
+  });
   const targets = $derived(
     new Map(index.targets.map((target) => [target.label, target])),
   );
@@ -91,12 +106,31 @@
 {/snippet}
 
   <header class="target-head">
-    <h1>{target.label}</h1>
-    <span class="badge">{target.ruleClass}</span>
-    {#if target.location}
-      <span class="source-location" title={target.location.file}>
-        {location(target.location.file, target.location.line)}
-      </span>
+    <div class="target-head-top">
+      <h1>{target.label}</h1>
+      {#if onclose}
+        <button type="button" class="button button-ghost icon-button" aria-label="Close" onclick={onclose}>✕</button>
+      {/if}
+    </div>
+    <div class="target-head-meta">
+      <span class="badge">{target.ruleClass}</span>
+      {#if target.location}
+        <span class="source-location" title={target.location.file}>
+          {location(target.location.file, target.location.line)}
+        </span>
+      {/if}
+    </div>
+    {#if onrun && onopenflags}
+      <div class="target-head-actions">
+        <ActionPair
+          primaryCmd={primary.cmd}
+          primaryLabel={primary.label}
+          target={target.label}
+          disabled={!canRun}
+          {onrun}
+          {onopenflags}
+        />
+      </div>
     {/if}
   </header>
   <section class="outputs">

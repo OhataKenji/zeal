@@ -40,6 +40,24 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
 }
 
+/// Fetch `bazel info` paths for a registered workspace.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "workspace.info", skip_all)]
+async fn get_workspace_info(
+    core: State<'_, Arc<Core>>,
+    workspace: String,
+) -> Result<workspace::WorkspaceInfo, String> {
+    let (bazel, ws_path) = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        let ws_path = st.workspace_path(&workspace)?;
+        let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
+        (bazel, ws_path)
+    };
+    tauri::async_runtime::spawn_blocking(move || workspace::fetch_info(&bazel, &ws_path))
+        .await
+        .map_err(|_| "workspace info worker failed".to_string())?
+}
+
 /// Load relationships for one target in `workspace`.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "target.detail.request", skip_all)]
@@ -480,6 +498,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            get_workspace_info,
             get_target_detail,
             get_target_outputs,
             get_target_actions,

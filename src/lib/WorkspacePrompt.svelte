@@ -6,7 +6,6 @@
   import type { TargetScope } from "./types";
 
   let {
-    mode = "open",
     initial = "",
     initialScope,
     bazelAvailable,
@@ -14,7 +13,6 @@
     onclose,
     opening = $bindable(false),
   }: {
-    mode?: "open" | "settings";
     initial?: string;
     initialScope: TargetScope;
     bazelAvailable: boolean;
@@ -87,11 +85,9 @@ build --experimental_collect_system_network_usage`;
   }}
 >
   <header>
-    <h1>{mode === "settings" ? "Workspace settings" : "Open a workspace"}</h1>
+    <h1>Open a workspace</h1>
     <p class="dim">
-      {mode === "settings"
-        ? "Choose which targets to discover in this workspace."
-        : "Choose a Bazel repository to explore its targets and build history."}
+      Choose a Bazel repository to explore its targets and build history.
     </p>
   </header>
   <div class="workspace-folder">
@@ -103,16 +99,13 @@ build --experimental_collect_system_network_usage`;
         bind:value={path}
         placeholder="/path/to/workspace"
         spellcheck={false}
-        readonly={mode === "settings"}
         disabled={busy}
         required
       />
     </label>
-    {#if mode === "open"}
-      <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
-        Choose folder…
-      </button>
-    {/if}
+    <button class="button" type="button" onclick={selectWorkspace} disabled={busy}>
+      Choose folder…
+    </button>
   </div>
   <Notice tone="warning">Do not open an untrusted repository.</Notice>
   <label>
@@ -141,7 +134,7 @@ build --experimental_collect_system_network_usage`;
     <button
       class="button button-primary"
       type="submit"
-      disabled={!canSubmit}>{mode === "settings" ? "Save settings" : "Open workspace"}</button
+      disabled={!canSubmit}>Open workspace</button
     >
     {#if onclose}
       <button class="button" type="button" onclick={onclose} disabled={busy}>Cancel</button>
