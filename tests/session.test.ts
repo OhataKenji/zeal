@@ -1384,21 +1384,20 @@ test("a stop failure surfaces only while its invocation is displayed", async () 
 test("returning to history reloads detail when the selected record changed off-page", async () => {
   const h = harness();
   await initReady(h);
-  const running = { ...RECORD, exitCode: null };
-  pendingRequest(h, "list_invocations").reply.resolve([running]);
+  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
   await settle();
   h.session.selectInvocation(RECORD.id);
   await settle();
-  pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: running });
+  pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
-  assert.equal(h.view.detail?.record.exitCode, null);
+  assert.equal(h.view.detail?.record.exitCode, undefined);
 
   h.session.showPage("targets");
   await settle();
   h.emit("invocations-changed", { workspace: WS });
   await settle();
-  lastPendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED_RECORD]);
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 1);
   assert.equal(requestCount(h, "get_invocation_profile"), 1);
