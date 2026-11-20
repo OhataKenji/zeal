@@ -492,7 +492,11 @@ export function createSession(
 
   /** A history update re-reads saved results even when values are cached. */
   function refreshSavedFromHistory() {
-    if (selectedInvocationId(state) === null) return;
+    if (state.selectedInvocationId === null) return;
+    if (state.page !== "history") {
+      state.saved = savedReaders();
+      return;
+    }
     const saved = state.saved;
     // Replacing the wrapper orphans any in-flight read; the retained values
     // stay visible until the fresh pair lands or fails.
