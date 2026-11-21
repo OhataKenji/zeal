@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import CopyButton from "./CopyButton.svelte";
+  import BesSetup from "./BesSetup.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope } from "./types";
 
@@ -9,7 +9,7 @@
     initial = "",
     initialScope,
     bazelAvailable,
-    besConfig,
+    besEndpoint,
     onopen,
     onclose,
     opening = $bindable(false),
@@ -17,7 +17,7 @@
     initial?: string;
     initialScope: TargetScope;
     bazelAvailable: boolean;
-    besConfig: string | null;
+    besEndpoint: string | null;
     onopen: (path: string, scope: TargetScope) => Promise<boolean>;
     onclose?: () => void;
     opening?: boolean;
@@ -28,7 +28,6 @@
   let include = $state(untrack(() => initialScope.include.join("\n")));
   let error = $state<string | null>(null);
   let choosing = $state(false);
-  let copyError = $state("");
   const busy = $derived(choosing || opening);
   const canSubmit = $derived(
     bazelAvailable && !busy && path.trim() !== "" && include.trim() !== "",
@@ -140,21 +139,5 @@
   {#if error}
     <Notice tone="error">{error}</Notice>
   {/if}
-  {#if besConfig}
-    <div class="scope-help">
-      <p class="scope-help">
-        To also record CLI invocations, add these lines to your workspace's
-        <code>.bazelrc</code> and keep Zeal open while running Bazel:
-      </p>
-      <div class="query-command">
-        <pre class="query-command-pre"><code>{besConfig}</code></pre>
-        <CopyButton
-          text={besConfig}
-          label="Copy .bazelrc settings"
-          onerror={(message) => (copyError = message)}
-        />
-      </div>
-      {#if copyError}<p role="status">{copyError}</p>{/if}
-    </div>
-  {/if}
+  <BesSetup endpoint={besEndpoint} />
 </form>

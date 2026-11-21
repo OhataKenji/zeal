@@ -41,14 +41,6 @@
 
   const st = $derived(view.state);
   const core = $derived(view.core);
-  const besConfig = $derived(
-    core?.besEndpoint
-      ? `build --bes_backend=${core.besEndpoint}
-build --experimental_build_event_upload_strategy=local
-build --bes_timeout=5s
-build --experimental_collect_system_network_usage`
-      : null,
-  );
   const snap = $derived(view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const selection = $derived(view.selection);
@@ -295,7 +287,7 @@ build --experimental_collect_system_network_usage`
           initial={promptInitial}
           initialScope={{ include: ["//..."] }}
           bazelAvailable={core.bazel !== null}
-          {besConfig}
+          besEndpoint={core.besEndpoint}
           bind:opening
           onopen={session.openWorkspace}
           onclose={
@@ -412,7 +404,7 @@ build --experimental_collect_system_network_usage`
               info={view.workspaceInfo}
               loading={view.workspaceInfoLoading}
               error={view.workspaceInfoError}
-              {besConfig}
+              besEndpoint={core.besEndpoint}
               onretry={session.loadWorkspaceInfo}
               onsavescope={(scope) => session.openWorkspace(st.workspace, scope)}
             />

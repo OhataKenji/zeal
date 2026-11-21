@@ -80,7 +80,23 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     assert.match(nav, /Analytics/);
   });
 
-  await t.test("shows the bound BES endpoint in both workspace settings", () => {
+  await t.test("shows the persistent BES settings in both workspace screens", () => {
+    const initial = render(AppView, {
+      props: { view: { ...emptyView(), core: CORE }, session },
+    }).body;
+    const workspace = render(AppView, {
+      props: { view: { ...emptyView("workspace"), core: CORE, state: WS }, session },
+    }).body;
+    const boundConfig =
+      /build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage/;
+    for (const html of [initial, workspace]) {
+      assert.match(html, boundConfig);
+      assert.match(html, /Copy \.bazelrc settings/);
+      assert.match(html, /workspace's\s*<code>\.bazelrc<\/code>/);
+    }
+  });
+
+  await t.test("shows only a session flag for a temporary BES endpoint", () => {
     const core = { ...CORE, besEndpoint: "grpc://127.0.0.1:12345" };
     const initial = render(AppView, {
       props: { view: { ...emptyView(), core }, session },
@@ -88,12 +104,14 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     const workspace = render(AppView, {
       props: { view: { ...emptyView("workspace"), core, state: WS }, session },
     }).body;
-    const boundConfig =
-      /build --bes_backend=grpc:\/\/127\.0\.0\.1:12345\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage/;
-    assert.match(initial, boundConfig);
-    assert.match(workspace, boundConfig);
-    assert.doesNotMatch(initial, /:4718/);
-    assert.doesNotMatch(workspace, /:4718/);
+    for (const html of [initial, workspace]) {
+      assert.match(html, /--bes_backend=grpc:\/\/127\.0\.0\.1:12345/);
+      assert.match(html, /Pass this\s+option to Bazel for this Zeal session only/);
+      assert.match(html, /Copy session option/);
+      assert.doesNotMatch(html, /build --bes_backend/);
+      assert.doesNotMatch(html, /\.bazelrc/);
+      assert.doesNotMatch(html, /Copy \.bazelrc/);
+    }
   });
 
   await t.test("offers no BES configuration without a bound receiver", () => {
@@ -104,8 +122,10 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     const workspace = render(AppView, {
       props: { view: { ...emptyView("workspace"), core, state: WS }, session },
     }).body;
-    assert.doesNotMatch(initial, /--bes_backend|Copy \.bazelrc/);
-    assert.doesNotMatch(workspace, /--bes_backend|Copy \.bazelrc/);
+    for (const html of [initial, workspace]) {
+      assert.doesNotMatch(html, /--bes_backend|Copy \.bazelrc|Copy session option/);
+      assert.doesNotMatch(html, /Local BES Receiver/);
+    }
   });
 
   await t.test("distinguishes simultaneous live rows by workspace", () => {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import CopyButton from "./CopyButton.svelte";
+  import BesSetup from "./BesSetup.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope, WorkspaceInfo } from "./types";
 
@@ -10,7 +10,7 @@
     info,
     loading,
     error,
-    besConfig,
+    besEndpoint,
     onretry,
     onsavescope,
   }: {
@@ -19,7 +19,7 @@
     info: WorkspaceInfo | null;
     loading: boolean;
     error: string | null;
-    besConfig: string | null;
+    besEndpoint: string | null;
     onretry: () => void;
     onsavescope: (scope: TargetScope) => Promise<boolean>;
   } = $props();
@@ -31,7 +31,6 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let copiedKey = $state<string | null>(null);
-  let copyError = $state("");
 
   $effect(() => {
     if (persistedScope !== lastScopeKey) {
@@ -147,17 +146,11 @@
   </form>
 </section>
 
-{#if besConfig}
+{#if besEndpoint}
   <section class="section">
     <div class="section-head">
       <h2 class="section-title">Local BES Receiver</h2>
-      <CopyButton
-        text={besConfig}
-        label="Copy .bazelrc snippet"
-        onerror={(msg) => (copyError = msg)}
-      />
     </div>
-    {#if copyError}<Notice tone="error">{copyError}</Notice>{/if}
-    <pre class="code-box">{besConfig}</pre>
+    <BesSetup endpoint={besEndpoint} />
   </section>
 {/if}

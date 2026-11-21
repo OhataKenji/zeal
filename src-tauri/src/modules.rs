@@ -30,6 +30,7 @@ const GRAPH_ARGS: &[&str] = &[
     "mod",
     "graph",
     "--color=no",
+    "--noshow_timestamps",
     "--lockfile_mode=off",
     "--output=json",
     "--depth=2147483647",
@@ -630,10 +631,15 @@ mod tests {
         fn snapshot_keeps_bazels_partial_graph_with_the_extension_error() {
             let dir = TempDir::new();
             fs::write(dir.path().join("graph.json"), GRAPH_JSON).unwrap();
+            // A workspace `.bazelrc` with `common --show_timestamps` prefixes
+            // stderr event lines like `(14:32:05) ERROR: ...`; the flag keeps
+            // them bare so the partial-graph notice is still recognized.
             let op = operation(
                 &dir,
-                "#!/bin/sh\ncat graph.json\necho 'ERROR: missing generated repository' >&2\n\
-                 echo 'ERROR: Results may be incomplete as 1 extension failed.' >&2\nexit 2\n",
+                "#!/bin/sh\ncase \" $* \" in *\" --noshow_timestamps \"*) ;; *) ts='(14:32:05) ' ;; esac\n\
+                 cat graph.json\n\
+                 echo \"${ts}ERROR: missing generated repository\" >&2\n\
+                 echo \"${ts}ERROR: Results may be incomplete as 1 extension failed.\" >&2\nexit 2\n",
             );
             let snapshot = op.snapshot().unwrap();
             assert_eq!(snapshot.modules, fixture().modules);
