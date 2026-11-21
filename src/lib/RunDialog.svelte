@@ -52,7 +52,12 @@
 >
   <div class="modal-head">
     <span>Run Bazel</span>
-    <button type="button" class="button button-ghost" onclick={() => dialog.close()}>Esc</button>
+    <button
+      type="button"
+      class="button button-ghost icon-button"
+      aria-label="Close"
+      onclick={() => dialog.close()}>✕</button
+    >
   </div>
   <form class="modal-body" onsubmit={submit}>
     <div class="run-row">

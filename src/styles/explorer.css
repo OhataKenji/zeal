@@ -40,8 +40,8 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px 12px;
-  padding: 20px 0 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 4px 0 14px;
+  border-bottom: 1px solid var(--hairline);
 }
 
 .target-head .badge {
@@ -87,8 +87,8 @@
   top: 0;
   z-index: 1;
   padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--background);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-panel);
   color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 600;
@@ -97,7 +97,7 @@
 
 .target-actions td {
   padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -319,6 +319,11 @@ details[open] .action-mnemonic::before {
   color: var(--muted-foreground);
 }
 
+.tree-caret-slot {
+  width: 10px;
+  flex-shrink: 0;
+}
+
 .tree .dir {
   font-weight: 650;
 }
@@ -343,7 +348,7 @@ details[open] .action-mnemonic::before {
 }
 
 .target-head h1 {
-  font: 600 24px/1.4 var(--mono);
+  font: 600 16px/1.4 var(--mono);
   margin: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -412,15 +417,12 @@ button.chip:hover {
   color: var(--foreground);
 }
 
+.package-cap-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
 @media (max-width: 800px) {
-  .target-head h1 {
-    font-size: 18px;
-  }
-
-  .tree .row small {
-    display: none;
-  }
-
   .relations {
     grid-template-columns: 52px minmax(0, 1fr);
     gap: 0 12px;

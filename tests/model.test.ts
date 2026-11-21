@@ -11,7 +11,7 @@ import {
 } from "../src/lib/model.ts";
 import type { TargetDetail, TargetIndex } from "../src/lib/types.ts";
 
-test("target tree lists packages and targets without input or output files", () => {
+test("package tree leads with //... and counts targets per subtree", () => {
   const snapshot: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: [
@@ -22,21 +22,43 @@ test("target tree lists packages and targets without input or output files", () 
         ruleClass: "cc_test",
         location: null,
       },
+      {
+        label: "//app/lib:helper",
+        pkg: "app/lib",
+        name: "helper",
+        ruleClass: "cc_library",
+        location: null,
+      },
+      {
+        label: "//:root_target",
+        pkg: "",
+        name: "root_target",
+        ruleClass: "cc_library",
+        location: null,
+      },
     ],
   };
-  const rows = flatten(buildTree(snapshot), new Set(["app"]));
+  const tree = buildTree(snapshot);
+  assert.equal(tree.count, 3);
+  assert.equal(tree.dirs.find((d) => d.path === "app")?.count, 2);
+  assert.equal(tree.dirs.find((d) => d.path === "app")?.dirs[0]?.count, 1);
+
+  const rows = flatten(tree, new Set(["app"]));
   assert.deepEqual(
-    rows.map((row) => ({ kind: row.kind, text: row.text })),
+    rows.map((row) => ({ path: row.path, name: row.name, depth: row.depth })),
     [
-      { kind: "dir", text: "app/" },
-      { kind: "target", text: ":parser_test" },
+      { path: "", name: "//...", depth: 0 },
+      { path: "app", name: "app/", depth: 1 },
+      { path: "app/lib", name: "lib/", depth: 2 },
     ],
   );
-  assert.equal(rows[1].label, "//app:parser_test");
-  assert.equal(rows[1].ruleClass, "cc_test");
+  assert.equal(rows[0].count, 3);
+  assert.equal(rows[1].count, 2);
+  assert.equal(rows[2].count, 1);
+  assert.ok(rows.every((row) => !("kind" in row) && !("label" in row)));
 });
 
-test("revealing a target expands every ancestor and keeps other branches open", () => {
+test("expanding a package reveals its row without opening its children", () => {
   const snapshot: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: ["//app/lib/deep:parser", "//other:lib", "//:root"].map((label) => ({
@@ -48,17 +70,20 @@ test("revealing a target expands every ancestor and keeps other branches open", 
   };
   const tree = buildTree(snapshot);
   const expanded = new Set(["other"]);
-  const label = "//app/lib/deep:parser";
-  assert.ok(!flatten(tree, expanded).some((row) => row.label === label));
 
-  for (const path of ancestorsOf(splitLabel(label).pkg)) {
+  // Collapsed branches still show their own row; only //... is always open.
+  assert.deepEqual(
+    flatten(tree, expanded).map((row) => row.path),
+    ["", "app", "other"],
+  );
+
+  // Revealing //app/lib/deep opens its ancestors but not the package itself.
+  for (const path of ancestorsOf("app/lib/deep").slice(0, -1)) {
     expanded.add(path);
   }
-
-  assert.deepEqual([...expanded], ["other", "app", "app/lib", "app/lib/deep"]);
-  assert.ok(flatten(tree, expanded).some((row) => row.label === label));
+  const paths = flatten(tree, expanded).map((row) => row.path);
+  assert.deepEqual(paths, ["", "app", "app/lib", "app/lib/deep", "other"]);
   assert.deepEqual(ancestorsOf(splitLabel("//:root").pkg), []);
-  assert.ok(flatten(tree, new Set()).some((row) => row.label === "//:root"));
 });
 
 test("forward attributes retain target and file inputs under their original names", () => {
@@ -124,10 +149,10 @@ test("commandLine joins quoted arguments with spaces", () => {
   assert.equal(commandLine({ arguments: ["it's", "x"] }), `'it'\\''s' x`);
 });
 
-test("tree distinguishes selectable packages from grouping directories", () => {
+test("every package row is selectable and the root row stands for //...", () => {
   const index: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
-    targets: ["//app/lib:parser", "//apple:server"].map((label) => ({
+    targets: ["//app/lib:parser", "//apple:server", "//:root"].map((label) => ({
       label,
       ...splitLabel(label),
       ruleClass: "cc_library",
@@ -135,7 +160,14 @@ test("tree distinguishes selectable packages from grouping directories", () => {
     })),
   };
   const rows = flatten(buildTree(index), new Set(["app"]));
-  assert.equal(rows.find((row) => row.dirPath === "app")?.hasTargets, false);
-  assert.equal(rows.find((row) => row.dirPath === "app/lib")?.hasTargets, true);
-  assert.equal(rows.find((row) => row.dirPath === "apple")?.hasTargets, true);
+  // Intermediate directories without their own targets still appear as rows.
+  assert.deepEqual(
+    rows.map((row) => row.path),
+    ["", "app", "app/lib", "apple"],
+  );
+  assert.equal(rows[0].name, "//...");
+  assert.equal(rows[0].expanded, true);
+  assert.equal(rows.find((row) => row.path === "app")?.count, 1);
+  assert.equal(rows.find((row) => row.path === "app/lib")?.count, 1);
+  assert.equal(rows.find((row) => row.path === "apple")?.count, 1);
 });

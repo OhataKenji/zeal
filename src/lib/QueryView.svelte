@@ -376,8 +376,10 @@
 <section class="query-view" bind:this={viewEl}>
   <div class="query-main">
     <div class="query-content">
-      <h1 class="query-title" id="query-heading">Query editor</h1>
-      <div class="query-tabs" role="tablist" aria-label="Bazel graph">
+      <div class="view-head">
+        <h1 class="view-title" id="query-heading">Query editor</h1>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Bazel graph">
         {#each kinds as value}
           <button type="button" role="tab" aria-selected={kind === value} onclick={() => { if (kind !== value) selectKind(value); }}>{value}</button>
         {/each}
@@ -426,7 +428,7 @@
               {/each}
             </div>
           </details>
-          <div class="query-tabs" role="tablist" aria-label="Query mode">
+          <div class="sub-switch" role="tablist" aria-label="Query mode">
             <button
               type="button"
               role="tab"
@@ -519,7 +521,7 @@
       <section class="query-panel" aria-labelledby="query-results-heading">
         <div class="query-results-head">
           <h2 id="query-results-heading">Results</h2>
-          <div class="query-tabs" role="tablist" aria-label="Result view">
+          <div class="sub-switch" role="tablist" aria-label="Result view">
             <button
               type="button"
               role="tab"
@@ -586,7 +588,7 @@
               {#if !rows.length}
                 <p class="query-empty">No configured targets matched.</p>
               {:else}
-                <table>
+                <table class="lens-table">
                   <thead><tr><th scope="col">Label</th><th scope="col">Configuration</th>{#if transitions}<th scope="col">Transitions</th>{/if}</tr></thead>
                   <tbody>
                     {#each rows.slice(0, RAW_LINE_CAP) as row}

@@ -49,12 +49,13 @@
     selection?.kind === "package"
       ? selection.path
       : selection?.kind === "target"
-        ? (snap?.targets.find((t) => t.label === selection.label)?.pkg ?? null)
-        : null,
+        ? (snap?.targets.find((t) => t.label === selection.label)?.pkg ?? "")
+        : "",
   );
   const invocation = $derived(view.invocation);
 
   let opening = $state(false);
+  let switchError = $state<string | null>(null);
   let historyFilter = $state<"all" | "failed" | "running">("all");
   let treeRevealRequest = $state(0);
 
@@ -101,8 +102,38 @@
 
   function openWorkspacePrompt(path = "") {
     if (opening) return;
+    switchError = null;
     surface = { kind: "workspace", path };
   }
+
+  // Registered workspaces switch in place; anything else (BES history paths)
+  // goes through the prompt so a stray click cannot start `bazel query //...`.
+  async function switchWorkspace(path: string) {
+    const registered = core?.workspaces.find((w) => w.workspace === path);
+    if (!registered) {
+      openWorkspacePrompt(path);
+      return;
+    }
+    if (opening) return;
+    opening = true;
+    switchError = null;
+    try {
+      const ok = await session.openWorkspace(registered.workspace, registered.scope);
+      if (ok && surface?.kind === "workspace") surface = null;
+    } catch (e) {
+      switchError = String(e);
+    } finally {
+      opening = false;
+    }
+  }
+
+  // A switch error belongs to the workspace it failed on: the next attempt or
+  // an actual workspace change clears it — unrelated state publishes do not.
+  const workspacePath = $derived(st?.workspace ?? null);
+  $effect(() => {
+    void workspacePath;
+    switchError = null;
+  });
 
   // ⌘K/Ctrl+K toggles only while the palette or nothing owns the keyboard.
   function paletteShortcutAllowed(event: KeyboardEvent): boolean {
@@ -223,8 +254,8 @@
     <WorkspaceSwitcher
       workspace={st?.workspace ?? null}
       {opening}
-      onopen={(path) => openWorkspacePrompt(path ?? "")}
-      onhome={() => selectPage("targets")}
+      onswitch={switchWorkspace}
+      onopennew={() => openWorkspacePrompt()}
     />
     {#if st !== null}
       <button
@@ -242,6 +273,7 @@
   </header>
 
   {#if view.error}<Notice tone="error">{view.error}</Notice>{/if}
+  {#if switchError}<Notice tone="error">{switchError}</Notice>{/if}
   {#if core?.besError}
     <Notice tone={core.besReady ? "warning" : "error"}>BES receiver: {core.besError}</Notice>
   {/if}
@@ -307,7 +339,12 @@
               </Notice>
             {/if}
             {#if snap && tree}
-              <Tree root={tree} {selection} revealRequest={treeRevealRequest} onselect={session.select} />
+              <Tree
+                root={tree}
+                activePkg={selectedPkg}
+                revealRequest={treeRevealRequest}
+                onselect={session.select}
+              />
             {:else if view.snapshotLoading}
               <p class="dim">Loading targets…</p>
             {:else}
@@ -382,7 +419,7 @@
               ).toLocaleTimeString()} ({view.snapshotError})
             </Notice>
           {/if}
-          {#if snap && selectedPkg !== null}
+          {#if snap}
             <PackageView
               index={snap}
               pkg={selectedPkg}
@@ -392,8 +429,6 @@
               onrun={(cmd, pattern) => session.start(cmd, pattern)}
               onopenflags={openRunDialog}
             />
-          {:else if snap}
-            <p class="workspace-empty dim">Select a package or target in the sidebar.</p>
           {:else if view.snapshotLoading}
             <p class="dim">Loading targets…</p>
           {:else if view.snapshotError}

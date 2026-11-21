@@ -14,6 +14,7 @@
   import Notice from "./Notice.svelte";
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
+  import { tabKeydown } from "./tabs";
   import { formatOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
@@ -47,48 +48,22 @@
     if (panel) panel.scrollTop = 0;
   });
 
-  function nextTabIndex(key: string, index: number): number {
-    switch (key) {
-      case "ArrowRight":
-        return (index + 1) % tabs.length;
-      case "ArrowLeft":
-        return (index + tabs.length - 1) % tabs.length;
-      case "Home":
-        return 0;
-      case "End":
-        return tabs.length - 1;
-      default:
-        return -1;
-    }
-  }
-
   function tabKey(event: KeyboardEvent, index: number) {
-    const next = nextTabIndex(event.key, index);
-    if (next < 0) return;
-    event.preventDefault();
-    active = tabs[next];
-    const buttons =
-      event.currentTarget instanceof HTMLElement
-        ? event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
-            '[role="tab"]',
-          )
-        : null;
-    buttons?.[next].focus();
+    tabKeydown(event, index, tabs.length, (next) => (active = tabs[next]));
   }
 </script>
 
 {#if shown}
   <div class="invocation-page">
     <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
-      <div class="invocation-tabs" role="tablist" aria-label="Invocation views">
+      <div class="tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab, index}
           <button
             type="button"
-            class="button button-ghost tab-button"
             id="invocation-tab-{tab}"
             role="tab"
             aria-selected={active === tab}
-            aria-controls="invocation-panel-{tab}"
+            aria-controls={active === tab ? `invocation-panel-${tab}` : undefined}
             tabindex={active === tab ? 0 : -1}
             onclick={() => (active = tab)}
             onkeydown={(event) => tabKey(event, index)}

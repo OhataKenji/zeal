@@ -1498,3 +1498,79 @@ test("a start reply selects its invocation without an extra history read", async
   assert.equal(h.view.invocation, null);
   assert.equal(requestCount(h, "list_invocations"), reads);
 });
+
+test("showPage(history) auto-selects the first invocation row", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [RECORD]);
+  assert.equal(h.view.selectedInvocationId, null);
+
+  h.session.showPage("history");
+  await settle();
+
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, RECORD.id);
+  // Eligibility started exactly one detail/profile read pair.
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+
+  // A later state publish must not reselect or refetch.
+  h.emit("app-state", coreState({ revision: 2 }));
+  await settle();
+  assert.equal(h.view.selectedInvocationId, RECORD.id);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+});
+
+test("history updates on the history page claim the first row once", async () => {
+  const h = harness(Promise.resolve(READY), "history");
+  await initReady(h);
+  await loadHistory(h, [RECORD, { ...RECORD, id: "run-b" }]);
+  await settle();
+
+  assert.equal(h.view.selectedInvocationId, RECORD.id);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+
+  // A refreshed list keeps the existing selection and does not refetch.
+  h.emit("invocations-changed", undefined);
+  await settle();
+  await loadHistory(h, [{ ...RECORD, id: "run-b" }, RECORD]);
+  await settle();
+
+  assert.equal(h.view.selectedInvocationId, RECORD.id);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+});
+
+test("a live invocation arriving on an empty history page is selected", async () => {
+  const h = harness(Promise.resolve(READY), "history");
+  await initReady(h);
+  await loadHistory(h, []);
+  await settle();
+  assert.equal(h.view.selectedInvocationId, null);
+
+  h.emit("app-state", coreState({ revision: 2, invocations: [owned("live-1", WS)] }));
+  await settle();
+
+  assert.equal(h.view.selectedInvocationId, "live-1");
+  assert.equal(h.view.invocation?.record.id, "live-1");
+  // A console execution is not saved-reader eligible, so nothing was fetched.
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+});
+
+test("auto-selection never fires off the history page or over a selection", async () => {
+  const h = harness(Promise.resolve(READY), "query");
+  await initReady(h);
+  await loadHistory(h, [RECORD]);
+  await settle();
+  assert.equal(h.view.selectedInvocationId, null);
+
+  h.emit("app-state", coreState({ revision: 2, invocations: [owned("live-1", WS)] }));
+  await settle();
+  assert.equal(h.view.selectedInvocationId, null);
+
+  h.session.showPage("history");
+  await settle();
+  // The pinned live execution outranks the older history record.
+  assert.equal(h.view.selectedInvocationId, "live-1");
+});

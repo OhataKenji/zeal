@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSvelteHarness } from "./svelte.ts";
 
-test("WorkspaceSwitcher renders home and switch controls", async (t) => {
+test("WorkspaceSwitcher renders a single trigger and split actions", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: WorkspaceSwitcher } = await load("/src/lib/WorkspaceSwitcher.svelte");
 
@@ -11,8 +11,8 @@ test("WorkspaceSwitcher renders home and switch controls", async (t) => {
       props: {
         workspace: "/work/cool-mono",
         opening: false,
-        onopen: () => {},
-        onhome: () => {},
+        onswitch: () => {},
+        onopennew: () => {},
         ...props,
       },
     })
@@ -20,45 +20,39 @@ test("WorkspaceSwitcher renders home and switch controls", async (t) => {
       .replace(/\s+/g, " ");
   }
 
-  function buttonTag(html: string, label: string): string {
-    const match = html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`));
-    assert.ok(match, `missing button labeled ${label}`);
-    return match[0];
-  }
-
-  await t.test("shows separately named home and switch controls", () => {
+  await t.test("one summary trigger carries the logo, basename, and full path title", () => {
     const html = output({});
-    assert.doesNotMatch(buttonTag(html, "Workspace home"), /disabled/);
-    assert.match(html, /<summary[^>]*aria-label="Switch workspace"/);
-    assert.match(html, />\/work\/cool-mono</);
+    const triggers = html.match(/<summary[^>]*class="[^"]*ws-trigger[^"]*"[^>]*>/g) ?? [];
+    assert.equal(triggers.length, 1);
+    assert.match(triggers[0], /aria-label="Switch workspace"/);
+    assert.match(triggers[0], /title="\/work\/cool-mono"/);
+    const trigger = html.match(/<summary[^>]*>[\s\S]*?<\/summary>/)?.[0];
+    assert.ok(trigger);
+    assert.match(trigger, /<svg[^>]*aria-hidden="true"/);
+    assert.match(trigger, />cool-mono</);
+    assert.doesNotMatch(trigger, /cool-mono\//);
     assert.match(html, /Open workspace…/);
+    // No legacy home button or second path row remains.
+    assert.doesNotMatch(html, /ws-home|ws-path-row|Workspace home/);
   });
 
-  await t.test("name shows the local basename even with a trailing separator", () => {
-    const html = output({ workspace: "/work/cool-mono/" });
-    const home = html.match(/<button[^>]*aria-label="Workspace home"[^>]*>[\s\S]*?<\/button>/);
-    assert.ok(home, "missing workspace home button");
-    assert.match(home[0], />cool-mono</);
-    assert.doesNotMatch(home[0], /cool-mono\//);
-    assert.match(home[0], /<svg[^>]*aria-hidden="true"/);
+  await t.test("missing workspace falls back to the Zeal label", () => {
+    const html = output({ workspace: null });
+    const trigger = html.match(/<summary[^>]*>[\s\S]*?<\/summary>/)?.[0];
+    assert.ok(trigger);
+    assert.match(trigger, />Zeal</);
   });
 
-  await t.test("opening disables Open; default Open is enabled without a busy notice", () => {
+  await t.test("opening disables the Open workspace footer", () => {
     const openingHtml = output({ opening: true });
-    assert.match(openingHtml, /class="[^"]*ws-open[^"]*"[^>]*disabled/);
+    const openTag = openingHtml.match(/<button[^>]*class="[^"]*ws-open[^"]*"[^>]*>/)?.[0];
+    assert.ok(openTag, "missing Open workspace button");
+    assert.match(openTag, /disabled/);
 
     const html = output({});
-    const openTag = html.match(/<button[^>]*class="[^"]*ws-open[^"]*"[^>]*>/)?.[0];
-    assert.ok(openTag, "missing Open workspace button");
-    assert.doesNotMatch(openTag, /disabled/);
+    const enabledTag = html.match(/<button[^>]*class="[^"]*ws-open[^"]*"[^>]*>/)?.[0];
+    assert.ok(enabledTag);
+    assert.doesNotMatch(enabledTag, /disabled/);
     assert.doesNotMatch(html, /Wait for the current Bazel operation/);
-  });
-
-  await t.test("opening and missing workspace disable home", () => {
-    const openingHtml = output({ opening: true });
-    assert.match(buttonTag(openingHtml, "Workspace home"), /disabled/);
-
-    const noWorkspace = output({ workspace: null });
-    assert.match(buttonTag(noWorkspace, "Workspace home"), /disabled/);
   });
 });

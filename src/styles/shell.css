@@ -14,10 +14,10 @@
 .toolbar {
   display: flex;
   align-items: center;
-  height: 44px;
+  height: 40px;
   padding: 0 12px 0 0;
-  border-bottom: 1px solid var(--border);
-  background: #11181f;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-chrome);
   position: relative;
   z-index: 30;
 }
@@ -74,8 +74,8 @@
   align-items: center;
   gap: 4px;
   padding: 8px 4px;
-  background: #11181f;
-  border-right: 1px solid var(--border);
+  background: var(--surface-chrome);
+  border-right: 1px solid var(--hairline);
 }
 
 .rail-btn {
@@ -120,8 +120,8 @@
 .sidebar {
   grid-column: 2;
   width: 242px;
-  border-right: 1px solid var(--border);
-  background: #151d25;
+  border-right: 1px solid var(--hairline);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -144,7 +144,7 @@
   align-items: center;
   gap: 6px;
   padding: 0 12px 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   font-size: 11px;
 }
 
@@ -183,8 +183,8 @@
   min-height: 0;
   overflow-y: auto;
   padding: 16px 20px 32px;
-  background: #151e26;
-  border-left: 1px solid var(--border);
+  background: var(--surface-panel);
+  border-left: 1px solid var(--hairline);
 }
 
 .mono {
@@ -197,7 +197,7 @@
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   margin-bottom: 18px;
 }
 
@@ -247,12 +247,12 @@
   font-weight: 600;
   color: var(--muted-foreground);
   padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .lens-table td {
   padding: 7px 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   vertical-align: middle;
 }
 
@@ -272,6 +272,19 @@
   color: var(--muted-foreground);
   font-size: 11.5px;
   word-break: break-all;
+}
+
+.table-link {
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--primary);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.table-link:hover {
+  text-decoration: underline;
 }
 
 .copied-tag {
@@ -296,9 +309,9 @@
 .code-box {
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
-  background: #10171f;
+  background: var(--surface-code);
   font: 11.5px/1.6 var(--mono);
   overflow-x: auto;
   white-space: pre-wrap;
@@ -307,12 +320,15 @@
 
 .sub-switch {
   display: inline-flex;
-  flex: 1;
   align-items: center;
   gap: 2px;
   padding: 2px;
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.035);
+}
+
+.sidebar-filter .sub-switch {
+  flex: 1;
 }
 
 .sub-switch button {
@@ -325,7 +341,12 @@
   color: var(--muted-foreground);
 }
 
-.sub-switch button.active {
+.sub-switch button:hover {
+  color: var(--foreground);
+}
+
+.sub-switch button.active,
+.sub-switch button[aria-selected="true"] {
   background: rgba(255, 255, 255, 0.08);
   color: var(--foreground);
   font-weight: 500;
@@ -368,8 +389,8 @@ details.dd > summary::-webkit-details-marker {
   min-width: 220px;
   padding: 5px;
   border-radius: 7px;
-  border: 1px solid var(--border);
-  background: #151d25;
+  border: 1px solid var(--hairline);
+  background: var(--surface-panel);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
   z-index: 60;
   display: flex;
@@ -464,7 +485,7 @@ details.dd > summary::-webkit-details-marker {
 }
 
 .cache-bar-exec {
-  background: #3a5264;
+  background: var(--accent);
 }
 
 .cache-legend {
@@ -481,7 +502,7 @@ details.dd > summary::-webkit-details-marker {
   height: 8px;
   border-radius: 2px;
   margin-right: 5px;
-  background: #3a5264;
+  background: var(--accent);
 }
 
 .cache-sw.hit {
@@ -494,7 +515,7 @@ dialog.modal {
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: #151d25;
+  background: var(--surface-panel);
   color: var(--foreground);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
 }
@@ -537,7 +558,7 @@ dialog.modal::backdrop {
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #10171f;
+  background: var(--surface-code);
   color: var(--foreground);
   font: 500 12px var(--mono);
 }
@@ -631,5 +652,65 @@ dialog.palette-modal {
 
   .content {
     padding: 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .lens-workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .rail {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex: none;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 3px 2px;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .sidebar {
+    width: 100%;
+    max-height: min(24vh, 180px);
+    flex: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .content {
+    flex: 1 0 auto;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  /* History keeps its internal scroll model inside the reading flow. */
+  .content.invocation-content {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* An open inspector replaces the reading area instead of clipping offscreen. */
+  .lens-workspace:has(> .inspector) > .sidebar,
+  .lens-workspace:has(> .inspector) > .content {
+    display: none;
+  }
+
+  .lens-workspace:has(> .inspector) > .inspector {
+    width: auto;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    border-left: 0;
+  }
+
+  .win > .content {
+    flex: 1;
+    min-height: 0;
   }
 }
