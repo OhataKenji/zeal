@@ -47,17 +47,13 @@
     void active;
     if (panel) panel.scrollTop = 0;
   });
-
-  function tabKey(event: KeyboardEvent, index: number) {
-    tabKeydown(event, index, tabs.length, (next) => (active = tabs[next]));
-  }
 </script>
 
 {#if shown}
   <div class="invocation-page">
     <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
       <div class="tabs" role="tablist" aria-label="Invocation views">
-        {#each tabs as tab, index}
+        {#each tabs as tab}
           <button
             type="button"
             id="invocation-tab-{tab}"
@@ -66,7 +62,7 @@
             aria-controls={active === tab ? `invocation-panel-${tab}` : undefined}
             tabindex={active === tab ? 0 : -1}
             onclick={() => (active = tab)}
-            onkeydown={(event) => tabKey(event, index)}
+            onkeydown={tabKeydown}
           >{tab}</button>
         {/each}
         {#if view.detailLoading}<span class="panel-loading" role="status"

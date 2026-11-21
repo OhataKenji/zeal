@@ -1,5 +1,4 @@
-/** Index of the tab a key moves to, or -1 for non-navigation keys. */
-export function nextTabIndex(key: string, index: number, count: number): number {
+function nextIndex(key: string, index: number, count: number): number {
   switch (key) {
     case "ArrowRight":
       return (index + 1) % count;
@@ -14,20 +13,18 @@ export function nextTabIndex(key: string, index: number, count: number): number 
   }
 }
 
-/** Arrow/Home/End activation and focus movement shared by tablists. */
-export function tabKeydown(
-  event: KeyboardEvent,
-  index: number,
-  count: number,
-  select: (next: number) => void,
-) {
-  const next = nextTabIndex(event.key, index, count);
+/** Arrow/Home/End on a tab: focus the target tab and activate it. */
+export function tabKeydown(event: KeyboardEvent) {
+  const current = event.currentTarget;
+  if (!(current instanceof HTMLElement)) return;
+  const list = current.closest('[role="tablist"]');
+  if (!list) return;
+  const tabs = Array.from(list.querySelectorAll<HTMLButtonElement>('button[role="tab"]'));
+  const index = tabs.indexOf(current as HTMLButtonElement);
+  if (index < 0) return;
+  const next = nextIndex(event.key, index, tabs.length);
   if (next < 0) return;
   event.preventDefault();
-  select(next);
-  const buttons =
-    event.currentTarget instanceof HTMLElement
-      ? event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
-      : null;
-  buttons?.[next]?.focus();
+  tabs[next].focus();
+  tabs[next].click();
 }

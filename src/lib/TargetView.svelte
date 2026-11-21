@@ -55,9 +55,6 @@
       label: `Actions${actionCount === null ? "" : ` (${actionCount})`}`,
     },
   ]);
-  function tabKey(event: KeyboardEvent, index: number) {
-    tabKeydown(event, index, tabs.length, (next) => (tab = tabs[next].id));
-  }
   const target = $derived(rel.target);
   const primary = $derived.by((): { cmd: BazelCommand; label: string } => {
     if (target.ruleClass.endsWith("_test")) return { cmd: "test", label: "Test" };
@@ -152,7 +149,7 @@
     {/if}
   </header>
   <div class="tabs" role="tablist" aria-label="Target views">
-    {#each tabs as t, index}
+    {#each tabs as t}
       <button
         type="button"
         role="tab"
@@ -161,7 +158,7 @@
         aria-controls={tab === t.id ? `target-panel-${t.id}` : undefined}
         tabindex={tab === t.id ? 0 : -1}
         onclick={() => (tab = t.id)}
-        onkeydown={(event) => tabKey(event, index)}>{t.label}</button
+        onkeydown={tabKeydown}>{t.label}</button
       >
     {/each}
   </div>

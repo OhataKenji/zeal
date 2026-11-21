@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Check } from "phosphor-svelte";
   import { COMMANDS } from "./commands";
@@ -19,31 +18,18 @@
 
   let details: HTMLDetailsElement | undefined;
   let summary: HTMLElement | undefined;
-  let entries = $state.raw<string[] | null>(null);
-  let loading = $state(false);
-  let error = $state<string | null>(null);
-  let disposed = false;
+  let entries = $state.raw<Promise<string[]> | null>(null);
 
   const displayName = $derived(
     workspace?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Zeal",
   );
 
-  async function load() {
-    if (loading) return;
-    loading = true;
-    error = null;
-    try {
-      const list = await invoke<string[]>(COMMANDS.listWorkspaces);
-      if (!disposed) entries = list;
-    } catch (e) {
-      if (!disposed) error = String(e);
-    } finally {
-      if (!disposed) loading = false;
-    }
+  function load() {
+    entries = invoke<string[]>(COMMANDS.listWorkspaces);
   }
 
   function onToggle() {
-    if (details?.open) void load();
+    if (details?.open) load();
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -65,24 +51,15 @@
     }
   }
 
-  function choose(path: string) {
-    if (details) details.open = false;
-    onswitch(path);
-  }
-
   function navigate(action: () => void) {
     if (details) details.open = false;
     action();
   }
-
-  onDestroy(() => {
-    disposed = true;
-  });
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={onKeydown} />
 
-<details bind:this={details} class="ws-details" ontoggle={onToggle}>
+<details bind:this={details} class="dd ws-switch" ontoggle={onToggle}>
   <summary
     bind:this={summary}
     class="ws-trigger"
@@ -103,36 +80,35 @@
     <span class="ws-name">{displayName}</span>
     <span class="ws-caret" aria-hidden="true">▾</span>
   </summary>
-  <div class="ws-menu">
-    {#if error !== null}
-      <Notice tone="error" onaction={load}>{error}</Notice>
-    {/if}
-    {#if loading && entries === null}
-      <p class="dim ws-note">Loading workspaces…</p>
-    {:else if entries !== null}
-      <div class="ws-list">
-        {#each entries as path (path)}
+  <div class="dd-menu ws-menu">
+    {#if entries}
+      {#await entries}
+        <p class="dim ws-note">Loading workspaces…</p>
+      {:then paths}
+        {#each paths as path (path)}
           <button
             type="button"
-            class="ws-entry"
+            class="menu-item ws-entry"
             disabled={opening || path === workspace}
             aria-current={path === workspace ? "true" : undefined}
             title={path}
-            onclick={() => choose(path)}
+            onclick={() => navigate(() => onswitch(path))}
           >
             <span class="ws-entry-path">{path}</span>
             {#if path === workspace}<Check size={12} />{/if}
           </button>
         {/each}
-        {#if entries.length === 0}
+        {#if paths.length === 0}
           <p class="dim ws-note">No recent workspaces.</p>
         {/if}
-      </div>
+      {:catch error}
+        <Notice tone="error" onaction={load}>{String(error)}</Notice>
+      {/await}
     {/if}
     <div class="ws-footer">
       <button
         type="button"
-        class="button ws-open"
+        class="button button-ghost ws-open"
         onclick={() => navigate(onopennew)}
         disabled={opening}
       >
@@ -143,9 +119,7 @@
 </details>
 
 <style>
-  .ws-details {
-    position: relative;
-    display: flex;
+  .ws-switch {
     min-width: 0;
     max-width: 240px;
     flex: 0 1 auto;
@@ -165,13 +139,7 @@
     color: var(--foreground);
     font-size: 12.5px;
     font-weight: 600;
-    list-style: none;
-    cursor: pointer;
     text-align: left;
-  }
-
-  .ws-trigger::-webkit-details-marker {
-    display: none;
   }
 
   .ws-trigger:hover {
@@ -197,49 +165,17 @@
   }
 
   .ws-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: 20;
-    display: flex;
     width: min(420px, calc(100vw - 24px));
     max-height: min(70vh, 520px);
-    flex-direction: column;
-    gap: 8px;
     overflow: auto;
-    padding: 8px;
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius-md);
-    background: var(--surface-panel);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
   }
 
-  .ws-list {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .ws-entry {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    gap: 8px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: none;
-    padding: 6px 8px;
-    color: var(--foreground);
+  .ws-menu .ws-entry {
     font: 12px var(--mono);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .ws-entry:hover:not(:disabled) {
-    background: var(--accent);
+    white-space: normal;
   }
 
   .ws-entry:disabled {
-    cursor: default;
     opacity: 0.55;
   }
 
@@ -247,11 +183,6 @@
     flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
-    white-space: normal;
-  }
-
-  .ws-entry[aria-current="true"] {
-    opacity: 1;
   }
 
   .ws-entry[aria-current="true"] .ws-entry-path {
@@ -259,8 +190,9 @@
   }
 
   .ws-footer {
+    margin-top: 4px;
     border-top: 1px solid var(--hairline);
-    padding-top: 8px;
+    padding-top: 6px;
   }
 
   .ws-open {

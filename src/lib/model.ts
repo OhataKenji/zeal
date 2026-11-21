@@ -80,17 +80,13 @@ export function buildTree(index: TargetIndex): DirNode {
   for (const target of index.targets) {
     ensure(target.pkg).count += 1;
   }
-  const rollup = (n: DirNode): number => {
-    for (const d of n.dirs) n.count += rollup(d);
+  // One bottom-up pass sorts each level and rolls child counts upward.
+  const finish = (n: DirNode): number => {
+    n.dirs.sort((a, b) => a.name.localeCompare(b.name));
+    for (const child of n.dirs) n.count += finish(child);
     return n.count;
   };
-  rollup(root);
-
-  const sortNode = (n: DirNode): void => {
-    n.dirs.sort((a, b) => a.name.localeCompare(b.name));
-    n.dirs.forEach(sortNode);
-  };
-  sortNode(root);
+  finish(root);
   return root;
 }
 
@@ -106,31 +102,20 @@ export interface Row {
 
 /** Flattens expanded directories into package rows in display order. */
 export function flatten(root: DirNode, expanded: Set<string>): Row[] {
-  const rows: Row[] = [
-    {
-      path: "",
-      name: "//...",
-      depth: 0,
-      count: root.count,
-      hasChildren: root.dirs.length > 0,
-      expanded: true,
-    },
-  ];
-  const walk = (n: DirNode, depth: number) => {
-    for (const d of n.dirs) {
-      const ex = expanded.has(d.path);
-      rows.push({
-        path: d.path,
-        name: `${d.name}/`,
-        depth,
-        count: d.count,
-        hasChildren: d.dirs.length > 0,
-        expanded: ex,
-      });
-      if (ex) walk(d, depth + 1);
-    }
+  const rows: Row[] = [];
+  const visit = (node: DirNode, depth: number) => {
+    const open = depth === 0 || expanded.has(node.path);
+    rows.push({
+      path: node.path,
+      name: depth === 0 ? "//..." : `${node.name}/`,
+      depth,
+      count: node.count,
+      hasChildren: node.dirs.length > 0,
+      expanded: open,
+    });
+    if (open) for (const child of node.dirs) visit(child, depth + 1);
   };
-  walk(root, 1);
+  visit(root, 0);
   return rows;
 }
 

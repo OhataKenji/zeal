@@ -147,12 +147,6 @@ function pinnedInvocations(state: SessionState): OwnedInvocation[] {
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** The invocation row shown first: pinned executions, then history head. */
-function firstInvocationId(state: SessionState): string | null {
-  const pinned = pinnedInvocations(state);
-  return pinned[0]?.id ?? state.workspace?.history[0]?.id ?? null;
-}
-
 /** Flat projection of session state consumed by the Svelte views. */
 export type SessionView = ReturnType<typeof sessionView>;
 
@@ -382,8 +376,8 @@ export function createSession(
   /** Claims History's first row while the page sits unselected. */
   function claimFirstInvocation() {
     if (state.page !== "history" || state.selectedInvocationId !== null) return;
-    const first = firstInvocationId(state);
-    if (first !== null) state.selectedInvocationId = first;
+    state.selectedInvocationId =
+      pinnedInvocations(state)[0]?.id ?? state.workspace?.history[0]?.id ?? null;
   }
 
   function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {
@@ -612,25 +606,17 @@ export function createSession(
     openInvocation(id, true);
   }
 
-  /** Publishes an entered page; History claims its first row before the frame. */
-  function enterPage(page: Page) {
-    if (page === "history" && state.selectedInvocationId === null) {
-      const first = firstInvocationId(state);
-      if (first !== null) {
-        openInvocation(first, false);
-        return;
-      }
-    }
-    publish();
-    if (page === "history") ensureSaved();
-  }
-
   function showPage(page: Page) {
     if (disposed) return;
     const changed = state.page !== page;
     state.page = page;
     state.start = null;
-    if (changed) enterPage(page);
+    if (changed) {
+      // Claim History's first row before the frame so it never flashes empty.
+      claimFirstInvocation();
+      publish();
+      if (page === "history") ensureSaved();
+    }
     if (page === "workspace") {
       const ws = state.workspace;
       if (ws && ws.info.value === null && ws.info.error === null && !ws.info.loading) {
