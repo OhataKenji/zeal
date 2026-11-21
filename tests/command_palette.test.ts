@@ -90,6 +90,7 @@ test("CommandPalette renders an accessible combobox listbox with grouped options
       canRefresh: true,
       isMac: false,
       onselect: () => {},
+      onclose: () => {},
     },
   }).body;
 
@@ -134,8 +135,10 @@ test("a closed CommandPalette renders no options", async (t) => {
       canRefresh: true,
       isMac: false,
       onselect: () => {},
+      onclose: () => {},
     },
   }).body;
+  assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /role="option"/);
   assert.doesNotMatch(html, /role="group"/);
 });

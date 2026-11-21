@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { pages } from "../src/lib/pages.ts";
 import { createIndex } from "../src/lib/search.ts";
 import { paletteItems, type PaletteInput } from "../src/lib/palette.ts";
 import type { InvocationRecord, OwnedInvocation, Target } from "../src/lib/types.ts";
@@ -74,12 +75,10 @@ function labels(items: ReturnType<typeof paletteItems>, group?: string): string[
 test("empty and whitespace queries return commands plus the five most recent invocations", () => {
   for (const query of ["", "   "]) {
     const items = paletteItems(input({ query }));
+    // Every command shows for an empty query — pages plus the specials —
+    // so adding a rail page must not be silently capped at eight.
     assert.deepEqual(labels(items, "commands"), [
-      "Go to Workspace",
-      "Go to Targets",
-      "Go to Query",
-      "Go to History",
-      "Go to Analytics",
+      ...pages.map((page) => `Go to ${page.label}`),
       "Run Bazel…",
       "Reload targets",
       "Open workspace…",

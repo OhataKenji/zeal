@@ -1,7 +1,7 @@
 import type { SnapshotKey } from "fuzzysort";
 import { invocationStatus } from "./invocation.ts";
 import { search } from "./search.ts";
-import type { Page } from "./session.ts";
+import { pages, type Page } from "./pages.ts";
 import type { InvocationRecord, OwnedInvocation, Target } from "./types.ts";
 
 export type PaletteGroup = "commands" | "targets" | "invocations";
@@ -48,39 +48,21 @@ interface PaletteCommand {
   readonly action: PaletteAction;
 }
 
+const pageKeywords: Record<Page, string> = {
+  workspace: "home bazel info",
+  targets: "explorer packages tree",
+  query: "expr bazel",
+  history: "invocations logs runs",
+  analytics: "stats metrics",
+};
+
 function commands(input: PaletteInput): PaletteCommand[] {
-  const list: PaletteCommand[] = [
-    {
-      id: "command:page-workspace",
-      label: "Go to Workspace",
-      keywords: "home bazel info",
-      action: { kind: "page", page: "workspace" },
-    },
-    {
-      id: "command:page-targets",
-      label: "Go to Targets",
-      keywords: "explorer packages tree",
-      action: { kind: "page", page: "targets" },
-    },
-    {
-      id: "command:page-query",
-      label: "Go to Query",
-      keywords: "expr bazel",
-      action: { kind: "page", page: "query" },
-    },
-    {
-      id: "command:page-history",
-      label: "Go to History",
-      keywords: "invocations logs runs",
-      action: { kind: "page", page: "history" },
-    },
-    {
-      id: "command:page-analytics",
-      label: "Go to Analytics",
-      keywords: "stats metrics",
-      action: { kind: "page", page: "analytics" },
-    },
-  ];
+  const list: PaletteCommand[] = pages.map(({ id, label }) => ({
+    id: `command:page-${id}`,
+    label: `Go to ${label}`,
+    keywords: pageKeywords[id],
+    action: { kind: "page", page: id },
+  }));
   if (input.canRun) {
     list.push({
       id: "command:run",
@@ -163,16 +145,16 @@ export function paletteItems(input: PaletteInput): PaletteItem[] {
   const uuid = UUID_PATTERN.test(query) ? needle : null;
   const available = commands(input);
   const commandItems: PaletteItem[] = (
-    query === "" ? available : available.filter((command) => commandMatches(command, needle))
-  )
-    .slice(0, MATCH_LIMIT)
-    .map((command) => ({
-      id: command.id,
-      group: "commands",
-      label: command.label,
-      shortcut: command.shortcut,
-      action: command.action,
-    }));
+    query === ""
+      ? available
+      : available.filter((command) => commandMatches(command, needle)).slice(0, MATCH_LIMIT)
+  ).map((command) => ({
+    id: command.id,
+    group: "commands",
+    label: command.label,
+    shortcut: command.shortcut,
+    action: command.action,
+  }));
 
   const targetItems: PaletteItem[] =
     query === "" || input.targetIndex === null

@@ -1,13 +1,8 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import {
-  canSend,
-  createSession,
-  emptyView,
-  type Page,
-  type Transport,
-} from "../src/lib/session.ts";
+import { canSend, createSession, emptyView, type Transport } from "../src/lib/session.ts";
+import type { Page } from "../src/lib/pages.ts";
 import type {
   AppState,
   InvocationDetail,

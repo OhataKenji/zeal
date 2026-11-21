@@ -1,4 +1,5 @@
 import { COMMANDS } from "./commands.ts";
+import type { Page } from "./pages.ts";
 import { targetError } from "./target.ts";
 import type {
   AppState,
@@ -19,9 +20,6 @@ import type {
   WorkspaceInfo,
   WorkspaceState,
 } from "./types.ts";
-
-/** Top-level Lens Rail page destinations. */
-export type Page = "workspace" | "targets" | "history" | "query" | "analytics";
 
 /** IPC boundary used by a session to call the core and subscribe to events. */
 export interface Transport {

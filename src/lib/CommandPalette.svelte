@@ -10,13 +10,14 @@
   import type { TargetIndex } from "./types";
 
   let {
-    open = $bindable(false),
+    open,
     snapshot,
     invocations,
     canRun,
     canRefresh,
     isMac,
     onselect,
+    onclose,
   }: {
     open: boolean;
     snapshot: TargetIndex | null;
@@ -25,6 +26,7 @@
     canRefresh: boolean;
     isMac: boolean;
     onselect: (action: PaletteAction) => void;
+    onclose: () => void;
   } = $props();
 
   const listId = $props.id();
@@ -84,7 +86,7 @@
   });
 
   function choose(item: PaletteItem) {
-    open = false;
+    onclose();
     onselect(item.action);
   }
 
@@ -98,9 +100,9 @@
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       activeIndex = moveIndex(activeIdx, event.key === "ArrowDown" ? 1 : -1, items.length);
-    } else if (event.key === "Enter" && !event.repeat) {
+    } else if (event.key === "Enter") {
       event.preventDefault();
-      chooseActive();
+      if (!event.repeat) chooseActive();
     }
   }
 
@@ -118,16 +120,16 @@
   aria-label="Command Palette"
   onclose={() => {
     // A queued close event can land after a rapid reopen; only a dialog that
-    // is actually closed may push `open` back down.
-    if (!dialog?.open) open = false;
+    // is actually closed may ask the owner to clear the palette surface.
+    if (!dialog?.open) onclose();
   }}
   onkeydown={(event) => {
-    // The native close event is queued; settling `open` here keeps a fast
-    // ⌘K from toggling against a stale value.
-    if (event.key === "Escape" && !event.isComposing) open = false;
+    // The native close event is queued; settling the surface here keeps a
+    // fast ⌘K from toggling against a stale value.
+    if (event.key === "Escape" && !event.isComposing) onclose();
   }}
   onclick={(event) => {
-    if (event.target === dialog) open = false;
+    if (event.target === dialog) onclose();
   }}
 >
   <input
@@ -140,7 +142,7 @@
     autocomplete="off"
     spellcheck="false"
     role="combobox"
-    aria-expanded="true"
+    aria-expanded={open}
     aria-controls={listId}
     aria-autocomplete="list"
     aria-activedescendant={items.length > 0 ? optionId(listId, activeIdx) : undefined}
