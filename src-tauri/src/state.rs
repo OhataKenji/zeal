@@ -23,8 +23,8 @@ use tauri::{AppHandle, Emitter};
 pub struct AppStateDto {
     pub revision: u64,
     pub bes_error: Option<String>,
-    /// Whether the receiver can accept a new Bazel invocation.
-    pub bes_ready: bool,
+    /// The bound receiver endpoint, if the receiver can accept invocations.
+    pub bes_endpoint: Option<String>,
     /// Resolved bazel executable, if found on PATH.
     pub bazel: Option<String>,
     /// Saved preference for the last opened workspace; never used to resolve
@@ -199,7 +199,7 @@ impl Core {
         AppStateDto {
             revision,
             bes_error: st.bes_error.clone(),
-            bes_ready: st.bes_endpoint.is_some(),
+            bes_endpoint: st.bes_endpoint.clone(),
             bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
             last_workspace: st
                 .last_workspace
@@ -251,9 +251,9 @@ mod tests {
     }
 
     #[test]
-    fn dto_reports_bes_readiness_independently_of_its_message() {
+    fn dto_reports_bound_bes_endpoint_independently_of_its_message() {
         let core = Core::new();
-        assert_eq!(serde_json::to_value(core.dto()).unwrap()["besReady"], false);
+        assert!(serde_json::to_value(core.dto()).unwrap()["besEndpoint"].is_null());
 
         {
             let mut st = core.state.lock().unwrap();
@@ -261,7 +261,7 @@ mod tests {
             st.bes_error = Some("preferred port occupied".to_string());
         }
         let available = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(available["besReady"], true);
+        assert_eq!(available["besEndpoint"], "grpc://127.0.0.1:12345");
         assert_eq!(available["besError"], "preferred port occupied");
 
         {
@@ -270,7 +270,7 @@ mod tests {
             st.bes_error = Some("receiver stopped".to_string());
         }
         let unavailable = serde_json::to_value(core.dto()).unwrap();
-        assert_eq!(unavailable["besReady"], false);
+        assert!(unavailable["besEndpoint"].is_null());
         assert_eq!(unavailable["besError"], "receiver stopped");
     }
 

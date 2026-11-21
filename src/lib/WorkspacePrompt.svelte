@@ -9,6 +9,7 @@
     initial = "",
     initialScope,
     bazelAvailable,
+    besConfig,
     onopen,
     onclose,
     opening = $bindable(false),
@@ -16,6 +17,7 @@
     initial?: string;
     initialScope: TargetScope;
     bazelAvailable: boolean;
+    besConfig: string | null;
     onopen: (path: string, scope: TargetScope) => Promise<boolean>;
     onclose?: () => void;
     opening?: boolean;
@@ -64,11 +66,6 @@
       opening = false;
     }
   }
-
-  const BAZELRC = `build --bes_backend=grpc://127.0.0.1:4718
-build --experimental_build_event_upload_strategy=local
-build --bes_timeout=5s
-build --experimental_collect_system_network_usage`;
 </script>
 
 {#if !bazelAvailable}
@@ -143,19 +140,21 @@ build --experimental_collect_system_network_usage`;
   {#if error}
     <Notice tone="error">{error}</Notice>
   {/if}
-  <div class="scope-help">
-    <p class="scope-help">
-      To also record CLI invocations, add these lines to your workspace's
-      <code>.bazelrc</code> and keep Zeal open while running Bazel:
-    </p>
-    <div class="query-command">
-      <pre class="query-command-pre"><code>{BAZELRC}</code></pre>
-      <CopyButton
-        text={BAZELRC}
-        label="Copy .bazelrc settings"
-        onerror={(message) => (copyError = message)}
-      />
+  {#if besConfig}
+    <div class="scope-help">
+      <p class="scope-help">
+        To also record CLI invocations, add these lines to your workspace's
+        <code>.bazelrc</code> and keep Zeal open while running Bazel:
+      </p>
+      <div class="query-command">
+        <pre class="query-command-pre"><code>{besConfig}</code></pre>
+        <CopyButton
+          text={besConfig}
+          label="Copy .bazelrc settings"
+          onerror={(message) => (copyError = message)}
+        />
+      </div>
+      {#if copyError}<p role="status">{copyError}</p>{/if}
     </div>
-    {#if copyError}<p role="status">{copyError}</p>{/if}
-  </div>
+  {/if}
 </form>

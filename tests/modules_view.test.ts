@@ -59,6 +59,13 @@ test("module page and browser preview", async (t) => {
     assert.match(error, /role="alert"[^>]*>[\s\S]*graph failed[\s\S]*Retry/);
   });
 
+  await t.test("partial results keep the module table visible with a warning", () => {
+    const html = output({ snapshot: { ...snapshot, warning: "Bazel extension failed" } });
+    assert.match(html, /role="status"[^>]*>[\s\S]*Bazel returned a partial module graph/);
+    assert.match(html, /<details[^>]*>[\s\S]*Show Bazel output[\s\S]*Bazel extension failed/);
+    assert.match(html, /<th[^>]*>Module<\/th>/);
+  });
+
   await t.test(
     "inspector links to modules but never to root, including a cycle back to root",
     () => {

@@ -3,8 +3,7 @@
 //! Both pipes drain on scoped threads behind one deadline: stdout keeps a
 //! bounded head, stderr a bounded tail. [`DeadlinePipe`] polls each read
 //! against the shared deadline so a descendant holding a pipe open cannot
-//! keep reader threads or descriptors alive past it. Nonzero exits are
-//! errors carrying the stderr tail; callers only see successful output.
+//! keep reader threads or descriptors alive past it.
 
 use rustix::event::{self, PollFd, PollFlags, Timespec};
 use rustix::process::Signal;
@@ -20,11 +19,40 @@ use std::time::{Duration, Instant};
 /// stderr is kept as a bounded tail: Bazel prints `ERROR:` at the end.
 const STDERR_TAIL_CAP: usize = 8 * 1024;
 
-/// A successful bounded run: head-capped stdout plus a truncation flag.
+/// A finished process with head-capped stdout and tail-capped stderr.
 #[derive(Debug)]
 pub(crate) struct BoundedOutput {
     pub stdout: Vec<u8>,
     pub stdout_truncated: bool,
+    pub status: ExitStatus,
+    stderr: String,
+    label: String,
+}
+
+impl BoundedOutput {
+    pub(crate) fn stderr(&self) -> &str {
+        self.stderr.trim()
+    }
+
+    pub(crate) fn failure(&self) -> Option<String> {
+        if self.status.success() {
+            return None;
+        }
+        let label = &self.label;
+        let detail = self.stderr();
+        Some(if detail.is_empty() {
+            format!("{label} exited with {}", self.status)
+        } else {
+            format!("{label} failed: {detail}")
+        })
+    }
+
+    pub(crate) fn require_success(self) -> Result<Self, String> {
+        match self.failure() {
+            Some(error) => Err(error),
+            None => Ok(self),
+        }
+    }
 }
 
 /// A pipe whose reads fail with [`io::ErrorKind::TimedOut`] once `deadline`
@@ -131,18 +159,13 @@ pub(crate) fn run_bazel_bounded(
         // process group id — may be recycled, so nothing may be signalled.
         let status = wait_with_timeout(&mut child, pid, deadline, &label, cancelled)?;
         let (stdout, stdout_truncated) = join_reader(out, &label, "stdout")?;
-        let tail = join_reader(err, &label, "stderr")?;
-        if status.success() {
-            return Ok(BoundedOutput {
-                stdout,
-                stdout_truncated,
-            });
-        }
-        let detail = utf8_tail(&tail).trim().to_string();
-        Err(if detail.is_empty() {
-            format!("{label} exited with {status}")
-        } else {
-            format!("{label} failed: {detail}")
+        let stderr = utf8_tail(&join_reader(err, &label, "stderr")?);
+        Ok(BoundedOutput {
+            stdout,
+            stdout_truncated,
+            status,
+            stderr,
+            label,
         })
     })
 }
@@ -242,7 +265,8 @@ mod tests {
             Instant::now() + Duration::from_secs(10),
             cap,
             &AtomicBool::new(false),
-        )
+        )?
+        .require_success()
     }
 
     #[test]

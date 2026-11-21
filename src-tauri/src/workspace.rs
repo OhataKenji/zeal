@@ -73,7 +73,8 @@ fn fetch_info_with_timeout(
         INFO_STDOUT_CAP,
         // Workspace info has no lifecycle owner; it is never cancelled.
         &AtomicBool::new(false),
-    )?;
+    )?
+    .require_success()?;
     Ok(parse_bazel_info(&String::from_utf8_lossy(&out.stdout), ws))
 }
 

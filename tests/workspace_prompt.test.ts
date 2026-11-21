@@ -21,6 +21,7 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
         initial,
         initialScope: { include },
         bazelAvailable,
+        besConfig: null,
         onopen: async () => true,
         opening,
       },
@@ -98,12 +99,13 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
         initial: "",
         initialScope: SCOPE,
         bazelAvailable: true,
+        besConfig: "build --bes_backend=grpc://127.0.0.1:12345",
         onopen: async () => true,
       },
     }).body;
     assert.match(
       html,
-      /<pre[^>]*><code[^>]*>build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage<\/code><\/pre>/,
+      /<pre[^>]*><code[^>]*>build --bes_backend=grpc:\/\/127\.0\.0\.1:12345<\/code><\/pre>/,
     );
     const button = tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>/);
     assert.match(button, /type="button"/);

@@ -75,11 +75,20 @@
         {view.loadError}
       </Notice>
     {/if}
+    {#if snapshot?.warning}
+      <Notice tone="warning">
+        Bazel returned a partial module graph. Some module extensions failed.
+        <details>
+          <summary>Show Bazel output</summary>
+          <pre class="code-box">{snapshot.warning}</pre>
+        </details>
+      </Notice>
+    {/if}
     {#if !snapshot}
       {#if view.loadError === null}
         <p>
           Run <code>bazel mod graph</code> to load dependencies.
-          With a cold cache, Bazel may evaluate module extensions.
+          With a cold cache, Bazel may take a few minutes to resolve dependencies.
         </p>
         <button type="button" class="button button-primary" {disabled} onclick={controller.load}>
           {view.busy === "load" ? "Loading modules…" : "Load modules"}

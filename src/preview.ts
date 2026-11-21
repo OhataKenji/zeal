@@ -26,6 +26,7 @@ import type { CommandName } from "./lib/commands.ts";
 const WORKSPACE = "/demo/cool-mono";
 const MODULES: ModulesSnapshot = {
   rootKey: "<root>",
+  warning: null,
   modules: [
     {
       key: "rules_cc@0.0.17",
@@ -194,7 +195,7 @@ const records: PreviewRecord[] = Array.from(dayIndices, (dayIndex) => {
 const state: AppState = {
   revision: 0,
   besError: null,
-  besReady: true,
+  besEndpoint: "grpc://127.0.0.1:4718",
   bazel: "8.7.0",
   lastWorkspace: WORKSPACE,
   workspaces: [

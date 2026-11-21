@@ -41,6 +41,14 @@
 
   const st = $derived(view.state);
   const core = $derived(view.core);
+  const besConfig = $derived(
+    core?.besEndpoint
+      ? `build --bes_backend=${core.besEndpoint}
+build --experimental_build_event_upload_strategy=local
+build --bes_timeout=5s
+build --experimental_collect_system_network_usage`
+      : null,
+  );
   const snap = $derived(view.snapshot);
   const tree = $derived(snap ? buildTree(snap) : null);
   const selection = $derived(view.selection);
@@ -275,7 +283,7 @@
   {#if view.error}<Notice tone="error">{view.error}</Notice>{/if}
   {#if switchError}<Notice tone="error">{switchError}</Notice>{/if}
   {#if core?.besError}
-    <Notice tone={core.besReady ? "warning" : "error"}>BES receiver: {core.besError}</Notice>
+    <Notice tone={core.besEndpoint ? "warning" : "error"}>BES receiver: {core.besError}</Notice>
   {/if}
 
   {#if core === null}
@@ -287,6 +295,7 @@
           initial={promptInitial}
           initialScope={{ include: ["//..."] }}
           bazelAvailable={core.bazel !== null}
+          {besConfig}
           bind:opening
           onopen={session.openWorkspace}
           onclose={
@@ -403,6 +412,7 @@
               info={view.workspaceInfo}
               loading={view.workspaceInfoLoading}
               error={view.workspaceInfoError}
+              {besConfig}
               onretry={session.loadWorkspaceInfo}
               onsavescope={(scope) => session.openWorkspace(st.workspace, scope)}
             />

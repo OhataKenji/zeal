@@ -22,6 +22,7 @@ const b = {
 };
 const snapshot: ModulesSnapshot = {
   rootKey: "<root>",
+  warning: null,
   modules: [a, b],
 };
 

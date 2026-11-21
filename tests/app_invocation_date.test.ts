@@ -13,7 +13,7 @@ const WS: WorkspaceState = {
 const CORE: AppState = {
   revision: 1,
   besError: null,
-  besReady: true,
+  besEndpoint: "grpc://127.0.0.1:4718",
   bazel: "/bin/bazel",
   lastWorkspace: "/workspace",
   workspaces: [WS],
@@ -78,6 +78,34 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     assert.match(nav, /Query/);
     assert.match(nav, /History/);
     assert.match(nav, /Analytics/);
+  });
+
+  await t.test("shows the bound BES endpoint in both workspace settings", () => {
+    const core = { ...CORE, besEndpoint: "grpc://127.0.0.1:12345" };
+    const initial = render(AppView, {
+      props: { view: { ...emptyView(), core }, session },
+    }).body;
+    const workspace = render(AppView, {
+      props: { view: { ...emptyView("workspace"), core, state: WS }, session },
+    }).body;
+    const boundConfig =
+      /build --bes_backend=grpc:\/\/127\.0\.0\.1:12345\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage/;
+    assert.match(initial, boundConfig);
+    assert.match(workspace, boundConfig);
+    assert.doesNotMatch(initial, /:4718/);
+    assert.doesNotMatch(workspace, /:4718/);
+  });
+
+  await t.test("offers no BES configuration without a bound receiver", () => {
+    const core = { ...CORE, besEndpoint: null };
+    const initial = render(AppView, {
+      props: { view: { ...emptyView(), core }, session },
+    }).body;
+    const workspace = render(AppView, {
+      props: { view: { ...emptyView("workspace"), core, state: WS }, session },
+    }).body;
+    assert.doesNotMatch(initial, /--bes_backend|Copy \.bazelrc/);
+    assert.doesNotMatch(workspace, /--bes_backend|Copy \.bazelrc/);
   });
 
   await t.test("distinguishes simultaneous live rows by workspace", () => {

@@ -12,8 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Per-Bazel-call bound for `bazel mod` commands.
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+/// Module resolution and extension evaluation can fetch dependencies on a
+/// cold cache. Keep a deadline that allows large workspaces to finish.
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(180);
 const GRAPH_STDOUT_CAP: usize = 16 * 1024 * 1024;
 const EXPLAIN_STDOUT_CAP: usize = 2 * 1024 * 1024;
 const EXPLAIN_TRUNCATION_NOTE: &str = "\n\n… (output truncated at 2 MiB)";
@@ -28,6 +29,7 @@ const MAX_KEY_LEN: usize = 256;
 const GRAPH_ARGS: &[&str] = &[
     "mod",
     "graph",
+    "--color=no",
     "--lockfile_mode=off",
     "--output=json",
     "--depth=2147483647",
@@ -55,6 +57,7 @@ pub struct ModuleNode {
 pub struct ModulesSnapshot {
     pub root_key: String,
     pub modules: Vec<ModuleNode>,
+    pub warning: Option<String>,
 }
 
 /// Fail-fast guard owning one workspace's `bazel mod` operations: the
@@ -94,10 +97,21 @@ impl ModulesOperation {
     /// The resolved module graph.
     pub fn snapshot(&self) -> Result<ModulesSnapshot, String> {
         let out = self.run(GRAPH_ARGS, GRAPH_STDOUT_CAP)?;
+        // Bazel emits a graph before reporting extension inspection failures.
+        // Only accept that exit with Bazel's explicit incomplete-result notice.
+        let partial = out.status.code() == Some(2)
+            && out.stderr().lines().any(|line| {
+                line.starts_with("ERROR: Results may be incomplete as ")
+                    && (line.ends_with(" extension failed.")
+                        || line.ends_with(" extensions failed."))
+            });
+        let out = if partial { out } else { out.require_success()? };
         if out.stdout_truncated {
             return Err("bazel mod graph output exceeded 16 MiB".into());
         }
-        parse_mod_graph(&out.stdout)
+        let mut snapshot = parse_mod_graph(&out.stdout)?;
+        snapshot.warning = out.failure();
+        Ok(snapshot)
     }
 
     /// `bazel mod explain --verbose` output for one module key.
@@ -117,7 +131,7 @@ impl ModulesOperation {
             "--",
             module_key,
         ];
-        let out = self.run(&args, EXPLAIN_STDOUT_CAP)?;
+        let out = self.run(&args, EXPLAIN_STDOUT_CAP)?.require_success()?;
         Ok(explain_output(&out.stdout, out.stdout_truncated))
     }
 
@@ -267,6 +281,7 @@ fn project(
     ModulesSnapshot {
         root_key: root_key.to_string(),
         modules,
+        warning: None,
     }
 }
 
@@ -609,6 +624,36 @@ mod tests {
             let op = operation(&dir, "#!/bin/sh\nexit 1\n");
             let err = op.snapshot().unwrap_err();
             assert!(err.contains("mod graph"), "{err}");
+        }
+
+        #[test]
+        fn snapshot_keeps_bazels_partial_graph_with_the_extension_error() {
+            let dir = TempDir::new();
+            fs::write(dir.path().join("graph.json"), GRAPH_JSON).unwrap();
+            let op = operation(
+                &dir,
+                "#!/bin/sh\ncat graph.json\necho 'ERROR: missing generated repository' >&2\n\
+                 echo 'ERROR: Results may be incomplete as 1 extension failed.' >&2\nexit 2\n",
+            );
+            let snapshot = op.snapshot().unwrap();
+            assert_eq!(snapshot.modules, fixture().modules);
+            assert!(
+                snapshot
+                    .warning
+                    .unwrap()
+                    .contains("missing generated repository")
+            );
+        }
+
+        #[test]
+        fn snapshot_rejects_other_failed_commands_even_if_they_emit_graph_json() {
+            let dir = TempDir::new();
+            fs::write(dir.path().join("graph.json"), GRAPH_JSON).unwrap();
+            let op = operation(
+                &dir,
+                "#!/bin/sh\ncat graph.json\necho 'ERROR: invalid argument' >&2\nexit 2\n",
+            );
+            assert!(op.snapshot().unwrap_err().contains("invalid argument"));
         }
 
         #[test]
