@@ -455,6 +455,7 @@
                 reloadProfile={session.loadProfile}
                 onstop={session.stop}
                 onrerun={(cmd, pattern) => session.start(cmd, pattern)}
+                onselecttarget={(label) => session.select({ kind: "target", label })}
               />
             {/key}
           {:else}
