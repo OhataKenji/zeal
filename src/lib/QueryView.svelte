@@ -60,7 +60,7 @@
   import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
-  import { onDestroy, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { createIndex } from "./search";
   import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
@@ -129,6 +129,9 @@
   let buildFlags = $state(initial?.flags ?? "");
   let transitions = $state(false);
   let resultView = $state<ResultView>(initial && initial.kind !== "query" ? "table" : "raw");
+  onMount(() => {
+    if (initial) onpresetapplied?.();
+  });
   const outputFormat = $derived(outputFormatFor(kind, resultView, transitions));
   const phases = {
     query: "Loading — explore target dependencies before configuration.",
@@ -177,14 +180,6 @@
     resultView = next === "query" ? "raw" : "table";
     codeError = null;
   }
-
-  $effect.pre(() => {
-    const next = preset;
-    if (!next) return;
-    selectKind(next.kind);
-    buildFlags = next.flags;
-    untrack(() => onpresetapplied?.());
-  });
 
   const flags = $derived<CommandFlags>({ noImplicit, noTool, flags: buildFlags });
   const serialized = $derived(serialize(root));
