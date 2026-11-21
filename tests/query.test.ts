@@ -18,8 +18,9 @@ import {
   outputFormatFor,
   parse,
   parseCqueryOutput,
+  previewWords,
   producerQuery,
-  queryArgv,
+  queryInputs,
   serialize,
   switchKind,
   target,
@@ -189,7 +190,6 @@ test("applyExample builds a fresh tree for a known name only", () => {
     noImplicit: true,
     noTool: false,
     flags: "",
-    transitions: false,
   });
 });
 
@@ -454,57 +454,88 @@ test("commandLine puts managed output options after user flags, and the expressi
     ...DEFAULT_FLAGS,
     flags: `--config=ci "--define=title=Bob's $HOME" --copt=foo\\ bar`,
   };
+  const inputs = (kind: QueryKind, output: Parameters<typeof queryInputs>[2], f = DEFAULT_FLAGS) =>
+    queryInputs(kind, q, output, f);
   assert.equal(
-    commandLine("query", q, "label", DEFAULT_FLAGS),
+    commandLine(inputs("query", "label")),
     "bazel --noblock_for_lock query --output=label --noimplicit_deps -- 'deps(//a)'",
   );
   assert.equal(
-    commandLine("query", q, "graph", { ...DEFAULT_FLAGS, noTool: true }),
+    commandLine(queryInputs("query", q, "graph", { ...DEFAULT_FLAGS, noTool: true })),
     "bazel --noblock_for_lock query --output=graph --nograph:factored --noimplicit_deps --notool_deps -- 'deps(//a)'",
   );
   const words = "--config=ci '--define=title=Bob'\\''s $HOME' '--copt=foo bar'";
   assert.equal(
-    commandLine("cquery", q, "label", flags),
+    commandLine(inputs("cquery", "label", flags)),
     `bazel --noblock_for_lock cquery ${words} --output=label --show_config_fragments=off -- 'deps(//a)'`,
   );
   assert.equal(
-    commandLine("cquery", q, "transitions", { ...flags, transitions: true }),
+    commandLine(inputs("cquery", "transitions", flags)),
     `bazel --noblock_for_lock cquery ${words} --output=transitions --transitions=lite -- 'deps(//a)'`,
   );
   assert.equal(
-    commandLine("aquery", "a'b", "jsonproto", flags),
+    commandLine(queryInputs("aquery", "a'b", "jsonproto", flags)),
     `bazel --noblock_for_lock aquery ${words} --output=jsonproto --include_commandline --include_artifacts -- 'a'\\''b'`,
   );
   assert.equal(
-    commandLine("aquery", q, "text", flags),
+    commandLine(inputs("aquery", "text", flags)),
     `bazel --noblock_for_lock aquery ${words} --output=text -- 'deps(//a)'`,
   );
+  assert.equal(commandLine(inputs("cquery", "label", { ...DEFAULT_FLAGS, flags: "--a='x" })), "");
 });
 
-test("queryArgv carries flags and the chosen view", () => {
+test("queryInputs carries flags and the chosen output", () => {
   // The Raw view asks the core for --output=label; Graph for --output=graph.
-  assert.deepEqual(queryArgv("query", "deps(//a)", "label", DEFAULT_FLAGS), {
+  assert.deepEqual(queryInputs("query", "deps(//a)", "label", DEFAULT_FLAGS), {
     kind: "query",
     expr: "deps(//a)",
     output: "label",
     noImplicitDeps: true,
     noToolDeps: false,
     flags: "",
-    transitions: false,
   });
   const flags = `--config=foo --define='A B'`;
-  assert.deepEqual(
-    queryArgv("cquery", "deps(//a)", "transitions", { ...DEFAULT_FLAGS, flags, transitions: true }),
-    {
-      kind: "cquery",
-      expr: "deps(//a)",
-      output: "transitions",
-      noImplicitDeps: false,
-      noToolDeps: false,
-      flags,
-      transitions: true,
-    },
-  );
+  assert.deepEqual(queryInputs("cquery", "deps(//a)", "transitions", { ...DEFAULT_FLAGS, flags }), {
+    kind: "cquery",
+    expr: "deps(//a)",
+    output: "transitions",
+    noImplicitDeps: false,
+    noToolDeps: false,
+    flags,
+  });
+});
+
+test("previewWords reads shell-like words or refuses malformed input", () => {
+  const cases: [string, string[] | null][] = [
+    ["", []],
+    ["  --config=ci  ", ["--config=ci"]],
+    ["--flag=''", ["--flag="]],
+    ["''", [""]],
+    ["a '' b", ["a", "", "b"]],
+    ["--opt='a b'c\"d\"", ["--opt=a bcd"]],
+    ["'a'\"b\"c", ["abc"]],
+    ["a#b --x", ["a#b", "--x"]],
+    ["a\\#b", ["a#b"]],
+    ["--x # comment", ["--x"]],
+    ["# whole line", []],
+    ["--define='x$(date)'", ["--define=x$(date)"]],
+    ['"$()"', ["$()"]],
+    ["a\u00a0b", ["a\u00a0b"]],
+    ["#comment\nline", null],
+    ["--copt=foo\\ bar", ["--copt=foo bar"]],
+    ['"a\\"b"', ['a"b']],
+    ['"\\$x"', ["$x"]],
+    ["'a\\nb'", ["a\\nb"]],
+    ["a\tb", ["a", "b"]],
+    ["--a='x", null],
+    ['--a="x', null],
+    ["'a'b'", null],
+    ["--a=foo\\", null],
+    ["a\nb", null],
+  ];
+  for (const [input, expected] of cases) {
+    assert.deepEqual(previewWords(input), expected, JSON.stringify(input));
+  }
 });
 
 test("codeDiverged mirrors the mock's editor state check", () => {
@@ -542,7 +573,7 @@ test("attrCandidates stays sorted and covers label-typed and scalar attrs", () =
 });
 
 function loading(expr: string, output: "graph" | "label" = "label") {
-  return queryArgv("query", expr, output, DEFAULT_FLAGS);
+  return queryInputs("query", expr, output, DEFAULT_FLAGS);
 }
 const OUTPUT: QueryOutput = {
   exitCode: 0,
@@ -832,10 +863,9 @@ test("configured target and transitions survive real Bazel output", () => {
 test("graph kind invalidates equal label outputs, but cquery Table/Raw shares in-flight and stored results", async () => {
   const h = harness();
   const req = (kind: QueryKind, view: "raw" | "table", transitions = false) =>
-    queryArgv(kind, "//a", outputFormatFor(kind, view, transitions), {
+    queryInputs(kind, "//a", outputFormatFor(kind, view, transitions), {
       ...DEFAULT_FLAGS,
       noImplicit: false,
-      transitions,
     });
   const loadingRaw = req("query", "raw");
   const table = req("cquery", "table");

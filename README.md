@@ -68,10 +68,6 @@ Build Bazel queries visually from preset examples or from scratch across all thr
 
 ![Query Builder with visual expression blocks and a dependency graph](docs/screenshots/query-builder.jpg)
 
-### Workspace Configs
-
-The Workspace page lists `--config` definitions parsed from workspace `.bazelrc` files alongside the rc provenance reported by `bazel info --announce_rc`. Launch a config with `build`/`test`/`run` or open it in `cquery` — both only fill in the fields; nothing runs until you confirm.
-
 ### Invocation Page
 
 View logs, results, details, and available timing data.

@@ -337,7 +337,6 @@ export function serialize(root: Expr): { ok: true; text: string } | { ok: false;
 export interface CommandFlags {
   noImplicit: boolean;
   noTool: boolean;
-  transitions: boolean;
   flags: string;
 }
 
@@ -348,68 +347,73 @@ export interface CommandFlags {
 export const DEFAULT_FLAGS: CommandFlags = {
   noImplicit: true,
   noTool: false,
-  transitions: false,
   flags: "",
 };
 
-// Match Rust shlex splitting for the single-line flags field. These words are
-// only for the copyable preview; the core validates the original flags text.
-function previewWords(text: string): string[] | null {
+// Quote/escape pieces have distinct opening characters; adjacent pieces form one argv word.
+const quoted = /'[^']*'|"(?:[^"\\]|\\.)*"|\\./gs;
+function unquote(piece: string): string {
+  if (piece.startsWith("\\")) return piece.slice(1);
+  const inner = piece.slice(1, -1);
+  return piece.startsWith('"') ? inner.replace(/\\([$`"\\])/g, "$1") : inner;
+}
+
+/**
+ * Splits the single-line flags field the way a POSIX shell would: quoted and
+ * escaped pieces concatenate into words (empty quotes included), whitespace
+ * ends a word, and a `#` at a word boundary comments out the rest. Returns
+ * null on control characters, unterminated quotes or escapes so the preview
+ * can refuse rather than interpolate raw text. Display only — the core
+ * revalidates `flags`.
+ */
+export function previewWords(text: string): string[] | null {
+  if (/\p{Cc}/u.test(text.replaceAll("\t", ""))) return null;
+  // A comment starts only at a word boundary; # inside a word is literal.
+  const token = new RegExp(`[ \\t]+|#.*|(?:${quoted.source}|[^ \\t'"\\\\])+`, "sy");
   const words: string[] = [];
-  let i = 0;
-  while (i < text.length) {
-    if (" \t".includes(text[i])) {
-      i++;
-      continue;
-    }
-    if (text[i] === "#") break;
-    let word = "";
-    let quote = "";
-    while (i < text.length) {
-      const c = text[i++];
-      if (!quote && " \t".includes(c)) break;
-      if (!quote && (c === "'" || c === '"')) quote = c;
-      else if (c === quote) quote = "";
-      else if (c === "\\" && quote !== "'") {
-        if (i === text.length) return null;
-        const next = text[i++];
-        word += quote && !'\\$`"'.includes(next) ? "\\" + next : next;
-      } else word += c;
-    }
-    if (quote) return null;
-    words.push(word);
+  while (token.lastIndex < text.length) {
+    const match = token.exec(text);
+    if (!match) return null;
+    const [word] = match;
+    if (word.startsWith("#")) break;
+    if (!/^[ \t]/.test(word)) words.push(word.replace(quoted, unquote));
   }
   return words;
 }
+
+// Managed flags keyed by kind:output; user flags always precede them.
+const MANAGED_FLAGS: Record<string, readonly string[]> = {
+  "query:graph": ["--nograph:factored"],
+  "cquery:label": ["--show_config_fragments=off"],
+  "cquery:transitions": ["--transitions=lite"],
+  "aquery:jsonproto": ["--include_commandline", "--include_artifacts"],
+};
 
 /**
  * Shell-safe display of the argv the core will execute, or an empty string
  * if the flags field cannot be split. Execution never goes through a shell.
  */
-export function commandLine(
-  kind: QueryKind,
-  exprText: string,
-  output: OutputFormat,
-  flags: CommandFlags,
-): string {
-  const user = kind === "query" ? [] : previewWords(flags.flags);
-  if (!user) return "";
-  const argv = ["bazel", "--noblock_for_lock", kind, ...user, `--output=${output}`];
-  if (kind === "query") {
-    if (output === "graph") argv.push("--nograph:factored");
-    if (flags.noImplicit) argv.push("--noimplicit_deps");
-    if (flags.noTool) argv.push("--notool_deps");
-  } else if (kind === "cquery") {
-    argv.push(output === "label" ? "--show_config_fragments=off" : "--transitions=lite");
-  } else if (output === "jsonproto") argv.push("--include_commandline", "--include_artifacts");
-  return [...argv, "--", exprText].map(shellQuote).join(" ");
+export function commandLine(request: QueryInputs): string {
+  const user = request.kind === "query" ? [] : previewWords(request.flags);
+  if (user === null) return "";
+  const argv = [
+    "bazel",
+    "--noblock_for_lock",
+    request.kind,
+    ...user,
+    `--output=${request.output}`,
+    ...(MANAGED_FLAGS[`${request.kind}:${request.output}`] ?? []),
+  ];
+  if (request.noImplicitDeps) argv.push("--noimplicit_deps");
+  if (request.noToolDeps) argv.push("--notool_deps");
+  return [...argv, "--", request.expr].map(shellQuote).join(" ");
 }
 
 /**
  * Non-workspace fields of the run_query request. Inactive graph controls
  * cannot affect execution. Send flags as entered, not as frontend argv.
  */
-export function queryArgv(
+export function queryInputs(
   kind: QueryKind,
   expr: string,
   output: OutputFormat,
@@ -421,12 +425,11 @@ export function queryArgv(
     output,
     noImplicitDeps: kind === "query" && flags.noImplicit,
     noToolDeps: kind === "query" && flags.noTool,
-    transitions: kind === "cquery" && flags.transitions,
     flags: kind === "query" ? "" : flags.flags,
   };
 }
 
-type QueryInputs = ReturnType<typeof queryArgv>;
+type QueryInputs = ReturnType<typeof queryInputs>;
 export type QueryRequest = QueryInputs & { workspace: string };
 
 interface Token {

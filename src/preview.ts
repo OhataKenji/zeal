@@ -501,35 +501,93 @@ function actionMnemonic(path: string): string {
   return "SingleJar";
 }
 
-// Stand-in for the core's per-action input budget so the preview exercises
-// the inputsTruncated path; the real caps are far larger.
-const PREVIEW_INPUT_CAP = 40;
+/** Sample actions for one target, built from the demo workspace files. */
+function previewActions(label: string): TargetActions {
+  const inputs = FULL_DATA.files
+    .filter((file) => file.owner === label && file.role === "srcs")
+    .map((file) => file.path);
+  const actions = FULL_DATA.files
+    .filter((file) => file.owner === label && file.role === "out")
+    .map((file) => {
+      const output = `bazel-out/k8-fastbuild/bin/${file.path}`;
+      const mnemonic = actionMnemonic(file.path);
+      return {
+        output,
+        mnemonic,
+        owner: file.owner,
+        arguments: [
+          mnemonic.toLowerCase(),
+          "--output",
+          output,
+          "--define=GREETING=hello world",
+          ...inputs.slice(0, 2),
+        ],
+        inputs,
+        inputsTruncated: false,
+        outputs: [output],
+        environmentVariables: [
+          { key: "PATH", value: "/usr/bin:/bin" },
+          { key: "LC_ALL", value: "C" },
+        ],
+        configuration: {
+          mnemonic: "k8-fastbuild",
+          platformName: "@local_config_platform//:host",
+          checksum: "0f3c9a1e7b2d4f60",
+          isTool: false,
+        },
+        executionPlatform: "@local_config_platform//:host",
+      };
+    });
+  return { actions: actions.slice(0, 100), truncated: actions.length > 100 };
+}
 
-/** Sample `aquery` actions: over the 100-action cap on broad expressions. */
-function previewQueryActions(config: string): TargetActions {
-  const generated = Array.from({ length: 130 }, (_, i) => {
-    const output = `bazel-out/k8-fastbuild/bin/app/lib/out${i}.jar`;
-    const mnemonic = ["Javac", "SourceJar", "SingleJar"][i % 3];
-    const inputs = Array.from({ length: 10 + (i % 45) }, (_, j) => `app/lib/input${i}-${j}.java`);
-    return {
-      output,
-      mnemonic,
-      owner: PARSER,
-      arguments: [mnemonic.toLowerCase(), "--output", output],
-      inputs: inputs.slice(0, PREVIEW_INPUT_CAP),
-      inputsTruncated: inputs.length > PREVIEW_INPUT_CAP,
-      outputs: [output],
-      environmentVariables: [{ key: "PATH", value: "/usr/bin:/bin" }],
-      configuration: {
-        mnemonic: "k8-fastbuild",
-        platformName: "@local_config_platform//:host",
-        checksum: `cfg-${config}`,
-        isTool: i % 7 === 0,
-      },
-      executionPlatform: "@local_config_platform//:host",
-    };
-  });
-  return { actions: generated.slice(0, 100), truncated: generated.length > 100 };
+/** Sample `run_query` reply covering the three graphs and output modes. */
+function previewQueryOutput({ kind, output, expr, flags }: QueryRequest): QueryOutput {
+  // `--config=<name>` shows up in configured output the way Bazel reports it.
+  const config = /--config=(\S+)/.exec(flags)?.[1] ?? "k8-fastbuild";
+  const labels = SNAPSHOT.targets.map((t) => t.label);
+  let stdout = "";
+  let actions: TargetActions | null = null;
+  switch (output) {
+    case "jsonproto":
+    case "text": {
+      const set = previewActions(SNAPSHOT.targets.some((t) => t.label === expr) ? expr : PARSER);
+      if (output === "jsonproto") {
+        actions = set;
+      } else {
+        stdout = set.actions
+          .slice(0, 10)
+          .map(
+            (a) =>
+              `action '${a.mnemonic}'\n  Outputs: "${a.output}"\n  Owner: ${a.owner}\n  Inputs: ${a.inputs.length} file(s)\n`,
+          )
+          .join("\n");
+      }
+      break;
+    }
+    case "transitions":
+      stdout =
+        labels
+          .slice(0, 10)
+          .flatMap((label, i) => [
+            `${i % 2 === 0 ? "target_platform" : "target_configuration_transition"} -> ${label} (${config})`,
+            `  ${label} (${config})`,
+          ])
+          .join("\n") + "\n";
+      break;
+    case "graph":
+      stdout = `digraph mygraph {\n${FULL_DATA.edges
+        .filter((e) => e.from === PARSER)
+        .slice(0, 6)
+        .map((e) => `  ${JSON.stringify(e.from)} -> ${JSON.stringify(e.to)};`)
+        .join("\n")}\n}\n`;
+      break;
+    default:
+      stdout =
+        (kind === "cquery" ? labels.map((label) => `${label} (${config})`) : labels).join("\n") +
+        "\n";
+  }
+  return { exitCode: 0, stdout, truncated: false, stderrTail: "", actions };
 }
 
 /** Installs mock core IPC for the development-only browser preview. */
@@ -602,42 +660,7 @@ export function installPreview() {
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
-      const inputs = FULL_DATA.files
-        .filter((file) => file.owner === label && file.role === "srcs")
-        .map((file) => file.path);
-      const actions = FULL_DATA.files
-        .filter((file) => file.owner === label && file.role === "out")
-        .map((file) => {
-          const output = `bazel-out/k8-fastbuild/bin/${file.path}`;
-          const mnemonic = actionMnemonic(file.path);
-          return {
-            output,
-            mnemonic,
-            owner: file.owner,
-            arguments: [
-              mnemonic.toLowerCase(),
-              "--output",
-              output,
-              "--define=GREETING=hello world",
-              ...inputs.slice(0, 2),
-            ],
-            inputs,
-            inputsTruncated: false,
-            outputs: [output],
-            environmentVariables: [
-              { key: "PATH", value: "/usr/bin:/bin" },
-              { key: "LC_ALL", value: "C" },
-            ],
-            configuration: {
-              mnemonic: "k8-fastbuild",
-              platformName: "@local_config_platform//:host",
-              checksum: "0f3c9a1e7b2d4f60",
-              isTool: false,
-            },
-            executionPlatform: "@local_config_platform//:host",
-          };
-        });
-      return { actions: actions.slice(0, 100), truncated: actions.length > 100 };
+      return previewActions(label);
     },
     list_invocations: (payload) =>
       structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),
@@ -701,66 +724,12 @@ export function installPreview() {
     stop_invocation: (payload) =>
       stopInvocation(String(payload?.workspace ?? ""), String(payload?.id)),
     run_query: (payload) => {
-      const request = (payload?.request ?? {}) as Partial<QueryRequest>;
-      const workspace = String(request.workspace ?? "");
-      wsEntry(workspace);
-      const id = `preview-query-${crypto.randomUUID()}`;
-      const kind = request.kind ?? "query";
-      const output = String(request.output ?? "label");
-      const expr = String(request.expr ?? "");
-      const flags = String(request.flags ?? "");
-      // `--config=<name>` shows up in configured output the way Bazel reports it.
-      const config = /--config=(\S+)/.exec(flags)?.[1] ?? "k8-fastbuild";
-      const broad = expr.includes("//...");
-      const labels = expr.includes("//")
-        ? SNAPSHOT.targets.map((t) => t.label)
-        : ["//app:server", "//app/lib:parser", "//tools:cli"];
-      const actionSet = kind === "aquery" ? previewQueryActions(config) : null;
-      let stdout = "";
-      let actions: TargetActions | null = null;
-      let truncated = false;
-      if (actionSet !== null && output === "jsonproto") {
-        actions = actionSet;
-      } else if (actionSet !== null) {
-        stdout = actionSet.actions
-          .slice(0, 10)
-          .map(
-            (a) =>
-              `action '${a.mnemonic}'\n  Outputs: "${a.output}"\n  Owner: ${a.owner}\n  Inputs: ${a.inputs.length} file(s)\n`,
-          )
-          .join("\n");
-        truncated = broad;
-      } else if (kind === "cquery" && output === "transitions") {
-        stdout =
-          labels
-            .slice(0, 10)
-            .flatMap((label, i) => [
-              `${i % 2 === 0 ? "target_platform" : "target_configuration_transition"} -> ${label} (${config})`,
-              `  ${label} (${config})`,
-            ])
-            .join("\n") + "\n";
-      } else if (kind === "cquery") {
-        stdout = labels.map((label) => `${label} (${config})`).join("\n") + "\n";
-      } else if (output === "graph") {
-        stdout = `digraph mygraph {\n${labels
-          .slice(0, 6)
-          .map((l, i) => `  node${i} [label="${l}"];`)
-          .join("\n")}\n${labels
-          .slice(1, 6)
-          .map((_, i) => `  node${i} -> node${i + 1};`)
-          .join("\n")}\n}\n`;
-      } else {
-        stdout = labels.join("\n") + "\n";
-      }
-      const finished: QueryOutput = {
-        exitCode: 0,
-        stdout,
-        truncated,
-        stderrTail: "",
-        actions,
-      };
+      const request = payload?.request as QueryRequest;
+      wsEntry(request.workspace);
+      const { workspace, kind, expr } = request;
+      const finished = previewQueryOutput(request);
       const owned: OwnedInvocation = {
-        id,
+        id: `preview-query-${crypto.randomUUID()}`,
         workspace,
         cmd: kind,
         pattern: expr,
@@ -774,7 +743,7 @@ export function installPreview() {
       return new Promise((resolve, reject) => {
         setTimeout(() => {
           const stopped = owned.stopping;
-          if (!stopped) finishOwned(id);
+          if (!stopped) finishOwned(owned.id);
           if (stopped) reject(new Error("Query stopped"));
           else resolve(finished);
         }, 800);

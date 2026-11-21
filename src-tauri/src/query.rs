@@ -66,8 +66,6 @@ pub struct QueryRequest {
     #[serde(default)]
     pub no_tool_deps: bool,
     #[serde(default)]
-    pub transitions: bool,
-    #[serde(default)]
     pub flags: String,
 }
 
@@ -156,12 +154,8 @@ fn argv(req: &QueryRequest) -> Result<Vec<String>, String> {
                 args.push("--notool_deps".into());
             }
         }
-        (QueryKind::Cquery, "label") if !req.transitions => {
-            args.push("--show_config_fragments=off".into())
-        }
-        (QueryKind::Cquery, "transitions") if req.transitions => {
-            args.push("--transitions=lite".into())
-        }
+        (QueryKind::Cquery, "label") => args.push("--show_config_fragments=off".into()),
+        (QueryKind::Cquery, "transitions") => args.push("--transitions=lite".into()),
         (QueryKind::Aquery, "jsonproto") => {
             args.push("--include_commandline".into());
             args.push("--include_artifacts".into());
@@ -353,7 +347,7 @@ mod tests {
     fn request(kind: QueryKind, output: &str) -> QueryRequest {
         serde_json::from_value(serde_json::json!({
             "kind": kind.as_str(), "workspace": "/workspace", "output": output,
-            "expr": "//app:chosen", "transitions": output == "transitions",
+            "expr": "//app:chosen",
         }))
         .unwrap()
     }

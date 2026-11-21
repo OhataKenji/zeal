@@ -80,7 +80,7 @@
     outputFormatFor,
     parseCqueryOutput,
     producerQuery,
-    queryArgv,
+    queryInputs,
     serialize,
     validate,
     type CommandFlags,
@@ -186,7 +186,7 @@
     untrack(() => onpresetapplied?.());
   });
 
-  const flags = $derived<CommandFlags>({ noImplicit, noTool, transitions, flags: buildFlags });
+  const flags = $derived<CommandFlags>({ noImplicit, noTool, flags: buildFlags });
   const serialized = $derived(serialize(root));
   const builderOk = $derived(serialized.ok);
   const builderText = $derived(serialized.ok ? serialized.text : "");
@@ -194,10 +194,11 @@
   const errors = $derived(
     mode === "builder" ? validate(root, kind) : new Map<string, string>(),
   );
+  const request = $derived(queryInputs(kind, exprText, outputFormat, flags));
   const command = $derived(
     mode === "builder" && !serialized.ok
       ? `(serialize error) ${serialized.error}`
-      : commandLine(kind, exprText, outputFormat, flags),
+      : commandLine(request),
   );
   const valid = $derived(
     mode === "builder" ? builderOk && errors.size === 0 : codeValid(draft),
@@ -207,7 +208,6 @@
     mode === "code" && (diverged || codeError !== null),
   );
 
-  const request = $derived(queryArgv(kind, exprText, outputFormat, flags));
   $effect.pre(() => {
     // Depend on the execution inputs, not the presentation: cquery's Table
     // and Raw are two views of the same stdout, even during an in-flight run.
