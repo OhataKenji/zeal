@@ -175,8 +175,8 @@
     white-space: normal;
   }
 
-  .ws-entry:disabled {
-    opacity: 0.55;
+  .ws-entry[aria-current="true"] {
+    opacity: 1;
   }
 
   .ws-entry-path {

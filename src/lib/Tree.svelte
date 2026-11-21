@@ -39,19 +39,20 @@
 
 <div class="tree">
   {#each rows as r (r.path)}
+    {@const canToggle = r.path !== "" && r.hasChildren}
     <button
       class="row dir"
       class:selected={r.path === activePkg}
       aria-current={r.path === activePkg ? "true" : undefined}
-      aria-expanded={r.hasChildren ? r.expanded : undefined}
+      aria-expanded={canToggle ? r.expanded : undefined}
       title={r.path === "" ? "//..." : r.path}
       style:padding-left="{8 + r.depth * 12}px"
       onclick={() => {
         onselect({ kind: "package", path: r.path });
-        if (r.path !== "" && r.hasChildren) toggle(r.path);
+        if (canToggle) toggle(r.path);
       }}
     >
-      {#if r.hasChildren}
+      {#if canToggle}
         {#if r.expanded}<CaretDown size={10} />{:else}<CaretRight size={10} />{/if}
       {:else}
         <span class="tree-caret-slot" aria-hidden="true"></span>
