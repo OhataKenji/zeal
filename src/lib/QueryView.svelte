@@ -224,11 +224,13 @@
   });
   const rawShown = $derived(rawLines.slice(0, RAW_LINE_CAP));
   const rawMore = $derived(rawLines.length - rawShown.length);
-  const resultCount = $derived(
-    resultView === "raw" && stored && !failedOutput && !qstate.running
-      ? `${rawLines.length} ${kind === "query" ? "target" : "line"}${rawLines.length === 1 ? "" : "s"}`
-      : "",
-  );
+  const resultCount = $derived.by(() => {
+    if (!stored || failedOutput || qstate.running) return "";
+    if (resultView === "table" && kind === "cquery")
+      return `${rows.length} configured target${rows.length === 1 ? "" : "s"}`;
+    if (resultView !== "raw") return "";
+    return `${rawLines.length} ${kind === "query" ? "target" : "line"}${rawLines.length === 1 ? "" : "s"}`;
+  });
   // A successful graph invocation can still drop nodes (`--graph:node_limit`); bazel
   // only says so on stderr.
   const graphWarn = $derived.by(() => {
