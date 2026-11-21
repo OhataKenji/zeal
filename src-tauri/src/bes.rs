@@ -5,12 +5,13 @@ use crate::state::Core;
 use crate::store;
 use crate::store::events::{AckRange, Receipt};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use tracing::{Instrument, Span, field};
 use wire::publish_build_event_server::{PublishBuildEvent, PublishBuildEventServer};
 
 pub const ADDRESS: &str = "127.0.0.1:4718";
@@ -54,14 +55,15 @@ struct Stream {
 #[allow(clippy::result_large_err)] // The RPC task reports tonic Status by value.
 impl Stream {
     async fn append(self, data: PathBuf, event: wire::OrderedBuildEvent) -> Result<Self, Status> {
-        tokio::task::spawn_blocking(move || self.append_event(&data, &event))
+        let span = Span::current();
+        tokio::task::spawn_blocking(move || span.in_scope(|| self.append_event(&data, &event)))
             .await
             .map_err(|_| Status::internal("event worker failed"))?
     }
 
     fn append_event(
         mut self,
-        data: &std::path::Path,
+        data: &Path,
         event: &wire::OrderedBuildEvent,
     ) -> Result<Self, Status> {
         if self.receipt.is_none() {
@@ -85,21 +87,27 @@ impl Stream {
         Ok(self)
     }
 
+    #[tracing::instrument(target = "zeal::operations", name = "bes.save", skip_all)]
     async fn finish(mut self) -> Result<(Self, AckRange), Status> {
+        let span = Span::current();
         tokio::task::spawn_blocking(move || {
-            let receipt = self.receipt.take().expect("nonempty stream has a receipt");
-            let range = receipt.finish().map_err(store_status)?;
-            (self.invocations_changed)();
-            Ok((self, range))
+            span.in_scope(|| {
+                let receipt = self.receipt.take().expect("nonempty stream has a receipt");
+                let range = receipt.finish().map_err(store_status)?;
+                (self.invocations_changed)();
+                Ok((self, range))
+            })
         })
         .await
         .map_err(|_| Status::internal("event worker failed"))?
     }
 
     async fn partial(self) {
-        let _ = tokio::task::spawn_blocking(move || self.save_partial()).await;
+        let span = Span::current();
+        let _ = tokio::task::spawn_blocking(move || span.in_scope(|| self.save_partial())).await;
     }
 
+    #[tracing::instrument(target = "zeal::operations", name = "bes.save.partial", skip_all)]
     fn save_partial(self) {
         let _permit = self._permit;
         if let Some(receipt) = self.receipt
@@ -126,6 +134,90 @@ async fn send_error(
     let _ = tokio::time::timeout(IDLE_TIMEOUT, send.send(Err(error))).await;
 }
 
+#[tracing::instrument(
+    target = "zeal::operations", name = "bes.receive", skip_all,
+    fields(events = field::Empty, append_ms = field::Empty, outcome = field::Empty)
+)]
+async fn receive_events(
+    mut stream: Stream,
+    data: &Path,
+    mut incoming: tonic::Streaming<wire::PublishBuildToolEventStreamRequest>,
+) -> Result<Option<(Stream, wire::StreamId)>, Status> {
+    let span = Span::current();
+    let mut stream_id = None;
+    let mut events = 0_u64;
+    let mut append_time = Duration::ZERO;
+    let result = loop {
+        let request = match tokio::time::timeout(IDLE_TIMEOUT, incoming.message()).await {
+            Ok(Ok(Some(request))) => request,
+            Ok(Ok(None)) => break Ok(stream_id.map(|id| (stream, id))),
+            result => {
+                stream.partial().await;
+                break Err(match result {
+                    Ok(Err(error)) => error,
+                    _ => Status::deadline_exceeded("BES stream was idle"),
+                });
+            }
+        };
+        let Some(ordered) = request.ordered_build_event else {
+            stream.partial().await;
+            break Err(Status::invalid_argument("missing ordered event"));
+        };
+        if stream_id.is_none() {
+            stream_id = ordered.stream_id.clone();
+        }
+        let start = (!span.is_disabled()).then(Instant::now);
+        let appended = stream.append(data.to_path_buf(), ordered).await;
+        if let Some(start) = start {
+            append_time += start.elapsed();
+        }
+        events += 1;
+        stream = match appended {
+            Ok(stream) => stream,
+            Err(error) => break Err(error),
+        };
+    };
+    span.record("events", events);
+    span.record("append_ms", append_time.as_secs_f64() * 1000.0);
+    span.record("outcome", if result.is_ok() { "eof" } else { "error" });
+    result
+}
+
+// This measures handing ACKs to tonic, including backpressure from the
+// response stream. It cannot measure when the remote client reads them.
+#[tracing::instrument(
+    target = "zeal::operations", name = "bes.ack", skip_all,
+    fields(queued = field::Empty, outcome = field::Empty)
+)]
+async fn send_acks(
+    send: &tokio::sync::mpsc::Sender<Result<wire::PublishBuildToolEventStreamResponse, Status>>,
+    stream_id: wire::StreamId,
+    range: AckRange,
+) {
+    let mut queued = 0_u64;
+    let mut outcome = "queued";
+    for sequence_number in range.first..=range.last {
+        let ack = wire::PublishBuildToolEventStreamResponse {
+            stream_id: Some(stream_id.clone()),
+            sequence_number,
+        };
+        match tokio::time::timeout(IDLE_TIMEOUT, send.send(Ok(ack))).await {
+            Ok(Ok(())) => queued += 1,
+            Ok(Err(_)) => {
+                outcome = "disconnected";
+                break;
+            }
+            Err(_) => {
+                outcome = "timeout";
+                break;
+            }
+        }
+    }
+    let span = Span::current();
+    span.record("queued", queued);
+    span.record("outcome", outcome);
+}
+
 #[tonic::async_trait]
 impl PublishBuildEvent for Receiver {
     async fn publish_lifecycle_event(
@@ -147,69 +239,35 @@ impl PublishBuildEvent for Receiver {
         &self,
         request: Request<tonic::Streaming<wire::PublishBuildToolEventStreamRequest>>,
     ) -> Result<Response<Self::PublishBuildToolEventStreamStream>, Status> {
-        let mut stream = Stream {
+        let stream = Stream {
             receipt: None,
             _permit: self.admit()?,
             invocations_changed: self.invocations_changed.clone(),
         };
-        let mut incoming = request.into_inner();
         let data = self.data.clone();
         let (send, receive) = tokio::sync::mpsc::channel(8);
-        tokio::spawn(async move {
-            let mut stream_id = None;
-            loop {
-                let request = match tokio::time::timeout(IDLE_TIMEOUT, incoming.message()).await {
-                    Ok(Ok(Some(request))) => request,
-                    Ok(Ok(None)) => break,
-                    result => {
-                        stream.partial().await;
-                        let error = match result {
-                            Ok(Err(error)) => error,
-                            _ => Status::deadline_exceeded("BES stream was idle"),
-                        };
-                        send_error(&send, error).await;
-                        return;
-                    }
-                };
-                let Some(ordered) = request.ordered_build_event else {
-                    stream.partial().await;
-                    send_error(&send, Status::invalid_argument("missing ordered event")).await;
-                    return;
-                };
-                if stream_id.is_none() {
-                    stream_id = ordered.stream_id.clone();
-                }
-                stream = match stream.append(data.clone(), ordered).await {
-                    Ok(stream) => stream,
+        tokio::spawn(
+            async move {
+                let (stream, stream_id) =
+                    match receive_events(stream, &data, request.into_inner()).await {
+                        Ok(Some(received)) => received,
+                        Ok(None) => return,
+                        Err(error) => {
+                            send_error(&send, error).await;
+                            return;
+                        }
+                    };
+                let (_stream, range) = match stream.finish().await {
+                    Ok(saved) => saved,
                     Err(error) => {
                         send_error(&send, error).await;
                         return;
                     }
                 };
+                send_acks(&send, stream_id, range).await;
             }
-            let Some(stream_id) = stream_id else {
-                return;
-            };
-            let (_stream, range) = match stream.finish().await {
-                Ok(saved) => saved,
-                Err(error) => {
-                    send_error(&send, error).await;
-                    return;
-                }
-            };
-            for sequence_number in range.first..=range.last {
-                let ack = wire::PublishBuildToolEventStreamResponse {
-                    stream_id: Some(stream_id.clone()),
-                    sequence_number,
-                };
-                if !matches!(
-                    tokio::time::timeout(IDLE_TIMEOUT, send.send(Ok(ack))).await,
-                    Ok(Ok(()))
-                ) {
-                    return;
-                }
-            }
-        });
+            .instrument(tracing::info_span!(target: "zeal::operations", "bes.stream")),
+        );
         Ok(Response::new(Box::pin(ReceiverStream::new(receive))))
     }
 }
