@@ -58,6 +58,10 @@ Find targets with fuzzy search. Run `build`, `test`, or `run`.
 
 ![Fuzzy search for Bazel targets](docs/screenshots/fuzzy-search.jpg)
 
+### Command Palette
+
+Press `⌘K` (macOS) or `Ctrl+K` — or the search button in the toolbar — to jump to a page, run Bazel, open a target, or open an invocation. Paste a full invocation ID to look up a build older than the recent history list.
+
 ### Query Builder
 
 Build Bazel queries visually from preset examples or from scratch. View results as target lists or dependency graphs.

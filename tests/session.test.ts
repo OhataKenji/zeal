@@ -1,13 +1,8 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import {
-  canSend,
-  createSession,
-  emptyView,
-  type Page,
-  type Transport,
-} from "../src/lib/session.ts";
+import { canSend, createSession, emptyView, type Transport } from "../src/lib/session.ts";
+import type { Page } from "../src/lib/pages.ts";
 import type {
   AppState,
   InvocationDetail,
@@ -92,6 +87,11 @@ const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] 
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
 const THIRD = "/third";
+const OFF_WINDOW_ID = "123e4567-e89b-42d3-a456-426614174000";
+
+function offWindowRecord(id = OFF_WINDOW_ID): InvocationRecord {
+  return { ...RECORD, id, finishedAt: 2, exitCode: 0 };
+}
 
 function targetDetail(label: string): TargetDetail {
   const target = SNAPSHOT.targets.find((item) => item.label === label);
@@ -1410,4 +1410,91 @@ test("returning to history reloads detail when the selected record changed off-p
   lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
+});
+
+test("selecting an off-window id pins it through a selected-id history read", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [RECORD]);
+  h.session.selectInvocation(OFF_WINDOW_ID);
+  await settle();
+  assert.equal(h.view.historyLoading, true);
+  assert.equal(h.view.selectedInvocationId, OFF_WINDOW_ID);
+  const pinned = lastPendingRequest(h, "list_invocations");
+  assert.deepEqual(pinned.args, { workspace: WS, selectedId: OFF_WINDOW_ID });
+  pinned.reply.resolve([RECORD, offWindowRecord()]);
+  await settle();
+  assert.equal(h.view.historyLoading, false);
+  assert.equal(h.view.invocation?.record.id, OFF_WINDOW_ID);
+  const detail = pendingRequest(h, "get_invocation");
+  const profile = pendingRequest(h, "get_invocation_profile");
+  assert.equal(detail.args?.workspace, WS);
+  assert.equal(detail.args?.id, OFF_WINDOW_ID);
+  assert.equal(profile.args?.workspace, WS);
+  assert.equal(profile.args?.id, OFF_WINDOW_ID);
+});
+
+test("an unknown off-window id converges without saved reads or extra fetches", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [RECORD]);
+  h.session.selectInvocation(OFF_WINDOW_ID);
+  await settle();
+  assert.equal(h.view.historyLoading, true);
+  lastPendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+  await settle();
+  assert.equal(h.view.historyLoading, false);
+  assert.equal(h.view.invocation, null);
+  assert.equal(h.view.selectedInvocationId, OFF_WINDOW_ID);
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  assert.equal(requestCount(h, "list_invocations"), 2);
+});
+
+test("selecting off-window while history is busy pins it on the follow-up read", async () => {
+  const h = harness();
+  await initReady(h);
+  // The initial list_invocations is still in flight; the selection queues a
+  // dirty follow-up instead of racing a second request.
+  h.session.selectInvocation(OFF_WINDOW_ID);
+  await settle();
+  assert.equal(requestCount(h, "list_invocations"), 1);
+  assert.equal(h.view.historyLoading, true);
+  await loadHistory(h, [RECORD]);
+  const pinned = lastPendingRequest(h, "list_invocations");
+  assert.equal(requestCount(h, "list_invocations"), 2);
+  assert.deepEqual(pinned.args, { workspace: WS, selectedId: OFF_WINDOW_ID });
+  pinned.reply.resolve([RECORD, offWindowRecord()]);
+  await settle();
+  assert.equal(h.view.invocation?.record.id, OFF_WINDOW_ID);
+  assert.equal(pendingRequest(h, "get_invocation").args?.id, OFF_WINDOW_ID);
+});
+
+test("a failed off-window lookup surfaces the history error", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [RECORD]);
+  h.session.selectInvocation(OFF_WINDOW_ID);
+  await settle();
+  lastPendingRequest(h, "list_invocations").reply.reject(new Error("lookup failed"));
+  await settle();
+  assert.match(h.view.invocationsError ?? "", /lookup failed/);
+  assert.equal(h.view.historyLoading, false);
+  assert.equal(h.view.invocation, null);
+  assert.equal(h.view.selectedInvocationId, OFF_WINDOW_ID);
+});
+
+test("a start reply selects its invocation without an extra history read", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, []);
+  const reads = requestCount(h, "list_invocations");
+  h.session.start("build", "//app:first");
+  await settle();
+  pendingRequest(h, "start_invocation").reply.resolve("inv-new");
+  await settle();
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "inv-new");
+  assert.equal(h.view.invocation, null);
+  assert.equal(requestCount(h, "list_invocations"), reads);
 });

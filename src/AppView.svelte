@@ -5,12 +5,15 @@
     ClockCounterClockwise,
     Folders,
     HardDrives,
+    MagnifyingGlass,
     TreeStructure,
   } from "phosphor-svelte";
   import { canSend } from "./lib/session";
-  import type { createSession, Page, SessionView } from "./lib/session";
+  import type { createSession, SessionView } from "./lib/session";
   import { invocationStatus } from "./lib/invocation";
   import { buildTree } from "./lib/model";
+  import type { PaletteAction } from "./lib/palette";
+  import { pages, type Page } from "./lib/pages";
   import Tree from "./lib/Tree.svelte";
   import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
@@ -22,6 +25,7 @@
   import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
+  import CommandPalette from "./lib/CommandPalette.svelte";
   import RunDialog from "./lib/RunDialog.svelte";
   import type { BazelCommand, InvocationRecord, OwnedInvocation } from "./lib/types";
 
@@ -49,13 +53,35 @@
   const invocation = $derived(view.invocation);
 
   let opening = $state(false);
-  let openPromptPath = $state<string | null>(null);
   let historyFilter = $state<"all" | "failed" | "running">("all");
+  let treeRevealRequest = $state(0);
 
-  let runDialogOpen = $state(false);
-  let runDialogCmd = $state<BazelCommand>("build");
-  let runDialogPattern = $state("//...");
-  let runDialogFlags = $state("");
+  // One surface owns the overlay layer at a time: the workspace prompt, the
+  // command palette, or the run dialog. `opening` stays independent.
+  type Surface =
+    | { kind: "workspace"; path: string }
+    | { kind: "palette" }
+    | { kind: "run"; cmd: BazelCommand; pattern: string; flags: string };
+  let surface = $state<Surface | null>(null);
+
+  const canOpenPalette = $derived(
+    st !== null && (surface === null || surface.kind === "palette"),
+  );
+  const promptPath = $derived(surface?.kind === "workspace" ? surface.path : null);
+  const promptInitial = $derived(promptPath ?? st?.workspace ?? core?.lastWorkspace ?? "");
+
+  const isMac =
+    typeof navigator === "undefined"
+      ? false
+      : /macintosh|mac os|macintel/i.test(navigator.userAgent);
+
+  const pageIcons = {
+    workspace: HardDrives,
+    targets: Folders,
+    query: TreeStructure,
+    history: ClockCounterClockwise,
+    analytics: ChartBar,
+  } satisfies Record<Page, typeof Folders>;
 
   const filteredInvocations = $derived(
     view.invocationRows.filter((row) => {
@@ -67,15 +93,29 @@
   );
 
   function openRunDialog(cmd: BazelCommand, pattern: string, flags = "") {
-    runDialogCmd = cmd;
-    runDialogPattern = pattern;
-    runDialogFlags = flags;
-    runDialogOpen = true;
+    surface = { kind: "run", cmd, pattern, flags };
   }
 
   function openWorkspacePrompt(path = "") {
     if (opening) return;
-    openPromptPath = path;
+    surface = { kind: "workspace", path };
+  }
+
+  // ⌘K/Ctrl+K toggles only while the palette or nothing owns the keyboard.
+  function paletteShortcutAllowed(event: KeyboardEvent): boolean {
+    return !event.shiftKey && !event.altKey && !event.repeat && canOpenPalette;
+  }
+
+  // A repeated ⌘O keeps the path already typed; explicit workspace picks
+  // may still replace the prompt. With no workspace the prompt is already
+  // the whole view, so the shortcut must not remount it.
+  function openWorkspaceShortcut() {
+    if (st && surface?.kind !== "workspace") openWorkspacePrompt("");
+  }
+
+  // An open run form keeps its edits; the prompt owns the keyboard too.
+  function openRunShortcut() {
+    if (canOpenPalette) openRunDialog("build", selectedTarget ?? "//...");
   }
 
   function onWindowKeydown(event: KeyboardEvent) {
@@ -83,15 +123,53 @@
     const key = event.key.toLowerCase();
     if (key === "o") {
       event.preventDefault();
-      openWorkspacePrompt("");
+      openWorkspaceShortcut();
     } else if (event.shiftKey && key === "r" && st) {
       event.preventDefault();
-      openRunDialog("build", selectedTarget ?? "//...");
+      openRunShortcut();
+    } else if (key === "k" && paletteShortcutAllowed(event)) {
+      event.preventDefault();
+      surface = surface?.kind === "palette" ? null : { kind: "palette" };
+    }
+  }
+
+  // Losing the workspace clears transient surfaces only; an explicit prompt
+  // keeps its chosen path for the next workspace.
+  $effect(() => {
+    if (st === null && (surface?.kind === "run" || surface?.kind === "palette")) {
+      surface = null;
+    }
+  });
+
+  function onPaletteSelect(action: PaletteAction) {
+    switch (action.kind) {
+      case "page":
+        selectPage(action.page);
+        break;
+      case "run":
+        openRunDialog("build", selectedTarget ?? "//...");
+        break;
+      case "refresh":
+        session.refresh();
+        break;
+      case "open-workspace":
+        openWorkspacePrompt("");
+        break;
+      case "target":
+        session.select({ kind: "target", label: action.label });
+        treeRevealRequest += 1;
+        break;
+      case "invocation":
+        if (!filteredInvocations.some((row) => row.record.id === action.id)) {
+          historyFilter = "all";
+        }
+        session.selectInvocation(action.id);
+        break;
     }
   }
 
   function selectPage(page: Page) {
-    openPromptPath = null;
+    surface = null;
     session.showPage(page);
   }
 </script>
@@ -145,6 +223,19 @@
       onopen={(path) => openWorkspacePrompt(path ?? "")}
       onhome={() => selectPage("targets")}
     />
+    {#if st !== null}
+      <button
+        type="button"
+        class="toolbar-search"
+        aria-label="Search targets, invocations, commands"
+        disabled={!canOpenPalette}
+        onclick={() => (surface = { kind: "palette" })}
+      >
+        <MagnifyingGlass size={13} />
+        <span class="toolbar-search-label">Search targets, invocations, commands…</span>
+        <span class="toolbar-search-kbd">{isMac ? "⌘K" : "Ctrl+K"}</span>
+      </button>
+    {/if}
   </header>
 
   {#if view.error}<Notice tone="error">{view.error}</Notice>{/if}
@@ -154,72 +245,41 @@
 
   {#if core === null}
     <div class="content dim">loading…</div>
-  {:else if st === null || openPromptPath !== null}
+  {:else if st === null || surface?.kind === "workspace"}
     <div class="content">
-      {#key openPromptPath ?? "initial"}
+      {#key promptPath ?? "initial"}
         <WorkspacePrompt
-          initial={openPromptPath ?? st?.workspace ?? core.lastWorkspace ?? ""}
+          initial={promptInitial}
           initialScope={{ include: ["//..."] }}
           bazelAvailable={core.bazel !== null}
           bind:opening
           onopen={session.openWorkspace}
-          onclose={st ? () => (openPromptPath = null) : undefined}
+          onclose={
+            st
+              ? () => {
+                  if (surface?.kind === "workspace") surface = null;
+                }
+              : undefined
+          }
         />
       {/key}
     </div>
   {:else}
     <div class="lens-workspace">
       <nav class="rail" aria-label="Workspace domains">
-        <button
-          type="button"
-          class="rail-btn"
-          class:active={view.page === "workspace"}
-          aria-current={view.page === "workspace" ? "page" : undefined}
-          onclick={() => selectPage("workspace")}
-        >
-          <HardDrives size={16} />
-          <span class="rail-lbl">Workspace</span>
-        </button>
-        <button
-          type="button"
-          class="rail-btn"
-          class:active={view.page === "targets"}
-          aria-current={view.page === "targets" ? "page" : undefined}
-          onclick={() => selectPage("targets")}
-        >
-          <Folders size={16} />
-          <span class="rail-lbl">Targets</span>
-        </button>
-        <button
-          type="button"
-          class="rail-btn"
-          class:active={view.page === "query"}
-          aria-current={view.page === "query" ? "page" : undefined}
-          onclick={() => selectPage("query")}
-        >
-          <TreeStructure size={16} />
-          <span class="rail-lbl">Query</span>
-        </button>
-        <button
-          type="button"
-          class="rail-btn"
-          class:active={view.page === "history"}
-          aria-current={view.page === "history" ? "page" : undefined}
-          onclick={() => selectPage("history")}
-        >
-          <ClockCounterClockwise size={16} />
-          <span class="rail-lbl">History</span>
-        </button>
-        <button
-          type="button"
-          class="rail-btn"
-          class:active={view.page === "analytics"}
-          aria-current={view.page === "analytics" ? "page" : undefined}
-          onclick={() => selectPage("analytics")}
-        >
-          <ChartBar size={16} />
-          <span class="rail-lbl">Analytics</span>
-        </button>
+        {#each pages as { id, label } (id)}
+          {@const Icon = pageIcons[id]}
+          <button
+            type="button"
+            class="rail-btn"
+            class:active={view.page === id}
+            aria-current={view.page === id ? "page" : undefined}
+            onclick={() => selectPage(id)}
+          >
+            <Icon size={16} />
+            <span class="rail-lbl">{label}</span>
+          </button>
+        {/each}
       </nav>
 
       {#if view.page === "targets"}
@@ -244,7 +304,7 @@
               </Notice>
             {/if}
             {#if snap && tree}
-              <Tree root={tree} {selection} revealRequest={0} onselect={session.select} />
+              <Tree root={tree} {selection} revealRequest={treeRevealRequest} onselect={session.select} />
             {:else if view.snapshotLoading}
               <p class="dim">Loading targets…</p>
             {:else}
@@ -419,13 +479,29 @@
       {/if}
     </div>
 
-    <RunDialog
-      bind:open={runDialogOpen}
-      bind:cmd={runDialogCmd}
-      bind:pattern={runDialogPattern}
-      bind:flags={runDialogFlags}
-      canRun={(pattern) => canSend(view, pattern)}
-      onrun={(cmd, pattern, flags) => session.start(cmd, pattern, flags)}
+    <CommandPalette
+      open={surface?.kind === "palette"}
+      snapshot={snap}
+      invocations={view.invocationRows}
+      canRun={canSend(view, selectedTarget ?? "//...")}
+      canRefresh={Boolean(st && core?.bazel && !view.snapshotLoading)}
+      {isMac}
+      onselect={onPaletteSelect}
+      onclose={() => {
+        if (surface?.kind === "palette") surface = null;
+      }}
     />
+    {#if surface?.kind === "run"}
+      <RunDialog
+        cmd={surface.cmd}
+        pattern={surface.pattern}
+        flags={surface.flags}
+        canRun={(pattern) => canSend(view, pattern)}
+        onrun={(cmd, pattern, flags) => session.start(cmd, pattern, flags)}
+        onclose={() => {
+          if (surface?.kind === "run") surface = null;
+        }}
+      />
+    {/if}
   {/if}
 </div>

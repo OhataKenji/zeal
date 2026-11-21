@@ -1,40 +1,42 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { targetError } from "./target";
   import type { BazelCommand } from "./types";
 
   let {
-    open = $bindable(false),
-    cmd = $bindable<BazelCommand>("build"),
-    pattern = $bindable("//..."),
-    flags = $bindable(""),
+    cmd,
+    pattern,
+    flags,
     canRun,
     onrun,
+    onclose,
   }: {
-    open: boolean;
     cmd: BazelCommand;
     pattern: string;
     flags: string;
     canRun: (target: string) => boolean;
     onrun: (cmd: BazelCommand, pattern: string, flags: string) => void;
+    onclose: () => void;
   } = $props();
 
-  let dialog = $state<HTMLDialogElement>();
+  let dialog: HTMLDialogElement;
   const error = $derived(pattern === "" ? null : targetError(pattern));
   const preview = $derived(
     `bazel ${cmd} ${pattern.trim() || "//..."}${flags.trim() ? ` ${flags.trim()}` : ""}`,
   );
   const submittable = $derived(pattern.trim() !== "" && error === null && canRun(pattern));
 
-  $effect(() => {
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    else if (!open && dialog.open) dialog.close();
+  onMount(() => {
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
   });
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!submittable) return;
-    open = false;
+    dialog.close();
     onrun(cmd, pattern.trim(), flags.trim());
   }
 </script>
@@ -43,14 +45,14 @@
   class="modal"
   bind:this={dialog}
   aria-label="Run Bazel"
-  onclose={() => (open = false)}
+  onclose={onclose}
   onclick={(e) => {
-    if (e.target === dialog) open = false;
+    if (e.target === dialog) dialog.close();
   }}
 >
   <div class="modal-head">
     <span>Run Bazel</span>
-    <button type="button" class="button button-ghost" onclick={() => (open = false)}>Esc</button>
+    <button type="button" class="button button-ghost" onclick={() => dialog.close()}>Esc</button>
   </div>
   <form class="modal-body" onsubmit={submit}>
     <div class="run-row">
@@ -84,7 +86,7 @@
     />
     <pre class="code-box">{preview}</pre>
     <div class="modal-actions">
-      <button type="button" class="button" onclick={() => (open = false)}>Cancel</button>
+      <button type="button" class="button" onclick={() => dialog.close()}>Cancel</button>
       <button type="submit" class="button button-primary" disabled={!submittable}>Execute</button>
     </div>
   </form>
