@@ -32,6 +32,7 @@ function makeAction(overrides: Partial<TargetAction> = {}): TargetAction {
     owner: PARSER.label,
     arguments: [],
     inputs: [],
+    inputsTruncated: false,
     outputs: [output],
     environmentVariables: [],
     configuration: null,
@@ -97,10 +98,9 @@ test("TargetView renders target details", async (t) => {
       ["Javac", "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"],
       ["SourceJar", "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar"],
     ]);
-    // Rows start collapsed: details render their content but carry no open
-    // attribute, so the browser keeps every section hidden.
-    assert.equal((html.match(/<details>/g) ?? []).length, 2);
-    assert.equal((html.match(/class="action-details"/g) ?? []).length, 2);
+    // Closed rows do not materialize command details or input paths in the DOM.
+    assert.equal((html.match(/<details\b/g) ?? []).length, 2);
+    assert.doesNotMatch(html, /class="action-details"/);
     assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
   });
 

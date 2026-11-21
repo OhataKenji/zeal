@@ -1,0 +1,7 @@
+NoTransition -> //app:tool (f50cc19)
+  $genrule_setup#@bazel_tools//tools/genrule:genrule-setup.sh#(null transition) ->
+//app:input.txt (null)
+NoTransition -> //app:chosen (7f8856b)
+  srcs#//app:input.txt#(null transition) ->
+  tools#//app:tool#(exec + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)) -> f50cc19
+  $genrule_setup#@bazel_tools//tools/genrule:genrule-setup.sh#(null transition) ->

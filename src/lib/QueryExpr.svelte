@@ -8,14 +8,17 @@
     FUNCTIONS,
     KIND_GROUPS,
     kindOf,
+    supportsFunction,
     switchKind,
     UNIVERSE_HELP,
     type ArgSpec,
     type Expr,
+    type QueryKind,
   } from "./query";
 
   let {
     node = $bindable(),
+    queryKind,
     errors,
     searchIndex,
     kindIndex,
@@ -23,6 +26,7 @@
     context = "Root",
   }: {
     node: Expr;
+    queryKind: QueryKind;
     errors: Map<string, string>;
     searchIndex: SnapshotKey<Target> | null;
     kindIndex: SnapshotKey<Target> | null;
@@ -34,6 +38,7 @@
 
   const kind = $derived(kindOf(node));
   const textError = $derived(errors.get(`${node.id}:text`));
+  const fnError = $derived(errors.get(`${node.id}:fn`));
 
   function fieldError(i: number): string | undefined {
     return errors.get(`${node.id}:${i}`);
@@ -113,7 +118,11 @@
   {#each KIND_GROUPS as [group, items] (group)}
     <optgroup label={group}>
       {#each items as [value, label] (value)}
-        <option {value}>{label}</option>
+        {#if group !== "Functions" || supportsFunction(value, queryKind)}
+          <option {value}>{label}</option>
+        {:else if value === kind}
+          <option {value} disabled>{label}</option>
+        {/if}
       {/each}
     </optgroup>
   {/each}
@@ -126,10 +135,13 @@
     aria-label="Expression kind for {context}"
     title={sigTitle()}
     value={kind}
+    aria-invalid={!!fnError}
+    aria-describedby={fnError ? fieldId("fn") : undefined}
     onchange={changeKind}
   >
     {@render kindOptions()}
   </select>
+  {#if fnError}<span class="field-error" id={fieldId("fn")}>{fnError}</span>{/if}
 {/snippet}
 
 {#if node.kind === "target"}
@@ -188,6 +200,7 @@
               {/if}
             </div>
             <QueryExpr
+              {queryKind}
               bind:node={
                 () => exprArg(call, i),
                 (value: Expr) => (call.args[i] = value)
@@ -258,6 +271,7 @@
           <span class="query-field-label">left</span>
           <QueryExpr
             bind:node={node.left}
+            {queryKind}
             {errors}
             {searchIndex}
             {attrIndex}
@@ -269,6 +283,7 @@
           <span class="query-field-label">right</span>
           <QueryExpr
             bind:node={node.right}
+            {queryKind}
             {errors}
             {searchIndex}
             {attrIndex}

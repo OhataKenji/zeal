@@ -117,6 +117,11 @@
   white-space: normal;
 }
 
+.target-actions .highlighted {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+
 .action-summary {
   display: grid;
   grid-template-columns: 32% minmax(0, 1fr);

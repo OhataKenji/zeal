@@ -15,6 +15,8 @@ keep their state in their views.
 - Target reads run detail → outputs → actions in order per selected workspace;
   other workspaces do not wait. History notifications coalesce into one follow-up.
   Saved detail/profile reads remain independent.
-- Query input changes clear results; execution is explicit.
+- Query input changes clear results; execution is explicit. Workspace `Configs`
+  presets arm the Query editor one-shot, scoped to their workspace, and
+  navigation clears them without running.
 
 See [tests](../tests) for behavior and [development](../docs/development.md) for checks.

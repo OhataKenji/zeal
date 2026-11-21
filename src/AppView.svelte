@@ -25,6 +25,7 @@
   import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
+  import type { QueryKind } from "./lib/query";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import RunDialog from "./lib/RunDialog.svelte";
   import type { BazelCommand, InvocationRecord, OwnedInvocation } from "./lib/types";
@@ -63,6 +64,22 @@
     | { kind: "palette" }
     | { kind: "run"; cmd: BazelCommand; pattern: string; flags: string };
   let surface = $state<Surface | null>(null);
+
+  // A one-shot preset arms the Query editor from a Workspace config; it is
+  // scoped to the workspace that created it and cleared by navigation or a
+  // workspace switch. It only fills fields — it never runs the query.
+  let queryPreset = $state<{
+    workspace: string;
+    kind: QueryKind;
+    flags: string;
+  } | null>(null);
+  const queryPagePreset = $derived(
+    queryPreset !== null &&
+    queryPreset.workspace === st?.workspace &&
+    view.page === "query"
+      ? { kind: queryPreset.kind, flags: queryPreset.flags }
+      : null,
+  );
 
   const canOpenPalette = $derived(
     st !== null && (surface === null || surface.kind === "palette"),
@@ -141,6 +158,13 @@
     }
   });
 
+  // A preset armed for another workspace must not apply after a switch.
+  $effect(() => {
+    if (queryPreset !== null && queryPreset.workspace !== (st?.workspace ?? null)) {
+      queryPreset = null;
+    }
+  });
+
   function onPaletteSelect(action: PaletteAction) {
     switch (action.kind) {
       case "page":
@@ -170,7 +194,17 @@
 
   function selectPage(page: Page) {
     surface = null;
+    queryPreset = null;
     session.showPage(page);
+  }
+
+  // "Open in cquery" arms the Query editor with the config's flags. Page
+  // navigation clears presets, so arm only after switching to the query page.
+  function openCqueryPreset(flags: string) {
+    const ws = st?.workspace ?? null;
+    if (ws === null) return;
+    selectPage("query");
+    queryPreset = { workspace: ws, kind: "cquery", flags };
   }
 </script>
 
@@ -365,6 +399,9 @@
               error={view.workspaceInfoError}
               onretry={session.loadWorkspaceInfo}
               onsavescope={(scope) => session.openWorkspace(st.workspace, scope)}
+              onrunconfig={(cmd, flags) =>
+                openRunDialog(cmd, selectedTarget ?? "//...", flags)}
+              oncqueryconfig={openCqueryPreset}
             />
           </div>
         {:else if view.page === "targets"}
@@ -429,6 +466,8 @@
                 {snap}
                 workspace={st.workspace}
                 bazelAvailable={core !== null && core.bazel !== null}
+                preset={queryPagePreset}
+                onpresetapplied={() => (queryPreset = null)}
               />
             {/key}
           </div>

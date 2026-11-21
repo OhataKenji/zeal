@@ -4,18 +4,22 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type {
   AppState,
+  BazelConfig,
   Edge,
   FileEntry,
   InvocationRecord,
   OwnedInvocation,
   Profile,
+  RcAnnouncement,
   Target,
   TargetActions,
   TargetDetail,
   TargetIndex,
   TargetOutputs,
+  WorkspaceInfo,
   WorkspaceState,
 } from "./lib/types";
+import type { QueryOutput, QueryRequest } from "./lib/query.ts";
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
@@ -128,6 +132,66 @@ const SNAPSHOT: TargetIndex = {
   meta: FULL_DATA.meta,
   targets: FULL_DATA.targets.map((item) => ({ ...item, location: null })),
 };
+// Sample `.bazelrc` `--config` definitions covering every command scope the
+// Configs tab distinguishes: build/test/run launch paths, cquery-only,
+// query/aquery-only, and an `always` entry.
+const PREVIEW_CONFIGS: BazelConfig[] = [
+  {
+    name: "ci",
+    entries: [
+      { command: "common", flags: "--config=netlocal", source: ".bazelrc", line: 3 },
+      { command: "build", flags: "--compilation_mode=opt", source: ".bazelrc", line: 4 },
+      { command: "test", flags: "--test_output=errors", source: ".bazelrc", line: 5 },
+    ],
+  },
+  {
+    name: "dev",
+    entries: [
+      { command: "build", flags: "--compilation_mode=dbg", source: "rc/dev.bazelrc", line: 1 },
+    ],
+  },
+  {
+    name: "inspect",
+    entries: [{ command: "query", flags: "--output=label", source: ".bazelrc", line: 8 }],
+  },
+  {
+    name: "local",
+    entries: [{ command: "run", flags: "--script_path=/tmp/run.sh", source: ".bazelrc", line: 9 }],
+  },
+  {
+    name: "brief",
+    entries: [{ command: "aquery", flags: "--output=text", source: ".bazelrc", line: 10 }],
+  },
+  {
+    name: "transitions",
+    entries: [
+      {
+        command: "cquery",
+        flags: "--output=transitions --transitions=lite",
+        source: ".bazelrc",
+        line: 11,
+      },
+    ],
+  },
+  {
+    name: "strict",
+    entries: [{ command: "always", flags: "--keep_going", source: ".bazelrc", line: 12 }],
+  },
+];
+const PREVIEW_RC_ANNOUNCEMENTS: RcAnnouncement[] = [
+  {
+    source: "/etc/bazel.bazelrc",
+    scope: "common",
+    flags: "--repository_cache=/tmp/bazel-repo-cache",
+  },
+  { source: `${WORKSPACE}/.bazelrc`, scope: "startup", flags: "--batch" },
+  { source: `${WORKSPACE}/.bazelrc`, scope: "common", flags: "--config=netlocal" },
+  {
+    source: `${WORKSPACE}/.bazelrc`,
+    scope: "config:ci",
+    flags: "--compilation_mode=opt --test_output=errors",
+  },
+];
 const PREVIEW_TARGETS = [
   "//app:server",
   "//app/lib:all",
@@ -437,6 +501,37 @@ function actionMnemonic(path: string): string {
   return "SingleJar";
 }
 
+// Stand-in for the core's per-action input budget so the preview exercises
+// the inputsTruncated path; the real caps are far larger.
+const PREVIEW_INPUT_CAP = 40;
+
+/** Sample `aquery` actions: over the 100-action cap on broad expressions. */
+function previewQueryActions(config: string): TargetActions {
+  const generated = Array.from({ length: 130 }, (_, i) => {
+    const output = `bazel-out/k8-fastbuild/bin/app/lib/out${i}.jar`;
+    const mnemonic = ["Javac", "SourceJar", "SingleJar"][i % 3];
+    const inputs = Array.from({ length: 10 + (i % 45) }, (_, j) => `app/lib/input${i}-${j}.java`);
+    return {
+      output,
+      mnemonic,
+      owner: PARSER,
+      arguments: [mnemonic.toLowerCase(), "--output", output],
+      inputs: inputs.slice(0, PREVIEW_INPUT_CAP),
+      inputsTruncated: inputs.length > PREVIEW_INPUT_CAP,
+      outputs: [output],
+      environmentVariables: [{ key: "PATH", value: "/usr/bin:/bin" }],
+      configuration: {
+        mnemonic: "k8-fastbuild",
+        platformName: "@local_config_platform//:host",
+        checksum: `cfg-${config}`,
+        isTool: i % 7 === 0,
+      },
+      executionPlatform: "@local_config_platform//:host",
+    };
+  });
+  return { actions: generated.slice(0, 100), truncated: generated.length > 100 };
+}
+
 /** Installs mock core IPC for the development-only browser preview. */
 export function installPreview() {
   if (!import.meta.env.DEV || isTauri()) throw new Error("Preview requires a development browser");
@@ -462,7 +557,7 @@ export function installPreview() {
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
-    get_workspace_info: (payload) => {
+    get_workspace_info: (payload): WorkspaceInfo => {
       const entry = wsEntry(payload?.workspace);
       const ob = `/private/var/tmp/_bazel_dev/preview`;
       return {
@@ -473,6 +568,9 @@ export function installPreview() {
         bazelBin: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
         bazelTestlogs: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
         repositoryCache: "/Users/dev/Library/Caches/bazel/repo_cache",
+        rcAnnouncements: structuredClone(PREVIEW_RC_ANNOUNCEMENTS),
+        configs: structuredClone(PREVIEW_CONFIGS),
+        infoError: null,
       };
     },
     get_target_detail: (payload): TargetDetail => {
@@ -524,6 +622,7 @@ export function installPreview() {
               ...inputs.slice(0, 2),
             ],
             inputs,
+            inputsTruncated: false,
             outputs: [output],
             environmentVariables: [
               { key: "PATH", value: "/usr/bin:/bin" },
@@ -602,33 +701,68 @@ export function installPreview() {
     stop_invocation: (payload) =>
       stopInvocation(String(payload?.workspace ?? ""), String(payload?.id)),
     run_query: (payload) => {
-      const workspace = String(payload?.workspace ?? "");
+      const request = (payload?.request ?? {}) as Partial<QueryRequest>;
+      const workspace = String(request.workspace ?? "");
       wsEntry(workspace);
       const id = `preview-query-${crypto.randomUUID()}`;
-      const output = String(payload?.output ?? "label");
-      const expr = String(payload?.expr ?? "");
+      const kind = request.kind ?? "query";
+      const output = String(request.output ?? "label");
+      const expr = String(request.expr ?? "");
+      const flags = String(request.flags ?? "");
+      // `--config=<name>` shows up in configured output the way Bazel reports it.
+      const config = /--config=(\S+)/.exec(flags)?.[1] ?? "k8-fastbuild";
+      const broad = expr.includes("//...");
       const labels = expr.includes("//")
         ? SNAPSHOT.targets.map((t) => t.label)
         : ["//app:server", "//app/lib:parser", "//tools:cli"];
-      const finished = {
+      const actionSet = kind === "aquery" ? previewQueryActions(config) : null;
+      let stdout = "";
+      let actions: TargetActions | null = null;
+      let truncated = false;
+      if (actionSet !== null && output === "jsonproto") {
+        actions = actionSet;
+      } else if (actionSet !== null) {
+        stdout = actionSet.actions
+          .slice(0, 10)
+          .map(
+            (a) =>
+              `action '${a.mnemonic}'\n  Outputs: "${a.output}"\n  Owner: ${a.owner}\n  Inputs: ${a.inputs.length} file(s)\n`,
+          )
+          .join("\n");
+        truncated = broad;
+      } else if (kind === "cquery" && output === "transitions") {
+        stdout =
+          labels
+            .slice(0, 10)
+            .flatMap((label, i) => [
+              `${i % 2 === 0 ? "target_platform" : "target_configuration_transition"} -> ${label} (${config})`,
+              `  ${label} (${config})`,
+            ])
+            .join("\n") + "\n";
+      } else if (kind === "cquery") {
+        stdout = labels.map((label) => `${label} (${config})`).join("\n") + "\n";
+      } else if (output === "graph") {
+        stdout = `digraph mygraph {\n${labels
+          .slice(0, 6)
+          .map((l, i) => `  node${i} [label="${l}"];`)
+          .join("\n")}\n${labels
+          .slice(1, 6)
+          .map((_, i) => `  node${i} -> node${i + 1};`)
+          .join("\n")}\n}\n`;
+      } else {
+        stdout = labels.join("\n") + "\n";
+      }
+      const finished: QueryOutput = {
         exitCode: 0,
-        stdout:
-          output === "graph"
-            ? `digraph mygraph {\n${labels
-                .slice(0, 6)
-                .map((l, i) => `  node${i} [label="${l}"];`)
-                .join("\n")}\n${labels
-                .slice(1, 6)
-                .map((_, i) => `  node${i} -> node${i + 1};`)
-                .join("\n")}\n}\n`
-            : labels.join("\n") + "\n",
-        truncated: false,
+        stdout,
+        truncated,
         stderrTail: "",
+        actions,
       };
       const owned: OwnedInvocation = {
         id,
         workspace,
-        cmd: "query",
+        cmd: kind,
         pattern: expr,
         startedAt: Date.now(),
         stoppable: true,

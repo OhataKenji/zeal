@@ -520,7 +520,9 @@ export function createSession(
 
   function loadWorkspaceInfo() {
     const ws = state.workspace;
-    if (disposed || !ws || !state.core?.bazel || !wsEntry(state.core, ws.path)) return;
+    // `.bazelrc` configs stay readable even when `bazel info` itself fails,
+    // so the workspace entry — not Bazel availability — gates this read.
+    if (disposed || !ws || !wsEntry(state.core, ws.path)) return;
     const current = () => !disposed && state.workspace === ws;
     void read(
       ws.info,

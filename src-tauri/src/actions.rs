@@ -4,9 +4,11 @@ use std::io::Read;
 
 // Bounds displayed actions; aquery still reads the full graph and retained action details.
 const MAX_ACTIONS: usize = 100;
+const MAX_ACTION_INPUTS: usize = 500;
+const MAX_TOTAL_INPUT_PATHS: usize = 20_000;
 
 /// A key/value pair carried by an action, such as an environment variable.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionKeyValue {
     pub key: String,
@@ -14,7 +16,7 @@ pub struct ActionKeyValue {
 }
 
 /// Public metadata of the configuration an action runs under.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionConfiguration {
     pub mnemonic: String,
@@ -23,7 +25,7 @@ pub struct ActionConfiguration {
     pub is_tool: bool,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetAction {
     pub output: String,
@@ -31,13 +33,14 @@ pub struct TargetAction {
     pub owner: String,
     pub arguments: Vec<String>,
     pub inputs: Vec<String>,
+    pub inputs_truncated: bool,
     pub outputs: Vec<String>,
     pub environment_variables: Vec<ActionKeyValue>,
     pub configuration: Option<ActionConfiguration>,
     pub execution_platform: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetActions {
     pub actions: Vec<TargetAction>,
@@ -168,15 +171,19 @@ pub fn parse(input: impl Read) -> Result<TargetActions, String> {
         .collect();
     let truncated = graph.actions.len() > MAX_ACTIONS;
     let mut actions = Vec::with_capacity(graph.actions.len().min(MAX_ACTIONS));
+    let mut remaining_inputs = MAX_TOTAL_INPUT_PATHS;
     for action in graph.actions.iter().take(MAX_ACTIONS) {
-        actions.push(summarize(
+        let summary = summarize(
             action,
             &targets,
             &dep_sets,
             &configurations,
             &artifacts,
             &fragments,
-        )?);
+            remaining_inputs.min(MAX_ACTION_INPUTS),
+        )?;
+        remaining_inputs -= summary.inputs.len();
+        actions.push(summary);
     }
     Ok(TargetActions { actions, truncated })
 }
@@ -188,6 +195,7 @@ fn summarize(
     configurations: &HashMap<u32, ConfigurationProto>,
     artifacts: &HashMap<u32, u32>,
     fragments: &HashMap<u32, PathFragmentProto>,
+    input_limit: usize,
 ) -> Result<TargetAction, String> {
     let owner = targets
         .get(&action.target_id)
@@ -206,7 +214,8 @@ fn summarize(
         .iter()
         .map(|id| artifact_path(*id, artifacts, fragments))
         .collect::<Result<Vec<_>, _>>()?;
-    let inputs = input_paths(action, dep_sets, artifacts, fragments)?;
+    let (inputs, inputs_truncated) =
+        input_paths(action, dep_sets, artifacts, fragments, input_limit)?;
     let configuration = if action.configuration_id == 0 {
         None
     } else {
@@ -226,6 +235,7 @@ fn summarize(
         owner: owner.clone(),
         arguments: action.arguments.clone(),
         inputs,
+        inputs_truncated,
         outputs,
         environment_variables: action
             .environment_variables
@@ -248,7 +258,8 @@ fn input_paths(
     dep_sets: &HashMap<u32, DepSetOfFilesProto>,
     artifacts: &HashMap<u32, u32>,
     fragments: &HashMap<u32, PathFragmentProto>,
-) -> Result<Vec<String>, String> {
+    limit: usize,
+) -> Result<(Vec<String>, bool), String> {
     let mut paths = Vec::new();
     let mut seen_artifacts = HashSet::new();
     let mut active = HashSet::new();
@@ -274,13 +285,16 @@ fn input_paths(
         let set = dep_sets
             .get(&id)
             .ok_or_else(|| "aquery action input references an unknown dep set".to_string())?;
-        for artifact_id in set
+        let mut unseen = set
             .direct_artifact_ids
             .iter()
             .copied()
-            .filter(|id| seen_artifacts.insert(*id))
-        {
+            .filter(|id| seen_artifacts.insert(*id));
+        for artifact_id in unseen.by_ref().take(limit - paths.len()) {
             paths.push(artifact_path(artifact_id, artifacts, fragments)?);
+        }
+        if unseen.next().is_some() {
+            return Ok((paths, true));
         }
         stack.push((id, true));
         stack.extend(
@@ -290,7 +304,7 @@ fn input_paths(
                 .map(|&id| (id, false)),
         );
     }
-    Ok(paths)
+    Ok((paths, false))
 }
 
 fn artifact_path(
@@ -370,6 +384,45 @@ mod tests {
 
     fn parse_value(value: &serde_json::Value) -> Result<TargetActions, String> {
         parse(value.to_string().into_bytes().as_slice())
+    }
+
+    #[test]
+    fn shared_dep_sets_respect_individual_and_total_expansion_budgets() {
+        let ids: Vec<_> = (1..=MAX_ACTION_INPUTS + 1).collect();
+        let shared = json!({"targetId": 1, "mnemonic": "Copy", "inputDepSetIds": [1]});
+        let mut actions = vec![shared; MAX_TOTAL_INPUT_PATHS / MAX_ACTION_INPUTS + 1];
+        actions.push(json!({"targetId": 1, "mnemonic": "Empty"}));
+        let mut graph = json!({
+            "actions": actions,
+            "targets": [{"id": 1, "label": "//app:chosen"}],
+            "depSetOfFiles": [{"id": 1, "directArtifactIds": ids}],
+            "artifacts": ids.iter().map(|id| json!({"id": id, "pathFragmentId": id})).collect::<Vec<_>>(),
+            "pathFragments": ids.iter().map(|id| json!({"id": id, "label": id.to_string()})).collect::<Vec<_>>(),
+        });
+        assert_shared_inputs(&graph, true);
+        graph["depSetOfFiles"][0]["directArtifactIds"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert_shared_inputs(&graph, false);
+    }
+
+    fn assert_shared_inputs(graph: &serde_json::Value, has_extra: bool) {
+        let parsed = parse_value(graph).unwrap();
+        assert!(!parsed.truncated);
+        let (empty, shared) = parsed.actions.split_last().unwrap();
+        assert!(!empty.inputs_truncated);
+        let mut remaining = MAX_TOTAL_INPUT_PATHS;
+        for action in shared {
+            let retained = remaining.min(MAX_ACTION_INPUTS);
+            assert_eq!(action.inputs.len(), retained);
+            assert_eq!(
+                action.inputs_truncated,
+                has_extra || retained < MAX_ACTION_INPUTS
+            );
+            remaining -= retained;
+        }
+        assert_eq!(remaining, 0);
     }
 
     #[test]

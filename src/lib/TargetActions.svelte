@@ -1,21 +1,41 @@
 <script lang="ts">
   import type { TargetAction, TargetActions } from "./types";
   import { commandLine } from "./model";
+  import { tick } from "svelte";
 
   let {
     actions,
     error,
+    oninputclick,
   }: {
     actions: TargetActions | null;
     error: string | null;
+    oninputclick?: (path: string, owner: string) => void;
   } = $props();
 
   let copyState = $state<{ index: number; status: "copied" | "failed" } | null>(null);
+  let open = $state<boolean[]>([]);
+  let highlighted = $state<number | null>(null);
+  const details: HTMLDetailsElement[] = [];
 
   $effect.pre(() => {
     void actions;
     copyState = null;
+    open = [];
+    highlighted = null;
   });
+
+  async function trace(path: string, owner: string) {
+    const producer = actions?.actions.findIndex((a) => a.outputs.includes(path)) ?? -1;
+    if (producer < 0) {
+      oninputclick?.(path, owner);
+      return;
+    }
+    open[producer] = true;
+    highlighted = producer;
+    await tick();
+    details[producer]?.scrollIntoView({ block: "nearest" });
+  }
 
   async function copyCommand(action: TargetAction, index: number) {
     const current = actions;
@@ -57,7 +77,7 @@
                 (action.outputs.includes(action.output) ? 1 : 0)}
               <tr>
                 <td colspan="2" class="action-cell">
-                  <details>
+                  <details bind:this={details[index]} bind:open={open[index]} class:highlighted={highlighted === index}>
                     <summary class="action-summary">
                       <span class="action-mnemonic" title={action.mnemonic}
                         >{action.mnemonic}</span
@@ -71,6 +91,7 @@
                           >{/if}</span
                       >
                     </summary>
+                    {#if open[index]}
                     <div class="action-details">
                       <section class="action-section action-command-section">
                         <h3>Command</h3>
@@ -101,13 +122,20 @@
                         <h3>Inputs</h3>
                         {#if action.inputs.length > 0}
                           <ul class="action-paths">
-                            {#each action.inputs as path}<li
-                                ><code>{path}</code></li
-                              >{/each}
+                            {#each action.inputs as path}
+                              <li>
+                                {#if oninputclick}
+                                  <button type="button" class="button button-ghost" title="Trace producer" onclick={() => trace(path, action.owner)}><code>{path}</code></button>
+                                {:else}
+                                  <code>{path}</code>
+                                {/if}
+                              </li>
+                            {/each}
                           </ul>
-                        {:else}
+                        {:else if !action.inputsTruncated}
                           <p class="dim">None</p>
                         {/if}
+                        {#if action.inputsTruncated}<p class="dim">Additional inputs not shown.</p>{/if}
                       </section>
                       <section class="action-section">
                         <h3>Outputs</h3>
@@ -165,6 +193,7 @@
                         <code>{action.owner}</code>
                       </section>
                     </div>
+                    {/if}
                   </details>
                 </td>
               </tr>
