@@ -44,7 +44,7 @@
           {#if key === snapshot?.rootKey}
             {key}
           {:else}
-            <button class="module-link" onclick={() => controller.select(key)}>{key}</button>
+            <button type="button" class="module-link" onclick={() => controller.select(key)}>{key}</button>
           {/if}
         </li>
       {:else}
@@ -62,7 +62,7 @@
         <div class="view-meta">Explore resolved Bzlmod dependencies and their selected versions.</div>
       </div>
       {#if snapshot}
-        <button class="button" {disabled} onclick={controller.load}>
+        <button type="button" class="button" {disabled} onclick={controller.load}>
           {view.busy === "load" ? "Refreshing…" : "Refresh"}
         </button>
       {/if}
@@ -81,7 +81,7 @@
           Run <code>bazel mod graph</code> to load dependencies.
           With a cold cache, Bazel may evaluate module extensions.
         </p>
-        <button class="button button-primary" {disabled} onclick={controller.load}>
+        <button type="button" class="button button-primary" {disabled} onclick={controller.load}>
           {view.busy === "load" ? "Loading modules…" : "Load modules"}
         </button>
       {/if}
@@ -107,6 +107,7 @@
             <tr class:selected={node.key === view.selectedKey}>
               <td>
                 <button
+                  type="button"
                   class="module-link mono"
                   aria-pressed={node.key === view.selectedKey}
                   onclick={() => controller.select(node.key)}
@@ -132,14 +133,14 @@
         <h2 class="view-title mono">{selected.key}</h2>
         <span class="badge">{selected.direct ? "direct" : "transitive"}</span>
       </div>
-      <button class="button" onclick={() => controller.select(null)}>Close</button>
+      <button type="button" class="button" onclick={() => controller.select(null)}>Close</button>
     </header>
     {@render relations("Required by", selected.requiredBy)}
     {@render relations("Dependencies", selected.dependencies)}
     <section class="section">
       <div class="section-head">
         <h3 class="section-title">Explain (MVS)</h3>
-        <button class="button" {disabled} onclick={controller.explain}>
+        <button type="button" class="button" {disabled} onclick={controller.explain}>
           {view.busy === "explain" ? "Explanation in progress…" : "Explain"}
         </button>
       </div>
