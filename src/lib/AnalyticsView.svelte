@@ -104,7 +104,9 @@
 {/snippet}
 
 <section class="analytics">
-  <h1>Analytics</h1>
+  <div class="view-head">
+    <h1 class="view-title">Analytics</h1>
+  </div>
   <div class="filters">
     <div class="date-filters">
       <label
@@ -377,24 +379,7 @@
 
   .analytics {
     min-width: 0;
-    padding: 28px;
     overflow: auto;
-  }
-
-  @media (max-width: 600px) {
-    .analytics {
-      padding: 16px;
-    }
-  }
-
-  .analytics h1 {
-    margin: 0 0 24px;
-    font-size: 22px;
-    letter-spacing: -0.7px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
   }
 
   .analytics > section {

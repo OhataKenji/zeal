@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { CaretDown, CaretUp } from "phosphor-svelte";
   import type {
@@ -9,6 +10,7 @@
     TargetOutputs,
   } from "./types";
   import { displayLabel, displayPath, relations } from "./model";
+  import { tabKeydown } from "./tabs";
   import ActionPair from "./ActionPair.svelte";
   import ActionsSection from "./TargetActions.svelte";
 
@@ -25,6 +27,7 @@
     onrun,
     onopenflags,
     onclose,
+    initialTab = "definition",
   }: {
     index: TargetIndex;
     detail: TargetDetail;
@@ -38,8 +41,20 @@
     onrun?: (cmd: BazelCommand, pattern: string) => void;
     onopenflags?: (cmd: BazelCommand, pattern: string) => void;
     onclose?: () => void;
+    initialTab?: "definition" | "actions";
   } = $props();
   const rel = $derived(relations(detail));
+  let tab = $state<"definition" | "actions">(untrack(() => initialTab));
+  const actionCount = $derived(
+    actions === null ? null : `${actions.actions.length}${actions.truncated ? "+" : ""}`,
+  );
+  const tabs = $derived([
+    { id: "definition" as const, label: "Definition" },
+    {
+      id: "actions" as const,
+      label: `Actions${actionCount === null ? "" : ` (${actionCount})`}`,
+    },
+  ]);
   const target = $derived(rel.target);
   const primary = $derived.by((): { cmd: BazelCommand; label: string } => {
     if (target.ruleClass.endsWith("_test")) return { cmd: "test", label: "Test" };
@@ -133,50 +148,71 @@
       </div>
     {/if}
   </header>
-  <section class="outputs">
-    <h2>Outputs</h2>
-    {#if outputsError}
-      <p class="dim">Could not load outputs: {outputsError}</p>
-    {:else if outputs === null}
-      <p class="dim">Loading outputs…</p>
-    {:else if outputs.paths.length === 0}
-      <p class="dim">None</p>
-    {:else}
-      <div class="chips">
-        {#each outputs.paths as path (path)}
-          <span class="chip file" title={path}>{path}</span>
-        {/each}
-        {#if outputs.truncated}<span class="chip more" title="More outputs not shown"
-            >…</span
-          >{/if}
-      </div>
-    {/if}
-  </section>
-  <h2 class="attributes-head">Attributes</h2>
-  <dl class="relations">
-    {#each rel.attributes as attribute (attribute.name)}
-      <dt>{attribute.name}</dt>
-      <dd>
-        {#if attribute.labels.length}
-          {@render labels(attribute.labels, `${attribute.name}-labels`, target.pkg)}
-        {/if}
-        {#if attribute.files.length}
-          {@render files(attribute.files, `${attribute.name}-files`, target.pkg)}
-        {/if}
-        {#if !attribute.labels.length && !attribute.files.length}
-          <span class="dim">None</span>
-        {/if}
-      </dd>
+  <div class="tabs" role="tablist" aria-label="Target views">
+    {#each tabs as t}
+      <button
+        type="button"
+        role="tab"
+        id="target-tab-{t.id}"
+        aria-selected={tab === t.id}
+        aria-controls={tab === t.id ? `target-panel-${t.id}` : undefined}
+        tabindex={tab === t.id ? 0 : -1}
+        onclick={() => (tab = t.id)}
+        onkeydown={tabKeydown}>{t.label}</button
+      >
     {/each}
-    <dt>outs</dt>
-    <dd>
-      {@render files(
-        [...new Set(rel.outputs.map((file) => file.path))],
-        "outs",
-        target.pkg,
-      )}
-    </dd>
-  </dl>
-  {#key target.label}
-    <ActionsSection actions={actions} error={actionsError} />
-  {/key}
+  </div>
+  {#if tab === "definition"}
+    <div id="target-panel-definition" role="tabpanel" aria-labelledby="target-tab-definition">
+      <section class="outputs">
+        <h2>Outputs</h2>
+        {#if outputsError}
+          <p class="dim">Could not load outputs: {outputsError}</p>
+        {:else if outputs === null}
+          <p class="dim">Loading outputs…</p>
+        {:else if outputs.paths.length === 0}
+          <p class="dim">None</p>
+        {:else}
+          <div class="chips">
+            {#each outputs.paths as path (path)}
+              <span class="chip file" title={path}>{path}</span>
+            {/each}
+            {#if outputs.truncated}<span class="chip more" title="More outputs not shown"
+                >…</span
+              >{/if}
+          </div>
+        {/if}
+      </section>
+      <h2 class="attributes-head">Attributes</h2>
+      <dl class="relations">
+        {#each rel.attributes as attribute (attribute.name)}
+          <dt>{attribute.name}</dt>
+          <dd>
+            {#if attribute.labels.length}
+              {@render labels(attribute.labels, `${attribute.name}-labels`, target.pkg)}
+            {/if}
+            {#if attribute.files.length}
+              {@render files(attribute.files, `${attribute.name}-files`, target.pkg)}
+            {/if}
+            {#if !attribute.labels.length && !attribute.files.length}
+              <span class="dim">None</span>
+            {/if}
+          </dd>
+        {/each}
+        <dt>outs</dt>
+        <dd>
+          {@render files(
+            [...new Set(rel.outputs.map((file) => file.path))],
+            "outs",
+            target.pkg,
+          )}
+        </dd>
+      </dl>
+    </div>
+  {:else}
+    <div id="target-panel-actions" role="tabpanel" aria-labelledby="target-tab-actions">
+      {#key target.label}
+        <ActionsSection actions={actions} error={actionsError} />
+      {/key}
+    </div>
+  {/if}

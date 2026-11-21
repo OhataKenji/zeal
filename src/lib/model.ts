@@ -43,16 +43,17 @@ export function basename(path: string): string {
 // ---------------------------------------------------------------------------
 // Tree
 //
-// The directory hierarchy of packages is the skeleton, with targets inside
-// each package. Files belong in the selected target's attributes, not in this
-// tree.
+// The directory hierarchy of packages is the skeleton. Targets are listed by
+// PackageView; each node only carries the total target count of its subtree.
+// Files belong in the selected target's attributes, not in this tree.
 
-/** Directory node used to group targets by Bazel package. */
+/** Directory node used to group packages by Bazel package path. */
 export interface DirNode {
   path: string;
   name: string;
   dirs: DirNode[];
-  targets: Target[];
+  /** Total targets in this subtree, local targets plus all descendants. */
+  count: number;
 }
 
 /** Builds the package tree from target package paths. */
@@ -62,7 +63,7 @@ export function buildTree(index: TargetIndex): DirNode {
     path,
     name: path === "" ? "" : basename(path),
     dirs: [],
-    targets: [],
+    count: 0,
   });
   const root = mk("");
   nodes.set("", root);
@@ -77,62 +78,44 @@ export function buildTree(index: TargetIndex): DirNode {
   };
 
   for (const target of index.targets) {
-    ensure(target.pkg).targets.push(target);
+    ensure(target.pkg).count += 1;
   }
-
-  const sortNode = (n: DirNode): void => {
+  // One bottom-up pass sorts each level and rolls child counts upward.
+  const finish = (n: DirNode): number => {
     n.dirs.sort((a, b) => a.name.localeCompare(b.name));
-    n.targets.sort((a, b) => a.name.localeCompare(b.name));
-    n.dirs.forEach(sortNode);
+    for (const child of n.dirs) n.count += finish(child);
+    return n.count;
   };
-  sortNode(root);
+  finish(root);
   return root;
 }
 
-/** A visible directory or target row in the package tree. */
+/** A visible package row in the tree; the root row stands for `//...`. */
 export interface Row {
-  key: string;
-  depth: number;
-  kind: "dir" | "target";
-  text: string;
-  /** For dir rows: the directory path that expand/collapse toggles. */
-  dirPath?: string;
-  expanded?: boolean;
-  hasTargets?: boolean;
-  /** For target rows: the label selecting this row navigates to. */
-  label?: string;
-  ruleClass?: string;
+  readonly path: string;
+  readonly name: string;
+  readonly depth: number;
+  readonly count: number;
+  readonly hasChildren: boolean;
+  readonly expanded: boolean;
 }
 
-/** Flattens expanded directories into rows in display order. */
+/** Flattens expanded directories into package rows in display order. */
 export function flatten(root: DirNode, expanded: Set<string>): Row[] {
   const rows: Row[] = [];
-  const walk = (n: DirNode, depth: number) => {
-    for (const d of n.dirs) {
-      const ex = expanded.has(d.path);
-      rows.push({
-        key: `d:${d.path}`,
-        depth,
-        kind: "dir",
-        text: `${d.name}/`,
-        dirPath: d.path,
-        expanded: ex,
-        hasTargets: d.targets.length > 0,
-      });
-      if (ex) walk(d, depth + 1);
-    }
-    for (const t of n.targets) {
-      rows.push({
-        key: `r:${t.label}`,
-        depth,
-        kind: "target",
-        text: `:${t.name}`,
-        ruleClass: t.ruleClass,
-        label: t.label,
-      });
-    }
+  const visit = (node: DirNode, depth: number) => {
+    const open = depth === 0 || expanded.has(node.path);
+    rows.push({
+      path: node.path,
+      name: depth === 0 ? "//..." : `${node.name}/`,
+      depth,
+      count: node.count,
+      hasChildren: node.dirs.length > 0,
+      expanded: open,
+    });
+    if (open) for (const child of node.dirs) visit(child, depth + 1);
   };
-  walk(root, 0);
+  visit(root, 0);
   return rows;
 }
 

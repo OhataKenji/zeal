@@ -139,6 +139,14 @@ function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boole
   return left === null && right === null;
 }
 
+/** Live executions owned by the current workspace, newest first. */
+function pinnedInvocations(state: SessionState): OwnedInvocation[] {
+  const ws = state.workspace;
+  return (state.core?.invocations ?? [])
+    .filter((entry) => entry.workspace === ws?.path)
+    .sort((a, b) => b.startedAt - a.startedAt);
+}
+
 /** Flat projection of session state consumed by the Svelte views. */
 export type SessionView = ReturnType<typeof sessionView>;
 
@@ -148,9 +156,7 @@ function sessionView(state: SessionState) {
   const ws = state.workspace;
   const history = ws?.history ?? [];
   const executions = core?.invocations ?? [];
-  const pinned = executions
-    .filter((entry) => entry.workspace === ws?.path)
-    .sort((a, b) => b.startedAt - a.startedAt);
+  const pinned = pinnedInvocations(state);
   const pinnedIds = new Set(pinned.map((entry) => entry.id));
   const invocationRows: Array<{ record: InvocationRecord; execution?: OwnedInvocation }> = [
     ...pinned.map((execution) => ({
@@ -367,6 +373,13 @@ export function createSession(
     if (after !== null) void refreshSnapshot();
   }
 
+  /** Claims History's first row while the page sits unselected. */
+  function claimFirstInvocation() {
+    if (state.page !== "history" || state.selectedInvocationId !== null) return;
+    state.selectedInvocationId =
+      pinnedInvocations(state)[0]?.id ?? state.workspace?.history[0]?.id ?? null;
+  }
+
   function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {
     const id = state.selectedInvocationId;
     const next = records.find((record) => record.id === id);
@@ -387,6 +400,9 @@ export function createSession(
       JSON.stringify(next) !== JSON.stringify(detail.value.record);
     ws.history = records;
     ws.historyError = null;
+    // An unselected history page claims its first row; reconcileSaved below
+    // starts the saved readers exactly once for the new selection.
+    claimFirstInvocation();
     if (changed || detailMismatch) refreshSavedFromHistory();
     reconcileSaved(wasEligible);
   }
@@ -596,6 +612,8 @@ export function createSession(
     state.page = page;
     state.start = null;
     if (changed) {
+      // Claim History's first row before the frame so it never flashes empty.
+      claimFirstInvocation();
       publish();
       if (page === "history") ensureSaved();
     }
@@ -663,6 +681,9 @@ export function createSession(
         !before?.bazel && snapshot.bazel !== null,
       );
     }
+    // A live invocation arriving while History sits unselected claims the
+    // first row; reconcileSaved starts its readers once.
+    claimFirstInvocation();
     reconcileSaved(wasEligible);
     publish();
   }

@@ -1,49 +1,35 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { CaretDown, Check } from "phosphor-svelte";
+  import { Check } from "phosphor-svelte";
   import { COMMANDS } from "./commands";
   import Notice from "./Notice.svelte";
 
   let {
     workspace,
     opening,
-    onopen,
-    onhome,
+    onswitch,
+    onopennew,
   }: {
     workspace: string | null;
     opening: boolean;
-    onopen: (path?: string) => void;
-    onhome: () => void;
+    onswitch: (path: string) => void;
+    onopennew: () => void;
   } = $props();
 
   let details: HTMLDetailsElement | undefined;
   let summary: HTMLElement | undefined;
-  let entries = $state.raw<string[] | null>(null);
-  let loading = $state(false);
-  let error = $state<string | null>(null);
-  let disposed = false;
+  let entries = $state.raw<Promise<string[]> | null>(null);
 
   const displayName = $derived(
     workspace?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Zeal",
   );
 
-  async function load() {
-    if (loading) return;
-    loading = true;
-    error = null;
-    try {
-      const list = await invoke<string[]>(COMMANDS.listWorkspaces);
-      if (!disposed) entries = list;
-    } catch (e) {
-      if (!disposed) error = String(e);
-    } finally {
-      if (!disposed) loading = false;
-    }
+  function load() {
+    entries = invoke<string[]>(COMMANDS.listWorkspaces);
   }
 
   function onToggle() {
-    if (details?.open) void load();
+    if (details?.open) load();
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -65,37 +51,26 @@
     }
   }
 
-  function choose(path: string) {
-    if (details) details.open = false;
-    onopen(path);
-  }
-
   function navigate(action: () => void) {
     if (details) details.open = false;
     action();
   }
-
-  onDestroy(() => {
-    disposed = true;
-  });
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={onKeydown} />
 
-<div class="workspace-switcher">
-  <button
-    type="button"
-    class="ws-home"
-    aria-label="Workspace home"
-    title="Workspace home"
-    disabled={!workspace || opening}
-    onclick={() => navigate(onhome)}
+<details bind:this={details} class="dd ws-switch" ontoggle={onToggle}>
+  <summary
+    bind:this={summary}
+    class="ws-trigger"
+    aria-label="Switch workspace"
+    title={workspace ?? "Switch workspace"}
   >
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="76 76 360 360"
-      width="22"
-      height="22"
+      width="18"
+      height="18"
       class="zeal-logo"
       aria-hidden="true"
     >
@@ -103,190 +78,100 @@
       <polygon points="428,208 348,208 236,296 84,296 84,408 428,408" fill="#0891b2" />
     </svg>
     <span class="ws-name">{displayName}</span>
-  </button>
-  <div class="ws-path-row">
-    {#if workspace}
-      <span class="ws-path" title={workspace}>{workspace}</span>
-    {/if}
-    <details bind:this={details} class="ws-details" ontoggle={onToggle}>
-      <summary
-        bind:this={summary}
-        class="ws-summary"
-        aria-label="Switch workspace"
-        title="Switch workspace"
-      >
-        <CaretDown size={12} />
-      </summary>
-      <div class="ws-menu">
-        {#if error !== null}
-          <Notice tone="error" onaction={load}>{error}</Notice>
-        {/if}
-        {#if loading && entries === null}
-          <p class="dim ws-note">Loading workspaces…</p>
-        {:else if entries !== null}
-          <div class="ws-list">
-            {#each entries as path (path)}
-              <button
-                type="button"
-                class="ws-entry"
-                disabled={opening || path === workspace}
-                aria-current={path === workspace ? "true" : undefined}
-                title={path}
-                onclick={() => choose(path)}
-              >
-                <span class="ws-entry-path">{path}</span>
-                {#if path === workspace}<Check size={12} />{/if}
-              </button>
-            {/each}
-            {#if entries.length === 0}
-              <p class="dim ws-note">No recent workspaces.</p>
-            {/if}
-          </div>
-        {/if}
-        <div class="ws-footer">
+    <span class="ws-caret" aria-hidden="true">▾</span>
+  </summary>
+  <div class="dd-menu ws-menu">
+    {#if entries}
+      {#await entries}
+        <p class="dim ws-note">Loading workspaces…</p>
+      {:then paths}
+        {#each paths as path (path)}
           <button
             type="button"
-            class="button ws-open"
-            onclick={() => navigate(onopen)}
-            disabled={opening}
+            class="menu-item ws-entry"
+            disabled={opening || path === workspace}
+            aria-current={path === workspace ? "true" : undefined}
+            title={path}
+            onclick={() => navigate(() => onswitch(path))}
           >
-            Open workspace…
+            <span class="ws-entry-path">{path}</span>
+            {#if path === workspace}<Check size={12} />{/if}
           </button>
-        </div>
-      </div>
-    </details>
+        {/each}
+        {#if paths.length === 0}
+          <p class="dim ws-note">No recent workspaces.</p>
+        {/if}
+      {:catch error}
+        <Notice tone="error" onaction={load}>{String(error)}</Notice>
+      {/await}
+    {/if}
+    <div class="ws-footer">
+      <button
+        type="button"
+        class="button button-ghost ws-open"
+        onclick={() => navigate(onopennew)}
+        disabled={opening}
+      >
+        Open workspace…
+      </button>
+    </div>
   </div>
-</div>
+</details>
 
 <style>
-  .workspace-switcher {
-    position: relative;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    column-gap: 8px;
-    row-gap: 0;
+  .ws-switch {
     min-width: 0;
-    padding: 0 12px;
+    max-width: 240px;
+    flex: 0 1 auto;
   }
 
-  .ws-path-row {
-    flex: 0 0 100%;
-    display: flex;
+  .ws-trigger {
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 7px;
+    width: 100%;
     min-width: 0;
-  }
-
-  .ws-home {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    max-width: calc(100% - 32px);
-    min-width: 0;
-    border: 0;
-    padding: 0;
-    background: none;
+    height: 26px;
+    padding: 0 8px 0 6px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
     color: var(--foreground);
-    font: 650 13px var(--font-sans);
+    font-size: 12.5px;
+    font-weight: 600;
     text-align: left;
+  }
+
+  .ws-trigger:hover {
+    background: var(--accent);
   }
 
   .zeal-logo {
     flex-shrink: 0;
   }
 
-  .ws-home:hover:not(:disabled) {
-    color: var(--primary);
-  }
-
-  .ws-details {
-    flex: 0 0 auto;
-  }
-
-  .ws-summary {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .ws-summary::-webkit-details-marker {
-    display: none;
-  }
-
   .ws-name {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .ws-path {
-    display: block;
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
+  .ws-caret {
+    flex-shrink: 0;
     color: var(--muted-foreground);
-    font: 12px var(--mono);
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 10px;
   }
 
   .ws-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: 20;
-    display: flex;
     width: min(420px, calc(100vw - 24px));
     max-height: min(70vh, 520px);
-    flex-direction: column;
-    gap: 8px;
     overflow: auto;
-    padding: 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--background);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
   }
 
-  .ws-list {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .ws-entry {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    gap: 8px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: none;
-    padding: 6px 8px;
-    color: var(--foreground);
+  .ws-menu .ws-entry {
     font: 12px var(--mono);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .ws-entry:hover:not(:disabled) {
-    background: var(--accent);
-  }
-
-  .ws-entry:disabled {
-    cursor: default;
-    opacity: 0.55;
-  }
-
-  .ws-entry-path {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
     white-space: normal;
   }
 
@@ -294,13 +179,20 @@
     opacity: 1;
   }
 
+  .ws-entry-path {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   .ws-entry[aria-current="true"] .ws-entry-path {
     color: var(--primary);
   }
 
   .ws-footer {
-    border-top: 1px solid var(--border);
-    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid var(--hairline);
+    padding-top: 6px;
   }
 
   .ws-open {

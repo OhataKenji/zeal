@@ -8,6 +8,7 @@ import type {
   TargetIndex,
   TargetOutputs,
 } from "../src/lib/types.ts";
+import { splitLabel } from "../src/lib/model.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 const PARSER: Target = {
@@ -50,6 +51,7 @@ test("TargetView renders target details", async (t) => {
     actions: TargetActions | null,
     actionsError: string | null = null,
     target: Target = PARSER,
+    initialTab: "definition" | "actions" = "definition",
   ): string {
     return render(TargetView, {
       props: {
@@ -61,6 +63,7 @@ test("TargetView renders target details", async (t) => {
         actionsError,
         wsRoot: "/ws",
         onselect: () => {},
+        initialTab,
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
   }
@@ -77,20 +80,25 @@ test("TargetView renders target details", async (t) => {
   }
 
   await t.test("mnemonic and primary output columns with collapsed detail rows", () => {
-    const html = view({
-      actions: [
-        makeAction({
-          output: "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
-          mnemonic: "Javac",
-        }),
-        makeAction({
-          output: "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
-          mnemonic: "SourceJar",
-          owner: "//tools:gen",
-        }),
-      ],
-      truncated: false,
-    });
+    const html = view(
+      {
+        actions: [
+          makeAction({
+            output: "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
+            mnemonic: "Javac",
+          }),
+          makeAction({
+            output: "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
+            mnemonic: "SourceJar",
+            owner: "//tools:gen",
+          }),
+        ],
+        truncated: false,
+      },
+      null,
+      PARSER,
+      "actions",
+    );
     assert.match(html, /<th[^>]*>Mnemonic<\/th>/);
     assert.match(html, /<th[^>]*>Primary output<\/th>/);
     assert.doesNotMatch(html, /<th[^>]*>(Action|Owner)<\/th>/);
@@ -105,26 +113,34 @@ test("TargetView renders target details", async (t) => {
   });
 
   await t.test("extra outputs are counted next to the primary output", () => {
-    const html = view({
-      actions: [
-        makeAction({
-          outputs: [
-            "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
-            "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
-            "bazel-out/k8-fastbuild/bin/app/lib/libparser-tests.jar",
-          ],
-        }),
-      ],
-      truncated: false,
-    });
+    const html = view(
+      {
+        actions: [
+          makeAction({
+            outputs: [
+              "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
+              "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
+              "bazel-out/k8-fastbuild/bin/app/lib/libparser-tests.jar",
+            ],
+          }),
+        ],
+        truncated: false,
+      },
+      null,
+      PARSER,
+      "actions",
+    );
     assert.match(html, /\+2<\/span>/);
     assert.match(html, /2 additional outputs/);
   });
 
   await t.test("loading, empty, and error states", () => {
-    assert.match(view(null), /Loading actions…/);
-    assert.match(view({ actions: [], truncated: false }), />None</);
-    assert.match(view(null, "aquery failed"), /Could not load actions: aquery failed/);
+    assert.match(view(null, null, PARSER, "actions"), /Loading actions…/);
+    assert.match(view({ actions: [], truncated: false }, null, PARSER, "actions"), />None</);
+    assert.match(
+      view(null, "aquery failed", PARSER, "actions"),
+      /Could not load actions: aquery failed/,
+    );
   });
 
   await t.test(
@@ -136,17 +152,31 @@ test("TargetView renders target details", async (t) => {
           outputs: [`bazel-out/k8-fastbuild/bin/app/lib/out${i}`],
         }),
       );
-      const truncated = view({ actions: rows, truncated: true });
+      const truncated = view({ actions: rows, truncated: true }, null, PARSER, "actions");
       assert.equal(actionSummaries(truncated).length, 100);
       assert.match(truncated, /Showing first 100 actions; more actions not shown\./);
       assert.ok(truncated.includes(">100+</span>"));
 
-      const exact = view({ actions: rows, truncated: false });
+      const exact = view({ actions: rows, truncated: false }, null, PARSER, "actions");
       assert.equal(actionSummaries(exact).length, 100);
       assert.doesNotMatch(exact, /Showing first 100 actions/);
       assert.ok(exact.includes(">100</span>"));
     },
   );
+
+  await t.test("definition is the default tab and actions renders via initialTab", () => {
+    const definition = view({ actions: [], truncated: false });
+    assert.match(definition, /role="tab"[^>]*aria-selected="true"[^>]*>Definition/);
+    assert.match(definition, />Outputs</);
+    assert.match(definition, />Attributes</);
+    assert.doesNotMatch(definition, /class="action-summary"/);
+
+    const actions = view({ actions: [], truncated: false }, null, PARSER, "actions");
+    assert.match(actions, /role="tab"[^>]*aria-selected="true"[^>]*>Actions \(0\)/);
+    assert.match(actions, />None</);
+    assert.doesNotMatch(actions, />Outputs</);
+    assert.doesNotMatch(actions, />Attributes</);
+  });
 
   await t.test("header shows the label, rule class, and relative source location", () => {
     const html = view({ actions: [], truncated: false }, null, {
@@ -233,5 +263,96 @@ test("TargetView renders target details", async (t) => {
 
     assert.match(ddFor("data"), />None</);
     assert.match(ddFor("deps"), />None</);
+  });
+});
+
+test("PackageView scope labels, root //..., and the row cap", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: PackageView } = await load("/src/lib/PackageView.svelte");
+
+  function indexedTarget(label: string): Target {
+    return { label, ...splitLabel(label), ruleClass: "cc_library", location: null };
+  }
+
+  function output(index: TargetIndex, pkg: string): string {
+    return render(PackageView, {
+      props: { index, pkg, onselect: () => {}, onrun: () => {}, onopenflags: () => {} },
+    })
+      .body.replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/\s+/g, " ");
+  }
+
+  const MIXED: TargetIndex = {
+    meta: { fetchedAt: 1, status: "ok" },
+    targets: [
+      indexedTarget("//app:top"),
+      indexedTarget("//app/lib:deep"),
+      indexedTarget("//other:solo"),
+      indexedTarget("//:root"),
+    ],
+  };
+
+  await t.test('pkg "" is //... with full labels and no ///...', () => {
+    const html = output(MIXED, "");
+    assert.match(html, /<h1[^>]*>\/\/\.\.\.<\/h1>/);
+    assert.doesNotMatch(html, /\/\/\/\.\.\.|\/\/:all/);
+    // Every target in the workspace is listed under its full label.
+    for (const label of ["//app:top", "//app/lib:deep", "//other:solo", "//:root"]) {
+      assert.ok(html.includes(`>${label}</button>`), `missing ${label}`);
+    }
+    assert.doesNotMatch(html, />:top</);
+  });
+
+  await t.test("sub-packages widen the scope to //pkg/... and keep full labels", () => {
+    const html = output(MIXED, "app");
+    assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
+    assert.ok(html.includes(">:top</button>"));
+    assert.ok(html.includes(">//app/lib:deep</button>"));
+    assert.ok(!html.includes(">//other:solo</button>"));
+  });
+
+  await t.test("a leaf package scopes to //pkg:all", () => {
+    const html = output(MIXED, "other");
+    assert.match(html, /<h1[^>]*>\/\/other:all<\/h1>/);
+    assert.ok(html.includes(">:solo</button>"));
+    assert.ok(!html.includes(">//other:solo</button>"));
+  });
+
+  await t.test("sorting does not mutate index.targets", () => {
+    const index: TargetIndex = {
+      meta: { fetchedAt: 1, status: "ok" },
+      targets: [indexedTarget("//z:-last"), indexedTarget("//a:first")],
+    };
+    const before = index.targets.map((t) => t.label);
+    output(index, "");
+    assert.deepEqual(
+      index.targets.map((t) => t.label),
+      before,
+    );
+    const html = output(index, "");
+    assert.ok(html.indexOf(">//a:first</button>") < html.indexOf(">//z:-last</button>"));
+  });
+
+  await t.test("more than 500 rows truncate with a notice", () => {
+    const index: TargetIndex = {
+      meta: { fetchedAt: 1, status: "ok" },
+      targets: Array.from({ length: 501 }, (_, i) =>
+        indexedTarget(`//app:t${String(i).padStart(4, "0")}`),
+      ),
+    };
+    const html = output(index, "app");
+    assert.equal((html.match(/class="clickable"/g) ?? []).length, 500);
+    assert.match(
+      html,
+      /Showing first 500 of 501 targets — select a package or press ⌘K to narrow\./,
+    );
+
+    const exact: TargetIndex = {
+      meta: { fetchedAt: 1, status: "ok" },
+      targets: index.targets.slice(0, 500),
+    };
+    const exactHtml = output(exact, "app");
+    assert.equal((exactHtml.match(/class="clickable"/g) ?? []).length, 500);
+    assert.doesNotMatch(exactHtml, /Showing first 500/);
   });
 });

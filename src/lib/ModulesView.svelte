@@ -44,7 +44,7 @@
           {#if key === snapshot?.rootKey}
             {key}
           {:else}
-            <button type="button" class="module-link" onclick={() => controller.select(key)}>{key}</button>
+            <button type="button" class="table-link" onclick={() => controller.select(key)}>{key}</button>
           {/if}
         </li>
       {:else}
@@ -104,11 +104,17 @@
         <thead><tr><th>Module</th><th>Version</th><th>Depth</th><th>Required by</th></tr></thead>
         <tbody>
           {#each filterModules(snapshot.modules, query, depth) as node (node.key)}
-            <tr class:selected={node.key === view.selectedKey}>
+            <tr
+              class="clickable"
+              class:selected={node.key === view.selectedKey}
+              onclick={(e) => {
+                if (!(e.target as HTMLElement).closest("button")) controller.select(node.key);
+              }}
+            >
               <td>
                 <button
                   type="button"
-                  class="module-link mono"
+                  class="table-link mono"
                   aria-pressed={node.key === view.selectedKey}
                   onclick={() => controller.select(node.key)}
                 >{node.name}</button>
@@ -133,7 +139,12 @@
         <h2 class="view-title mono">{selected.key}</h2>
         <span class="badge">{selected.direct ? "direct" : "transitive"}</span>
       </div>
-      <button type="button" class="button" onclick={() => controller.select(null)}>Close</button>
+      <button
+        type="button"
+        class="button button-ghost icon-button"
+        aria-label="Close"
+        onclick={() => controller.select(null)}>✕</button
+      >
     </header>
     {@render relations("Required by", selected.requiredBy)}
     {@render relations("Dependencies", selected.dependencies)}
@@ -169,16 +180,5 @@
   }
   input.input {
     flex: 1 1 12em;
-  }
-  .module-link {
-    border: 0;
-    background: transparent;
-    padding: 2px 0;
-    color: var(--primary);
-    overflow-wrap: anywhere;
-    text-align: left;
-  }
-  .module-link:hover {
-    text-decoration: underline;
   }
 </style>

@@ -112,22 +112,22 @@
   font: 12px var(--mono);
 }
 
-.invocation-summary {
-  flex: 1 1 280px;
-  min-width: 0;
+.invocation-head-row {
   display: flex;
-  gap: 12px;
   align-items: center;
-}
-
-.invocation-heading {
+  gap: 12px;
   min-width: 0;
+  padding-bottom: 10px;
 }
 
-.invocation-summary h1 {
-  font: 600 21px/1.4 var(--mono);
+.invocation-title {
+  flex: 1;
+  min-width: 0;
   margin: 0;
-  overflow-wrap: anywhere;
+  font: 600 16px/1.4 var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .invocation-owner {
@@ -137,24 +137,24 @@
   overflow-wrap: anywhere;
 }
 
+.invocation-head-row .invocation-owner {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.invocation-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .success {
   color: var(--success);
 }
 
 .failed {
   color: var(--destructive);
-}
-
-.invocation-tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  flex-shrink: 0;
-  background: transparent;
-  border-bottom: 1px solid var(--border);
 }
 
 .panel-loading {
@@ -325,10 +325,9 @@
 
 .invocation-header {
   display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 24px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  flex-shrink: 0;
+  padding: 12px 24px 0;
 }
 
 .compare-scroll {
@@ -411,15 +410,9 @@ tr.compare-changed > * {
   margin-top: 8px;
 }
 
-@media (max-width: 1050px) {
-  .invocation-header {
-    gap: 14px;
-  }
-}
-
 @media (max-width: 800px) {
   .invocation-header {
-    padding: 18px;
+    padding: 10px 16px 0;
   }
 
   .invocation-panel {

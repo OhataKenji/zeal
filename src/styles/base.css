@@ -5,7 +5,11 @@
   /* Surfaces & Canvas (Dark Blue-Gray) */
   --background: #182129;
   --foreground: #e1e8ed;
-  --border: #3a4a57;
+  --surface-chrome: #11181f;
+  --surface-panel: #151d25;
+  --surface-code: #10171f;
+  --hairline: rgba(225, 232, 237, 0.1);
+  --border: rgba(225, 232, 237, 0.22);
   --muted: #24313c;
   --muted-foreground: #abbac6;
   --accent: #2c4354;
@@ -141,10 +145,39 @@ button:disabled {
   white-space: nowrap;
 }
 
-.tab-button[aria-selected="true"] {
-  background: var(--accent);
-  color: var(--primary);
-  font-weight: 600;
+/* Quiet underline tabs for section switching. */
+.tabs {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tabs > button {
+  flex-shrink: 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 7px 10px 5px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tabs > button:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+.tabs > button[aria-selected="true"],
+.tabs > button.active {
+  color: var(--foreground);
+  border-bottom-color: var(--primary);
+  font-weight: 500;
 }
 
 .dim {
@@ -164,7 +197,7 @@ button:disabled {
   padding: 8px 12px;
   font-size: 12px;
   background: var(--background);
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--hairline);
   border-radius: var(--radius-md);
   overflow-wrap: anywhere;
 }
@@ -237,14 +270,14 @@ select {
 .invocation-details dt {
   color: var(--muted-foreground);
   padding: 14px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .relations dd,
 .invocation-details dd {
   margin: 0;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   min-width: 0;
   display: flex;
   flex-direction: column;
