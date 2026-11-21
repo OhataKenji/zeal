@@ -1,6 +1,21 @@
 import { COMMANDS } from "./commands.ts";
+import { shellQuote } from "./model.ts";
 import { labelTarget } from "./search.ts";
-import type { Target } from "./types.ts";
+import type { Target, TargetActions } from "./types.ts";
+
+export type QueryKind = "query" | "cquery" | "aquery";
+export type ResultView = "raw" | "graph" | "table";
+export type OutputFormat = "label" | "graph" | "transitions" | "jsonproto" | "text";
+
+export function outputFormatFor(
+  kind: QueryKind,
+  view: ResultView,
+  transitions: boolean,
+): OutputFormat {
+  if (kind === "query") return view === "graph" ? "graph" : "label";
+  if (kind === "cquery") return transitions ? "transitions" : "label";
+  return view === "raw" ? "text" : "jsonproto";
+}
 
 /**
  * Builder model and runner for the Bazel query editor.
@@ -41,6 +56,7 @@ export interface ArgSpec {
  * selector switches functions (`wrapArg`).
  */
 export interface FnSpec {
+  kinds?: readonly QueryKind[];
   signature: string;
   args: ArgSpec[];
   wrapArg: number;
@@ -49,6 +65,18 @@ export interface FnSpec {
 /** Explainer the view shows next to the `rdeps` universe argument. */
 export const UNIVERSE_HELP =
   "The search scope includes the targets in universe and their transitive dependencies. It does not restrict results to a package.";
+
+function actionFilter(name: string): FnSpec {
+  return {
+    kinds: ["aquery"],
+    signature: `${name}(pattern, expr)`,
+    args: [
+      { name: "pattern", type: "word", default: ".*" },
+      { name: "expr", type: "expr" },
+    ],
+    wrapArg: 1,
+  };
+}
 
 /**
  * The supported `bazel query` functions, in catalog order. Display,
@@ -114,6 +142,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     wrapArg: 2,
   },
   labels: {
+    kinds: ["query"],
     signature: "labels(attr_name, expr)",
     args: [
       { name: "attr_name", type: "word", default: "srcs" },
@@ -122,31 +151,37 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     wrapArg: 1,
   },
   tests: {
+    kinds: ["query"],
     signature: "tests(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
   },
   buildfiles: {
+    kinds: ["query"],
     signature: "buildfiles(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
   },
   loadfiles: {
+    kinds: ["query"],
     signature: "loadfiles(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
   },
   executables: {
+    kinds: ["query"],
     signature: "executables(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
   },
   siblings: {
+    kinds: ["query"],
     signature: "siblings(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
   },
   same_pkg_direct_rdeps: {
+    kinds: ["query"],
     signature: "same_pkg_direct_rdeps(expr)",
     args: [{ name: "expr", type: "expr" }],
     wrapArg: 0,
@@ -160,6 +195,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     wrapArg: 0,
   },
   visible: {
+    kinds: ["query"],
     signature: "visible(predicate, input)",
     args: [
       { name: "predicate", type: "expr" },
@@ -167,7 +203,23 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     ],
     wrapArg: 1,
   },
+  config: {
+    kinds: ["cquery"],
+    signature: "config(expr, config)",
+    args: [
+      { name: "expr", type: "expr" },
+      { name: "config", type: "word", default: "target" },
+    ],
+    wrapArg: 0,
+  },
+  mnemonic: actionFilter("mnemonic"),
+  inputs: actionFilter("inputs"),
+  outputs: actionFilter("outputs"),
 };
+
+export function supportsFunction(fn: string, kind: QueryKind): boolean {
+  return Object.hasOwn(FUNCTIONS, fn) && (FUNCTIONS[fn].kinds?.includes(kind) ?? true);
+}
 
 let nextNodeId = 1;
 
@@ -282,59 +334,100 @@ export function serialize(root: Expr): { ok: true; text: string } | { ok: false;
   }
 }
 
-function shellQuote(value: string): string {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
-}
-
-/** The two dependency flags the editor offers next to the generated query. */
 export interface CommandFlags {
   noImplicit: boolean;
   noTool: boolean;
+  flags: string;
+}
+
+/** Exclude implicit dependencies by default, but keep tool dependencies. */
+export const DEFAULT_FLAGS: CommandFlags = {
+  noImplicit: true,
+  noTool: false,
+  flags: "",
+};
+
+// Quote/escape pieces have distinct opening characters; adjacent pieces form one argv word.
+const quoted = /'[^']*'|"(?:[^"\\]|\\.)*"|\\./gs;
+function unquote(piece: string): string {
+  if (piece.startsWith("\\")) return piece.slice(1);
+  const inner = piece.slice(1, -1);
+  return piece.startsWith('"') ? inner.replace(/\\([$`"\\])/g, "$1") : inner;
 }
 
 /**
- * Mock defaults: implicit deps are excluded (unlike Bazel's default), tool
- * deps are kept. Preset loading resets the flags to these values.
+ * Splits the single-line flags field the way a POSIX shell would: quoted and
+ * escaped pieces concatenate into words (empty quotes included), whitespace
+ * ends a word, and a `#` at a word boundary comments out the rest. Returns
+ * null on control characters, unterminated quotes or escapes so the preview
+ * can refuse rather than interpolate raw text. Display only — the core
+ * revalidates `flags`.
  */
-export const DEFAULT_FLAGS: CommandFlags = { noImplicit: true, noTool: false };
+export function previewWords(text: string): string[] | null {
+  if (/\p{Cc}/u.test(text.replaceAll("\t", ""))) return null;
+  // A comment starts only at a word boundary; # inside a word is literal.
+  const token = new RegExp(`[ \\t]+|#.*|(?:${quoted.source}|[^ \\t'"\\\\])+`, "sy");
+  const words: string[] = [];
+  while (token.lastIndex < text.length) {
+    const match = token.exec(text);
+    if (!match) return null;
+    const [word] = match;
+    if (word.startsWith("#")) break;
+    if (!/^[ \t]/.test(word)) words.push(word.replace(quoted, unquote));
+  }
+  return words;
+}
+
+// Managed flags keyed by kind:output; user flags always precede them.
+const MANAGED_FLAGS: Record<string, readonly string[]> = {
+  "query:graph": ["--nograph:factored"],
+  "cquery:label": ["--show_config_fragments=off"],
+  "cquery:transitions": ["--transitions=lite"],
+  "aquery:jsonproto": ["--include_commandline", "--include_artifacts"],
+};
 
 /**
- * The `bazel query '<expr>' --output=<fmt> ...` line the view displays and
- * Copy command puts on the clipboard. It mirrors the argv `run_query`
- * executes so a pasted command produces the displayed result. Execution
- * never goes through a shell.
+ * Shell-safe display of the argv the core will execute, or an empty string
+ * if the flags field cannot be split. Execution never goes through a shell.
  */
-export function commandLine(
-  exprText: string,
-  output: "raw" | "graph",
-  flags: CommandFlags,
-): string {
-  return `bazel --noblock_for_lock query ${shellQuote(exprText)} --output=${
-    output === "graph" ? "graph --nograph:factored" : "label"
-  }${flags.noImplicit ? " --noimplicit_deps" : ""}${flags.noTool ? " --notool_deps" : ""}`;
+export function commandLine(request: QueryInputs): string {
+  const user = request.kind === "query" ? [] : previewWords(request.flags);
+  if (user === null) return "";
+  const argv = [
+    "bazel",
+    "--noblock_for_lock",
+    request.kind,
+    ...user,
+    `--output=${request.output}`,
+    ...(MANAGED_FLAGS[`${request.kind}:${request.output}`] ?? []),
+  ];
+  if (request.noImplicitDeps) argv.push("--noimplicit_deps");
+  if (request.noToolDeps) argv.push("--notool_deps");
+  return [...argv, "--", request.expr].map(shellQuote).join(" ");
 }
 
 /**
- * Arguments for the `run_query` invoke. `output` is the bazel `--output`
- * format the core accepts: the Raw view runs `label`, the Graph view `graph`.
+ * Non-workspace fields of the run_query request. Inactive graph controls
+ * cannot affect execution. Send flags as entered, not as frontend argv.
  */
-export function queryArgv(
+export function queryInputs(
+  kind: QueryKind,
   expr: string,
-  output: "raw" | "graph",
+  output: OutputFormat,
   flags: CommandFlags,
-): {
-  expr: string;
-  output: string;
-  noImplicitDeps: boolean;
-  noToolDeps: boolean;
-} {
+) {
   return {
+    kind,
     expr,
-    output: output === "graph" ? "graph" : "label",
-    noImplicitDeps: flags.noImplicit,
-    noToolDeps: flags.noTool,
+    output,
+    noImplicitDeps: kind === "query" && flags.noImplicit,
+    noToolDeps: kind === "query" && flags.noTool,
+    flags: kind === "query" ? "" : flags.flags,
   };
 }
+
+type QueryInputs = ReturnType<typeof queryInputs>;
+export type QueryRequest = QueryInputs & { workspace: string };
 
 interface Token {
   type: string;
@@ -398,7 +491,8 @@ function tokenize(text: string): Token[] {
   return tokens;
 }
 
-function parseQuery(text: string): Expr {
+/** Parses trusted query text and throws on invalid input; user text uses `parse`. */
+export function parseQuery(text: string, kind: QueryKind): Expr {
   const tokens = tokenize(text);
   let index = 0;
   const peek = () => tokens[index];
@@ -440,7 +534,7 @@ function parseQuery(text: string): Expr {
     }
     const word = takeWord();
     if (peek().type !== "(") return target(word);
-    if (!Object.hasOwn(FUNCTIONS, word))
+    if (!supportsFunction(word, kind))
       throw syntaxError(t, `${word} is not supported by this Builder`);
     const schema = FUNCTIONS[word];
     const args = callArgs(schema);
@@ -473,9 +567,10 @@ function parseQuery(text: string): Expr {
  */
 export function parse(
   text: string,
+  kind: QueryKind,
 ): { ok: true; expr: Expr } | { ok: false; error: string; pos?: number } {
   try {
-    return { ok: true, expr: parseQuery(text) };
+    return { ok: true, expr: parseQuery(text, kind) };
   } catch (e) {
     const error = e as Error & { pos?: number };
     const out: { ok: false; error: string; pos?: number } = {
@@ -505,7 +600,7 @@ function integerError(value: unknown, arg: ArgSpec): string | null {
  * attributes: `${nodeId}:text` for target patterns and `${nodeId}:${index}`
  * for scalar call arguments.
  */
-export function validate(root: Expr): Map<string, string> {
+export function validate(root: Expr, kind: QueryKind): Map<string, string> {
   const errors: { id: number; arg: string | number; msg: string }[] = [];
   function walk(n: Expr) {
     switch (n.kind) {
@@ -540,6 +635,9 @@ export function validate(root: Expr): Map<string, string> {
         walk(n.right);
         break;
       case "call": {
+        if (!supportsFunction(n.fn, kind)) {
+          errors.push({ id: n.id, arg: "fn", msg: `${n.fn} is not available in ${kind}.` });
+        }
         const schema = FUNCTIONS[n.fn];
         schema.args.forEach((arg, i) => {
           const v = n.args[i];
@@ -711,92 +809,133 @@ export function attrCandidates(): Target[] {
 // needs, how it connects, who needs X), then existence enumeration, then the
 // composite idioms (diffs) and plumbing.
 //
-// Every example only names @@platforms constraint-graph targets: canonical
+// The loading-graph examples only name @@platforms constraint-graph targets: canonical
 // `@@` names resolve without a use_repo declaration, so each runs verbatim in
 // any repository (even an empty MODULE.bazel), and a ~60-target universe
 // keeps them cheap in huge monorepos. tests() has no universal example —
 // no test_suite is guaranteed to exist.
-const PRESETS: Record<string, { expr: string; desc: string }> = {
-  deps: {
-    expr: "deps(@@platforms//os:all)",
-    desc: "Transitive dependencies",
-  },
-  somepath: {
-    expr: "somepath(@@platforms//os:all, @@platforms//os:os)",
-    desc: "One path between two targets",
-  },
-  allpaths: {
-    expr: "allpaths(@@platforms//os:all, @@platforms//os:os)",
-    desc: "Every path between two targets",
-  },
-  rdeps: {
-    expr: "rdeps(@@platforms//..., @@platforms//os:os)",
-    desc: "Reverse dependencies",
-  },
-  kindConstraint: {
-    expr: 'kind("constraint_value rule", @@platforms//...)',
-    desc: "Find targets by rule kind",
-  },
-  siblings: {
-    expr: "siblings(@@platforms//os:linux)",
-    desc: "Targets in the same package",
-  },
-  attrLabels: {
-    expr: 'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
-    desc: "Filter by attribute, then get labels",
-  },
-  osExceptKind: {
-    expr: '(@@platforms//os:all) except kind("constraint_value rule", @@platforms//os:all)',
-    desc: "Package targets minus a rule kind",
-  },
-  depsIntersectKind: {
-    expr: '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
-    desc: "Constraint values inside the deps",
-  },
-  buildfiles: {
-    expr: "buildfiles(deps(@@platforms//os:all))",
-    desc: "BUILD files in the deps",
-  },
-};
+function example(name: string, expr: string, desc: string) {
+  return { name, expr, desc };
+}
+type Example = ReturnType<typeof example>;
 
-const EXAMPLE_LABELS: Record<string, string> = {
-  deps: "deps",
-  somepath: "somepath",
-  allpaths: "allpaths",
-  rdeps: "rdeps",
-  kindConstraint: "kind constraint_value",
-  siblings: "siblings",
-  attrLabels: "attr → labels",
-  osExceptKind: "all − kind",
-  depsIntersectKind: "deps ∩ kind",
-  buildfiles: "buildfiles",
-};
+/** Sidebar examples grouped by kind; every `expr` parses under that kind. */
+export const EXAMPLES = {
+  query: {
+    Dependencies: [
+      example("deps", "deps(@@platforms//os:all)", "Transitive dependencies"),
+      example("rdeps", "rdeps(@@platforms//..., @@platforms//os:os)", "Reverse dependencies"),
+      example("siblings", "siblings(@@platforms//os:linux)", "Targets in the same package"),
+      example("buildfiles", "buildfiles(deps(@@platforms//os:all))", "BUILD files in the deps"),
+    ],
+    Paths: [
+      example(
+        "somepath",
+        "somepath(@@platforms//os:all, @@platforms//os:os)",
+        "One path between two targets",
+      ),
+      example(
+        "allpaths",
+        "allpaths(@@platforms//os:all, @@platforms//os:os)",
+        "Every path between two targets",
+      ),
+    ],
+    "Filter & Attributes": [
+      example(
+        "kind constraint_value",
+        'kind("constraint_value rule", @@platforms//...)',
+        "Find targets by rule kind",
+      ),
+      example(
+        "attr → labels",
+        'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
+        "Filter by attribute, then get labels",
+      ),
+    ],
+    "Set Operations": [
+      example(
+        "all − kind",
+        '(@@platforms//os:all) except kind("constraint_value rule", @@platforms//os:all)',
+        "Package targets minus a rule kind",
+      ),
+      example(
+        "deps ∩ kind",
+        '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
+        "Constraint values inside the deps",
+      ),
+    ],
+  },
+  cquery: {
+    "cquery examples": [
+      example("config", "config(//..., target)", "Select the target configuration"),
+      example("deps", "deps(//..., 1)", "Direct configured dependencies"),
+      example("kind", 'kind(".*_test rule", //...)', "Configured test rules"),
+    ],
+  },
+  aquery: {
+    "aquery examples": [
+      example("mnemonic", 'mnemonic("CppCompile", //...)', "Compile actions"),
+      example("inputs", 'inputs("\\.h$", //...)', "Actions that consume headers"),
+      example("outputs", 'outputs("\\.o$", //...)', "Actions that produce objects"),
+    ],
+  },
+} satisfies Record<QueryKind, Record<string, readonly Example[]>>;
 
-/**
- * Sidebar examples in the mock's order; `build` returns a fresh AST per call.
- * `name` is the display label from the mock; `id` is the stable key.
- */
-export const EXAMPLES: ReadonlyArray<{
-  id: string;
-  name: string;
-  desc: string;
-  build: () => Expr;
-}> = Object.keys(PRESETS).map((id) => ({
-  id,
-  name: EXAMPLE_LABELS[id],
-  desc: PRESETS[id].desc,
-  build: () => parseQuery(PRESETS[id].expr),
-}));
+export interface CqueryRow {
+  label: string;
+  config: string;
+  transitions: string[];
+}
 
-/**
- * Builds the named example expression, or null for an unknown name. Loading
- * an example replaces the current expression, resets the flags to
- * `DEFAULT_FLAGS`, and returns to Builder mode — the view performs those
- * resets itself; loading never runs the query (a click fills the editor,
- * and the user decides when to run).
- */
-export function applyExample(id: string): Expr | null {
-  return EXAMPLES.find((e) => e.id === id)?.build() ?? null;
+/** Read a label or transitions:lite report, keeping edges with their header. */
+export function parseCqueryOutput(stdout: string): CqueryRow[] {
+  const rows: CqueryRow[] = [];
+  let row: CqueryRow | undefined;
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trimEnd();
+    if (line.startsWith("  ")) {
+      row?.transitions.push(line.trimStart());
+      continue;
+    }
+    row = undefined;
+    const end = line.lastIndexOf(" (");
+    if (end < 1 || !line.endsWith(")") || /^\s/.test(line)) continue;
+    const prefix = line.slice(0, end);
+    const arrow = prefix.indexOf(" -> ");
+    const label = arrow < 0 ? prefix : prefix.slice(arrow + 4);
+    row = { label, config: line.slice(end + 2, -1), transitions: [] };
+    rows.push(row);
+  }
+  return rows;
+}
+
+export function escapeQueryRegex(path: string): string {
+  return (
+    path
+      // oxlint-disable-next-line no-control-regex -- controls cannot appear in a query expression
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replaceAll('"', "\\x22")
+      .replaceAll("'", "\\x27")
+  );
+}
+
+function ownerScope(owner: string): string {
+  // An owner must be an absolute label, not an action expression or pattern.
+  // Labels may themselves contain spaces, operators, or one kind of quote.
+  // oxlint-disable-next-line no-control-regex -- controls cannot appear in a label
+  if (/[\\\x00-\x1f\x7f-\x9f]/.test(owner) || !wordQuotable(owner)) return "//...";
+  const match = /^(?:@@?[A-Za-z0-9._+~-]*)?\/\/([^:]*)(?::([^:]+))?$/.exec(owner);
+  if (!match || (!match[1] && !match[2]) || match[2] === "*") return "//...";
+  const parts = [match[1], match[2]].filter(Boolean);
+  for (const part of parts) {
+    if (part.split("/").some((s) => !s || s === "." || s === ".." || s === "...")) return "//...";
+  }
+  return quoteWord(owner);
+}
+
+export function producerQuery(path: string, owner: string): string {
+  return `outputs("^${escapeQueryRegex(path)}$", deps(${ownerScope(owner)}))`;
 }
 
 /**
@@ -809,6 +948,7 @@ export interface QueryOutput {
   stdout: string;
   truncated: boolean;
   stderrTail: string;
+  actions: TargetActions | null;
 }
 
 /** IPC boundary the query runner uses to call the core. */
@@ -842,31 +982,34 @@ export function createQuery(workspace: string, t: Transport, changed: (s: QueryS
   let state = emptyQueryState();
   let disposed = false;
   let acceptResult = false;
+  let selected: QueryInputs | null = null;
   function update(patch: Partial<QueryState>) {
     if (disposed) return;
     state = { ...state, ...patch };
     changed(state);
   }
-  function select() {
+  function select(args: QueryInputs) {
     if (disposed) return;
+    const previous = selected;
+    const keys = Object.keys(args) as Array<keyof QueryInputs>;
+    if (previous && keys.every((key) => previous[key] === args[key])) return;
+    selected = args;
     acceptResult = false;
     update({ result: null, error: null });
   }
-  async function run(expr: string, view: "raw" | "graph", flags: CommandFlags): Promise<void> {
+  async function run(args: QueryInputs): Promise<void> {
     if (disposed || state.running) return;
-    const args = queryArgv(expr, view, flags);
+    selected = args;
     acceptResult = true;
     update({ running: true, error: null, result: null });
     let result: QueryOutput;
     try {
-      result = await t.invoke<QueryOutput>(COMMANDS.runQuery, { workspace, ...args });
+      result = await t.invoke<QueryOutput>(COMMANDS.runQuery, { request: { workspace, ...args } });
     } catch (error) {
       update({ running: false, error: acceptResult ? String(error) : null });
       return;
     }
-    update({ running: false });
-    if (!acceptResult) return;
-    update({ result });
+    update({ running: false, result: acceptResult ? result : null });
   }
 
   function dispose() {

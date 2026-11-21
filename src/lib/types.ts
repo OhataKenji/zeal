@@ -80,6 +80,7 @@ export interface TargetAction {
   owner: string;
   arguments: string[];
   inputs: string[];
+  inputsTruncated: boolean;
   outputs: string[];
   environmentVariables: ActionKeyValue[];
   configuration: ActionConfiguration | null;

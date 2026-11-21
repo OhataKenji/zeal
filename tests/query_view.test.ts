@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSvelteHarness } from "./svelte.ts";
+import { makeCall, target, validate } from "../src/lib/query.ts";
 
 test("QueryView blocks Execute only on Bazel availability", async (t) => {
   const { load, render } = await createSvelteHarness(t);
@@ -27,5 +28,27 @@ test("QueryView blocks Execute only on Bazel availability", async (t) => {
     assert.match(html, /<h1[^>]*id="query-heading"[^>]*>Query editor<\/h1>/);
     assert.doesNotMatch(html, /Bazel query/);
     assert.match(html, /aria-labelledby="query-heading"/);
+    for (const kind of ["query", "cquery", "aquery"]) {
+      assert.match(html, new RegExp(`role="tab"[^>]*>${kind}</button>`));
+    }
   });
+});
+
+test("a graph change keeps a disabled option and validation error on a nested unsupported card", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: QueryExpr } = await load("/src/lib/QueryExpr.svelte");
+  const node = makeCall("deps", makeCall("buildfiles", target("//pkg:t")));
+  const html = render(QueryExpr, {
+    props: {
+      node,
+      queryKind: "cquery",
+      errors: validate(node, "cquery"),
+      searchIndex: null,
+      kindIndex: null,
+      attrIndex: null,
+    },
+  }).body;
+  assert.match(html, /<option value="buildfiles"[^>]*disabled/);
+  assert.match(html, /buildfiles is not available in cquery/);
+  assert.doesNotMatch(html, /value="loadfiles"/);
 });

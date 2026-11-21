@@ -64,23 +64,29 @@
   import { createIndex } from "./search";
   import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
+  import TargetActions from "./TargetActions.svelte";
   import {
-    applyExample,
     attrCandidates,
     codeDiverged,
     commandLine,
     createQuery,
     DEFAULT_FLAGS,
-    defaultNodeFor,
     emptyQueryState,
     EXAMPLES,
     kindCandidates,
     parse,
+    parseQuery,
+    outputFormatFor,
+    parseCqueryOutput,
+    producerQuery,
+    queryInputs,
     serialize,
     validate,
     type CommandFlags,
     type Expr,
     type QueryState,
+    type QueryKind,
+    type ResultView,
   } from "./query";
   import type { TargetIndex } from "./types";
 
@@ -88,7 +94,11 @@
     snap,
     workspace,
     bazelAvailable,
-  }: { snap: TargetIndex | null; workspace: string; bazelAvailable: boolean } = $props();
+  }: {
+    snap: TargetIndex | null;
+    workspace: string;
+    bazelAvailable: boolean;
+  } = $props();
 
   const searchIndex = $derived(
     snap ? createIndex(snap.targets) : null,
@@ -102,41 +112,38 @@
     snap ? createIndex(kindCandidates(snap.targets)) : null,
   );
   let root = $state<Expr>(
-    EXAMPLES[0]?.build() ?? defaultNodeFor("target"),
+    parseQuery(EXAMPLES.query.Dependencies[0].expr, "query"),
   );
   let mode = $state<"builder" | "code">("builder");
   let draft = $state("");
   let codeError = $state<string | null>(null);
   let noImplicit = $state(DEFAULT_FLAGS.noImplicit);
   let noTool = $state(DEFAULT_FLAGS.noTool);
-  let resultView = $state<"raw" | "graph">("raw");
+  let kind = $state<QueryKind>("query");
+  let buildFlags = $state("");
+  let transitions = $state(false);
+  let resultView = $state<ResultView>("raw");
+  const outputFormat = $derived(outputFormatFor(kind, resultView, transitions));
+  const phases = {
+    query: "Loading — explore target dependencies before configuration.",
+    cquery: "Analysis — inspect targets and their configurations.",
+    aquery: "Action Graph — inspect build actions and trace their inputs.",
+  };
+  const kinds: QueryKind[] = ["query", "cquery", "aquery"];
   let feedback = $state("");
   let fbTimer: ReturnType<typeof setTimeout> | undefined;
   let qstate = $state<QueryState>(emptyQueryState());
-  let controller = $state<ReturnType<typeof createQuery> | null>(null);
   let graphUrl = $state<string | null>(null);
   let graphError = $state<string | null>(null);
-  const EXAMPLE_GROUPS = [
-    { title: "Dependencies", ids: ["deps", "rdeps", "siblings", "buildfiles"] },
-    { title: "Paths", ids: ["somepath", "allpaths"] },
-    { title: "Filter & Attributes", ids: ["kindConstraint", "attrLabels"] },
-    { title: "Set Operations", ids: ["osExceptKind", "depsIntersectKind"] },
-  ] as const;
-
   let graphZoom = $state(1);
   let graphDialog = $state<HTMLDialogElement>();
   let graphCanvas = $state<HTMLDivElement>();
   let viewEl = $state<HTMLElement>();
   let detailsEl = $state<HTMLDetailsElement>();
 
-  $effect(() => {
-    const next = untrack(() =>
-      createQuery(workspace, { invoke }, (s) => (qstate = s)),
-    );
-    controller = next;
-    return next.dispose;
-  });
+  const controller = createQuery(untrack(() => workspace), { invoke }, (s) => (qstate = s));
   onDestroy(() => {
+    controller.dispose();
     clearTimeout(fbTimer);
     vizWorker?.terminate();
     vizWorker = undefined;
@@ -144,18 +151,25 @@
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
 
-  const flags = $derived<CommandFlags>({ noImplicit, noTool });
+  function selectKind(next: QueryKind) {
+    kind = next;
+    resultView = next === "query" ? "raw" : "table";
+    codeError = null;
+  }
+
+  const flags = $derived<CommandFlags>({ noImplicit, noTool, flags: buildFlags });
   const serialized = $derived(serialize(root));
   const builderOk = $derived(serialized.ok);
   const builderText = $derived(serialized.ok ? serialized.text : "");
   const exprText = $derived(mode === "code" ? draft : builderText);
   const errors = $derived(
-    mode === "builder" ? validate(root) : new Map<string, string>(),
+    mode === "builder" ? validate(root, kind) : new Map<string, string>(),
   );
+  const request = $derived(queryInputs(kind, exprText, outputFormat, flags));
   const command = $derived(
     mode === "builder" && !serialized.ok
       ? `(serialize error) ${serialized.error}`
-      : commandLine(exprText, resultView, flags),
+      : commandLine(request),
   );
   const valid = $derived(
     mode === "builder" ? builderOk && errors.size === 0 : codeValid(draft),
@@ -166,16 +180,16 @@
   );
 
   $effect.pre(() => {
-    void exprText;
-    void resultView;
-    void flags;
-    untrack(() => controller?.select());
+    // Depend on the execution inputs, not the presentation: cquery's Table
+    // and Raw are two views of the same stdout, even during an in-flight run.
+    const next = request;
+    untrack(() => controller.select(next));
   });
 
   // Each editor owns one in-flight query for its workspace; other workspaces
   // run independently in the core.
   const busyReason = $derived(bazelAvailable ? null : "Bazel is not available");
-  const canRun = $derived(valid && !busyReason && !qstate.running);
+  const canRun = $derived(valid && command !== "" && !busyReason && !qstate.running);
   const runBlockReason = $derived(
     qstate.running
       ? null
@@ -184,14 +198,11 @@
           ? mode === "builder"
             ? "fix the marked fields"
             : "enter a query expression"
-          : null)),
+          : command === "" ? "check flag quoting and escapes" : null)),
   );
 
   // Input changes clear the displayed result.
   const stored = $derived(qstate.result);
-  // Only one invocation is ever in flight; which view started it does not matter —
-  // either pane may as well show the spinner.
-  const runningThisView = $derived(qstate.running);
   const failedOutput = $derived.by(() => {
     if (!stored) return null;
     if (stored.exitCode !== 0)
@@ -203,6 +214,8 @@
   });
 
   const RAW_LINE_CAP = 5000;
+  const rows = $derived(kind === "cquery" && resultView === "table" && stored ?
+    parseCqueryOutput(stored.stdout) : []);
   const rawLines = $derived.by(() => {
     if (resultView !== "raw" || !stored) return [] as string[];
     const lines = stored.stdout.split("\n");
@@ -211,11 +224,13 @@
   });
   const rawShown = $derived(rawLines.slice(0, RAW_LINE_CAP));
   const rawMore = $derived(rawLines.length - rawShown.length);
-  const resultCount = $derived(
-    resultView === "raw" && stored && !failedOutput && !runningThisView
-      ? `${rawLines.length} target${rawLines.length === 1 ? "" : "s"}`
-      : "",
-  );
+  const resultCount = $derived.by(() => {
+    if (!stored || failedOutput || qstate.running) return "";
+    if (resultView === "table" && kind === "cquery")
+      return `${rows.length} configured target${rows.length === 1 ? "" : "s"}`;
+    if (resultView !== "raw") return "";
+    return `${rawLines.length} ${kind === "query" ? "target" : "line"}${rawLines.length === 1 ? "" : "s"}`;
+  });
   // A successful graph invocation can still drop nodes (`--graph:node_limit`); bazel
   // only says so on stderr.
   const graphWarn = $derived.by(() => {
@@ -228,8 +243,7 @@
   });
 
   // A successful graph invocation's DOT becomes an SVG blob URL; Graphviz output is
-  // never appended to the DOM (CSP is unset and SVG links are an injection
-  // surface).
+  // never appended to the DOM (SVG links are an injection surface).
   const graphDot = $derived(
     resultView === "graph" &&
       stored &&
@@ -283,12 +297,12 @@
       mode = "builder";
       return;
     }
-    const parsed = parse(draft);
+    const parsed = parse(draft, kind);
     if (!parsed.ok) {
       codeError = parsed.error;
       return;
     }
-    const errs = validate(parsed.expr);
+    const errs = validate(parsed.expr, kind);
     if (errs.size) {
       codeError = errs.values().next().value ?? "Invalid expression";
       return;
@@ -300,7 +314,13 @@
 
   function run() {
     if (!canRun) return;
-    void controller?.run(exprText, resultView, flags);
+    void controller.run(request);
+  }
+
+  function traceArtifactProducer(path: string, owner: string) {
+    draft = producerQuery(path, owner);
+    codeError = null;
+    mode = "code";
   }
 
   // Mirrors the core's `validate_expr` so Execute is never enabled for an
@@ -317,15 +337,14 @@
   }
 
   // Loading an example only fills the editor; the user decides when to run.
-  function loadExample(id: string) {
-    const built = applyExample(id);
-    if (!built) return;
-    root = built;
+  function loadExample(expr: string) {
+    root = parseQuery(expr, kind);
     mode = "builder";
     draft = "";
     codeError = null;
     noImplicit = DEFAULT_FLAGS.noImplicit;
     noTool = DEFAULT_FLAGS.noTool;
+    transitions = false;
     if (detailsEl) detailsEl.open = false;
   }
 
@@ -358,6 +377,12 @@
   <div class="query-main">
     <div class="query-content">
       <h1 class="query-title" id="query-heading">Query editor</h1>
+      <div class="query-tabs" role="tablist" aria-label="Bazel graph">
+        {#each kinds as value}
+          <button type="button" role="tab" aria-selected={kind === value} onclick={() => { if (kind !== value) selectKind(value); }}>{value}</button>
+        {/each}
+      </div>
+      <p class="dim">{phases[kind]}</p>
       <section class="query-panel" aria-labelledby="query-heading">
         <div class="query-panel-head">
           <details
@@ -383,22 +408,19 @@
               }}
             ></button>
             <div class="query-examples-dropdown" role="menu" aria-label="Query examples">
-              {#each EXAMPLE_GROUPS as group}
+              {#each Object.entries(EXAMPLES[kind]) as [title, examples]}
                 <div class="query-examples-group">
-                  <div class="query-examples-group-title">{group.title}</div>
-                  {#each group.ids as itemId}
-                    {@const example = EXAMPLES.find((e) => e.id === itemId)}
-                    {#if example}
-                      <button
-                        type="button"
-                        class="query-example-item"
-                        role="menuitem"
-                        onclick={() => loadExample(example.id)}
-                      >
-                        <code>{example.name}</code>
-                        <span class="query-ex-desc">{example.desc}</span>
-                      </button>
-                    {/if}
+                  <div class="query-examples-group-title">{title}</div>
+                  {#each examples as example}
+                    <button
+                      type="button"
+                      class="query-example-item"
+                      role="menuitem"
+                      onclick={() => loadExample(example.expr)}
+                    >
+                      <code>{example.name}</code>
+                      <span class="query-ex-desc">{example.desc}</span>
+                    </button>
                   {/each}
                 </div>
               {/each}
@@ -424,6 +446,7 @@
           <div class="query-builder">
             <QueryExpr
               bind:node={root}
+              queryKind={kind}
               {errors}
               {searchIndex}
               {kindIndex}
@@ -453,15 +476,16 @@
         {/if}
         <div class="query-shared">
           <div class="query-command">
-            <pre class="query-command-pre"><code>{command}</code></pre>
+            <pre class="query-command-pre"><code>{command || "Invalid flags: check quoting and escapes."}</code></pre>
             <CopyButton
               text={command}
               label="Copy command line"
-              disabled={!valid}
+              disabled={!valid || command === ""}
               onerror={setFeedback}
             />
           </div>
           <div class="query-flags">
+            {#if kind === "query"}
             <label class="query-check">
               <input type="checkbox" bind:checked={noImplicit} />
               <code>--noimplicit_deps</code>
@@ -470,6 +494,12 @@
               <input type="checkbox" bind:checked={noTool} />
               <code>--notool_deps</code>
             </label>
+            {:else}
+              <label>Build flags <input type="text" maxlength={16 * 1024} placeholder="--config=opt (use --flag=value)" bind:value={buildFlags} /></label>
+              {#if kind === "cquery"}
+                <label class="query-check"><input type="checkbox" bind:checked={transitions} /> Transitions</label>
+              {/if}
+            {/if}
             <div class="query-actions">
               {#if runBlockReason}
                 <span class="query-busy dim">{runBlockReason}</span>
@@ -499,8 +529,8 @@
             <button
               type="button"
               role="tab"
-              aria-selected={resultView === "graph"}
-              onclick={() => (resultView = "graph")}>Graph</button
+              aria-selected={resultView !== "raw"}
+              onclick={() => (resultView = kind === "query" ? "graph" : "table")}>{kind === "query" ? "Graph" : "Table"}</button
             >
           </div>
           <span class="query-results-count">{resultCount}</span>
@@ -508,7 +538,7 @@
         {#if qstate.error}
           <Notice tone="error">{qstate.error}</Notice>
         {/if}
-        {#if failedOutput && !runningThisView}
+        {#if failedOutput && !qstate.running}
           <Notice tone="error">
             <p>{failedOutput.summary}</p>
             {#if failedOutput.tail}<pre>{failedOutput.tail}</pre>{/if}
@@ -517,22 +547,22 @@
         {#if graphWarn && !stored?.truncated}
           <Notice tone="warning"><pre>{graphWarn}</pre></Notice>
         {/if}
-        {#if stored?.truncated && !failedOutput && !runningThisView}
+        {#if stored?.truncated && !failedOutput && !qstate.running}
           <Notice tone={resultView === "graph" ? "error" : "warning"}>
             {#if resultView === "graph"}Bazel truncated the graph output — it
-              cannot be rendered.{:else}Bazel truncated this output.{/if}
+              cannot be rendered.{:else if outputFormat === "jsonproto"}Action data exceeds 32 MiB. Narrow the expression and execute again.{:else}Bazel truncated this output.{/if}
           </Notice>
         {/if}
         {#if graphError}
           <Notice tone="error">{graphError}</Notice>
         {/if}
         <div class="query-results-body">
-          {#if runningThisView}
+          {#if qstate.running}
             <p class="query-empty" role="status">Executing…</p>
           {:else if stored && !failedOutput}
             {#if resultView === "raw"}
               {#if rawLines.length === 0}
-                <p class="query-empty">No targets matched.</p>
+                <p class="query-empty">{kind === "aquery" ? "No actions matched." : "No targets matched."}</p>
               {:else}
                 <div class="query-raw-wrap">
                   <pre class="query-raw">{rawShown.join("\n")}</pre>
@@ -547,6 +577,26 @@
                     … {rawMore.toLocaleString()} more lines not shown.
                   </p>
                 {/if}
+              {/if}
+            {:else if resultView === "table" && kind === "aquery"}
+              {#if stored.actions}
+                <TargetActions actions={stored.actions} error={null} oninputclick={traceArtifactProducer} />
+              {/if}
+            {:else if resultView === "table"}
+              {#if !rows.length}
+                <p class="query-empty">No configured targets matched.</p>
+              {:else}
+                <table>
+                  <thead><tr><th scope="col">Label</th><th scope="col">Configuration</th>{#if transitions}<th scope="col">Transitions</th>{/if}</tr></thead>
+                  <tbody>
+                    {#each rows.slice(0, RAW_LINE_CAP) as row}
+                      <tr><td><code>{row.label}</code></td><td><code>{row.config}</code></td>
+                        {#if transitions}<td><pre>{row.transitions.join("\n")}</pre></td>{/if}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+                {#if rows.length > RAW_LINE_CAP}<p class="query-empty">… {(rows.length - RAW_LINE_CAP).toLocaleString()} more rows not shown.</p>{/if}
               {/if}
             {:else if stored.truncated}
               <p class="query-empty">No graph to render.</p>

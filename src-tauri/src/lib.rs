@@ -254,28 +254,12 @@ fn stop_invocation(
 async fn run_query(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
-    workspace: String,
-    expr: String,
-    output: String,
-    no_implicit_deps: bool,
-    no_tool_deps: bool,
+    request: query::QueryRequest,
 ) -> Result<QueryOutput, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
-    match tauri::async_runtime::spawn_blocking(move || {
-        query::run(
-            app,
-            core,
-            &workspace,
-            &expr,
-            &output,
-            no_implicit_deps,
-            no_tool_deps,
-        )
-    })
-    .await
-    {
+    match tauri::async_runtime::spawn_blocking(move || query::run(app, core, &request)).await {
         Ok(result) => result,
         // A panicked worker released its slot without emitting (Drop skips
         // emit while unwinding); tell the UI the query state changed here.

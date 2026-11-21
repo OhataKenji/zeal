@@ -1,4 +1,4 @@
-//! Ad-hoc `bazel query` for the query editor.
+//! Ad-hoc Bazel graph queries for the query editor.
 //!
 //! Distinct from ingest's fixed `bazel query //...` snapshot fetch: the
 //! expression and the output format come from the editor. Execution registers
@@ -10,8 +10,9 @@
 
 use crate::runner::{self, Output};
 use crate::state::Core;
-use serde::Serialize;
-use std::io::{self, Read};
+use crate::{actions, runargs};
+use serde::{Deserialize, Serialize};
+use std::io::{self, BufReader, Read};
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -19,14 +20,14 @@ use std::thread;
 use std::time::Duration;
 use tauri::AppHandle;
 
-/// The only output formats the editor offers.
-const OUTPUTS: [&str; 2] = ["label", "graph"];
-
 /// Cap on the expression text: far beyond a hand-built query.
 const MAX_EXPR_LEN: usize = 100_000;
 
 /// First bytes of stdout kept for the result; the rest is drained and dropped.
 const STDOUT_CAP: usize = 4 * 1024 * 1024;
+const AQUERY_JSON_CAP: usize = 32 * 1024 * 1024;
+const MAX_FLAGS_LEN: usize = 16 * 1024;
+const MAX_FLAGS: usize = 128;
 
 /// stderr keeps only its tail: bazel writes its errors there.
 const STDERR_TAIL: usize = 8 * 1024;
@@ -35,7 +36,40 @@ const STDERR_TAIL: usize = 8 * 1024;
 /// in milliseconds, so anything past this is a lingering descendant.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-/// Result of one ad-hoc `bazel query` invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueryKind {
+    Query,
+    Cquery,
+    Aquery,
+}
+
+impl QueryKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Cquery => "cquery",
+            Self::Aquery => "aquery",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryRequest {
+    pub workspace: String,
+    pub kind: QueryKind,
+    pub expr: String,
+    pub output: String,
+    #[serde(default)]
+    pub no_implicit_deps: bool,
+    #[serde(default)]
+    pub no_tool_deps: bool,
+    #[serde(default)]
+    pub flags: String,
+}
+
+/// Result of one ad-hoc query invocation.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryOutput {
@@ -47,40 +81,91 @@ pub struct QueryOutput {
     pub truncated: bool,
     /// The last ~8 KiB of stderr, where bazel writes its errors.
     pub stderr_tail: String,
+    pub actions: Option<actions::TargetActions>,
 }
 
-/// Arguments after the bazel executable. The expression is one `Command::arg`:
-/// nothing is split, quoted or escaped. No `--tool_tag` (query versions may
-/// reject it) and no `--keep_going` (partial results would be unusable).
-fn argv(expr: &str, output: &str, no_implicit: bool, no_tool: bool) -> Vec<String> {
-    let mut args = vec![
-        // A startup flag, before the subcommand: a bazel already holding the
-        // server lock fails this client immediately instead of looking hung.
-        "--noblock_for_lock".to_string(),
-        "query".to_string(),
-        expr.to_string(),
-        format!("--output={output}"),
-    ];
-    // Factored keeps one node per target instead of merging equal ones.
-    if output == "graph" {
-        args.push("--nograph:factored".to_string());
+/// User flags precede the managed output settings so rc configs expand before
+/// them. Standalone flags must not consume the following argument as a value.
+fn build_flags(req: &QueryRequest) -> Result<Vec<String>, String> {
+    if req.flags.len() > MAX_FLAGS_LEN {
+        return Err("build flags exceed 16 KiB".into());
     }
-    if no_implicit {
-        args.push("--noimplicit_deps".to_string());
+    if req.flags.chars().any(|c| c.is_control() && c != '\t') {
+        return Err("build flags contain control characters".into());
     }
-    if no_tool {
-        args.push("--notool_deps".to_string());
+    if req.kind == QueryKind::Query && !req.flags.trim().is_empty() {
+        return Err("query does not accept build flags".into());
     }
-    args
+    let flags = runargs::parse_arguments(&req.flags)?;
+    if flags.len() > MAX_FLAGS {
+        return Err("build flags exceed 128 tokens".into());
+    }
+    for flag in &flags {
+        let name = flag.split_once('=').map_or(flag.as_str(), |(name, _)| name);
+        if !name.starts_with('-') || name.len() < 2 {
+            return Err("expected a build flag in --flag=value form".into());
+        }
+        if matches!(
+            name,
+            "--" | "--output"
+                | "--output_file"
+                | "--starlark:file"
+                | "--starlark:expr"
+                | "--query_file"
+                | "--include_commandline"
+                | "--noinclude_commandline"
+                | "--include_artifacts"
+                | "--noinclude_artifacts"
+                | "--transitions"
+                | "--notransitions"
+        ) {
+            return Err("build flags must not override query options".into());
+        }
+        if !flag.contains('=')
+            && !matches!(
+                name,
+                "--keep_going"
+                    | "--nokeep_going"
+                    | "--verbose_failures"
+                    | "--noremote_accept_cached"
+                    | "--noremote_upload_local_results"
+            )
+        {
+            return Err("use --flag=value unless the flag is an allowed boolean switch".into());
+        }
+    }
+    Ok(flags)
 }
 
-/// Only the formats the editor can render.
-fn validate_output(output: &str) -> Result<(), String> {
-    if OUTPUTS.contains(&output) {
-        Ok(())
-    } else {
-        Err("output must be \"label\" or \"graph\"".to_string())
+fn argv(req: &QueryRequest) -> Result<Vec<String>, String> {
+    validate_expr(&req.expr)?;
+    let mut args = vec!["--noblock_for_lock".into(), req.kind.as_str().into()];
+    args.extend(build_flags(req)?);
+    args.push(format!("--output={}", req.output));
+    match (req.kind, req.output.as_str()) {
+        (QueryKind::Query, "label" | "graph") => {
+            if req.output == "graph" {
+                args.push("--nograph:factored".into());
+            }
+            if req.no_implicit_deps {
+                args.push("--noimplicit_deps".into());
+            }
+            if req.no_tool_deps {
+                args.push("--notool_deps".into());
+            }
+        }
+        (QueryKind::Cquery, "label") => args.push("--show_config_fragments=off".into()),
+        (QueryKind::Cquery, "transitions") => args.push("--transitions=lite".into()),
+        (QueryKind::Aquery, "jsonproto") => {
+            args.push("--include_commandline".into());
+            args.push("--include_artifacts".into());
+        }
+        (QueryKind::Aquery, "text") => {}
+        _ => return Err("unsupported output for selected query mode".into()),
     }
+    args.push("--".into());
+    args.push(req.expr.clone());
+    Ok(args)
 }
 
 /// A leading `-` would be read as a bazel flag rather than an expression, and
@@ -105,21 +190,11 @@ fn validate_expr(expr: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run one ad-hoc `bazel query` in `ws`. Blocks until the query exits or its
+/// Run one ad-hoc query. Blocks until the query exits or its
 /// stop is given up on.
 #[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
-pub fn run(
-    app: AppHandle,
-    core: Arc<Core>,
-    ws: &str,
-    expr: &str,
-    output: &str,
-    no_implicit: bool,
-    no_tool: bool,
-) -> Result<QueryOutput, String> {
-    validate_expr(expr)?;
-    validate_output(output)?;
-    let (mut child, id) = spawn_query(&core, ws, expr, output, no_implicit, no_tool)?;
+pub fn run(app: AppHandle, core: Arc<Core>, request: &QueryRequest) -> Result<QueryOutput, String> {
+    let (mut child, id) = spawn_query(&core, request)?;
     let _slot = runner::InvocationGuard {
         core: &core,
         id: &id,
@@ -130,8 +205,10 @@ pub fn run(
     // a full pipe; each reader sends its capture once, at end of stream.
     let (out_tx, out_rx) = mpsc::channel();
     let mut out_pipe = child.stdout.take().expect("stdout piped");
+    let json = request.kind == QueryKind::Aquery && request.output == "jsonproto";
+    let cap = if json { AQUERY_JSON_CAP } else { STDOUT_CAP };
     thread::spawn(move || {
-        let _ = out_tx.send(capture_head(&mut out_pipe, STDOUT_CAP));
+        let _ = out_tx.send(capture_head(&mut out_pipe, cap));
     });
     let (err_tx, err_rx) = mpsc::channel();
     let mut err_pipe = child.stderr.take().expect("stderr piped");
@@ -152,38 +229,56 @@ pub fn run(
         .transpose()
         .map_err(|error| format!("failed to read query stderr: {error}"))?;
     let stderr_tail = String::from_utf8_lossy(stderr.as_deref().unwrap_or_default()).into_owned();
-    Ok(QueryOutput {
-        exit_code: (exit >= 0).then_some(exit),
-        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+    query_output(
+        json,
+        (exit >= 0).then_some(exit),
+        &stdout,
         truncated,
         stderr_tail,
+    )
+}
+
+fn query_output(
+    json: bool,
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    truncated: bool,
+    stderr_tail: String,
+) -> Result<QueryOutput, String> {
+    let actions = if json && !truncated && exit_code == Some(0) {
+        Some(actions::parse(BufReader::new(stdout))?)
+    } else {
+        None
+    };
+    Ok(QueryOutput {
+        exit_code,
+        stdout: if json {
+            String::new()
+        } else {
+            String::from_utf8_lossy(stdout).into_owned()
+        },
+        truncated,
+        stderr_tail,
+        actions,
     })
 }
 
 /// Register the query as its own owned invocation and spawn it atomically.
-fn spawn_query(
-    core: &Core,
-    ws: &str,
-    expr: &str,
-    output: &str,
-    no_implicit: bool,
-    no_tool: bool,
-) -> Result<(Child, String), String> {
+fn spawn_query(core: &Core, req: &QueryRequest) -> Result<(Child, String), String> {
+    let args = argv(req)?;
     let mut st = core.state.lock().expect("application state lock poisoned");
-    let ws_path = st.workspace_path(ws)?;
+    let ws_path = st.workspace_path(&req.workspace)?;
     let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut command = Command::new(&bazel);
-    command
-        .args(argv(expr, output, no_implicit, no_tool))
-        .current_dir(&ws_path);
+    command.args(args).current_dir(&ws_path);
     let (child, _) = runner::spawn(
         &mut st,
         &mut command,
         runner::InvocationMeta {
             workspace: &ws_path,
-            cmd: "query",
-            pattern: expr,
+            cmd: req.kind.as_str(),
+            pattern: &req.expr,
             id: &id,
         },
         Output::Pipes,
@@ -249,63 +344,143 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
+    fn request(kind: QueryKind, output: &str) -> QueryRequest {
+        serde_json::from_value(serde_json::json!({
+            "kind": kind.as_str(), "workspace": "/workspace", "output": output,
+            "expr": "//app:chosen",
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn argv_has_the_expression_the_output_and_the_flag_switches() {
+    fn query_arguments_put_the_expression_last() {
+        let req = request(QueryKind::Query, "label");
         assert_eq!(
-            argv("deps(//a:b)", "label", false, false),
+            argv(&req).unwrap(),
             [
                 "--noblock_for_lock",
                 "query",
-                "deps(//a:b)",
-                "--output=label"
-            ]
-            .map(String::from)
-        );
-        assert_eq!(
-            argv("//...", "graph", false, false),
-            [
-                "--noblock_for_lock",
-                "query",
-                "//...",
-                "--output=graph",
-                "--nograph:factored"
-            ]
-            .map(String::from)
-        );
-        assert_eq!(
-            argv("//a:b", "label", true, false),
-            [
-                "--noblock_for_lock",
-                "query",
-                "//a:b",
                 "--output=label",
-                "--noimplicit_deps"
+                "--",
+                "//app:chosen"
             ]
-            .map(String::from)
         );
+        let req = QueryRequest {
+            output: "graph".into(),
+            no_implicit_deps: true,
+            no_tool_deps: true,
+            ..req
+        };
         assert_eq!(
-            argv("//a:b", "label", false, true),
+            argv(&req).unwrap(),
             [
                 "--noblock_for_lock",
                 "query",
-                "//a:b",
-                "--output=label",
-                "--notool_deps"
-            ]
-            .map(String::from)
-        );
-        assert_eq!(
-            argv("//a:b", "graph", true, true),
-            [
-                "--noblock_for_lock",
-                "query",
-                "//a:b",
                 "--output=graph",
                 "--nograph:factored",
                 "--noimplicit_deps",
                 "--notool_deps",
+                "--",
+                "//app:chosen"
             ]
-            .map(String::from)
+        );
+    }
+
+    #[test]
+    fn configured_queries_fix_the_output_after_user_flags() {
+        for (kind, output, managed) in [
+            (
+                QueryKind::Cquery,
+                "label",
+                &["--show_config_fragments=off"][..],
+            ),
+            (QueryKind::Cquery, "transitions", &["--transitions=lite"]),
+            (
+                QueryKind::Aquery,
+                "jsonproto",
+                &["--include_commandline", "--include_artifacts"],
+            ),
+            (QueryKind::Aquery, "text", &[]),
+        ] {
+            let req = QueryRequest {
+                flags: "--config=opt".into(),
+                ..request(kind, output)
+            };
+            let output_flag = format!("--output={output}");
+            let mut expected = vec![
+                "--noblock_for_lock",
+                kind.as_str(),
+                "--config=opt",
+                &output_flag,
+            ];
+            expected.extend_from_slice(managed);
+            expected.extend(["--", "//app:chosen"]);
+            assert_eq!(argv(&req).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn rejects_managed_flags_residue_missing_values_and_unbounded_input() {
+        let mut req = request(QueryKind::Aquery, "jsonproto");
+        for flag in [
+            "--",
+            "-",
+            "x",
+            "-=x",
+            "=x",
+            "--=x",
+            "--tool_tag",
+            "--platforms",
+            "''",
+            "--output=proto",
+            "--output_file=x",
+            "--starlark:file=x",
+            "--starlark:expr=x",
+            "--query_file=x",
+            "--include_commandline=false",
+            "--noinclude_commandline",
+            "--include_artifacts",
+            "--noinclude_artifacts",
+            "--transitions=x",
+            "--notransitions",
+            "--config=a residue",
+            "--config=\0",
+            "--config=a\n",
+            "\r",
+            "--config='",
+        ] {
+            req.flags = flag.into();
+            assert!(argv(&req).is_err(), "{flag:?}");
+        }
+        req.flags = "--keep_going ".repeat(MAX_FLAGS);
+        assert!(argv(&req).is_ok());
+        req.flags.push_str("--keep_going");
+        assert!(argv(&req).is_err());
+        req.flags = format!("--x={}", "a".repeat(MAX_FLAGS_LEN - 4));
+        assert!(argv(&req).is_ok());
+        req.flags.push('a');
+        assert!(argv(&req).is_err());
+        req = request(QueryKind::Query, "label");
+        req.flags = "--config=opt".into();
+        assert!(argv(&req).is_err());
+    }
+
+    #[test]
+    fn accepts_explicit_values_and_known_boolean_switches() {
+        let mut req = request(QueryKind::Cquery, "label");
+        req.flags = "--output_groups=foo\t--output_filter='a b' --config=opt --keep_going --nokeep_going --verbose_failures --noremote_accept_cached --noremote_upload_local_results".into();
+        assert_eq!(
+            build_flags(&req).unwrap(),
+            [
+                "--output_groups=foo",
+                "--output_filter=a b",
+                "--config=opt",
+                "--keep_going",
+                "--nokeep_going",
+                "--verbose_failures",
+                "--noremote_accept_cached",
+                "--noremote_upload_local_results"
+            ]
         );
     }
 
@@ -341,12 +516,15 @@ mod tests {
     }
 
     #[test]
-    fn outputs_accept_only_label_and_graph() {
-        for output in ["xml", "", "Label"] {
-            assert!(validate_output(output).is_err(), "{output:?}");
-        }
-        for output in ["label", "graph"] {
-            assert!(validate_output(output).is_ok(), "{output:?}");
+    fn rejects_formats_for_other_query_kinds() {
+        for (kind, output) in [
+            (QueryKind::Query, "transitions"),
+            (QueryKind::Cquery, "graph"),
+            (QueryKind::Aquery, "label"),
+            (QueryKind::Query, "Label"),
+            (QueryKind::Aquery, ""),
+        ] {
+            assert!(argv(&request(kind, output)).is_err());
         }
     }
 
@@ -359,9 +537,9 @@ mod tests {
         assert!(!msg.contains("bad"), "{msg}");
     }
 
-    fn assert_query_entry(st: &crate::state::CoreState, id: &str, ws: &str) {
+    fn assert_query_entry(st: &crate::state::CoreState, id: &str, ws: &str, kind: QueryKind) {
         let invocation = st.invocations.get(id).unwrap();
-        assert_eq!(invocation.cmd, "query");
+        assert_eq!(invocation.cmd, kind.as_str());
         assert_eq!(invocation.workspace, PathBuf::from(ws));
         let process = &invocation.process;
         assert!(process.terminal.is_none());
@@ -400,11 +578,19 @@ mod tests {
         st.bazel = Some(bazel);
         drop(st);
         // Queries never serialize each other: both register before either ends.
-        let (mut child_a, id_a) = spawn_query(&core, &ws, "//...", "label", false, false).unwrap();
-        let (mut child_b, id_b) = spawn_query(&core, &ws, "//...", "label", false, false).unwrap();
+        let a = QueryRequest {
+            workspace: ws.clone(),
+            ..request(QueryKind::Cquery, "label")
+        };
+        let b = QueryRequest {
+            workspace: ws.clone(),
+            ..request(QueryKind::Aquery, "text")
+        };
+        let (mut child_a, id_a) = spawn_query(&core, &a).unwrap();
+        let (mut child_b, id_b) = spawn_query(&core, &b).unwrap();
         let st = core.state.lock().unwrap();
-        for id in [&id_a, &id_b] {
-            assert_query_entry(&st, id, &ws);
+        for (id, kind) in [(&id_a, a.kind), (&id_b, b.kind)] {
+            assert_query_entry(&st, id, &ws, kind);
         }
         drop(st);
         let _guard_a = runner::InvocationGuard {
@@ -441,11 +627,33 @@ mod tests {
             stdout: "//a:b\n".to_string(),
             truncated: false,
             stderr_tail: "oops".to_string(),
+            actions: None,
         })
         .unwrap();
         assert_eq!(json["exitCode"], 2);
         assert_eq!(json["stderrTail"], "oops");
         assert!(json.get("stderr_tail").is_none());
+    }
+
+    #[test]
+    fn jsonproto_parses_only_an_intact_successful_capture() {
+        let valid = br#"{"actions":[{"targetId":1,"mnemonic":"Genrule"}],"targets":[{"id":1,"label":"//app:chosen"}]}"#;
+        let out = query_output(true, Some(0), valid, false, String::new()).unwrap();
+        assert_eq!(out.stdout, "");
+        assert_eq!(out.actions.unwrap().actions[0].owner, "//app:chosen");
+        assert!(query_output(true, Some(0), b"bad json", false, String::new()).is_err());
+    }
+
+    #[test]
+    fn incomplete_jsonproto_returns_status_and_diagnostics() {
+        for (exit, truncated) in [(Some(1), false), (None, false), (Some(0), true)] {
+            let out = query_output(true, exit, b"partial", truncated, "error".into()).unwrap();
+            assert!(out.actions.is_none());
+            assert_eq!(out.stdout, "");
+            assert_eq!(out.exit_code, exit);
+            assert_eq!(out.stderr_tail, "error");
+            assert_eq!(out.truncated, truncated);
+        }
     }
 
     struct InterruptOnce<R> {
