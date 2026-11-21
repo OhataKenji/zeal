@@ -1,12 +1,11 @@
 //! Bzlmod `bazel mod` views: the resolved module graph and per-module MVS
-//! explanations. Every command is read-only and bounded; `MODULE.bazel` must
-//! already exist so Bazel never creates one, and `--lockfile_mode=off` keeps
+//! explanations. Commands run bounded; `MODULE.bazel` must already exist so
+//! Bazel never creates one, and `--lockfile_mode=off` keeps
 //! `MODULE.bazel.lock` untouched.
 
 use crate::bazel_output;
 use crate::state::Core;
 use serde::{Deserialize, Serialize};
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,9 +20,9 @@ const EXPLAIN_TRUNCATION_NOTE: &str = "\n\n… (output truncated at 2 MiB)";
 const MAX_GRAPH_DEPTH: usize = 60;
 const MAX_MODULES: usize = 2000;
 const MAX_EDGES: usize = 20_000;
-/// Every graph key — root included, even one only seen inside `children` or
-/// `cycles` — is cloned into edge lists, so unbounded keys would amplify the
-/// input without limit.
+/// Every graph key — root included, even one seen only as an edge endpoint —
+/// is cloned into the output, so unbounded keys would amplify the input
+/// without limit.
 const MAX_KEY_LEN: usize = 256;
 
 const GRAPH_ARGS: &[&str] = &[
@@ -98,8 +97,7 @@ impl ModulesOperation {
         if out.stdout_truncated {
             return Err("bazel mod graph output exceeded 16 MiB".into());
         }
-        let (root_key, modules) = parse_mod_graph(&out.stdout)?;
-        Ok(ModulesSnapshot { root_key, modules })
+        parse_mod_graph(&out.stdout)
     }
 
     /// `bazel mod explain --verbose` output for one module key.
@@ -166,21 +164,16 @@ fn explain_output(stdout: &[u8], truncated: bool) -> String {
     if !truncated {
         return String::from_utf8_lossy(stdout).into_owned();
     }
-    let end = utf8_complete_len(stdout);
+    // An incomplete trailing sequence reports `valid_up_to`; other invalid
+    // bytes keep the full length so lossy decoding handles them.
+    let end = match std::str::from_utf8(stdout) {
+        Ok(_) => stdout.len(),
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        Err(_) => stdout.len(),
+    };
     let mut text = String::from_utf8_lossy(&stdout[..end]).into_owned();
     text.push_str(EXPLAIN_TRUNCATION_NOTE);
     text
-}
-
-/// Byte length of `bytes` when it ends on a UTF-8 boundary. An incomplete
-/// trailing sequence reports `valid_up_to`; other invalid bytes keep the full
-/// length so lossy decoding handles them.
-fn utf8_complete_len(bytes: &[u8]) -> usize {
-    match std::str::from_utf8(bytes) {
-        Ok(_) => bytes.len(),
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        Err(_) => bytes.len(),
-    }
 }
 
 /// One node of `bazel mod graph --output=json`. Unknown fields (`apparentName`,
@@ -190,9 +183,7 @@ fn utf8_complete_len(bytes: &[u8]) -> usize {
 #[serde(rename_all = "camelCase")]
 struct RawNode {
     key: String,
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
     version: Option<String>,
     #[serde(default)]
     dependencies: Vec<RawNode>,
@@ -202,129 +193,70 @@ struct RawNode {
     unexpanded: bool,
 }
 
-struct Fold {
-    root_key: String,
-    nodes: BTreeMap<String, ModuleNode>,
-    expanded: BTreeSet<String>,
-    edges: usize,
+/// Record `node` under the graph caps and merge its explicit metadata — a
+/// repeated occurrence may supply fields an earlier stub lacked, while
+/// missing fields never overwrite known ones.
+fn observe_node<'a>(
+    nodes: &mut BTreeMap<&'a str, ModuleNode>,
+    node: &'a RawNode,
+) -> Result<(), String> {
+    let key = node.key.as_str();
+    if key.len() > MAX_KEY_LEN {
+        return Err(format!("bazel mod graph key exceeds {MAX_KEY_LEN} bytes"));
+    }
+    let module = nodes.entry(key).or_insert_with(|| {
+        let (name, version) = key.split_once('@').unwrap_or((key, ""));
+        ModuleNode {
+            key: key.into(),
+            name: name.into(),
+            version: normalize_version(version),
+            direct: false,
+            required_by: Vec::new(),
+            dependencies: Vec::new(),
+        }
+    });
+    if let Some(name) = &node.name {
+        module.name.clone_from(name);
+    }
+    if let Some(version) = &node.version {
+        module.version = normalize_version(version);
+    }
+    // The root occupies one slot but is excluded only at projection.
+    if nodes.len() > MAX_MODULES + 1 {
+        return Err(format!("bazel mod graph exceeds {MAX_MODULES} modules"));
+    }
+    Ok(())
 }
 
-impl Fold {
-    /// Insert on first observation with key-part fallbacks, or merge
-    /// non-`None` `name`/`version` when a later occurrence supplies them:
-    /// an `unexpanded` stub can precede the expanded node and lack either.
-    fn ensure(&mut self, node: &RawNode) -> Result<(), String> {
-        if node.key.len() > MAX_KEY_LEN {
-            return Err(format!("bazel mod graph key exceeds {MAX_KEY_LEN} bytes"));
-        }
-        // The root occupies one slot but is not counted as a module.
-        if !self.nodes.contains_key(&node.key)
-            && node.key != self.root_key
-            && self.nodes.len() > MAX_MODULES
-        {
-            return Err(format!("bazel mod graph exceeds {MAX_MODULES} modules"));
-        }
-        let acc = match self.nodes.entry(node.key.clone()) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let (key_name, key_version) = key_parts(&node.key);
-                entry.insert(ModuleNode {
-                    key: node.key.clone(),
-                    name: node.name.clone().unwrap_or(key_name),
-                    version: normalize_version(node.version.clone().unwrap_or(key_version)),
-                    direct: false,
-                    required_by: Vec::new(),
-                    dependencies: Vec::new(),
-                })
-            }
-        };
-        // A repeated occurrence may supply `name`/`version` a stub lacked;
-        // applying it to a fresh insert is a no-op.
-        if let Some(name) = &node.name {
-            acc.name.clone_from(name);
-        }
-        if let Some(version) = &node.version {
-            acc.version = normalize_version(version.clone());
-        }
-        Ok(())
-    }
-
-    /// Record the parent→child edge in both directions, once per observed
-    /// edge. `unexpanded` stubs and `cycles` entries contribute theirs even
-    /// though their subtrees are never walked.
-    fn edge(&mut self, parent: &RawNode, child: &RawNode) -> Result<(), String> {
-        self.edges += 1;
-        if self.edges > MAX_EDGES {
-            return Err(format!("bazel mod graph exceeds {MAX_EDGES} edges"));
-        }
-        // Both endpoints have already been visited.
-        if parent.key != self.root_key
-            && let Some(acc) = self.nodes.get_mut(&parent.key)
-        {
-            acc.dependencies.push(child.key.clone());
-        }
-        if let Some(acc) = self.nodes.get_mut(&child.key) {
-            acc.required_by.push(parent.key.clone());
-        }
-        Ok(())
-    }
-
-    /// Ensure `node`, record its edge to `parent` when there is one, then
-    /// walk its children unless it is an `unexpanded` stub or was already
-    /// expanded — `expanded` doubles as the recursion guard since ancestors
-    /// are inserted before their children are walked.
-    fn visit(
-        &mut self,
-        node: &RawNode,
-        parent: Option<&RawNode>,
-        depth: usize,
-    ) -> Result<(), String> {
-        self.ensure(node)?;
-        if let Some(parent) = parent {
-            self.edge(parent, node)?;
-        }
-        if node.unexpanded || !self.expanded.insert(node.key.clone()) {
-            return Ok(());
-        }
-        if depth > MAX_GRAPH_DEPTH {
-            return Err(format!("bazel mod graph exceeds depth {MAX_GRAPH_DEPTH}"));
-        }
-        for child in &node.dependencies {
-            self.visit(child, Some(node), depth + 1)?;
-        }
-        for child in &node.cycles {
-            // Cycle edges are recorded but their targets are never expanded.
-            self.ensure(child)?;
-            self.edge(node, child)?;
-        }
-        Ok(())
+fn normalize_version(version: &str) -> String {
+    if version == "_" {
+        String::new()
+    } else {
+        version.to_string()
     }
 }
 
-/// Fold the `bazel mod graph --output=json` tree into deduplicated module
-/// records, returning `(root_key, modules)` with the root excluded. A
-/// module is `direct` when the root key appears in its `required_by`.
-fn parse_mod_graph(stdout: &[u8]) -> Result<(String, Vec<ModuleNode>), String> {
-    let root: RawNode =
-        serde_json::from_slice(stdout).map_err(|e| format!("invalid bazel mod graph JSON: {e}"))?;
-    let mut fold = Fold {
-        root_key: root.key.clone(),
-        nodes: BTreeMap::new(),
-        expanded: BTreeSet::new(),
-        edges: 0,
-    };
-    fold.visit(&root, None, 0)?;
-    let Fold {
-        root_key, nodes, ..
-    } = fold;
-    let mut modules: Vec<ModuleNode> = nodes.into_values().filter(|m| m.key != root_key).collect();
-    for module in &mut modules {
-        module.required_by.sort_unstable();
-        module.required_by.dedup();
-        module.dependencies.sort_unstable();
-        module.dependencies.dedup();
-        module.direct = module.required_by.contains(&root_key);
+/// Fold the collected relation into the snapshot. Sorted unique edges make
+/// both adjacency lists sorted for free; the root was removed above, so its
+/// edge endpoints resolve to `None` and are skipped.
+fn project(
+    mut nodes: BTreeMap<&str, ModuleNode>,
+    mut edges: Vec<(&str, &str)>,
+    root_key: &str,
+) -> ModulesSnapshot {
+    nodes.remove(root_key);
+    edges.sort_unstable();
+    edges.dedup();
+    for (parent, child) in edges {
+        if let Some(module) = nodes.get_mut(parent) {
+            module.dependencies.push(child.into());
+        }
+        if let Some(module) = nodes.get_mut(child) {
+            module.required_by.push(parent.into());
+            module.direct |= parent == root_key;
+        }
     }
+    let mut modules: Vec<ModuleNode> = nodes.into_values().collect();
     modules.sort_by(|a, b| {
         b.direct
             .cmp(&a.direct)
@@ -332,67 +264,84 @@ fn parse_mod_graph(stdout: &[u8]) -> Result<(String, Vec<ModuleNode>), String> {
             .then_with(|| a.version.cmp(&b.version))
             .then_with(|| a.key.cmp(&b.key))
     });
-    Ok((root_key, modules))
-}
-
-/// `name@version` split for nodes lacking explicit fields; a key without
-/// `@` is its own name with an empty version.
-fn key_parts(key: &str) -> (String, String) {
-    match key.split_once('@') {
-        Some((name, version)) => (name.to_string(), version.to_string()),
-        None => (key.to_string(), String::new()),
+    ModulesSnapshot {
+        root_key: root_key.to_string(),
+        modules,
     }
 }
 
-fn normalize_version(version: String) -> String {
-    if version == "_" {
-        String::new()
-    } else {
-        version
+/// Parse `bazel mod graph --output=json` into a snapshot. Collection walks
+/// the tree once — every observed node merges metadata and every raw
+/// parent→child occurrence records an edge — then projection folds the
+/// edge relation into adjacency lists.
+fn parse_mod_graph(stdout: &[u8]) -> Result<ModulesSnapshot, String> {
+    let root: RawNode =
+        serde_json::from_slice(stdout).map_err(|e| format!("invalid bazel mod graph JSON: {e}"))?;
+    let mut nodes = BTreeMap::new();
+    let mut edges = Vec::new();
+    let mut expanded = BTreeSet::new();
+    // (node, depth, expand): cycle-sourced occurrences are observed for
+    // metadata but their subtrees are never walked.
+    let mut pending = vec![(&root, 0usize, true)];
+    while let Some((node, depth, expand)) = pending.pop() {
+        observe_node(&mut nodes, node)?;
+        if !expand || node.unexpanded || !expanded.insert(node.key.as_str()) {
+            continue;
+        }
+        if depth > MAX_GRAPH_DEPTH {
+            return Err(format!("bazel mod graph exceeds depth {MAX_GRAPH_DEPTH}"));
+        }
+        let children = node.dependencies.len() + node.cycles.len();
+        if edges.len() + children > MAX_EDGES {
+            return Err(format!("bazel mod graph exceeds {MAX_EDGES} edges"));
+        }
+        // Push reversed so the stack pops dependencies before cycles, each
+        // in listed order — the preorder the recursive walk used.
+        for child in node.cycles.iter().rev() {
+            edges.push((node.key.as_str(), child.key.as_str()));
+            pending.push((child, depth + 1, false));
+        }
+        for child in node.dependencies.iter().rev() {
+            edges.push((node.key.as_str(), child.key.as_str()));
+            pending.push((child, depth + 1, true));
+        }
     }
+    Ok(project(nodes, edges, root.key.as_str()))
 }
 
 /// Module keys travel to `bazel mod explain` as a single argv element after
 /// `--`; restrict them to characters that can never look like a flag.
 fn validate_module_key(module_key: &str) -> Result<(), String> {
-    if module_key.is_empty() {
-        return Err("module key is empty".to_string());
+    let valid = !module_key.is_empty()
+        && module_key.len() <= MAX_KEY_LEN
+        && !module_key.starts_with('-')
+        && module_key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '@' | '~' | '-'));
+    if valid {
+        Ok(())
+    } else {
+        Err("invalid module key".to_string())
     }
-    if module_key.len() > 256 {
-        return Err("module key is too long".to_string());
-    }
-    if module_key.starts_with('-') {
-        return Err("module key must not start with '-'".to_string());
-    }
-    if !module_key
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '@' | '~' | '-'))
-    {
-        return Err("module key contains invalid characters".to_string());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workspace::test_support::{TempDir, fake_bazel};
-    use std::fs;
 
     /// Real `bazel mod graph --output=json` captured with `--noinclude_unused`
     /// from the Bzlmod diamond fixture: `mod_a@_`/`mod_b@_` local overrides
     /// share `mod_c@3.0.0` and the MVS winner `mod_e@2.0.0`.
     const GRAPH_JSON: &[u8] = include_bytes!("../tests/fixtures/modules-graph.json");
 
-    fn ws_with_module(dir: &TempDir) -> PathBuf {
-        let ws = dir.path().join("ws");
-        fs::create_dir_all(&ws).unwrap();
-        fs::write(ws.join("MODULE.bazel"), "module(name = \"ws\")\n").unwrap();
-        ws
-    }
-
     fn by_key(modules: &[ModuleNode]) -> BTreeMap<&str, &ModuleNode> {
         modules.iter().map(|m| (m.key.as_str(), m)).collect()
+    }
+
+    /// The committed real-Bazel capture, parsed fresh per test.
+    fn fixture() -> ModulesSnapshot {
+        parse_mod_graph(GRAPH_JSON).unwrap()
     }
 
     /// Core with `ws` registered and `bazel` configured — the single state
@@ -409,12 +358,12 @@ mod tests {
 
     #[test]
     fn parse_mod_graph_folds_captured_bazel_output() {
-        let (root_key, modules) = parse_mod_graph(GRAPH_JSON).unwrap();
-        assert_eq!(root_key, "<root>");
+        let snap = fixture();
+        assert_eq!(snap.root_key, "<root>");
         // Direct dependencies first, then name order.
-        let keys: Vec<&str> = modules.iter().map(|m| m.key.as_str()).collect();
+        let keys: Vec<&str> = snap.modules.iter().map(|m| m.key.as_str()).collect();
         assert_eq!(keys, ["mod_a@_", "mod_b@_", "mod_c@3.0.0", "mod_e@2.0.0"]);
-        let by_key = by_key(&modules);
+        let by_key = by_key(&snap.modules);
         assert!(by_key["mod_a@_"].direct && by_key["mod_b@_"].direct);
         assert!(!by_key["mod_c@3.0.0"].direct && !by_key["mod_e@2.0.0"].direct);
         assert_eq!(by_key["mod_a@_"].version, "");
@@ -423,8 +372,8 @@ mod tests {
 
     #[test]
     fn parse_mod_graph_merges_diamond_edges_across_stubs() {
-        let (_, modules) = parse_mod_graph(GRAPH_JSON).unwrap();
-        let by_key = by_key(&modules);
+        let snap = fixture();
+        let by_key = by_key(&snap.modules);
         // The diamond merges edges recorded under the expanded occurrence
         // (mod_a) and the `unexpanded` stubs (mod_b).
         for key in ["mod_c@3.0.0", "mod_e@2.0.0"] {
@@ -447,7 +396,7 @@ mod tests {
             {"key":"odd@9.9","dependencies":[]},
             {"key":"under@_","name":"under","version":"_","dependencies":[]}
         ]}"#;
-        let (_, modules) = parse_mod_graph(json.as_bytes()).unwrap();
+        let modules = parse_mod_graph(json.as_bytes()).unwrap().modules;
         assert_eq!(modules.len(), 2);
         let odd = modules.iter().find(|m| m.key == "odd@9.9").unwrap();
         assert_eq!(odd.name, "odd");
@@ -468,7 +417,7 @@ mod tests {
                 {"key":"late@_","name":"late","version":"2","dependencies":[]}
             ]}
         ]}"#;
-        let (_, modules) = parse_mod_graph(json.as_bytes()).unwrap();
+        let modules = parse_mod_graph(json.as_bytes()).unwrap().modules;
         let late = modules.iter().find(|m| m.key == "late@_").unwrap();
         assert_eq!(late.name, "late");
         assert_eq!(late.version, "2");
@@ -485,7 +434,7 @@ mod tests {
                  "cycles":[{"key":"a@1","unexpanded":true}]}
             ]}
         ]}"#;
-        let (_, modules) = parse_mod_graph(json.as_bytes()).unwrap();
+        let modules = parse_mod_graph(json.as_bytes()).unwrap().modules;
         assert_eq!(modules.len(), 2);
         let by_key = by_key(&modules);
         assert_eq!(by_key["a@1"].required_by, ["<root>", "b@1"]);
@@ -504,7 +453,7 @@ mod tests {
                 ]}
             ]}
         ]}"#;
-        let (_, modules) = parse_mod_graph(json.as_bytes()).unwrap();
+        let modules = parse_mod_graph(json.as_bytes()).unwrap().modules;
         let a = modules.iter().find(|m| m.key == "a@1").unwrap();
         assert_eq!(a.required_by, ["<root>", "b@1"]);
         let b = modules.iter().find(|m| m.key == "b@1").unwrap();
@@ -551,28 +500,21 @@ mod tests {
         assert!(parse_mod_graph(deep_graph(59).as_bytes()).is_ok());
         assert!(parse_mod_graph(deep_graph(60).as_bytes()).is_err());
 
-        let children: Vec<String> = (0..=MAX_MODULES)
-            .map(|i| format!("{{\"key\":\"m{i}@1\",\"dependencies\":[]}}"))
+        let children: Vec<serde_json::Value> = (0..=MAX_MODULES)
+            .map(|i| serde_json::json!({"key": format!("m{i}@1"), "dependencies": []}))
             .collect();
-        let json = format!(
-            "{{\"key\":\"<root>\",\"dependencies\":[{}]}}",
-            children.join(",")
-        );
-        assert!(parse_mod_graph(json.as_bytes()).is_err());
+        let json = serde_json::json!({"key": "<root>", "dependencies": children});
+        assert!(parse_mod_graph(&serde_json::to_vec(&json).unwrap()).is_err());
 
         // 100 parents x 200 shared stubs = 20 100 recorded edges.
-        let deps: Vec<String> = (0..200)
-            .map(|i| format!("{{\"key\":\"s{i}@1\",\"unexpanded\":true}}"))
+        let stubs: Vec<serde_json::Value> = (0..200)
+            .map(|i| serde_json::json!({"key": format!("s{i}@1"), "unexpanded": true}))
             .collect();
-        let deps = deps.join(",");
-        let parents: Vec<String> = (0..100)
-            .map(|i| format!("{{\"key\":\"p{i}@1\",\"dependencies\":[{deps}]}}"))
+        let parents: Vec<serde_json::Value> = (0..100)
+            .map(|i| serde_json::json!({"key": format!("p{i}@1"), "dependencies": stubs}))
             .collect();
-        let json = format!(
-            "{{\"key\":\"<root>\",\"dependencies\":[{}]}}",
-            parents.join(",")
-        );
-        assert!(parse_mod_graph(json.as_bytes()).is_err());
+        let json = serde_json::json!({"key": "<root>", "dependencies": parents});
+        assert!(parse_mod_graph(&serde_json::to_vec(&json).unwrap()).is_err());
     }
 
     #[test]
@@ -637,41 +579,34 @@ mod tests {
         use std::fs;
         use std::time::Duration;
 
-        /// Fake bazel that records each invoked subcommand — argv is
-        /// `--noblock_for_lock mod <sub>` …, so `$3` — and serves the graph
-        /// fixture for any call.
-        fn bazel_serving_graph(dir: &TempDir) -> (PathBuf, PathBuf) {
-            let graph_path = dir.path().join("graph.json");
-            fs::write(&graph_path, GRAPH_JSON).unwrap();
-            let calls = dir.path().join("calls.txt");
-            let script = format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$3\" >> '{}'\ncat '{}'\n",
-                calls.display(),
-                graph_path.display()
-            );
-            (fake_bazel(dir.path(), "bazel", &script), calls)
+        /// An acquired operation with `dir` itself as the workspace: an
+        /// empty `MODULE.bazel` exists and `bazel` is the fake script, whose
+        /// cwd is the workspace so relative paths land beside it.
+        fn operation(dir: &TempDir, script: &str) -> ModulesOperation {
+            fs::write(dir.path().join("MODULE.bazel"), "").unwrap();
+            let bazel = fake_bazel(dir.path(), "bazel", script);
+            ModulesOperation::acquire(&core_with(dir.path(), &bazel), dir.path().to_str().unwrap())
+                .unwrap()
         }
 
         #[test]
         fn snapshot_runs_only_mod_graph() {
             let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            let (bazel, calls) = bazel_serving_graph(&dir);
-            let core = core_with(&ws, &bazel);
-            let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
+            fs::write(dir.path().join("graph.json"), GRAPH_JSON).unwrap();
+            let op = operation(&dir, "#!/bin/sh\necho \"$3\" >> calls\ncat graph.json\n");
             let snapshot = op.snapshot().unwrap();
             assert_eq!(snapshot.root_key, "<root>");
             assert_eq!(snapshot.modules.len(), 4);
-            assert_eq!(fs::read_to_string(&calls).unwrap(), "graph\n");
+            assert_eq!(
+                fs::read_to_string(dir.path().join("calls")).unwrap(),
+                "graph\n"
+            );
         }
 
         #[test]
         fn snapshot_fails_when_graph_fails() {
             let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            let bazel = fake_bazel(dir.path(), "bazel", "#!/bin/sh\nexit 1\n");
-            let core = core_with(&ws, &bazel);
-            let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
+            let op = operation(&dir, "#!/bin/sh\nexit 1\n");
             let err = op.snapshot().unwrap_err();
             assert!(err.contains("mod graph"), "{err}");
         }
@@ -681,7 +616,8 @@ mod tests {
             let dir = TempDir::new();
             let ws = dir.path().join("ws");
             fs::create_dir_all(&ws).unwrap();
-            let core = core_with(&ws, Path::new("/nonexistent/zeal-bazel"));
+            let bazel = fake_bazel(dir.path(), "bazel", "#!/bin/sh\ntouch invoked\n");
+            let core = core_with(&ws, &bazel);
             let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
             assert_eq!(
                 op.snapshot().unwrap_err(),
@@ -691,26 +627,27 @@ mod tests {
                 op.explain("mod_a@_").unwrap_err(),
                 "MODULE.bazel not found in workspace"
             );
+            assert!(!ws.join("invoked").exists(), "bazel must not be spawned");
         }
 
         #[test]
         fn explain_returns_text_and_rejects_bad_keys_first() {
             let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            fs::write(dir.path().join("explain.txt"), "mod_a@_ was selected\n").unwrap();
-            let args_path = dir.path().join("args.txt");
-            let script = format!(
-                "#!/bin/sh\nprintf '%s' \"$*\" > '{}'\ncat '{}'\n",
-                args_path.display(),
-                dir.path().join("explain.txt").display()
+            let op = operation(
+                &dir,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > args\necho 'mod_a@_ was selected'\n",
             );
-            let bazel = fake_bazel(dir.path(), "bazel", &script);
-            let core = core_with(&ws, &bazel);
-            let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
             assert_eq!(op.explain("mod_a@_").unwrap(), "mod_a@_ was selected\n");
-            let args = fs::read_to_string(&args_path).unwrap();
-            assert!(args.contains("--depth=2147483647"), "{args}");
-            assert!(args.contains("--noinclude_unused"), "{args}");
+            let args = fs::read_to_string(dir.path().join("args")).unwrap();
+            let lines: Vec<&str> = args.lines().collect();
+            assert!(
+                ["--depth=2147483647", "--noinclude_unused", "--verbose"]
+                    .iter()
+                    .all(|flag| lines.contains(flag)),
+                "{args}"
+            );
+            // The module key is the last argv element, after `--`.
+            assert_eq!(lines.last(), Some(&"mod_a@_"), "{args}");
             // Validation happens before bazel is even spawned.
             let err = op.explain("-bad").unwrap_err();
             assert!(err.contains("module key"), "{err}");
@@ -719,20 +656,12 @@ mod tests {
         #[test]
         fn exit_stop_cancels_an_in_flight_modules_operation() {
             let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            // The fake bazel announces startup, then blocks: shutdown lands
-            // while `mod graph` is genuinely in flight.
-            let marker = dir.path().join("bazel-started");
-            let bazel = fake_bazel(
-                dir.path(),
-                "bazel",
-                &format!("#!/bin/sh\ntouch '{}'\nsleep 30\n", marker.display()),
-            );
-            let core = core_with(&ws, &bazel);
-            let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
+            let op = operation(&dir, "#!/bin/sh\ntouch started\nsleep 30\n");
+            // The worker needs the core for exit_stop; clone it before moving op.
+            let core = op.core.clone();
             let worker = std::thread::spawn(move || op.snapshot());
             // Wait until the subprocess is actually running before exit.
-            wait_for_file(&marker, Duration::from_secs(10));
+            wait_for_file(&dir.path().join("started"), Duration::from_secs(10));
             let started = Instant::now();
             crate::runner::exit_stop(&core);
             assert!(started.elapsed() < Duration::from_secs(5));

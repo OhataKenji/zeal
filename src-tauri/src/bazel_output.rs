@@ -7,6 +7,7 @@
 //! errors carrying the stderr tail; callers only see successful output.
 
 use rustix::event::{self, PollFd, PollFlags, Timespec};
+use rustix::process::Signal;
 use std::io::{self, Read};
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
@@ -217,17 +218,12 @@ fn wait_with_timeout(
 }
 
 fn kill_group_and_reap(child: &mut Child, pid: u32) {
-    use rustix::process::{Pid, Signal, kill_process_group};
     // Only reached while the child is confirmed unreaped, so its pid —
     // and process group id — cannot have been recycled. ESRCH means the
     // group already exited; child.kill()/wait() below still cover the
-    // leader itself.
-    if let Ok(raw) = i32::try_from(pid)
-        && raw > 1
-        && let Some(pgid) = Pid::from_raw(raw)
-    {
-        let _ = kill_process_group(pgid, Signal::KILL);
-    }
+    // leader itself. `signal_group` rejects group ids that could address
+    // the caller's or every process.
+    let _ = crate::runner::signal_group(i32::try_from(pid).unwrap_or(0), Signal::KILL);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -236,12 +232,6 @@ fn kill_group_and_reap(child: &mut Child, pid: u32) {
 mod tests {
     use super::*;
     use crate::workspace::test_support::{TempDir, fake_bazel};
-
-    fn fake_ws(dir: &TempDir) -> std::path::PathBuf {
-        let ws = dir.path().join("ws");
-        std::fs::create_dir_all(&ws).unwrap();
-        ws
-    }
 
     /// A bounded run with a generous deadline and no cancellation.
     fn run(bazel: &Path, ws: &Path, args: &[&str], cap: usize) -> Result<BoundedOutput, String> {
@@ -258,9 +248,8 @@ mod tests {
     #[test]
     fn run_bazel_bounded_captures_stdout_and_reports_failures() {
         let dir = TempDir::new();
-        let ws = fake_ws(&dir);
         let ok = fake_bazel(dir.path(), "bazel-ok", "#!/bin/sh\nprintf 'out-data'\n");
-        let out = run(&ok, &ws, &["info"], 1024).unwrap();
+        let out = run(&ok, dir.path(), &["info"], 1024).unwrap();
         assert_eq!(out.stdout, b"out-data");
         assert!(!out.stdout_truncated);
 
@@ -269,21 +258,20 @@ mod tests {
             "bazel-fail",
             "#!/bin/sh\nprintf 'err-data' >&2\nexit 3\n",
         );
-        let err = run(&fail, &ws, &["info"], 1024).unwrap_err();
+        let err = run(&fail, dir.path(), &["info"], 1024).unwrap_err();
         assert!(err.contains("err-data"), "{err}");
     }
 
     #[test]
     fn run_bazel_bounded_times_out_and_kills_the_process_group() {
         let dir = TempDir::new();
-        let ws = fake_ws(&dir);
         // `sleep` runs in the child's process group; the group kill must reap
         // it too, so the call returns promptly instead of waiting 30 s.
         let bazel = fake_bazel(dir.path(), "bazel", "#!/bin/sh\nsleep 30\n");
         let started = Instant::now();
         let err = run_bazel_bounded(
             &bazel,
-            &ws,
+            dir.path(),
             &["info"],
             Instant::now() + Duration::from_millis(200),
             1024,
@@ -307,17 +295,16 @@ mod tests {
     #[test]
     fn run_bazel_bounded_marks_stdout_truncated_at_the_cap() {
         let dir = TempDir::new();
-        let ws = fake_ws(&dir);
         let script = "#!/bin/sh\nprintf '%*s' 24 '' | tr ' ' 'a'\n";
         let bazel = fake_bazel(dir.path(), "bazel", script);
-        let out = run(&bazel, &ws, &["info"], 16).unwrap();
+        let out = run(&bazel, dir.path(), &["info"], 16).unwrap();
         assert_eq!(out.stdout, vec![b'a'; 16]);
         assert!(out.stdout_truncated);
 
         // Exactly at the cap is not truncated.
         let script = "#!/bin/sh\nprintf '%*s' 16 '' | tr ' ' 'a'\n";
         let bazel = fake_bazel(dir.path(), "bazel2", script);
-        let out = run(&bazel, &ws, &["info"], 16).unwrap();
+        let out = run(&bazel, dir.path(), &["info"], 16).unwrap();
         assert_eq!(out.stdout.len(), 16);
         assert!(!out.stdout_truncated);
     }
@@ -325,12 +312,11 @@ mod tests {
     #[test]
     fn nonzero_exit_reports_a_utf8_safe_stderr_tail() {
         let dir = TempDir::new();
-        let ws = fake_ws(&dir);
         // 3000 '€' signs overflow the 8 KiB tail; the window cut lands
         // mid-codepoint and must not leak a leading U+FFFD.
         let script = format!("#!/bin/sh\nprintf '{}' >&2\nexit 1\n", "€".repeat(3000));
         let bazel = fake_bazel(dir.path(), "bazel", &script);
-        let err = run(&bazel, &ws, &["info"], 1024).unwrap_err();
+        let err = run(&bazel, dir.path(), &["info"], 1024).unwrap_err();
         assert!(err.contains('€'), "{err}");
         assert!(!err.contains('\u{FFFD}'), "{err}");
     }
@@ -338,10 +324,9 @@ mod tests {
     #[test]
     fn run_bazel_bounded_fails_when_bazel_cannot_start() {
         let dir = TempDir::new();
-        let ws = fake_ws(&dir);
         let err = run(
             std::path::Path::new("/nonexistent/zeal-bazel"),
-            &ws,
+            dir.path(),
             &["info"],
             1024,
         )
