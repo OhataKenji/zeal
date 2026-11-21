@@ -60,7 +60,7 @@
   import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { createIndex } from "./search";
   import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
@@ -95,14 +95,10 @@
     snap,
     workspace,
     bazelAvailable,
-    preset = null,
-    onpresetapplied,
   }: {
     snap: TargetIndex | null;
     workspace: string;
     bazelAvailable: boolean;
-    preset?: {kind: QueryKind; flags: string} | null;
-    onpresetapplied?: () => void;
   } = $props();
 
   const searchIndex = $derived(
@@ -124,14 +120,10 @@
   let codeError = $state<string | null>(null);
   let noImplicit = $state(DEFAULT_FLAGS.noImplicit);
   let noTool = $state(DEFAULT_FLAGS.noTool);
-  const initial = untrack(() => preset);
-  let kind = $state<QueryKind>(initial?.kind ?? "query");
-  let buildFlags = $state(initial?.flags ?? "");
+  let kind = $state<QueryKind>("query");
+  let buildFlags = $state("");
   let transitions = $state(false);
-  let resultView = $state<ResultView>(initial && initial.kind !== "query" ? "table" : "raw");
-  onMount(() => {
-    if (initial) onpresetapplied?.();
-  });
+  let resultView = $state<ResultView>("raw");
   const outputFormat = $derived(outputFormatFor(kind, resultView, transitions));
   const phases = {
     query: "Loading — explore target dependencies before configuration.",

@@ -226,15 +226,6 @@
   margin-bottom: 10px;
 }
 
-.config-head,
-.config-head .ws-actions {
-  flex-wrap: wrap;
-}
-
-.config-head > .mono {
-  overflow-wrap: anywhere;
-}
-
 .section-title {
   margin: 0;
   font-size: 11px;

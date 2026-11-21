@@ -28,35 +28,10 @@ test("QueryView blocks Execute only on Bazel availability", async (t) => {
     assert.match(html, /<h1[^>]*id="query-heading"[^>]*>Query editor<\/h1>/);
     assert.doesNotMatch(html, /Bazel query/);
     assert.match(html, /aria-labelledby="query-heading"/);
-  });
-});
-
-test("configured graph presets fill the editor without executing and restrict its controls", async (t) => {
-  const { load, render } = await createSvelteHarness(t);
-  const { default: QueryView } = await load("/src/lib/QueryView.svelte");
-  for (const kind of ["cquery", "aquery"] as const) {
-    const html = render(QueryView, {
-      props: {
-        snap: null,
-        workspace: "/workspace",
-        bazelAvailable: true,
-        preset: { kind, flags: "--config=ci" },
-      },
-    }).body;
-    assert.match(html, /Select Execute to fetch results/);
-    assert.match(html, /aria-selected="true"[^>]*>Table</);
-    assert.match(html, /--config=ci/);
-    assert.doesNotMatch(html, />Graph<\/button>|--noimplicit_deps|value="buildfiles"/);
-    if (kind === "cquery") {
-      assert.match(html, /value="config"/);
-      assert.match(html, /--show_config_fragments=off/);
-      assert.doesNotMatch(html, /value="mnemonic"/);
-    } else {
-      assert.match(html, /value="mnemonic"/);
-      assert.match(html, /--include_commandline --include_artifacts/);
-      assert.doesNotMatch(html, /value="config"/);
+    for (const kind of ["query", "cquery", "aquery"]) {
+      assert.match(html, new RegExp(`role="tab"[^>]*>${kind}</button>`));
     }
-  }
+  });
 });
 
 test("a graph change keeps a disabled option and validation error on a nested unsupported card", async (t) => {

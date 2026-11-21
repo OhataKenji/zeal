@@ -169,27 +169,6 @@ export type Section<T> =
   | { status: "missing" }
   | { status: "parse_error" | "read_error" | "not_available"; note: string };
 
-/** One rc file/options line reported by `bazel info --announce_rc`. */
-export interface RcAnnouncement {
-  source: string;
-  scope: string;
-  flags: string;
-}
-
-/** One `<command>:<config>` definition parsed from a workspace rc file. */
-export interface ConfigEntry {
-  command: string;
-  flags: string;
-  source: string;
-  line: number;
-}
-
-/** A named `--config=<name>` definition with its per-command entries. */
-export interface BazelConfig {
-  name: string;
-  entries: ConfigEntry[];
-}
-
 /** Paths reported by `bazel info` for one workspace. */
 export interface WorkspaceInfo {
   workspace: string;
@@ -199,9 +178,6 @@ export interface WorkspaceInfo {
   bazelBin: string | null;
   bazelTestlogs: string | null;
   repositoryCache: string | null;
-  rcAnnouncements: RcAnnouncement[];
-  configs: BazelConfig[];
-  infoError: string | null;
 }
 
 /** Per-runner action execution counts from BEP `BuildMetrics.action_summary`. */

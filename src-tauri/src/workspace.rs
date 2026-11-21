@@ -10,36 +10,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod configs;
-
 const INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const INFO_STDOUT_CAP: usize = 64 * 1024;
-const INFO_STDERR_HEAD: usize = 128 * 1024;
-const INFO_STDERR_TAIL: usize = 4 * 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RcAnnouncement {
-    pub source: String,
-    pub scope: String,
-    pub flags: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigEntry {
-    pub command: String,
-    pub flags: String,
-    pub source: String,
-    pub line: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BazelConfig {
-    pub name: String,
-    pub entries: Vec<ConfigEntry>,
-}
+const INFO_STDERR_CAP: usize = 8 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,9 +24,6 @@ pub struct WorkspaceInfo {
     pub bazel_bin: Option<String>,
     pub bazel_testlogs: Option<String>,
     pub repository_cache: Option<String>,
-    pub rc_announcements: Vec<RcAnnouncement>,
-    pub configs: Vec<BazelConfig>,
-    pub info_error: Option<String>,
 }
 
 /// Pure parser for `bazel info` `key: value` output.
@@ -67,9 +37,6 @@ pub fn parse_bazel_info(stdout: &str, workspace: &Path) -> WorkspaceInfo {
         bazel_bin: None,
         bazel_testlogs: None,
         repository_cache: None,
-        rc_announcements: Vec::new(),
-        configs: Vec::new(),
-        info_error: None,
     };
     for line in stdout.lines() {
         let Some((key, val)) = line.split_once(':') else {
@@ -92,48 +59,24 @@ pub fn parse_bazel_info(stdout: &str, workspace: &Path) -> WorkspaceInfo {
     info
 }
 
-/// Drain the pipe even after the retained prefix has filled. Keep up to three
-/// extra bytes at each cut so decoding a split UTF-8 scalar is lossless.
-fn read_capped(mut reader: impl Read, head: usize, tail: usize) -> (String, String) {
-    let mut prefix = Vec::new();
-    let mut suffix = Vec::new();
+fn read_capped<R: Read>(mut reader: R, cap: usize) -> Vec<u8> {
+    let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     while let Ok(n) = reader.read(&mut buf) {
         if n == 0 {
             break;
         }
-        let take = n.min(head + 3 - prefix.len());
-        prefix.extend_from_slice(&buf[..take]);
-        if tail > 0 {
-            suffix.extend_from_slice(&buf[..n]);
-            suffix.drain(..suffix.len().saturating_sub(tail + 3));
+        if out.len() < cap {
+            let take = n.min(cap - out.len());
+            out.extend_from_slice(&buf[..take]);
         }
     }
-    let prefix = String::from_utf8_lossy(&prefix);
-    let suffix = String::from_utf8_lossy(&suffix);
-    let mut end = head.min(prefix.len());
-    while !prefix.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut start = suffix.len().saturating_sub(tail);
-    while !suffix.is_char_boundary(start) {
-        start += 1;
-    }
-    (prefix[..end].to_owned(), suffix[start..].to_owned())
+    out
 }
 
-/// Config definitions don't depend on whether Bazel is installed or can run.
-pub fn fetch_info(bazel: Option<&Path>, ws: &Path) -> WorkspaceInfo {
-    let result = bazel
-        .ok_or_else(|| "no bazel".to_owned())
-        .and_then(|bazel| fetch_info_with_timeout(bazel, ws, INFO_TIMEOUT));
-    let mut info = result.unwrap_or_else(|error| {
-        let mut info = parse_bazel_info("", ws);
-        info.info_error = Some(error);
-        info
-    });
-    info.configs = configs::load_workspace_configs(ws);
-    info
+/// Run `bazel --noblock_for_lock info` in `ws` with bounded IO and timeout.
+pub fn fetch_info(bazel: &Path, ws: &Path) -> Result<WorkspaceInfo, String> {
+    fetch_info_with_timeout(bazel, ws, INFO_TIMEOUT)
 }
 
 fn fetch_info_with_timeout(
@@ -142,7 +85,7 @@ fn fetch_info_with_timeout(
     timeout: Duration,
 ) -> Result<WorkspaceInfo, String> {
     let mut cmd = Command::new(bazel);
-    cmd.args(["--noblock_for_lock", "info", "--announce_rc"])
+    cmd.args(["--noblock_for_lock", "info"])
         .current_dir(ws)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -160,12 +103,12 @@ fn fetch_info_with_timeout(
     let (out_tx, out_rx) = mpsc::channel();
     let out_pipe = child.stdout.take().expect("stdout piped");
     thread::spawn(move || {
-        let _ = out_tx.send(read_capped(out_pipe, INFO_STDOUT_CAP, 0).0);
+        let _ = out_tx.send(read_capped(out_pipe, INFO_STDOUT_CAP));
     });
     let (err_tx, err_rx) = mpsc::channel();
     let err_pipe = child.stderr.take().expect("stderr piped");
     thread::spawn(move || {
-        let _ = err_tx.send(read_capped(err_pipe, INFO_STDERR_HEAD, INFO_STDERR_TAIL));
+        let _ = err_tx.send(read_capped(err_pipe, INFO_STDERR_CAP));
     });
 
     let status = wait_with_timeout(&mut child, pid, Instant::now() + timeout)?;
@@ -173,64 +116,18 @@ fn fetch_info_with_timeout(
     let stdout = out_rx
         .recv_timeout(Duration::from_secs(1))
         .unwrap_or_default();
-    let (head, tail) = err_rx
+    let stderr = err_rx
         .recv_timeout(Duration::from_secs(1))
         .unwrap_or_default();
-    let mut info = parse_bazel_info(if status.success() { &stdout } else { "" }, ws);
-    info.rc_announcements = parse_announce_rc(&head);
     if !status.success() {
-        let detail = tail.trim();
-        info.info_error = Some(if detail.is_empty() {
+        let detail = String::from_utf8_lossy(&stderr).trim().to_string();
+        return Err(if detail.is_empty() {
             format!("bazel info exited with {status}")
         } else {
-            detail.to_owned()
+            detail
         });
     }
-    Ok(info)
-}
-
-fn parse_announce_rc(stderr: &str) -> Vec<RcAnnouncement> {
-    let mut active_source = None;
-    stderr
-        .lines()
-        .filter_map(|line| announcement(line, &mut active_source))
-        .collect()
-}
-
-fn announcement<'a>(line: &'a str, active: &mut Option<&'a str>) -> Option<RcAnnouncement> {
-    if !line.starts_with(char::is_whitespace) {
-        *active = None;
-    }
-    let line = line.trim();
-    if let Some(header) = line.strip_prefix("INFO: Reading rc options for '") {
-        let (_, path) = header.split_once("' from ")?;
-        *active = path.strip_suffix(':');
-        return None;
-    }
-    announcement_options(line, *active)
-}
-
-fn announcement_options(line: &str, active: Option<&str>) -> Option<RcAnnouncement> {
-    let (source, scope, flags) = if let Some(startup) =
-        line.strip_prefix("INFO: Reading 'startup' options from ")
-    {
-        let (source, flags) = startup.split_once(": ")?;
-        (source, "startup".to_owned(), flags)
-    } else if let Some(config) = line.strip_prefix("INFO: Found applicable config definition ") {
-        let (config, rest) = config.split_once(" in file ")?;
-        let (_, name) = config.split_once(':')?;
-        let (source, flags) = rest.split_once(": ")?;
-        (source, format!("config:{name}"), flags)
-    } else {
-        let options = line.strip_prefix("Inherited ").unwrap_or(line);
-        let (scope, flags) = options.strip_prefix('\'')?.split_once("' options: ")?;
-        (active?, scope.to_owned(), flags)
-    };
-    Some(RcAnnouncement {
-        source: source.to_owned(),
-        scope,
-        flags: flags.to_owned(),
-    })
+    Ok(parse_bazel_info(&String::from_utf8_lossy(&stdout), ws))
 }
 
 fn wait_with_timeout(
@@ -351,7 +248,7 @@ pub fn save(data_dir: &Path, ws: &Path, scope: &Scope) {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::process::{Command, Output};
 
     pub fn git(dir: &Path, args: &[&str]) -> Output {
@@ -392,16 +289,22 @@ pub(crate) mod test_support {
         init(dir);
         git(dir, &["remote", "add", "origin", origin]);
     }
-    pub struct TempDir(PathBuf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
 
     impl TempDir {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let path =
                 std::env::temp_dir().join(format!("zeal-workspace-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
         }
-        pub fn path(&self) -> &Path {
+        fn path(&self) -> &Path {
             &self.0
         }
     }
@@ -410,93 +313,6 @@ pub(crate) mod test_support {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::test_support::TempDir;
-    use super::*;
-
-    #[test]
-    fn parses_multiline_rc_sections_without_attributing_client_flags() {
-        let lines = "\
-INFO: Reading 'startup' options from /my repo/.bazelrc: --batch
-INFO: Reading rc options for 'info' from /my repo/.bazelrc:
-  Inherited 'common' options: --color=no
-  'info' options: --config=ci
-INFO: Options provided by the client:
-  Inherited 'common' options: --isatty=1
-INFO: Found applicable config definition info:ci in file /my repo/rc/team.rc: --curses=no
-";
-        let parsed = parse_announce_rc(lines);
-        let values: Vec<_> = parsed
-            .iter()
-            .map(|a| (a.source.as_str(), a.scope.as_str(), a.flags.as_str()))
-            .collect();
-        assert_eq!(
-            values,
-            [
-                ("/my repo/.bazelrc", "startup", "--batch"),
-                ("/my repo/.bazelrc", "common", "--color=no"),
-                ("/my repo/.bazelrc", "info", "--config=ci"),
-                ("/my repo/rc/team.rc", "config:ci", "--curses=no"),
-            ]
-        );
-    }
-
-    #[test]
-    fn multibyte_stderr_is_trimmed_at_scalar_boundaries() {
-        let data = "界".repeat(INFO_STDERR_HEAD / 3 + INFO_STDERR_TAIL);
-        let (head, tail) = read_capped(data.as_bytes(), INFO_STDERR_HEAD, INFO_STDERR_TAIL);
-        assert_eq!(head, "界".repeat(INFO_STDERR_HEAD / 3));
-        assert_eq!(tail, "界".repeat(INFO_STDERR_TAIL / 3));
-    }
-
-    #[test]
-    fn missing_bazel_still_loads_configs() {
-        let dir = TempDir::new();
-        std::fs::write(dir.path().join(".bazelrc"), "build:ci -c opt").unwrap();
-        let info = fetch_info(None, dir.path());
-        assert_eq!(info.configs[0].name, "ci");
-        assert_eq!(info.info_error.as_deref(), Some("no bazel"));
-        let info = fetch_info(Some(&dir.path().join("nonexistent")), dir.path());
-        assert_eq!(info.configs[0].name, "ci");
-        assert!(info.info_error.unwrap().contains("failed to start"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn fetch_preserves_early_announcements_and_late_error() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
-        let script = dir.path().join("bazel");
-        let create_script = |body: &str| {
-            std::fs::write(&script, format!("#!/bin/sh\n[ \"$*\" = '--noblock_for_lock info --announce_rc' ] || exit 99\n{body}\n")).unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-        };
-        std::fs::write(
-            dir.path().join(".bazelrc"),
-            "test:ci --flaky_test_attempts=2",
-        )
-        .unwrap();
-        create_script(
-            "echo 'release: fake'\necho \"INFO: Reading 'startup' options from /rc: --batch\" >&2",
-        );
-        let info = fetch_info(Some(&script), dir.path());
-        assert_eq!(info.release.as_deref(), Some("fake"));
-        assert_eq!(info.rc_announcements[0].flags, "--batch");
-        assert!(info.info_error.is_none());
-
-        create_script(
-            "echo \"INFO: Reading 'startup' options from /rc: --batch\" >&2\nhead -c 150000 /dev/zero | tr '\\000' x >&2\nprintf '\\nlock held\\n' >&2\nexit 7",
-        );
-        let info = fetch_info(Some(&script), dir.path());
-        let error = info.info_error.unwrap();
-        assert!(error.ends_with("lock held"));
-        assert!(error.len() <= INFO_STDERR_TAIL);
-        assert_eq!(info.configs[0].name, "ci");
-        assert_eq!(info.rc_announcements[0].flags, "--batch");
     }
 
     #[test]

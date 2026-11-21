@@ -4,19 +4,16 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type {
   AppState,
-  BazelConfig,
   Edge,
   FileEntry,
   InvocationRecord,
   OwnedInvocation,
   Profile,
-  RcAnnouncement,
   Target,
   TargetActions,
   TargetDetail,
   TargetIndex,
   TargetOutputs,
-  WorkspaceInfo,
   WorkspaceState,
 } from "./lib/types";
 import type { QueryOutput, QueryRequest } from "./lib/query.ts";
@@ -132,66 +129,6 @@ const SNAPSHOT: TargetIndex = {
   meta: FULL_DATA.meta,
   targets: FULL_DATA.targets.map((item) => ({ ...item, location: null })),
 };
-// Sample `.bazelrc` `--config` definitions covering every command scope the
-// Configs tab distinguishes: build/test/run launch paths, cquery-only,
-// query/aquery-only, and an `always` entry.
-const PREVIEW_CONFIGS: BazelConfig[] = [
-  {
-    name: "ci",
-    entries: [
-      { command: "common", flags: "--config=netlocal", source: ".bazelrc", line: 3 },
-      { command: "build", flags: "--compilation_mode=opt", source: ".bazelrc", line: 4 },
-      { command: "test", flags: "--test_output=errors", source: ".bazelrc", line: 5 },
-    ],
-  },
-  {
-    name: "dev",
-    entries: [
-      { command: "build", flags: "--compilation_mode=dbg", source: "rc/dev.bazelrc", line: 1 },
-    ],
-  },
-  {
-    name: "inspect",
-    entries: [{ command: "query", flags: "--output=label", source: ".bazelrc", line: 8 }],
-  },
-  {
-    name: "local",
-    entries: [{ command: "run", flags: "--script_path=/tmp/run.sh", source: ".bazelrc", line: 9 }],
-  },
-  {
-    name: "brief",
-    entries: [{ command: "aquery", flags: "--output=text", source: ".bazelrc", line: 10 }],
-  },
-  {
-    name: "transitions",
-    entries: [
-      {
-        command: "cquery",
-        flags: "--output=transitions --transitions=lite",
-        source: ".bazelrc",
-        line: 11,
-      },
-    ],
-  },
-  {
-    name: "strict",
-    entries: [{ command: "always", flags: "--keep_going", source: ".bazelrc", line: 12 }],
-  },
-];
-const PREVIEW_RC_ANNOUNCEMENTS: RcAnnouncement[] = [
-  {
-    source: "/etc/bazel.bazelrc",
-    scope: "common",
-    flags: "--repository_cache=/tmp/bazel-repo-cache",
-  },
-  { source: `${WORKSPACE}/.bazelrc`, scope: "startup", flags: "--batch" },
-  { source: `${WORKSPACE}/.bazelrc`, scope: "common", flags: "--config=netlocal" },
-  {
-    source: `${WORKSPACE}/.bazelrc`,
-    scope: "config:ci",
-    flags: "--compilation_mode=opt --test_output=errors",
-  },
-];
 const PREVIEW_TARGETS = [
   "//app:server",
   "//app/lib:all",
@@ -615,7 +552,7 @@ export function installPreview() {
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
-    get_workspace_info: (payload): WorkspaceInfo => {
+    get_workspace_info: (payload) => {
       const entry = wsEntry(payload?.workspace);
       const ob = `/private/var/tmp/_bazel_dev/preview`;
       return {
@@ -626,9 +563,6 @@ export function installPreview() {
         bazelBin: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
         bazelTestlogs: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
         repositoryCache: "/Users/dev/Library/Caches/bazel/repo_cache",
-        rcAnnouncements: structuredClone(PREVIEW_RC_ANNOUNCEMENTS),
-        configs: structuredClone(PREVIEW_CONFIGS),
-        infoError: null,
       };
     },
     get_target_detail: (payload): TargetDetail => {
