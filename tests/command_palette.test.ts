@@ -12,7 +12,7 @@ const WS: WorkspaceState = {
 const CORE: AppState = {
   revision: 1,
   besError: null,
-  besReady: true,
+  besEndpoint: "grpc://127.0.0.1:4718",
   bazel: "/bin/bazel",
   lastWorkspace: "/workspace",
   workspaces: [WS],

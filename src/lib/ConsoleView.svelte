@@ -50,15 +50,26 @@
       if (writable) stream.input(Uint8Array.from(data, (ch) => ch.charCodeAt(0)));
     });
     const sizes = term.onResize(({ cols, rows }) => { void stream.resize(cols, rows); });
-    const observer = new ResizeObserver(() => { if (host.clientWidth && host.clientHeight) fit.fit(); });
+    function fitTerminal() {
+      if (host.clientWidth && host.clientHeight) fit.fit();
+    }
+    function updateVisibility() {
+      if (document.hidden) return;
+      fitTerminal();
+      term.refresh(0, term.rows - 1);
+      void stream.poll();
+    }
+    document.addEventListener("visibilitychange", updateVisibility);
+    const observer = new ResizeObserver(fitTerminal);
     observer.observe(host);
-    fit.fit();
+    fitTerminal();
     void stream.resize(term.cols, term.rows);
     void stream.poll();
     const timer = setInterval(() => { void stream.poll(); }, 50);
     term.focus();
     return () => {
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", updateVisibility);
       observer.disconnect();
       stream.dispose();
       keys.dispose(); binary.dispose(); sizes.dispose();

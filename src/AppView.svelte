@@ -275,7 +275,7 @@
   {#if view.error}<Notice tone="error">{view.error}</Notice>{/if}
   {#if switchError}<Notice tone="error">{switchError}</Notice>{/if}
   {#if core?.besError}
-    <Notice tone={core.besReady ? "warning" : "error"}>BES receiver: {core.besError}</Notice>
+    <Notice tone={core.besEndpoint ? "warning" : "error"}>BES receiver: {core.besError}</Notice>
   {/if}
 
   {#if core === null}
@@ -287,6 +287,7 @@
           initial={promptInitial}
           initialScope={{ include: ["//..."] }}
           bazelAvailable={core.bazel !== null}
+          besEndpoint={core.besEndpoint}
           bind:opening
           onopen={session.openWorkspace}
           onclose={
@@ -403,6 +404,7 @@
               info={view.workspaceInfo}
               loading={view.workspaceInfoLoading}
               error={view.workspaceInfoError}
+              besEndpoint={core.besEndpoint}
               onretry={session.loadWorkspaceInfo}
               onsavescope={(scope) => session.openWorkspace(st.workspace, scope)}
             />

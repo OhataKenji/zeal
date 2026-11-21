@@ -49,6 +49,7 @@ pub struct Receipt {
 }
 
 impl Receipt {
+    #[tracing::instrument(target = "zeal::operations", name = "bes.save.begin", skip_all)]
     pub fn begin(data: &Path, stream: &bes::StreamId) -> Result<Self, StoreError> {
         if stream.build_id.is_empty()
             || stream.build_id.len() > 256
@@ -155,6 +156,9 @@ impl Receipt {
         match &event.payload {
             Some(Payload::Started(started)) => self.observe_started(started, &event.children)?,
             Some(Payload::Finished(finished)) => {
+                let _span =
+                    tracing::info_span!(target: "zeal::operations", "bes.receive.build_finished")
+                        .entered();
                 self.facts.finished =
                     millis(finished.finish_time.as_ref(), finished.finish_time_millis);
                 self.facts.exit = finished.exit_code.as_ref().map(|v| v.code);
@@ -194,6 +198,7 @@ impl Receipt {
         Ok(())
     }
 
+    #[tracing::instrument(target = "zeal::operations", name = "bes.save.database", skip(self))]
     fn save(&self, complete: bool) -> Result<(), StoreError> {
         struct StoredFacts {
             workspace: Option<Vec<u8>>,
@@ -292,6 +297,7 @@ impl Receipt {
         self.save(false)
     }
 
+    #[tracing::instrument(target = "zeal::operations", name = "bes.save.flush", skip_all)]
     fn finish_writer(&mut self) -> Result<(), StoreError> {
         if let Some((_, writer)) = self.writer.take() {
             writer.finish()?.flush()?;
@@ -301,6 +307,7 @@ impl Receipt {
 }
 
 /// Copy the local gzip referenced by BEP; readers wait for receipt completion.
+#[tracing::instrument(target = "zeal::operations", name = "bes.save.profile", skip_all)]
 fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
     let path = Url::parse(uri)
         .ok()

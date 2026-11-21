@@ -103,6 +103,10 @@ build --experimental_collect_system_network_usage
 
 While Zeal is open, run `bazel build //...`.
 
+If port 4718 is already in use, Zeal listens on a different port — open the
+Workspace page for a one-off `--bes_backend` flag to pass to Bazel for that
+session instead of editing `.bazelrc`.
+
 ## Development
 
 - [Setup and checks](docs/development.md)

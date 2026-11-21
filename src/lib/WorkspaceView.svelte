@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import CopyButton from "./CopyButton.svelte";
+  import BesSetup from "./BesSetup.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope, WorkspaceInfo } from "./types";
 
@@ -10,6 +10,7 @@
     info,
     loading,
     error,
+    besEndpoint,
     onretry,
     onsavescope,
   }: {
@@ -18,6 +19,7 @@
     info: WorkspaceInfo | null;
     loading: boolean;
     error: string | null;
+    besEndpoint: string | null;
     onretry: () => void;
     onsavescope: (scope: TargetScope) => Promise<boolean>;
   } = $props();
@@ -29,7 +31,6 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let copiedKey = $state<string | null>(null);
-  let copyError = $state("");
 
   $effect(() => {
     if (persistedScope !== lastScopeKey) {
@@ -49,11 +50,6 @@
     ];
     return list;
   });
-
-  const BES_SNIPPET = `build --bes_backend=grpc://127.0.0.1:4718
-build --experimental_build_event_upload_strategy=local
-build --bes_timeout=5s
-build --experimental_collect_system_network_usage`;
 
   async function copyPath(key: string, value: string) {
     try {
@@ -150,15 +146,11 @@ build --experimental_collect_system_network_usage`;
   </form>
 </section>
 
-<section class="section">
-  <div class="section-head">
-    <h2 class="section-title">Local BES Receiver · 127.0.0.1:4718</h2>
-    <CopyButton
-      text={BES_SNIPPET}
-      label="Copy .bazelrc snippet"
-      onerror={(msg) => (copyError = msg)}
-    />
-  </div>
-  {#if copyError}<Notice tone="error">{copyError}</Notice>{/if}
-  <pre class="code-box">{BES_SNIPPET}</pre>
-</section>
+{#if besEndpoint}
+  <section class="section">
+    <div class="section-head">
+      <h2 class="section-title">Local BES Receiver</h2>
+    </div>
+    <BesSetup endpoint={besEndpoint} />
+  </section>
+{/if}

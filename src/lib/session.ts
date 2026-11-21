@@ -212,7 +212,7 @@ export function canSend(view: SessionView, target: string): boolean {
   return !!(
     view.state &&
     view.core?.bazel &&
-    view.core.besReady &&
+    view.core.besEndpoint &&
     !view.starting &&
     targetError(target) === null
   );

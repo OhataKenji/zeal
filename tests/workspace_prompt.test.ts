@@ -21,6 +21,7 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
         initial,
         initialScope: { include },
         bazelAvailable,
+        besEndpoint: null,
         onopen: async () => true,
         opening,
       },
@@ -92,25 +93,26 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     assert.match(submitButton(html), /\bdisabled\b/);
   });
 
-  await t.test("CLI recording settings have a non-submitting copy button", () => {
+  await t.test("session BES flag has a non-submitting copy button", () => {
     const html = render(WorkspacePrompt, {
       props: {
         initial: "",
         initialScope: SCOPE,
         bazelAvailable: true,
+        besEndpoint: "grpc://127.0.0.1:12345",
         onopen: async () => true,
       },
     }).body;
     assert.match(
       html,
-      /<pre[^>]*><code[^>]*>build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage<\/code><\/pre>/,
+      /<pre[^>]*><code[^>]*>--bes_backend=grpc:\/\/127\.0\.0\.1:12345<\/code><\/pre>/,
     );
-    const button = tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>/);
+    const button = tag(html, /<button[^>]*aria-label="Copy session option"[^>]*>/);
     assert.match(button, /type="button"/);
-    assert.match(button, /title="Copy \.bazelrc settings"/);
+    assert.match(button, /title="Copy session option"/);
     assert.doesNotMatch(button, /disabled/);
     assert.match(
-      tag(html, /<button[^>]*aria-label="Copy \.bazelrc settings"[^>]*>[\s\S]*?<\/button>/),
+      tag(html, /<button[^>]*aria-label="Copy session option"[^>]*>[\s\S]*?<\/button>/),
       /<svg/,
     );
   });

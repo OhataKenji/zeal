@@ -49,7 +49,7 @@ function coreState(over: Partial<AppState> = {}): AppState {
   return {
     revision: 1,
     besError: null,
-    besReady: true,
+    besEndpoint: "grpc://127.0.0.1:4718",
     bazel: "/bin/bazel",
     lastWorkspace: WS,
     workspaces: [wsEntry(WS)],
@@ -696,7 +696,7 @@ test("canSend requires readiness, a workspace, bazel, BES, and a valid target", 
   assert.equal(canSend(h.view, "//app:first"), true);
   const noBazel = { ...h.view, core: { ...READY, bazel: null } };
   assert.equal(canSend(noBazel, "//app:first"), false);
-  const noBes = { ...h.view, core: { ...READY, besReady: false } };
+  const noBes = { ...h.view, core: { ...READY, besEndpoint: null } };
   assert.equal(canSend(noBes, "//app:first"), false);
   const noWs = { ...h.view, state: null };
   assert.equal(canSend(noWs, "//app:first"), false);
