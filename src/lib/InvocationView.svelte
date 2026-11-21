@@ -18,18 +18,26 @@
   import { formatOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
-  let { view, reload, reloadProfile, onstop, onrerun }: {
+  let { view, reload, reloadProfile, onstop, onrerun, onselecttarget }: {
     view: SessionView;
     reload: () => void;
     reloadProfile: () => void;
     onstop: (id: string) => void;
     onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onselecttarget?: (label: string) => void;
   } = $props();
   const selected = $derived(view.invocation);
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
   const execution = $derived(selected?.execution);
   const profile = $derived(sectionData(view.profile ?? undefined));
   const bep = $derived(sectionData(view.detail?.bep));
+  // Target links navigate only when the shown record belongs to the
+  // workspace whose snapshot is loaded.
+  const targetIndex = $derived(
+    shown?.workspace && shown.workspace === view.state?.workspace && view.core?.bazel
+      ? view.snapshot
+      : null,
+  );
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
   const rerunCandidate = $derived(rerunArgs(shown));
   const canRerun = $derived(
@@ -100,7 +108,7 @@
           <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
             {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
             {#if section === "Targets"}
-              <TargetsPanel section={view.detail?.bep} />
+              <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
             {:else if section === "Logs"}
               <LogPanel section={view.detail?.log} loading={view.detailLoading} />
             {:else if section === "Details"}

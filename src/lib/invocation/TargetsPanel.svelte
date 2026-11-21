@@ -1,11 +1,31 @@
 <script lang="ts">
-  import type { Bep, Section } from "../types";
+  import type { Bep, Section, TargetIndex } from "../types";
   import { sectionData, sectionMessage, sectionNoticeTone } from "../invocation";
   import Notice from "../Notice.svelte";
 
-  let { section }: { section: Section<Bep> | undefined } = $props();
+  let {
+    section,
+    index = null,
+    onselecttarget,
+  }: {
+    section: Section<Bep> | undefined;
+    index?: TargetIndex | null;
+    onselecttarget?: (label: string) => void;
+  } = $props();
   const bep = $derived(sectionData(section));
+  const labels = $derived(new Set((index?.targets ?? []).map((t) => t.label)));
 </script>
+
+{#snippet targetLabel(label: string)}
+  {@const key = label.startsWith("@@//") ? label.slice(2) : label}
+  {#if onselecttarget && labels.has(key)}
+    <button type="button" class="table-link mono" onclick={() => onselecttarget?.(key)}
+      >{label}</button
+    >
+  {:else}
+    <code>{label}</code>
+  {/if}
+{/snippet}
 
 <h3 class="panel-subheading">Build results {#if bep}<span>{bep.targets.length}</span>{/if}</h3>
 {#if section && section.status !== "ok"}<Notice tone={sectionNoticeTone(section)}
@@ -18,7 +38,7 @@
         <li>
           <span class:success={target.ok} class:failed={!target.ok}>{target.ok ? "✓" : "✗"}</span>
           <div class="result-identity">
-            <code>{target.label}</code>
+            {@render targetLabel(target.label)}
             {#if target.aspect}<div class="result-context">Aspect: <code>{target.aspect}</code></div>{/if}
             {#if target.configuration}<div class="result-context">Configuration: <code>{target.configuration}</code></div>{/if}
           </div>
@@ -35,7 +55,7 @@
 {#if bep}
   {#if bep.tests.length}
     <ul class="result-list">
-      {#each bep.tests as test}<li><code>{test.label}</code><span>{test.status}</span></li>{/each}
+      {#each bep.tests as test}<li>{@render targetLabel(test.label)}<span>{test.status}</span></li>{/each}
     </ul>
   {:else}
     <p class="panel-empty">No results recorded.</p>

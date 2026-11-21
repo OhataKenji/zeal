@@ -231,3 +231,62 @@ test("AppView shows lookup states without invocation tabs when the record is una
     assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
   });
 });
+
+test("AppView links history target labels into the target explorer", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
+  const snapshot: TargetIndex = {
+    meta: { fetchedAt: 0, status: "ok" },
+    targets: [
+      { label: "//app:x", pkg: "app", name: "x", ruleClass: "java_binary", location: null },
+    ],
+  };
+
+  function output(workspace: string): string {
+    const record = {
+      id: "inv-1",
+      workspace,
+      cmd: "build",
+      pattern: "//app:x",
+      startedAt: 1_700_000_000_000,
+      finishedAt: 1_700_000_001_000,
+      exitCode: 0,
+    };
+    const view = Object.assign(emptyView("history"), {
+      core: CORE,
+      state: WS,
+      selectedInvocationId: "inv-1",
+      invocations: [record],
+      invocationRows: [{ record }],
+      invocation: { record },
+      snapshot,
+      detail: {
+        record,
+        log: { status: "missing" },
+        bep: {
+          status: "ok",
+          data: {
+            targets: [
+              { label: "@@//app:x", ok: true },
+              { label: "//app:missing", ok: false },
+            ],
+            tests: [{ label: "//app:x", status: "PASSED" }],
+            truncated: false,
+          },
+        },
+      },
+    });
+    return render(AppView, { props: { view, session } }).body.replace(/<!--[\s\S]*?-->/g, "");
+  }
+
+  const own = output("/workspace");
+  assert.match(own, /<button[^>]*class="table-link mono"[^>]*>@@\/\/app:x<\/button>/);
+  assert.match(own, /<button[^>]*class="table-link mono"[^>]*>\/\/app:x<\/button>/);
+  assert.match(own, /<code>\/\/app:missing<\/code>/);
+  assert.equal(own.match(/table-link/g)?.length, 2);
+
+  const foreign = output("/other");
+  assert.doesNotMatch(foreign, /table-link/);
+  assert.match(foreign, /<code>@@\/\/app:x<\/code>/);
+});
