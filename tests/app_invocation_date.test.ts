@@ -74,6 +74,7 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     assert.ok(nav, "workspace rail navigation is missing");
     assert.match(nav, /Workspace/);
     assert.match(nav, /Targets/);
+    assert.match(nav, /Modules/);
     assert.match(nav, /Query/);
     assert.match(nav, /History/);
     assert.match(nav, /Analytics/);

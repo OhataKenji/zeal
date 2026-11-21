@@ -8,7 +8,7 @@
   const requestedPage = typeof location === "undefined"
     ? null
     : new URLSearchParams(location.search).get("view");
-  const initialPage = requestedPage === "analytics" || requestedPage === "query"
+  const initialPage = requestedPage === "analytics" || requestedPage === "query" || requestedPage === "modules"
     ? requestedPage
     : "targets";
   let view = $state.raw(emptyView(initialPage));

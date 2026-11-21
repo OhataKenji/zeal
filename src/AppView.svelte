@@ -6,6 +6,7 @@
     Folders,
     HardDrives,
     MagnifyingGlass,
+    Package,
     TreeStructure,
   } from "phosphor-svelte";
   import { canSend } from "./lib/session";
@@ -25,6 +26,7 @@
   import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
+  import ModulesView from "./lib/ModulesView.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import RunDialog from "./lib/RunDialog.svelte";
   import type { BazelCommand, InvocationRecord, OwnedInvocation } from "./lib/types";
@@ -78,6 +80,7 @@
   const pageIcons = {
     workspace: HardDrives,
     targets: Folders,
+    modules: Package,
     query: TreeStructure,
     history: ClockCounterClockwise,
     analytics: ChartBar,
@@ -354,7 +357,7 @@
         </aside>
       {/if}
 
-      <main class="content" class:invocation-content={view.page === "history"}>
+      {#snippet pageContent()}
         {#if view.page === "workspace"}
           <div class="page-center">
             <WorkspaceView
@@ -439,7 +442,17 @@
             {/key}
           </div>
         {/if}
-      </main>
+      {/snippet}
+
+      {#if view.page === "modules"}
+        {#key st.workspace}
+          <ModulesView workspace={st.workspace} bazelAvailable={core.bazel !== null} />
+        {/key}
+      {:else}
+        <main class="content" class:invocation-content={view.page === "history"}>
+          {@render pageContent()}
+        </main>
+      {/if}
 
       {#if view.page === "targets" && snap && selectedTarget}
         <aside class="inspector" aria-label="Target details">

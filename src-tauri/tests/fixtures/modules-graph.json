@@ -1,0 +1,63 @@
+{
+  "key": "<root>",
+  "name": "zeal_bzlmod_fixture",
+  "version": "0.0.1",
+  "apparentName": "zeal_bzlmod_fixture",
+  "dependencies": [
+    {
+      "key": "mod_a@_",
+      "name": "mod_a",
+      "version": "",
+      "apparentName": "mod_a",
+      "dependencies": [
+        {
+          "key": "mod_c@3.0.0",
+          "name": "mod_c",
+          "version": "3.0.0",
+          "apparentName": "mod_c",
+          "dependencies": [],
+          "indirectDependencies": [],
+          "cycles": []
+        },
+        {
+          "key": "mod_e@2.0.0",
+          "name": "mod_e",
+          "version": "2.0.0",
+          "apparentName": "mod_e",
+          "dependencies": [],
+          "indirectDependencies": [],
+          "cycles": []
+        }
+      ],
+      "indirectDependencies": [],
+      "cycles": []
+    },
+    {
+      "key": "mod_b@_",
+      "name": "mod_b",
+      "version": "",
+      "apparentName": "mod_b",
+      "dependencies": [
+        {
+          "key": "mod_c@3.0.0",
+          "name": "mod_c",
+          "version": "3.0.0",
+          "apparentName": "mod_c",
+          "unexpanded": true
+        },
+        {
+          "key": "mod_e@2.0.0",
+          "name": "mod_e",
+          "version": "2.0.0",
+          "apparentName": "mod_e",
+          "unexpanded": true
+        }
+      ],
+      "indirectDependencies": [],
+      "cycles": []
+    }
+  ],
+  "indirectDependencies": [],
+  "cycles": [],
+  "root": true
+}

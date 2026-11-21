@@ -1,3 +1,24 @@
+export interface ModuleNode {
+  key: string;
+  name: string;
+  version: string;
+  direct: boolean;
+  requiredBy: string[];
+  dependencies: string[];
+}
+
+export interface RepoMapping {
+  apparent: string;
+  canonical: string;
+}
+
+export interface ModulesSnapshot {
+  rootKey: string;
+  modules: ModuleNode[];
+  repos: RepoMapping[];
+  repoMappingError: string | null;
+}
+
 /** The one item currently selected in the target explorer. */
 export type ExplorerSelection =
   | { kind: "target"; label: string }

@@ -26,7 +26,7 @@ Bazel がコマンドと排他を扱い、Zeal が起動したプロセスと観
 flowchart LR
     DEV["開発者"] -->|"対象を選び実行結果を見る"| ZEAL["Zeal"]
     DEV -->|"端末から起動"| BAZEL["Bazel CLI"]
-    ZEAL -->|"query / build / test / run"| BAZEL
+    ZEAL -->|"info / mod / query / build / test / run"| BAZEL
     BAZEL -->|"BEP を送信"| ZEAL
 ```
 
@@ -63,6 +63,10 @@ Bazel の起動には PATH 上の `bazelisk` を優先し、なければ `bazel`
 Bazel が `--noblock_for_lock` で同じ output base の競合を拒否します。
 Zeal は workspace の切り替えでプロセスを変更せず、待ち行列や自動再実行を持ちません。
 snapshot は表示中の workspace についてメモリに持ち、対象一覧は workspace を開いたときと手動操作で取得します。
+
+Modules は画面を開いただけでは Bazel を起動しません。
+利用者が読み込みを選ぶとコアが `bazel mod` で依存関係とルートから見えるリポジトリ名を取得し、結果はその画面だけが保持します。
+行の選択は取得済みの関係を表示し、`Explain` を押したときだけ Bazel に選定理由を問い合わせます。
 
 個別の Stop は ID と所有元の workspace が一致する実行だけに作用します。
 Stop とアプリ終了は同じ遷移で停止を開始し、SIGINT を一度送り、猶予後に SIGKILL を試みます。

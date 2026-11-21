@@ -2,7 +2,7 @@
 
 `App.svelte` creates a session, calls `init` once on mount, and `dispose` on
 unmount. `AppView.svelte` renders its view; `lib/session.ts` owns selection and
-fetched data and calls IPC. Forms, Query, Analytics, comparison, and Console
+fetched data and calls IPC. Forms, Modules, Query, Analytics, comparison, and Console
 keep their state in their views.
 
 - Rust owns processes by workspace and invocation ID. A selected live Console

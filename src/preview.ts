@@ -7,6 +7,7 @@ import type {
   Edge,
   FileEntry,
   InvocationRecord,
+  ModulesSnapshot,
   OwnedInvocation,
   Profile,
   Target,
@@ -23,6 +24,32 @@ import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
 
 const WORKSPACE = "/demo/cool-mono";
+const MODULES: ModulesSnapshot = {
+  rootKey: "<root>",
+  modules: [
+    {
+      key: "rules_cc@0.0.17",
+      name: "rules_cc",
+      version: "0.0.17",
+      direct: true,
+      requiredBy: ["<root>"],
+      dependencies: ["platforms@0.0.11"],
+    },
+    {
+      key: "platforms@0.0.11",
+      name: "platforms",
+      version: "0.0.11",
+      direct: false,
+      requiredBy: ["rules_cc@0.0.17"],
+      dependencies: [],
+    },
+  ],
+  repos: [
+    { apparent: "local_config_cc", canonical: "rules_cc++cc_configure_extension+local_config_cc" },
+    { apparent: "rules_cc", canonical: "rules_cc+" },
+  ],
+  repoMappingError: null,
+};
 const NOW = Date.now();
 function target(label: string, ruleClass = "java_library"): Target {
   const [pkg, name] = label.slice(2).split(":");
@@ -552,6 +579,30 @@ export function installPreview() {
   // missing one a typecheck error instead of a runtime surprise.
   const handlers: Record<CommandName, (payload: Record<string, unknown> | undefined) => unknown> = {
     get_state: () => structuredClone(state),
+    get_modules: (payload) => {
+      wsEntry(payload?.workspace);
+      return structuredClone(MODULES);
+    },
+    explain_module: (payload) => {
+      wsEntry(payload?.workspace);
+      const key = payload?.moduleKey;
+      if (
+        typeof key !== "string" ||
+        !key ||
+        key.length > 256 ||
+        key.startsWith("-") ||
+        /[^a-zA-Z0-9._+@~-]/.test(key)
+      ) {
+        throw new Error("Invalid module key");
+      }
+      const node = MODULES.modules.find((item) => item.key === key);
+      if (!node) throw new Error(`Unknown module: ${key}`);
+      return [
+        MODULES.rootKey,
+        ...node.requiredBy.filter((parent) => parent !== MODULES.rootKey),
+        key,
+      ].join(" -> ");
+    },
     get_workspace_info: (payload) => {
       const entry = wsEntry(payload?.workspace);
       const ob = `/private/var/tmp/_bazel_dev/preview`;

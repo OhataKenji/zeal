@@ -4,6 +4,8 @@
 export const COMMANDS = {
   getState: "get_state",
   getWorkspaceInfo: "get_workspace_info",
+  getModules: "get_modules",
+  explainModule: "explain_module",
   getTargetDetail: "get_target_detail",
   getTargetOutputs: "get_target_outputs",
   getTargetActions: "get_target_actions",

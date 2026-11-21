@@ -1,10 +1,12 @@
 mod actions;
+mod bazel_output;
 mod bep;
 mod bes;
 mod console;
 mod detail;
 mod ingest;
 mod label;
+mod modules;
 mod profile;
 mod protocol;
 mod query;
@@ -56,6 +58,35 @@ async fn get_workspace_info(
     tauri::async_runtime::spawn_blocking(move || workspace::fetch_info(&bazel, &ws_path))
         .await
         .map_err(|_| "workspace info worker failed".to_string())?
+}
+
+/// `bazel mod graph` + `bazel mod dump_repo_mapping ""` for a registered
+/// workspace, under one per-workspace fail-fast guard.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "modules.get", skip_all)]
+async fn get_modules(
+    core: State<'_, Arc<Core>>,
+    workspace: String,
+) -> Result<modules::ModulesSnapshot, String> {
+    let op = modules::ModulesOperation::acquire(core.inner(), &workspace)?;
+    tauri::async_runtime::spawn_blocking(move || op.snapshot())
+        .await
+        .map_err(|_| "modules worker failed".to_string())?
+}
+
+/// `bazel mod explain --verbose` for one module key in a registered
+/// workspace, under the same per-workspace fail-fast guard.
+#[tauri::command]
+#[tracing::instrument(target = "zeal::operations", name = "modules.explain", skip_all)]
+async fn explain_module(
+    core: State<'_, Arc<Core>>,
+    workspace: String,
+    module_key: String,
+) -> Result<String, String> {
+    let op = modules::ModulesOperation::acquire(core.inner(), &workspace)?;
+    tauri::async_runtime::spawn_blocking(move || op.explain(&module_key))
+        .await
+        .map_err(|_| "modules worker failed".to_string())?
 }
 
 /// Load relationships for one target in `workspace`.
@@ -483,6 +514,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_workspace_info,
+            get_modules,
+            explain_module,
             get_target_detail,
             get_target_outputs,
             get_target_actions,

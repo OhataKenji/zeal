@@ -8,9 +8,10 @@
 //! are never inserted here.
 
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
@@ -121,8 +122,13 @@ pub struct CoreState {
     pub workspaces: BTreeMap<PathBuf, crate::scope::Scope>,
     /// Every Bazel operation Zeal launched, by invocation id.
     pub invocations: BTreeMap<String, OwnedInvocation>,
-    /// Set at app exit: new starts are rejected while owned children stop.
-    pub shutting_down: bool,
+    /// Workspaces with a `bazel mod` operation in flight; the modules page
+    /// fails fast per workspace rather than queueing.
+    pub modules_running: BTreeSet<PathBuf>,
+    /// The one shutdown fact: set at app exit, cloned into modules
+    /// operations so their bounded Bazel runs cancel, and read under the
+    /// same lock to reject new starts.
+    pub shutting_down: Arc<AtomicBool>,
     revision: u64,
 }
 
@@ -175,7 +181,8 @@ impl Core {
                 last_workspace: None,
                 workspaces: BTreeMap::new(),
                 invocations: BTreeMap::new(),
-                shutting_down: false,
+                modules_running: BTreeSet::new(),
+                shutting_down: Arc::new(AtomicBool::new(false)),
                 revision: 0,
             }),
             invocation_finished: Condvar::new(),
