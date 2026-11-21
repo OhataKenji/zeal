@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  createModules,
-  emptyModulesState,
-  filterModules,
-  filterRepos,
-} from "../src/lib/modules.ts";
+import { createModules, emptyModulesState, filterModules } from "../src/lib/modules.ts";
 import type { ModulesSnapshot } from "../src/lib/types.ts";
 
 const workspace = "/demo";
@@ -28,8 +23,6 @@ const b = {
 const snapshot: ModulesSnapshot = {
   rootKey: "<root>",
   modules: [a, b],
-  repoMappingError: null,
-  repos: [{ apparent: "alias", canonical: "generated+name" }],
 };
 
 function harness(available = true, state = emptyModulesState()) {
@@ -181,13 +174,9 @@ test("disposal suppresses late callbacks and new commands", async () => {
   assert.equal(h.calls.length, 1);
 });
 
-test("module filters combine text and depth; repo searches match either displayed name", () => {
+test("module filters combine text and depth", () => {
   assert.deepEqual(filterModules(snapshot.modules, " ALPHA@1 ", "direct"), [a]);
   assert.deepEqual(filterModules(snapshot.modules, "alpha", "transitive"), []);
   assert.deepEqual(filterModules(snapshot.modules, "", "transitive"), [b]);
   assert.deepEqual(filterModules(snapshot.modules, "2", "all"), [b]);
-  for (const term of ["Alias", "@@generated", "+name"]) {
-    assert.deepEqual(filterRepos(snapshot.repos, term), snapshot.repos);
-  }
-  assert.deepEqual(filterRepos(snapshot.repos, "absent"), []);
 });

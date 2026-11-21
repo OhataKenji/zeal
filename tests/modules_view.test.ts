@@ -41,17 +41,12 @@ test("module page and browser preview", async (t) => {
     },
   );
 
-  function output(
-    overrides: Partial<ModulesState> = {},
-    tab = "Modules",
-    bazelAvailable = true,
-  ): string {
+  function output(overrides: Partial<ModulesState> = {}, bazelAvailable = true): string {
     return render(ModulesView, {
       props: {
         workspace,
         bazelAvailable,
         initialState: { ...emptyModulesState(), ...overrides },
-        initialTab: tab,
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
   }
@@ -59,7 +54,7 @@ test("module page and browser preview", async (t) => {
   await t.test("unloaded page offers explicit load, unavailable and retry states", () => {
     assert.match(output(), />\s*Load modules\s*<\/button>/);
     assert.doesNotMatch(output(), /<aside/);
-    assert.match(output({}, "Modules", false), /<button[^>]*disabled[^>]*>\s*Load modules/);
+    assert.match(output({}, false), /<button[^>]*disabled[^>]*>\s*Load modules/);
     const error = output({ loadError: "graph failed" });
     assert.match(error, /role="alert"[^>]*>[\s\S]*graph failed[\s\S]*Retry/);
   });
@@ -85,29 +80,12 @@ test("module page and browser preview", async (t) => {
         selectedKey: module.key,
         explanation: "<script>example</script>",
       });
-      assert.match(html, /Root Repos/);
       const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];
       assert.ok(aside);
       assert.equal(aside.match(/workspace@1/g)?.length, 2);
       assert.doesNotMatch(aside, /<button[^>]*>\s*workspace@1/);
       assert.ok(aside.includes(`${module.dependencies[0]}</button>`));
       assert.match(aside, /<pre[^>]*>&lt;script/);
-    },
-  );
-
-  await t.test(
-    "repo view offers prefixed copy actions and surfaces a partial mapping failure",
-    () => {
-      const html = output({ snapshot }, "Root Repos");
-      for (const { apparent, canonical } of snapshot.repos) {
-        assert.ok(html.includes(`aria-label="Copy @${apparent}"`));
-        assert.ok(html.includes(`aria-label="Copy @@${canonical}"`));
-      }
-      const partial = output(
-        { snapshot: { ...snapshot, repos: [], repoMappingError: "mapping unavailable" } },
-        "Root Repos",
-      );
-      assert.match(partial, /role="status"[^>]*>[\s\S]*mapping unavailable/);
     },
   );
 });

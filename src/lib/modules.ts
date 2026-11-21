@@ -1,6 +1,6 @@
 import { COMMANDS } from "./commands.ts";
 import type { Transport } from "./query.ts";
-import type { ModuleNode, ModulesSnapshot, RepoMapping } from "./types.ts";
+import type { ModuleNode, ModulesSnapshot } from "./types.ts";
 
 export type ModuleDepth = "all" | "direct" | "transitive";
 
@@ -10,14 +10,6 @@ export function filterModules(modules: readonly ModuleNode[], query: string, dep
     (node) =>
       (depth === "all" || node.direct === (depth === "direct")) &&
       [node.name, node.version, node.key].some((field) => field.toLowerCase().includes(term)),
-  );
-}
-
-export function filterRepos(repos: readonly RepoMapping[], query: string) {
-  const term = query.trim().toLowerCase();
-  return repos.filter(
-    ({ apparent, canonical }) =>
-      `@${apparent}`.toLowerCase().includes(term) || `@@${canonical}`.toLowerCase().includes(term),
   );
 }
 

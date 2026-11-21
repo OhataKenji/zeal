@@ -70,7 +70,7 @@ Build Bazel queries visually from preset examples or from scratch across all thr
 
 ### Bzlmod Modules
 
-Open **Modules** and choose **Load modules** to see which modules depend on each other. Select a module to browse its parents and dependencies, or choose **Explain** to ask Bazel why that version was selected. **Root Repos** maps the repository names visible from the workspace root to their canonical names.
+Open **Modules** and choose **Load modules** to see which modules depend on each other. Select a module to browse its parents and dependencies, or choose **Explain** to ask Bazel why that version was selected.
 
 ### Invocation Page
 

@@ -44,11 +44,6 @@ const MODULES: ModulesSnapshot = {
       dependencies: [],
     },
   ],
-  repos: [
-    { apparent: "local_config_cc", canonical: "rules_cc++cc_configure_extension+local_config_cc" },
-    { apparent: "rules_cc", canonical: "rules_cc+" },
-  ],
-  repoMappingError: null,
 };
 const NOW = Date.now();
 function target(label: string, ruleClass = "java_library"): Target {

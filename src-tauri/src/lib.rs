@@ -60,8 +60,8 @@ async fn get_workspace_info(
         .map_err(|_| "workspace info worker failed".to_string())?
 }
 
-/// `bazel mod graph` + `bazel mod dump_repo_mapping ""` for a registered
-/// workspace, under one per-workspace fail-fast guard.
+/// `bazel mod graph` for a registered workspace, under one per-workspace
+/// fail-fast guard.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "modules.get", skip_all)]
 async fn get_modules(

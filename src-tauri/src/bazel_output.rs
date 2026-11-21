@@ -165,7 +165,7 @@ fn join_reader<T>(
 
 /// `bazel mod graph ...`-style label for error messages: the leading
 /// non-flag arguments.
-pub(crate) fn command_label(args: &[&str]) -> String {
+fn command_label(args: &[&str]) -> String {
     let words: Vec<&str> = args
         .iter()
         .copied()

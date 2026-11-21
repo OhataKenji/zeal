@@ -7,16 +7,9 @@ export interface ModuleNode {
   dependencies: string[];
 }
 
-export interface RepoMapping {
-  apparent: string;
-  canonical: string;
-}
-
 export interface ModulesSnapshot {
   rootKey: string;
   modules: ModuleNode[];
-  repos: RepoMapping[];
-  repoMappingError: string | null;
 }
 
 /** The one item currently selected in the target explorer. */

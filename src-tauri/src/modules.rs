@@ -1,7 +1,7 @@
-//! Bzlmod `bazel mod` views: the resolved module graph, the root repository
-//! mapping, and per-module MVS explanations. Every command is read-only and
-//! bounded; `MODULE.bazel` must already exist so Bazel never creates one, and
-//! `--lockfile_mode=off` keeps `MODULE.bazel.lock` untouched.
+//! Bzlmod `bazel mod` views: the resolved module graph and per-module MVS
+//! explanations. Every command is read-only and bounded; `MODULE.bazel` must
+//! already exist so Bazel never creates one, and `--lockfile_mode=off` keeps
+//! `MODULE.bazel.lock` untouched.
 
 use crate::bazel_output;
 use crate::state::Core;
@@ -13,10 +13,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// One budget shared by `mod graph` and `mod dump_repo_mapping`.
+/// Per-Bazel-call bound for `bazel mod` commands.
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const GRAPH_STDOUT_CAP: usize = 16 * 1024 * 1024;
-const REPO_MAPPING_STDOUT_CAP: usize = 4 * 1024 * 1024;
 const EXPLAIN_STDOUT_CAP: usize = 2 * 1024 * 1024;
 const EXPLAIN_TRUNCATION_NOTE: &str = "\n\n… (output truncated at 2 MiB)";
 const MAX_GRAPH_DEPTH: usize = 60;
@@ -37,7 +36,6 @@ const GRAPH_ARGS: &[&str] = &[
     "--noinclude_unused",
     "--extension_info=hidden",
 ];
-const REPO_MAPPING_ARGS: &[&str] = &["mod", "dump_repo_mapping", "--lockfile_mode=off", ""];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,31 +53,21 @@ pub struct ModuleNode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RepoMapping {
-    pub apparent: String,
-    pub canonical: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ModulesSnapshot {
     pub root_key: String,
     pub modules: Vec<ModuleNode>,
-    pub repos: Vec<RepoMapping>,
-    pub repo_mapping_error: Option<String>,
 }
 
 /// Fail-fast guard owning one workspace's `bazel mod` operations: the
-/// registered path, configured binary, shared shutdown signal, one
-/// operation deadline and the busy mark are taken under a single state
-/// lock. Dropping the guard — at the end of the blocking closure —
-/// releases the mark and wakes exit. There is no wait queue.
+/// registered path, configured binary, shared shutdown signal and the busy
+/// mark are taken under a single state lock. Dropping the guard — at the end
+/// of the blocking closure — releases the mark and wakes exit. There is no
+/// wait queue.
 pub struct ModulesOperation {
     core: Arc<Core>,
     bazel: PathBuf,
     workspace: PathBuf,
     cancelled: Arc<AtomicBool>,
-    deadline: Instant,
 }
 
 impl ModulesOperation {
@@ -101,29 +89,17 @@ impl ModulesOperation {
             bazel,
             workspace: workspace_path,
             cancelled: st.shutting_down.clone(),
-            deadline: Instant::now() + OPERATION_TIMEOUT,
         })
     }
 
-    /// The resolved module graph plus the root repository mapping.
+    /// The resolved module graph.
     pub fn snapshot(&self) -> Result<ModulesSnapshot, String> {
-        let (root_key, modules) = parse_mod_graph(&self.json(GRAPH_ARGS, GRAPH_STDOUT_CAP)?)?;
-        let mut snapshot = ModulesSnapshot {
-            root_key,
-            modules,
-            repos: Vec::new(),
-            repo_mapping_error: None,
-        };
-        // A mapping failure leaves the graph usable; it is reported, not
-        // fatal. `MODULE.bazel` and the shared budget are re-checked inside.
-        match self
-            .json(REPO_MAPPING_ARGS, REPO_MAPPING_STDOUT_CAP)
-            .and_then(|bytes| parse_repo_mapping(&bytes))
-        {
-            Ok(repos) => snapshot.repos = repos,
-            Err(e) => snapshot.repo_mapping_error = Some(e),
+        let out = self.run(GRAPH_ARGS, GRAPH_STDOUT_CAP)?;
+        if out.stdout_truncated {
+            return Err("bazel mod graph output exceeded 16 MiB".into());
         }
-        Ok(snapshot)
+        let (root_key, modules) = parse_mod_graph(&out.stdout)?;
+        Ok(ModulesSnapshot { root_key, modules })
     }
 
     /// `bazel mod explain --verbose` output for one module key.
@@ -147,38 +123,18 @@ impl ModulesOperation {
         Ok(explain_output(&out.stdout, out.stdout_truncated))
     }
 
-    /// One bounded Bazel call on this operation's shared budget.
-    /// `MODULE.bazel` is re-checked before every spawn so Bazel can never
-    /// recreate it, and a spent budget skips the launch entirely.
+    /// One bounded Bazel call. `MODULE.bazel` is re-checked before every
+    /// spawn so Bazel can never recreate it.
     fn run(&self, args: &[&str], cap: usize) -> Result<bazel_output::BoundedOutput, String> {
         require_module_bazel(&self.workspace)?;
-        if Instant::now() >= self.deadline {
-            return Err(format!(
-                "timed out before {}",
-                bazel_output::command_label(args)
-            ));
-        }
         bazel_output::run_bazel_bounded(
             &self.bazel,
             &self.workspace,
             args,
-            self.deadline,
+            Instant::now() + OPERATION_TIMEOUT,
             cap,
             &self.cancelled,
         )
-    }
-
-    /// `run` output as complete bytes: a cap-truncated stream is rejected.
-    fn json(&self, args: &[&str], cap: usize) -> Result<Vec<u8>, String> {
-        let out = self.run(args, cap)?;
-        if out.stdout_truncated {
-            return Err(format!(
-                "{} output exceeded {} MiB",
-                bazel_output::command_label(args),
-                cap / (1024 * 1024)
-            ));
-        }
-        Ok(out.stdout)
     }
 }
 
@@ -394,21 +350,6 @@ fn normalize_version(version: String) -> String {
     } else {
         version
     }
-}
-
-/// `bazel mod dump_repo_mapping ""` prints one JSON object; the root's own
-/// entry (`""` → `_main`) is dropped and the rest sorted by apparent name.
-fn parse_repo_mapping(stdout: &[u8]) -> Result<Vec<RepoMapping>, String> {
-    let map: BTreeMap<String, String> =
-        serde_json::from_slice(stdout).map_err(|e| format!("invalid repo mapping JSON: {e}"))?;
-    Ok(map
-        .into_iter()
-        .filter(|(apparent, _)| !apparent.is_empty())
-        .map(|(apparent, canonical)| RepoMapping {
-            apparent,
-            canonical,
-        })
-        .collect())
 }
 
 /// Module keys travel to `bazel mod explain` as a single argv element after
@@ -648,30 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_repo_mapping_drops_root_and_sorts() {
-        let repos = parse_repo_mapping(
-            br#"{"":"_main","rules_cc":"rules_cc+","mod_a":"mod_a~"}"#.as_slice(),
-        )
-        .unwrap();
-        assert_eq!(
-            repos,
-            [
-                RepoMapping {
-                    apparent: "mod_a".to_string(),
-                    canonical: "mod_a~".to_string(),
-                },
-                RepoMapping {
-                    apparent: "rules_cc".to_string(),
-                    canonical: "rules_cc+".to_string(),
-                },
-            ]
-        );
-        assert!(parse_repo_mapping(b"{}").unwrap().is_empty());
-        assert!(parse_repo_mapping(b"{\"a\":1}").is_err());
-        assert!(parse_repo_mapping(b"not json").is_err());
-    }
-
-    #[test]
     fn validate_module_key_accepts_real_keys() {
         let longest = "x".repeat(256);
         for key in [
@@ -720,49 +637,32 @@ mod tests {
         use std::fs;
         use std::time::Duration;
 
-        /// Fake bazel serving GRAPH_JSON for `mod graph` and running
-        /// `mapping_cmd` for `mod dump_repo_mapping`.
-        fn bazel_with_mapping(dir: &TempDir, mapping_cmd: &str) -> PathBuf {
+        /// Fake bazel that records each invoked subcommand — argv is
+        /// `--noblock_for_lock mod <sub>` …, so `$3` — and serves the graph
+        /// fixture for any call.
+        fn bazel_serving_graph(dir: &TempDir) -> (PathBuf, PathBuf) {
             let graph_path = dir.path().join("graph.json");
             fs::write(&graph_path, GRAPH_JSON).unwrap();
+            let calls = dir.path().join("calls.txt");
             let script = format!(
-                "#!/bin/sh\ncase \"$*\" in\n  *dump_repo_mapping*) {mapping_cmd} ;;\n  *) cat '{}' ;;\nesac\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$3\" >> '{}'\ncat '{}'\n",
+                calls.display(),
                 graph_path.display()
             );
-            fake_bazel(dir.path(), "bazel", &script)
+            (fake_bazel(dir.path(), "bazel", &script), calls)
         }
 
         #[test]
-        fn snapshot_returns_graph_and_repo_mapping() {
+        fn snapshot_runs_only_mod_graph() {
             let dir = TempDir::new();
             let ws = ws_with_module(&dir);
-            let bazel = bazel_with_mapping(
-                &dir,
-                "printf '%s\\n' '{\"\":\"_main\",\"mod_a\":\"mod_a~\",\"mod_c\":\"mod_c~3.0.0\"}'",
-            );
+            let (bazel, calls) = bazel_serving_graph(&dir);
             let core = core_with(&ws, &bazel);
             let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
             let snapshot = op.snapshot().unwrap();
             assert_eq!(snapshot.root_key, "<root>");
             assert_eq!(snapshot.modules.len(), 4);
-            assert_eq!(snapshot.repos.len(), 2);
-            assert_eq!(snapshot.repos[0].apparent, "mod_a");
-            assert_eq!(snapshot.repos[1].apparent, "mod_c");
-            assert!(snapshot.repo_mapping_error.is_none());
-        }
-
-        #[test]
-        fn snapshot_keeps_graph_when_repo_mapping_fails() {
-            let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            let bazel = bazel_with_mapping(&dir, "exit 1");
-            let core = core_with(&ws, &bazel);
-            let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
-            let snapshot = op.snapshot().unwrap();
-            assert_eq!(snapshot.modules.len(), 4);
-            assert!(snapshot.repos.is_empty());
-            let error = snapshot.repo_mapping_error.unwrap();
-            assert!(error.contains("dump_repo_mapping"), "{error}");
+            assert_eq!(fs::read_to_string(&calls).unwrap(), "graph\n");
         }
 
         #[test]
@@ -774,55 +674,6 @@ mod tests {
             let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
             let err = op.snapshot().unwrap_err();
             assert!(err.contains("mod graph"), "{err}");
-        }
-
-        #[test]
-        fn snapshot_skips_bazel_when_the_budget_is_gone() {
-            let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            // A past deadline must skip Bazel entirely: a nonexistent binary
-            // would fail the spawn if `mod graph` were attempted.
-            let core = core_with(&ws, Path::new("/nonexistent/zeal-bazel"));
-            let mut op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
-            op.deadline = Instant::now() - Duration::from_secs(1);
-            let err = op.snapshot().unwrap_err();
-            assert!(err.contains("timed out"), "{err}");
-        }
-
-        #[test]
-        fn snapshot_reports_mapping_timeout_without_losing_the_graph() {
-            let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            let bazel = bazel_with_mapping(&dir, "sleep 30");
-            let core = core_with(&ws, &bazel);
-            let mut op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
-            op.deadline = Instant::now() + Duration::from_secs(1);
-            let snapshot = op.snapshot().unwrap();
-            assert_eq!(snapshot.modules.len(), 4);
-            let error = snapshot.repo_mapping_error.unwrap();
-            assert!(error.contains("timed out"), "{error}");
-        }
-
-        #[test]
-        fn snapshot_reports_mapping_error_when_module_bazel_vanishes() {
-            let dir = TempDir::new();
-            let ws = ws_with_module(&dir);
-            // `mod graph` removes MODULE.bazel; the mapping step must not let
-            // Bazel recreate it, so it fails before spawning.
-            let graph_path = dir.path().join("graph.json");
-            fs::write(&graph_path, GRAPH_JSON).unwrap();
-            let script = format!(
-                "#!/bin/sh\ncase \"$*\" in\n  *dump_repo_mapping*) printf 'SHOULD-NOT-RUN' >&2; exit 1 ;;\n  *) rm -f '{}'; cat '{}' ;;\nesac\n",
-                ws.join("MODULE.bazel").display(),
-                graph_path.display()
-            );
-            let bazel = fake_bazel(dir.path(), "bazel", &script);
-            let core = core_with(&ws, &bazel);
-            let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
-            let snapshot = op.snapshot().unwrap();
-            assert_eq!(snapshot.modules.len(), 4);
-            let error = snapshot.repo_mapping_error.unwrap();
-            assert!(error.contains("MODULE.bazel"), "{error}");
         }
 
         #[test]
