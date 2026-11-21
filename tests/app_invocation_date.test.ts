@@ -188,23 +188,45 @@ test("AppView shows snapshot errors alongside retained targets", async (t) => {
   });
 });
 
-test("AppView shows a diagnostic without invocation tabs when the record is unavailable", async (t) => {
+test("AppView shows lookup states without invocation tabs when the record is unavailable", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: AppView } = await load("/src/AppView.svelte");
   const session = renderSession();
 
-  const view = Object.assign(emptyView("history"), {
-    core: CORE,
-    state: WS,
-    selectedInvocationId: "pending",
-    invocations: [],
-    invocationRows: [],
-    invocationsError: null,
-    detail: null,
-    detailLoading: false,
-    detailError: null,
+  function output(over: Record<string, unknown>): string {
+    const view = Object.assign(emptyView("history"), {
+      core: CORE,
+      state: WS,
+      selectedInvocationId: "pending",
+      invocations: [],
+      invocationRows: [],
+      invocationsError: null,
+      detail: null,
+      detailLoading: false,
+      detailError: null,
+      ...over,
+    });
+    return render(AppView, { props: { view, session } }).body;
+  }
+
+  await t.test("a missing record names the selected invocation", () => {
+    const html = output({});
+    assert.match(html, /No invocation record found for/);
+    assert.match(html, /pending/);
+    assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
   });
-  const html = render(AppView, { props: { view, session } }).body;
-  assert.match(html, /No live process or Bazel build record is available/);
-  assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
+
+  await t.test("history loading shows a pending state instead of not-found", () => {
+    const html = output({ historyLoading: true });
+    assert.match(html, /Loading invocation…/);
+    assert.doesNotMatch(html, /No invocation record found/);
+    assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
+  });
+
+  await t.test("a failed history lookup surfaces the error", () => {
+    const html = output({ invocationsError: "history unavailable" });
+    assert.match(html, /history unavailable/);
+    assert.doesNotMatch(html, /No invocation record found/);
+    assert.doesNotMatch(html, /role="tablist" aria-label="Invocation views"/);
+  });
 });

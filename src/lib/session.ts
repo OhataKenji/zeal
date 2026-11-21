@@ -193,6 +193,7 @@ function sessionView(state: SessionState) {
     error: state.error,
     invocations: history,
     invocationsError: ws?.historyError ?? null,
+    historyLoading: ws?.historyBusy ?? false,
     detail: saved.detail.value,
     detailError: saved.detail.error,
     profile: saved.profile.value,
@@ -555,7 +556,7 @@ export function createSession(
     if (state.page === "workspace") loadWorkspaceInfo();
   }
 
-  function selectInvocation(id: string) {
+  function openInvocation(id: string, lookup: boolean) {
     if (disposed) return;
     const previousId = selectedInvocationId(state);
     state.page = "history";
@@ -567,10 +568,28 @@ export function createSession(
     publish();
     ensureSaved();
     const saved = state.saved;
-    if (!savedEligible(state)) return;
+    if (!savedEligible(state)) {
+      // An id the current history cannot show may still exist past the latest
+      // window; only a user-driven selection pins it through a fresh list
+      // read. savedEligible already scanned history, so this probe runs only
+      // when the record is absent.
+      if (
+        lookup &&
+        state.workspace !== null &&
+        !visibleExecution(state, id) &&
+        !state.workspace.history.some((record) => record.id === id)
+      ) {
+        requestHistory();
+      }
+      return;
+    }
     // Re-selecting the same invocation only retries failed readers.
     if (saved.detail.error !== null) readSavedDetail();
     if (saved.profile.error !== null) readSavedProfile();
+  }
+
+  function selectInvocation(id: string) {
+    openInvocation(id, true);
   }
 
   function showPage(page: Page) {
@@ -671,7 +690,7 @@ export function createSession(
         publish();
         return;
       }
-      selectInvocation(id);
+      openInvocation(id, false);
     } catch (error) {
       if (disposed || state.start !== token) return;
       state.start = null;

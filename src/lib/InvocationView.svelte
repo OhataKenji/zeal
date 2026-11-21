@@ -249,8 +249,13 @@
       {/each}
     </div>
   </div>
+{:else if view.historyLoading}
+  <p class="panel-empty" role="status">Loading invocation…</p>
+{:else if view.invocationsError}
+  <Notice tone="error">{view.invocationsError}</Notice>
 {:else}
   <Notice tone="neutral">
-    No live process or Bazel build record is available. The command may have exited before sending build events.
+    No invocation record found for <code>{view.selectedInvocationId}</code>. It may be older than
+    the retained history, or the command may have exited before sending build events.
   </Notice>
 {/if}

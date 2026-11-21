@@ -5,12 +5,14 @@
     ClockCounterClockwise,
     Folders,
     HardDrives,
+    MagnifyingGlass,
     TreeStructure,
   } from "phosphor-svelte";
   import { canSend } from "./lib/session";
   import type { createSession, Page, SessionView } from "./lib/session";
   import { invocationStatus } from "./lib/invocation";
   import { buildTree } from "./lib/model";
+  import type { PaletteAction } from "./lib/palette";
   import Tree from "./lib/Tree.svelte";
   import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
@@ -22,6 +24,7 @@
   import InvocationView from "./lib/InvocationView.svelte";
   import AnalyticsView from "./lib/AnalyticsView.svelte";
   import QueryView from "./lib/QueryView.svelte";
+  import CommandPalette from "./lib/CommandPalette.svelte";
   import RunDialog from "./lib/RunDialog.svelte";
   import type { BazelCommand, InvocationRecord, OwnedInvocation } from "./lib/types";
 
@@ -51,6 +54,13 @@
   let opening = $state(false);
   let openPromptPath = $state<string | null>(null);
   let historyFilter = $state<"all" | "failed" | "running">("all");
+  let paletteOpen = $state(false);
+  let treeRevealRequest = $state(0);
+
+  const isMac =
+    typeof navigator === "undefined"
+      ? false
+      : /macintosh|mac os|macintel/i.test(navigator.userAgent);
 
   let runDialogOpen = $state(false);
   let runDialogCmd = $state<BazelCommand>("build");
@@ -67,6 +77,7 @@
   );
 
   function openRunDialog(cmd: BazelCommand, pattern: string, flags = "") {
+    paletteOpen = false;
     runDialogCmd = cmd;
     runDialogPattern = pattern;
     runDialogFlags = flags;
@@ -74,8 +85,21 @@
   }
 
   function openWorkspacePrompt(path = "") {
+    paletteOpen = false;
     if (opening) return;
     openPromptPath = path;
+  }
+
+  // ⌘K/Ctrl+K toggles only while no prompt or run dialog owns the keyboard.
+  function paletteShortcutAllowed(event: KeyboardEvent): boolean {
+    return (
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.repeat &&
+      st !== null &&
+      openPromptPath === null &&
+      !runDialogOpen
+    );
   }
 
   function onWindowKeydown(event: KeyboardEvent) {
@@ -87,6 +111,42 @@
     } else if (event.shiftKey && key === "r" && st) {
       event.preventDefault();
       openRunDialog("build", selectedTarget ?? "//...");
+    } else if (key === "k" && paletteShortcutAllowed(event)) {
+      event.preventDefault();
+      paletteOpen = !paletteOpen;
+    }
+  }
+
+  // The palette only exists inside the workspace branch; losing the workspace
+  // must not leave it armed for the next one.
+  $effect(() => {
+    if (st === null) paletteOpen = false;
+  });
+
+  function onPaletteSelect(action: PaletteAction) {
+    switch (action.kind) {
+      case "page":
+        selectPage(action.page);
+        break;
+      case "run":
+        openRunDialog("build", selectedTarget ?? "//...");
+        break;
+      case "refresh":
+        session.refresh();
+        break;
+      case "open-workspace":
+        openWorkspacePrompt("");
+        break;
+      case "target":
+        session.select({ kind: "target", label: action.label });
+        treeRevealRequest += 1;
+        break;
+      case "invocation":
+        if (!filteredInvocations.some((row) => row.record.id === action.id)) {
+          historyFilter = "all";
+        }
+        session.selectInvocation(action.id);
+        break;
     }
   }
 
@@ -145,6 +205,19 @@
       onopen={(path) => openWorkspacePrompt(path ?? "")}
       onhome={() => selectPage("targets")}
     />
+    {#if st !== null}
+      <button
+        type="button"
+        class="toolbar-search"
+        aria-label="Search targets, invocations, commands"
+        disabled={openPromptPath !== null || runDialogOpen}
+        onclick={() => (paletteOpen = true)}
+      >
+        <MagnifyingGlass size={13} />
+        <span class="toolbar-search-label">Search targets, invocations, commands…</span>
+        <span class="toolbar-search-kbd">{isMac ? "⌘K" : "Ctrl+K"}</span>
+      </button>
+    {/if}
   </header>
 
   {#if view.error}<Notice tone="error">{view.error}</Notice>{/if}
@@ -244,7 +317,7 @@
               </Notice>
             {/if}
             {#if snap && tree}
-              <Tree root={tree} {selection} revealRequest={0} onselect={session.select} />
+              <Tree root={tree} {selection} revealRequest={treeRevealRequest} onselect={session.select} />
             {:else if view.snapshotLoading}
               <p class="dim">Loading targets…</p>
             {:else}
@@ -419,6 +492,15 @@
       {/if}
     </div>
 
+    <CommandPalette
+      bind:open={paletteOpen}
+      snapshot={snap}
+      invocations={view.invocationRows}
+      canRun={canSend(view, selectedTarget ?? "//...")}
+      canRefresh={Boolean(st && core?.bazel && !view.snapshotLoading)}
+      {isMac}
+      onselect={onPaletteSelect}
+    />
     <RunDialog
       bind:open={runDialogOpen}
       bind:cmd={runDialogCmd}
