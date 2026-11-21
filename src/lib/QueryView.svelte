@@ -66,17 +66,16 @@
   import QueryExpr from "./QueryExpr.svelte";
   import TargetActions from "./TargetActions.svelte";
   import {
-    applyExample,
     attrCandidates,
     codeDiverged,
     commandLine,
     createQuery,
     DEFAULT_FLAGS,
-    defaultNodeFor,
     emptyQueryState,
     EXAMPLES,
     kindCandidates,
     parse,
+    parseQuery,
     outputFormatFor,
     parseCqueryOutput,
     producerQuery,
@@ -113,7 +112,7 @@
     snap ? createIndex(kindCandidates(snap.targets)) : null,
   );
   let root = $state<Expr>(
-    EXAMPLES[0]?.build() ?? defaultNodeFor("target"),
+    parseQuery(EXAMPLES.query.Dependencies[0].expr, "query"),
   );
   let mode = $state<"builder" | "code">("builder");
   let draft = $state("");
@@ -134,32 +133,17 @@
   let feedback = $state("");
   let fbTimer: ReturnType<typeof setTimeout> | undefined;
   let qstate = $state<QueryState>(emptyQueryState());
-  let controller = $state<ReturnType<typeof createQuery> | null>(null);
   let graphUrl = $state<string | null>(null);
   let graphError = $state<string | null>(null);
-  const EXAMPLE_GROUPS = [
-    { title: "Dependencies", ids: ["deps", "rdeps", "siblings", "buildfiles"] },
-    { title: "Paths", ids: ["somepath", "allpaths"] },
-    { title: "Filter & Attributes", ids: ["kindConstraint", "attrLabels"] },
-    { title: "Set Operations", ids: ["osExceptKind", "depsIntersectKind"] },
-  ] as const;
-  const exampleGroups = $derived(kind === "query" ? EXAMPLE_GROUPS :
-    [{ title: `${kind} examples`, ids: EXAMPLES.filter(e => e.kind === kind).map(e => e.id) }]);
-
   let graphZoom = $state(1);
   let graphDialog = $state<HTMLDialogElement>();
   let graphCanvas = $state<HTMLDivElement>();
   let viewEl = $state<HTMLElement>();
   let detailsEl = $state<HTMLDetailsElement>();
 
-  $effect(() => {
-    const next = untrack(() =>
-      createQuery(workspace, { invoke }, (s) => (qstate = s)),
-    );
-    controller = next;
-    return next.dispose;
-  });
+  const controller = createQuery(untrack(() => workspace), { invoke }, (s) => (qstate = s));
   onDestroy(() => {
+    controller.dispose();
     clearTimeout(fbTimer);
     vizWorker?.terminate();
     vizWorker = undefined;
@@ -199,7 +183,7 @@
     // Depend on the execution inputs, not the presentation: cquery's Table
     // and Raw are two views of the same stdout, even during an in-flight run.
     const next = request;
-    untrack(() => controller?.select(next));
+    untrack(() => controller.select(next));
   });
 
   // Each editor owns one in-flight query for its workspace; other workspaces
@@ -219,9 +203,6 @@
 
   // Input changes clear the displayed result.
   const stored = $derived(qstate.result);
-  // Only one invocation is ever in flight; which view started it does not matter —
-  // either pane may as well show the spinner.
-  const runningThisView = $derived(qstate.running);
   const failedOutput = $derived.by(() => {
     if (!stored) return null;
     if (stored.exitCode !== 0)
@@ -244,7 +225,7 @@
   const rawShown = $derived(rawLines.slice(0, RAW_LINE_CAP));
   const rawMore = $derived(rawLines.length - rawShown.length);
   const resultCount = $derived(
-    resultView === "raw" && stored && !failedOutput && !runningThisView
+    resultView === "raw" && stored && !failedOutput && !qstate.running
       ? `${rawLines.length} ${kind === "query" ? "target" : "line"}${rawLines.length === 1 ? "" : "s"}`
       : "",
   );
@@ -331,7 +312,7 @@
 
   function run() {
     if (!canRun) return;
-    void controller?.run(request);
+    void controller.run(request);
   }
 
   function traceArtifactProducer(path: string, owner: string) {
@@ -354,10 +335,8 @@
   }
 
   // Loading an example only fills the editor; the user decides when to run.
-  function loadExample(id: string) {
-    const built = applyExample(id);
-    if (!built) return;
-    root = built;
+  function loadExample(expr: string) {
+    root = parseQuery(expr, kind);
     mode = "builder";
     draft = "";
     codeError = null;
@@ -427,22 +406,19 @@
               }}
             ></button>
             <div class="query-examples-dropdown" role="menu" aria-label="Query examples">
-              {#each exampleGroups as group}
+              {#each Object.entries(EXAMPLES[kind]) as [title, examples]}
                 <div class="query-examples-group">
-                  <div class="query-examples-group-title">{group.title}</div>
-                  {#each group.ids as itemId}
-                    {@const example = EXAMPLES.find((e) => e.id === itemId)}
-                    {#if example}
-                      <button
-                        type="button"
-                        class="query-example-item"
-                        role="menuitem"
-                        onclick={() => loadExample(example.id)}
-                      >
-                        <code>{example.name}</code>
-                        <span class="query-ex-desc">{example.desc}</span>
-                      </button>
-                    {/if}
+                  <div class="query-examples-group-title">{title}</div>
+                  {#each examples as example}
+                    <button
+                      type="button"
+                      class="query-example-item"
+                      role="menuitem"
+                      onclick={() => loadExample(example.expr)}
+                    >
+                      <code>{example.name}</code>
+                      <span class="query-ex-desc">{example.desc}</span>
+                    </button>
                   {/each}
                 </div>
               {/each}
@@ -560,7 +536,7 @@
         {#if qstate.error}
           <Notice tone="error">{qstate.error}</Notice>
         {/if}
-        {#if failedOutput && !runningThisView}
+        {#if failedOutput && !qstate.running}
           <Notice tone="error">
             <p>{failedOutput.summary}</p>
             {#if failedOutput.tail}<pre>{failedOutput.tail}</pre>{/if}
@@ -569,7 +545,7 @@
         {#if graphWarn && !stored?.truncated}
           <Notice tone="warning"><pre>{graphWarn}</pre></Notice>
         {/if}
-        {#if stored?.truncated && !failedOutput && !runningThisView}
+        {#if stored?.truncated && !failedOutput && !qstate.running}
           <Notice tone={resultView === "graph" ? "error" : "warning"}>
             {#if resultView === "graph"}Bazel truncated the graph output — it
               cannot be rendered.{:else if outputFormat === "jsonproto"}Action data exceeds 32 MiB. Narrow the expression and execute again.{:else}Bazel truncated this output.{/if}
@@ -579,7 +555,7 @@
           <Notice tone="error">{graphError}</Notice>
         {/if}
         <div class="query-results-body">
-          {#if runningThisView}
+          {#if qstate.running}
             <p class="query-empty" role="status">Executing…</p>
           {:else if stored && !failedOutput}
             {#if resultView === "raw"}

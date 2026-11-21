@@ -491,7 +491,8 @@ function tokenize(text: string): Token[] {
   return tokens;
 }
 
-function parseQuery(text: string, kind: QueryKind): Expr {
+/** Parses trusted query text and throws on invalid input; user text uses `parse`. */
+export function parseQuery(text: string, kind: QueryKind): Expr {
   const tokens = tokenize(text);
   let index = 0;
   const peek = () => tokens[index];
@@ -813,122 +814,72 @@ export function attrCandidates(): Target[] {
 // any repository (even an empty MODULE.bazel), and a ~60-target universe
 // keeps them cheap in huge monorepos. tests() has no universal example —
 // no test_suite is guaranteed to exist.
-const PRESETS: Record<string, { kind: QueryKind; name: string; expr: string; desc: string }> = {
-  deps: {
-    kind: "query",
-    name: "deps",
-    expr: "deps(@@platforms//os:all)",
-    desc: "Transitive dependencies",
-  },
-  somepath: {
-    kind: "query",
-    name: "somepath",
-    expr: "somepath(@@platforms//os:all, @@platforms//os:os)",
-    desc: "One path between two targets",
-  },
-  allpaths: {
-    kind: "query",
-    name: "allpaths",
-    expr: "allpaths(@@platforms//os:all, @@platforms//os:os)",
-    desc: "Every path between two targets",
-  },
-  rdeps: {
-    kind: "query",
-    name: "rdeps",
-    expr: "rdeps(@@platforms//..., @@platforms//os:os)",
-    desc: "Reverse dependencies",
-  },
-  kindConstraint: {
-    kind: "query",
-    name: "kind constraint_value",
-    expr: 'kind("constraint_value rule", @@platforms//...)',
-    desc: "Find targets by rule kind",
-  },
-  siblings: {
-    kind: "query",
-    name: "siblings",
-    expr: "siblings(@@platforms//os:linux)",
-    desc: "Targets in the same package",
-  },
-  attrLabels: {
-    kind: "query",
-    name: "attr → labels",
-    expr: 'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
-    desc: "Filter by attribute, then get labels",
-  },
-  osExceptKind: {
-    kind: "query",
-    name: "all − kind",
-    expr: '(@@platforms//os:all) except kind("constraint_value rule", @@platforms//os:all)',
-    desc: "Package targets minus a rule kind",
-  },
-  depsIntersectKind: {
-    kind: "query",
-    name: "deps ∩ kind",
-    expr: '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
-    desc: "Constraint values inside the deps",
-  },
-  buildfiles: {
-    kind: "query",
-    name: "buildfiles",
-    expr: "buildfiles(deps(@@platforms//os:all))",
-    desc: "BUILD files in the deps",
-  },
-  configured: {
-    kind: "cquery",
-    name: "config",
-    desc: "Select the target configuration",
-    expr: "config(//..., target)",
-  },
-  configuredDeps: {
-    kind: "cquery",
-    name: "deps",
-    desc: "Direct configured dependencies",
-    expr: "deps(//..., 1)",
-  },
-  configuredTests: {
-    kind: "cquery",
-    name: "kind",
-    desc: "Configured test rules",
-    expr: 'kind(".*_test rule", //...)',
-  },
-  mnemonic: {
-    kind: "aquery",
-    name: "mnemonic",
-    desc: "Compile actions",
-    expr: 'mnemonic("CppCompile", //...)',
-  },
-  inputs: {
-    kind: "aquery",
-    name: "inputs",
-    desc: "Actions that consume headers",
-    expr: 'inputs("\\.h$", //...)',
-  },
-  outputs: {
-    kind: "aquery",
-    name: "outputs",
-    desc: "Actions that produce objects",
-    expr: 'outputs("\\.o$", //...)',
-  },
-};
+function example(name: string, expr: string, desc: string) {
+  return { name, expr, desc };
+}
+type Example = ReturnType<typeof example>;
 
-/**
- * Sidebar examples in the mock's order; `build` returns a fresh AST per call.
- * `name` is the display label from the mock; `id` is the stable key.
- */
-export const EXAMPLES: ReadonlyArray<{
-  kind: QueryKind;
-  id: string;
-  name: string;
-  desc: string;
-  build: () => Expr;
-}> = Object.entries(PRESETS).map(([id, { kind, name, expr, desc }]) => ({
-  kind,
-  id,
-  name,
-  desc,
-  build: () => parseQuery(expr, kind),
-}));
+/** Sidebar examples grouped by kind; every `expr` parses under that kind. */
+export const EXAMPLES = {
+  query: {
+    Dependencies: [
+      example("deps", "deps(@@platforms//os:all)", "Transitive dependencies"),
+      example("rdeps", "rdeps(@@platforms//..., @@platforms//os:os)", "Reverse dependencies"),
+      example("siblings", "siblings(@@platforms//os:linux)", "Targets in the same package"),
+      example("buildfiles", "buildfiles(deps(@@platforms//os:all))", "BUILD files in the deps"),
+    ],
+    Paths: [
+      example(
+        "somepath",
+        "somepath(@@platforms//os:all, @@platforms//os:os)",
+        "One path between two targets",
+      ),
+      example(
+        "allpaths",
+        "allpaths(@@platforms//os:all, @@platforms//os:os)",
+        "Every path between two targets",
+      ),
+    ],
+    "Filter & Attributes": [
+      example(
+        "kind constraint_value",
+        'kind("constraint_value rule", @@platforms//...)',
+        "Find targets by rule kind",
+      ),
+      example(
+        "attr → labels",
+        'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
+        "Filter by attribute, then get labels",
+      ),
+    ],
+    "Set Operations": [
+      example(
+        "all − kind",
+        '(@@platforms//os:all) except kind("constraint_value rule", @@platforms//os:all)',
+        "Package targets minus a rule kind",
+      ),
+      example(
+        "deps ∩ kind",
+        '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
+        "Constraint values inside the deps",
+      ),
+    ],
+  },
+  cquery: {
+    "cquery examples": [
+      example("config", "config(//..., target)", "Select the target configuration"),
+      example("deps", "deps(//..., 1)", "Direct configured dependencies"),
+      example("kind", 'kind(".*_test rule", //...)', "Configured test rules"),
+    ],
+  },
+  aquery: {
+    "aquery examples": [
+      example("mnemonic", 'mnemonic("CppCompile", //...)', "Compile actions"),
+      example("inputs", 'inputs("\\.h$", //...)', "Actions that consume headers"),
+      example("outputs", 'outputs("\\.o$", //...)', "Actions that produce objects"),
+    ],
+  },
+} satisfies Record<QueryKind, Record<string, readonly Example[]>>;
 
 export interface CqueryRow {
   label: string;
@@ -985,11 +936,6 @@ function ownerScope(owner: string): string {
 
 export function producerQuery(path: string, owner: string): string {
   return `outputs("^${escapeQueryRegex(path)}$", deps(${ownerScope(owner)}))`;
-}
-
-/** Builds the named example expression without executing it. */
-export function applyExample(id: string): Expr | null {
-  return EXAMPLES.find((e) => e.id === id)?.build() ?? null;
 }
 
 /**

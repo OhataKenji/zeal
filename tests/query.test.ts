@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  applyExample,
   codeDiverged,
   commandLine,
   createQuery,
@@ -17,6 +16,7 @@ import {
   makeCall,
   outputFormatFor,
   parse,
+  parseQuery,
   parseCqueryOutput,
   previewWords,
   producerQuery,
@@ -144,48 +144,60 @@ test("constructors fill schema defaults and defaultNodeFor covers every kind", (
 });
 
 const EXPECTED: Record<string, string> = {
-  deps: "deps(@@platforms//os:all)",
-  somepath: "somepath(@@platforms//os:all, @@platforms//os:os)",
-  allpaths: "allpaths(@@platforms//os:all, @@platforms//os:os)",
-  rdeps: "rdeps(@@platforms//..., @@platforms//os:os)",
-  kindConstraint: 'kind("constraint_value rule", @@platforms//...)',
-  siblings: "siblings(@@platforms//os:linux)",
-  attrLabels: 'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
-  osExceptKind: '(@@platforms//os:all except kind("constraint_value rule", @@platforms//os:all))',
-  depsIntersectKind:
+  "query/deps": "deps(@@platforms//os:all)",
+  "query/rdeps": "rdeps(@@platforms//..., @@platforms//os:os)",
+  "query/siblings": "siblings(@@platforms//os:linux)",
+  "query/buildfiles": "buildfiles(deps(@@platforms//os:all))",
+  "query/somepath": "somepath(@@platforms//os:all, @@platforms//os:os)",
+  "query/allpaths": "allpaths(@@platforms//os:all, @@platforms//os:os)",
+  "query/kind constraint_value": 'kind("constraint_value rule", @@platforms//...)',
+  "query/attr → labels":
+    'labels(constraint_setting, attr(constraint_setting, "cpu", @@platforms//...))',
+  "query/all − kind":
+    '(@@platforms//os:all except kind("constraint_value rule", @@platforms//os:all))',
+  "query/deps ∩ kind":
     '(deps(@@platforms//os:all) intersect kind("constraint_value rule", @@platforms//os:all))',
-  buildfiles: "buildfiles(deps(@@platforms//os:all))",
-  configured: "config(//..., target)",
-  configuredDeps: "deps(//..., 1)",
-  configuredTests: 'kind(".*_test rule", //...)',
-  mnemonic: 'mnemonic("CppCompile", //...)',
-  inputs: 'inputs("\\.h$", //...)',
-  outputs: 'outputs("\\.o$", //...)',
+  "cquery/config": "config(//..., target)",
+  "cquery/deps": "deps(//..., 1)",
+  "cquery/kind": 'kind(".*_test rule", //...)',
+  "aquery/mnemonic": 'mnemonic("CppCompile", //...)',
+  "aquery/inputs": 'inputs("\\.h$", //...)',
+  "aquery/outputs": 'outputs("\\.o$", //...)',
 };
 
 test("every example serializes to its golden text and parses back", () => {
-  assert.deepEqual(
-    EXAMPLES.map((e) => e.id),
-    Object.keys(EXPECTED),
-  );
-  for (const { id, name, kind, build } of EXAMPLES) {
-    assert.ok(name.length > 0, `label for ${id}`);
-    assert.deepEqual(serialize(build()), { ok: true, text: EXPECTED[id] }, `serialize ${id}`);
-    const parsed = parse(EXPECTED[id], kind);
-    assert.ok(parsed.ok, `parse ${id}`);
-    assert.deepEqual(
-      serialize(parsed.expr),
-      { ok: true, text: EXPECTED[id] },
-      `re-serialize ${id}`,
-    );
+  const seen: string[] = [];
+  for (const kind of ["query", "cquery", "aquery"] as const) {
+    for (const group of Object.values(EXAMPLES[kind])) {
+      for (const { name, expr, desc } of group) {
+        const key = `${kind}/${name}`;
+        seen.push(key);
+        assert.ok(name.length > 0 && desc.length > 0, `label for ${key}`);
+        assert.deepEqual(
+          serialize(parseQuery(expr, kind)),
+          { ok: true, text: EXPECTED[key] },
+          `serialize ${key}`,
+        );
+        const parsed = parse(EXPECTED[key], kind);
+        assert.ok(parsed.ok, `parse ${key}`);
+        assert.deepEqual(
+          serialize(parsed.expr),
+          { ok: true, text: EXPECTED[key] },
+          `re-serialize ${key}`,
+        );
+      }
+    }
   }
+  assert.deepEqual(seen, Object.keys(EXPECTED));
 });
 
-test("applyExample builds a fresh tree for a known name only", () => {
-  const built = applyExample("deps");
-  assert.ok(built);
-  assert.equal(text(built), "deps(@@platforms//os:all)");
-  assert.equal(applyExample("no-such-example"), null);
+test("the default example parses to a fresh tree and default flags are unchanged", () => {
+  const expr = EXAMPLES.query.Dependencies[0].expr;
+  const first = parseQuery(expr, "query");
+  const second = parseQuery(expr, "query");
+  assert.notEqual(first, second);
+  assert.notEqual(callNode(first).args[0], callNode(second).args[0]);
+  assert.equal(text(first), "deps(@@platforms//os:all)");
   assert.deepEqual(DEFAULT_FLAGS, {
     noImplicit: true,
     noTool: false,
