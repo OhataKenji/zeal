@@ -26,7 +26,7 @@
     initialTab?: Tab;
   } = $props();
 
-  let view = $state.raw(untrack(() => initialState));
+  const view = $state(untrack(() => ({ ...initialState })));
   let tab = $state<Tab>(untrack(() => initialTab));
   let depth = $state<ModuleDepth>("all");
   let query = $state("");
@@ -37,7 +37,7 @@
   const controller = createModules(
     untrack(() => workspace),
     { invoke },
-    (next) => (view = next),
+    view,
     () => bazelAvailable,
   );
   onDestroy(controller.dispose);

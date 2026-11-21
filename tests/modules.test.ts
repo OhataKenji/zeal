@@ -32,11 +32,10 @@ const snapshot: ModulesSnapshot = {
   repos: [{ apparent: "alias", canonical: "generated+name" }],
 };
 
-function harness(available = true) {
+function harness(available = true, state = emptyModulesState()) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   let resolve!: (value: unknown) => void;
   let reject!: (error: Error) => void;
-  let state = emptyModulesState();
   const controller = createModules(
     workspace,
     {
@@ -48,15 +47,13 @@ function harness(available = true) {
         }) as Promise<T>;
       },
     },
-    (next) => (state = next),
+    state,
     () => available,
   );
   return {
     ...controller,
     calls,
-    get state() {
-      return state;
-    },
+    state,
     succeed: (value: unknown) => resolve(value),
     fail: () => reject(new Error("server busy")),
   };
@@ -158,15 +155,29 @@ test("a failed explanation can be retried, but returning to a selection does not
   assert.equal(h.calls.length, 3);
 });
 
+test("explain mutates the supplied state object in place", async () => {
+  const state = { ...emptyModulesState(), snapshot, selectedKey: a.key };
+  const h = harness(true, state);
+  const pending = h.explain();
+  assert.equal(state.busy, "explain");
+  assert.equal(state.snapshot, snapshot);
+  h.succeed("why alpha");
+  await pending;
+  assert.equal(h.state, state);
+  assert.equal(state.busy, null);
+  assert.equal(state.explanation, "why alpha");
+  assert.deepEqual(h.calls, [{ command: "explain_module", args: { workspace, moduleKey: a.key } }]);
+});
+
 test("disposal suppresses late callbacks and new commands", async () => {
   const h = harness();
   const request = h.load();
-  const before = h.state;
+  const before = { ...h.state };
   h.dispose();
   h.succeed(snapshot);
   await request;
   await h.load();
-  assert.equal(h.state, before);
+  assert.deepEqual(h.state, before);
   assert.equal(h.calls.length, 1);
 });
 

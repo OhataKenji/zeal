@@ -45,16 +45,14 @@ export function emptyModulesState(): ModulesState {
 export function createModules(
   workspace: string,
   transport: Transport,
-  changed: (state: ModulesState) => void,
+  state: ModulesState,
   bazelAvailable: () => boolean = () => true,
 ) {
-  let state = emptyModulesState();
   let disposed = false;
 
   function update(patch: Partial<ModulesState>) {
     if (disposed) return;
-    state = { ...state, ...patch };
-    changed(state);
+    Object.assign(state, patch);
   }
 
   async function load() {

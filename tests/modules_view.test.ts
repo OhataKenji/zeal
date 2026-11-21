@@ -70,13 +70,15 @@ test("module page and browser preview", async (t) => {
       const cyclic = {
         ...snapshot,
         rootKey: "workspace@1",
-        modules: [
-          {
-            ...module,
-            requiredBy: ["workspace@1"],
-            dependencies: [...module.dependencies, "workspace@1"],
-          },
-        ],
+        modules: snapshot.modules.map((node) =>
+          node.key === module.key
+            ? {
+                ...node,
+                requiredBy: ["workspace@1"],
+                dependencies: [...node.dependencies, "workspace@1"],
+              }
+            : node,
+        ),
       };
       const html = output({
         snapshot: cyclic,
