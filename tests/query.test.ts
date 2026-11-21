@@ -847,7 +847,7 @@ test("cquery groups indented transitions under the preceding header only", () =>
 
 test("configured target and transitions survive real Bazel output", () => {
   const fixture = (name: string) =>
-    readFileSync(new URL(`./fixtures/phase3-cquery-${name}.txt`, import.meta.url), "utf8");
+    readFileSync(new URL(`./fixtures/cquery-${name}.txt`, import.meta.url), "utf8");
   const labels = parseCqueryOutput(fixture("label"));
   const transitions = parseCqueryOutput(fixture("transitions"));
   const target = transitions.find(

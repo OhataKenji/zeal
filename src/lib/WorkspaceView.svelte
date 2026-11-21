@@ -212,10 +212,10 @@ build --experimental_collect_system_network_usage`;
       <p class="dim">No --config definitions found in workspace rc files.</p>
     {:else}
       {#each configViews as view (view.config.name)}
-        <div class="config-block">
-          <div class="config-head">
+        <section class="section">
+          <div class="section-head config-head">
             <span class="mono">--config={view.config.name}</span>
-            <span class="config-actions">
+            <span class="ws-actions">
               {#if view.runCmd && onrunconfig}
                 {@const runCmd = view.runCmd}
                 <button
@@ -247,7 +247,7 @@ build --experimental_collect_system_network_usage`;
               {/each}
             </tbody>
           </table>
-        </div>
+        </section>
       {/each}
     {/if}
     <p class="dim">

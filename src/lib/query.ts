@@ -340,10 +340,7 @@ export interface CommandFlags {
   flags: string;
 }
 
-/**
- * Mock defaults: implicit deps are excluded (unlike Bazel's default), tool
- * deps are kept. Preset loading resets the flags to these values.
- */
+/** Exclude implicit dependencies by default, but keep tool dependencies. */
 export const DEFAULT_FLAGS: CommandFlags = {
   noImplicit: true,
   noTool: false,
@@ -990,13 +987,7 @@ export function producerQuery(path: string, owner: string): string {
   return `outputs("^${escapeQueryRegex(path)}$", deps(${ownerScope(owner)}))`;
 }
 
-/**
- * Builds the named example expression, or null for an unknown name. Loading
- * an example replaces the current expression, resets the flags to
- * `DEFAULT_FLAGS`, and returns to Builder mode — the view performs those
- * resets itself; loading never runs the query (a click fills the editor,
- * and the user decides when to run).
- */
+/** Builds the named example expression without executing it. */
 export function applyExample(id: string): Expr | null {
   return EXAMPLES.find((e) => e.id === id)?.build() ?? null;
 }

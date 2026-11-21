@@ -371,7 +371,6 @@
     codeError = null;
     noImplicit = DEFAULT_FLAGS.noImplicit;
     noTool = DEFAULT_FLAGS.noTool;
-    buildFlags = "";
     transitions = false;
     if (detailsEl) detailsEl.open = false;
   }
