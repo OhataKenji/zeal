@@ -8,11 +8,12 @@
 //! Composer Stop and app exit use the same process-group lifecycle as other
 //! Bazel operations; queries have no separate timeout.
 
+use crate::bazel_output::{capture_head, capture_tail};
 use crate::runner::{self, Output};
 use crate::state::Core;
 use crate::{actions, runargs};
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufReader, Read};
+use std::io::BufReader;
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -287,46 +288,6 @@ fn spawn_query(core: &Core, req: &QueryRequest) -> Result<(Child, String), Strin
     Ok((child, id))
 }
 
-/// Keep the first `cap` bytes of the stream and drain the rest: the child
-/// must never block on a full pipe. Returns the bytes and whether any were
-/// dropped.
-fn capture_head(pipe: &mut impl Read, cap: usize) -> io::Result<(Vec<u8>, bool)> {
-    let mut buf = Vec::new();
-    let mut truncated = false;
-    let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk) {
-            Ok(0) => break,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-            Ok(n) => {
-                let kept = n.min(cap - buf.len());
-                buf.extend_from_slice(&chunk[..kept]);
-                truncated |= kept < n;
-            }
-        }
-    }
-    Ok((buf, truncated))
-}
-
-/// Keep the last `cap` bytes of the stream.
-fn capture_tail(pipe: &mut impl Read, cap: usize) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk) {
-            Ok(0) => break,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                buf.drain(..buf.len().saturating_sub(cap));
-            }
-        }
-    }
-    Ok(buf)
-}
-
 /// Receive a reader's capture. Even a confirmed exit is bounded: a descendant
 /// still holding the pipe would otherwise wedge the bazel slot forever — the
 /// same hazard runner bounds with its drain grace. The confirmed wait is the
@@ -341,6 +302,7 @@ fn drain<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::{self, Read};
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 

@@ -107,8 +107,8 @@ test("CommandPalette renders an accessible combobox listbox with grouped options
   assert.match(html, />Run Bazel…</);
   assert.match(html, />Ctrl\+Shift\+R</);
   const options = html.match(/role="option"/g) ?? [];
-  // Eight commands plus the single recent invocation.
-  assert.equal(options.length, 9);
+  // Nine commands plus the single recent invocation.
+  assert.equal(options.length, 10);
   assert.match(html, /aria-selected="true"/);
 });
 

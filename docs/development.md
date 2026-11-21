@@ -31,6 +31,11 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
+The modules graph parser is tested against a fixture captured from a real
+`bazel mod graph --output=json` run (`src-tauri/tests/fixtures/`). `bazel mod
+explain` needs an explicit `--depth`: its default view hides transitive
+modules entirely (verified on Bazel 7, 8 and 9).
+
 ## Development traces
 
 Start [Jaeger](https://www.jaegertracing.io/docs/2.22/getting-started/) with OTLP/HTTP on port 4318, then run:

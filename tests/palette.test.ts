@@ -75,6 +75,10 @@ function labels(items: ReturnType<typeof paletteItems>, group?: string): string[
 test("empty and whitespace queries return commands plus the five most recent invocations", () => {
   for (const query of ["", "   "]) {
     const items = paletteItems(input({ query }));
+    assert.deepEqual(items.find((item) => item.label === "Go to Modules")?.action, {
+      kind: "page",
+      page: "modules",
+    });
     // Every command shows for an empty query — pages plus the specials —
     // so adding a rail page must not be silently capped at eight.
     assert.deepEqual(labels(items, "commands"), [

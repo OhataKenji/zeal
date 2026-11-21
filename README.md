@@ -68,6 +68,10 @@ Build Bazel queries visually from preset examples or from scratch across all thr
 
 ![Query Builder with visual expression blocks and a dependency graph](docs/screenshots/query-builder.jpg)
 
+### Bzlmod Modules
+
+Open **Modules** and choose **Load modules** to see which modules depend on each other. Select a module to browse its parents and dependencies, or choose **Explain** to ask Bazel why that version was selected.
+
 ### Invocation Page
 
 View logs, results, details, and available timing data.

@@ -2,6 +2,7 @@
 export const pages = [
   { id: "workspace", label: "Workspace" },
   { id: "targets", label: "Targets" },
+  { id: "modules", label: "Modules" },
   { id: "query", label: "Query" },
   { id: "history", label: "History" },
   { id: "analytics", label: "Analytics" },

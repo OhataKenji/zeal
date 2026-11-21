@@ -18,6 +18,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -59,7 +60,7 @@ pub(crate) fn spawn(
     meta: InvocationMeta<'_>,
     output: Output,
 ) -> io::Result<(Child, Option<crate::terminal::Capture>)> {
-    if state.shutting_down {
+    if state.shutting_down.load(Ordering::Relaxed) {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
             "application is shutting down",
@@ -347,17 +348,18 @@ fn revoke_unconfirmed_groups(st: &mut CoreState) {
 }
 
 /// Bound process stopping to the short exit grace, shared across every owned
-/// invocation: one common deadline, not one per child. Children already
-/// reaped have nothing left to signal; their in-progress saves are joined
-/// through the condvar. New starts are rejected by `shutting_down`.
+/// invocation and in-flight modules operation: one common deadline, not one
+/// per child. Children already reaped have nothing left to signal; their
+/// in-progress saves and modules guards are joined through the condvar. New
+/// starts are rejected by `shutting_down`.
 pub fn exit_stop(core: &Core) {
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        st.shutting_down = true;
+        st.shutting_down.store(true, Ordering::Relaxed);
         for invocation in st.invocations.values_mut() {
             interrupt(&mut invocation.process);
         }
-        if st.invocations.is_empty() {
+        if st.invocations.is_empty() && st.modules_running.is_empty() {
             return;
         }
     }
@@ -366,7 +368,7 @@ pub fn exit_stop(core: &Core) {
     let mut killed = false;
     loop {
         let mut st = core.state.lock().expect("application state lock poisoned");
-        if st.invocations.is_empty() {
+        if st.invocations.is_empty() && st.modules_running.is_empty() {
             return;
         }
         let now = Instant::now();
@@ -1394,7 +1396,13 @@ mod tests {
         // The SIGINTs did not end them, so the SIGKILLs came after the grace:
         // the wait is bounded, not skipped, and not per-invocation.
         assert!(started.elapsed() >= EXIT_GRACE, "the grace was skipped");
-        assert!(core.state.lock().unwrap().shutting_down);
+        assert!(
+            core.state
+                .lock()
+                .unwrap()
+                .shutting_down
+                .load(Ordering::Relaxed)
+        );
         for (child, pgid) in &mut children {
             let status = child.wait().unwrap();
             assert!(!status.success(), "unexpected status: {status}");
@@ -1865,7 +1873,7 @@ mod tests {
     fn exit_rejects_new_starts_once_shutdown_begins() {
         let core = Core::new();
         let mut st = core.state.lock().unwrap();
-        st.shutting_down = true;
+        st.shutting_down.store(true, Ordering::Relaxed);
         register_ws(&mut st, Path::new(WS));
         st.bazel = Some(PathBuf::from("/bin/true"));
         st.bes_endpoint = Some("grpc://127.0.0.1:1".into());

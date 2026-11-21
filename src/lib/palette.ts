@@ -51,6 +51,7 @@ interface PaletteCommand {
 const pageKeywords: Record<Page, string> = {
   workspace: "home bazel info",
   targets: "explorer packages tree",
+  modules: "bzlmod dependencies",
   query: "expr bazel",
   history: "invocations logs runs",
   analytics: "stats metrics",
