@@ -616,7 +616,7 @@ export function installPreview() {
           },
           { key: "execution_root", value: `${ob}/execroot/_main` },
           { key: "install_base", value: "/private/var/tmp/_bazel_install/9f2c1d" },
-          { key: "max-heap-size", value: "4096" },
+          { key: "max-heap-size", value: "4096MB" },
           { key: "output_base", value: ob },
           { key: "output_path", value: `${ob}/execroot/_main/bazel-out` },
           { key: "release", value: "release 8.7.0" },
