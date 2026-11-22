@@ -1,23 +1,16 @@
 <script lang="ts">
-  import ActionPair from "./ActionPair.svelte";
-  import type { BazelCommand, TargetIndex } from "./types";
+  import type { TargetIndex } from "./types";
 
   let {
     index,
     pkg,
     selectedLabel = null,
-    canRun = true,
     onselect,
-    onrun,
-    onopenflags,
   }: {
     index: TargetIndex;
     pkg: string;
     selectedLabel?: string | null;
-    canRun?: boolean;
     onselect: (label: string) => void;
-    onrun: (cmd: BazelCommand, pattern: string) => void;
-    onopenflags: (cmd: BazelCommand, pattern: string) => void;
   } = $props();
 
   const ROW_CAP = 500;
@@ -30,25 +23,7 @@
       : sortedTargets.filter((t) => t.pkg === pkg || t.pkg.startsWith(`${pkg}/`)),
   );
   const visible = $derived(targets.slice(0, ROW_CAP));
-  const hasSub = $derived(index.targets.some((t) => t.pkg.startsWith(`${pkg}/`)));
-  const pattern = $derived(pkg === "" ? "//..." : hasSub ? `//${pkg}/...` : `//${pkg}:all`);
-  const hasTests = $derived(targets.some((t) => t.ruleClass.endsWith("_test")));
 </script>
-
-<div class="view-head">
-  <div>
-    <h1 class="view-title mono">{pattern}</h1>
-    <div class="view-meta">{targets.length} targets</div>
-  </div>
-  <ActionPair
-    primaryCmd={hasTests ? "test" : "build"}
-    primaryLabel={hasTests ? "Test" : "Build"}
-    target={pattern}
-    disabled={!canRun}
-    {onrun}
-    {onopenflags}
-  />
-</div>
 
 <table class="lens-table">
   <thead>

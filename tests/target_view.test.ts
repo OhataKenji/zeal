@@ -45,7 +45,6 @@ function makeAction(overrides: Partial<TargetAction> = {}): TargetAction {
 test("TargetView renders target details", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: TargetView } = await load("/src/lib/TargetView.svelte");
-  const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
   function view(
     actions: TargetActions | null,
@@ -188,18 +187,6 @@ test("TargetView renders target details", async (t) => {
     assert.match(html, />\s*app\/lib\/BUILD\.bazel:14\s*</);
 
     assert.ok(!view({ actions: [], truncated: false }).includes("BUILD.bazel"));
-
-    const pkgHtml = render(PackageView, {
-      props: {
-        index: INDEX,
-        pkg: "app/lib",
-        onselect: () => {},
-        onrun: () => {},
-        onopenflags: () => {},
-      },
-    }).body.replace(/<!--[\s\S]*?-->/g, "");
-    assert.match(pkgHtml, /<h1[^>]*>\/\/app\/lib:all<\/h1>/);
-    assert.match(pkgHtml, />:parser</);
   });
 
   await t.test("attributes render without the label filter and keep Show more", () => {
@@ -266,7 +253,7 @@ test("TargetView renders target details", async (t) => {
   });
 });
 
-test("PackageView scope labels, root //..., and the row cap", async (t) => {
+test("PackageView workspace and package filtering and the row cap", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
@@ -276,7 +263,7 @@ test("PackageView scope labels, root //..., and the row cap", async (t) => {
 
   function output(index: TargetIndex, pkg: string): string {
     return render(PackageView, {
-      props: { index, pkg, onselect: () => {}, onrun: () => {}, onopenflags: () => {} },
+      props: { index, pkg, onselect: () => {} },
     })
       .body.replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\s+/g, " ");
@@ -292,10 +279,9 @@ test("PackageView scope labels, root //..., and the row cap", async (t) => {
     ],
   };
 
-  await t.test('pkg "" is //... with full labels and no ///...', () => {
+  await t.test("empty package lists the whole workspace with full labels", () => {
     const html = output(MIXED, "");
-    assert.match(html, /<h1[^>]*>\/\/\.\.\.<\/h1>/);
-    assert.doesNotMatch(html, /\/\/\/\.\.\.|\/\/:all/);
+    assert.doesNotMatch(html, />\/\/\.\.\.</);
     // Every target in the workspace is listed under its full label.
     for (const label of ["//app:top", "//app/lib:deep", "//other:solo", "//:root"]) {
       assert.ok(html.includes(`>${label}</button>`), `missing ${label}`);
@@ -303,17 +289,15 @@ test("PackageView scope labels, root //..., and the row cap", async (t) => {
     assert.doesNotMatch(html, />:top</);
   });
 
-  await t.test("sub-packages widen the scope to //pkg/... and keep full labels", () => {
+  await t.test("a package lists its own and sub-package targets", () => {
     const html = output(MIXED, "app");
-    assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
     assert.ok(html.includes(">:top</button>"));
     assert.ok(html.includes(">//app/lib:deep</button>"));
     assert.ok(!html.includes(">//other:solo</button>"));
   });
 
-  await t.test("a leaf package scopes to //pkg:all", () => {
+  await t.test("a leaf package lists only its own targets", () => {
     const html = output(MIXED, "other");
-    assert.match(html, /<h1[^>]*>\/\/other:all<\/h1>/);
     assert.ok(html.includes(">:solo</button>"));
     assert.ok(!html.includes(">//other:solo</button>"));
   });

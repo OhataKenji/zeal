@@ -427,10 +427,7 @@
               index={snap}
               pkg={selectedPkg}
               selectedLabel={selectedTarget}
-              canRun={canSend(view, "//...")}
               onselect={(label) => session.select({ kind: "target", label })}
-              onrun={(cmd, pattern) => session.start(cmd, pattern)}
-              onopenflags={openRunDialog}
             />
           {:else if view.snapshotLoading}
             <p class="dim">Loading targets…</p>
