@@ -42,7 +42,7 @@
     onopenflags?: (cmd: BazelCommand, pattern: string) => void;
     onclose?: () => void;
     ontab: (tab: TargetTab) => void;
-    onapply: (flags: string) => void | Promise<void>;
+    onapply: (flags: string) => void;
   } = $props();
   const rel = $derived(relations(detail));
   const configured = $derived(
@@ -71,8 +71,6 @@
   // a string is the in-progress edit. Apply only fires from Enter or the
   // button; nothing runs on draft changes or blur.
   let flagsDraft = $state<string | null>(null);
-  let flagsError = $state<string | null>(null);
-  let flagsBusy = $state(false);
   let copyNote = $state<{ key: string; ok: boolean } | null>(null);
   $effect(() => {
     if (!copyNote) return;
@@ -92,29 +90,18 @@
       copyNote = { key, ok: false };
     }
   }
-  async function applyFlags(event: SubmitEvent) {
+  function applyFlags(event: SubmitEvent) {
     event.preventDefault();
-    const draft = flagsDraft?.trim() ?? "";
+    const flags = flagsDraft?.trim();
     // A blank draft never applies: clearing flags is the explicit ✕ reset.
-    if (!draft || flagsBusy) return;
-    const form = event.currentTarget as HTMLFormElement;
-    flagsBusy = true;
-    flagsError = null;
-    try {
-      await onapply(draft);
-      // The editor may have been replaced by navigation mid-validation.
-      if (form.isConnected) flagsDraft = null;
-    } catch (error) {
-      if (form.isConnected) flagsError = String(error);
-    } finally {
-      flagsBusy = false;
-    }
+    if (!flags) return;
+    flagsDraft = null;
+    onapply(flags);
   }
   function flagKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
       event.preventDefault();
       flagsDraft = null;
-      flagsError = null;
     }
   }
 </script>
@@ -184,10 +171,7 @@
         <button
           type="button"
           class="button button-ghost flag-button"
-          onclick={() => {
-            flagsError = null;
-            flagsDraft = flags;
-          }}
+          onclick={() => (flagsDraft = flags)}
           > {customFlags ? "Edit" : "+ Flags"}</button
         >
         {#if customFlags}
@@ -196,7 +180,7 @@
             class="button button-ghost flag-button"
             aria-label="Reset flags"
             title="Reset to Default"
-            onclick={() => void onapply("")}>✕</button
+            onclick={() => onapply("")}>✕</button
           >
         {/if}
       </span>
@@ -211,26 +195,18 @@
         placeholder="--config=opt"
         aria-label="Build flags"
         spellcheck="false"
-        disabled={flagsBusy}
       />
       <button
         type="submit"
         class="button button-primary flag-apply"
-        disabled={flagsBusy || !flagsDraft.trim()}>Apply</button
+        disabled={!flagsDraft.trim()}>Apply</button
       >
       <button
         type="button"
         class="button button-ghost"
-        disabled={flagsBusy}
-        onclick={() => {
-          flagsDraft = null;
-          flagsError = null;
-        }}>Cancel</button
+        onclick={() => (flagsDraft = null)}>Cancel</button
       >
     </form>
-    {#if flagsError}
-      <p class="flag-error" role="alert">{flagsError}</p>
-    {/if}
     <p class="flag-warning">
       Changing build flags discards Bazel’s analysis cache for this workspace.
     </p>

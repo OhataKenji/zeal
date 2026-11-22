@@ -19,7 +19,7 @@ import type {
   WorkspaceInfo,
   WorkspaceState,
 } from "./lib/types";
-import { previewWords, type QueryOutput, type QueryRequest } from "./lib/query.ts";
+import type { QueryOutput, QueryRequest } from "./lib/query.ts";
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
@@ -695,14 +695,6 @@ export function installPreview() {
         return previewTransitions(label);
       }
       throw new Error("Unknown target read step");
-    },
-    validate_target_flags: (payload) => {
-      // Minimal truthful mock: the same word splitting the preview uses
-      // for display refuses control characters and unterminated quotes.
-      if (previewWords(String(payload?.flags ?? "")) === null) {
-        throw new Error("Invalid build flags");
-      }
-      return null;
     },
     list_invocations: (payload) =>
       structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),

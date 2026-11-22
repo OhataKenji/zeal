@@ -8,7 +8,6 @@ export const COMMANDS = {
   explainModule: "explain_module",
   getTargetDetail: "get_target_detail",
   readTarget: "read_target",
-  validateTargetFlags: "validate_target_flags",
   openWorkspace: "open_workspace",
   listWorkspaces: "list_workspaces",
   refresh: "refresh",

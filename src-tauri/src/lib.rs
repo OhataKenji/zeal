@@ -144,13 +144,6 @@ async fn read_target(
     }
 }
 
-/// Cheap syntactic check of a build-flags draft; execution revalidates
-/// anyway, so this only rejects malformed input before it is committed.
-#[tauri::command]
-fn validate_target_flags(flags: String) -> Result<(), String> {
-    query::build_flags(query::QueryKind::Cquery, &flags).map(drop)
-}
-
 /// Register a directory as a Bazel workspace: validate it, canonicalize it,
 /// reuse or create its state entry, and save it as the last-workspace
 /// preference. It does not query; the caller refreshes explicitly. Running
@@ -506,7 +499,6 @@ pub fn run() {
             explain_module,
             get_target_detail,
             read_target,
-            validate_target_flags,
             read_console,
             write_console,
             resize_console,

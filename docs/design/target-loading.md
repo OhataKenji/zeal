@@ -22,7 +22,7 @@ workspace、Scope、一覧の世代、選択 target が変わった後に届い�
 インスペクタの Configured / Actions タブは、選択 target に対して `read_target` コマンドを段階的に呼ぶ。
 各呼び出しは 1 つの Bazel プロセスであり、`--noblock_for_lock` はプロセスごとに適用され、サブコマンド間でロックを保持しない。
 Configured は configuration → transitions（報告された checksum で照合）→ outputs の 3 段階で、タブ・フラグ・選択の変更は段階の合間で読み取りを止められる。
-フラグの下書きは `validate_target_flags` で構文だけを事前検証し、拒否された場合は適用済みフラグも読み取りも変わらない。
+適用済みフラグはそのまま保持される。`read_target` は malformed または予約済みのフラグを Bazel プロセスの起動前に拒否し、その診断はフェーズのエラーとして表示される。
 
 ## 判断の根拠
 

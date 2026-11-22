@@ -272,7 +272,7 @@ test("TargetView renders target details", async (t) => {
         },
       },
     });
-    assert.match(html, /<span class="badge action-exec">exec<\/span>/);
+    assert.match(html, /<span class="badge action-exec" title="Tool configuration">exec<\/span>/);
     assert.match(html, /\+2<\/span>/);
     assert.match(html, /2 additional outputs/);
   });

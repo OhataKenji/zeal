@@ -18,9 +18,10 @@ keep their state in their views.
   stages the Configured tab's three `read_target` steps — configuration,
   transitions (keyed by the reported checksum), outputs — so a tab, flag, or
   selection change can stop between them; each step is one Bazel process and
-  `--noblock_for_lock` applies per process, never across them. Flag drafts
-  pass a cheap `validate_target_flags` check before they commit; a rejected
-  draft changes nothing. Tab and flag changes replace the phase reader, so
+  `--noblock_for_lock` applies per process, never across them. Applied
+  flags persist verbatim; `read_target` rejects malformed or reserved
+  flags before spawning Bazel and the diagnostic surfaces as the phase
+  error. Tab and flag changes replace the phase reader, so
   stale replies cannot land. Other workspaces do not wait. History notifications
   coalesce into one follow-up. Saved detail/profile reads remain independent.
 - The selected workspace keeps the module graph, selection, and explanation across

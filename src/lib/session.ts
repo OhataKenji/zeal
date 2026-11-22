@@ -248,8 +248,6 @@ export function createSession(
 ) {
   const state = initialState(page);
   let disposed = false;
-  // Newest apply intent wins; older in-flight validations are ignored.
-  let flagApplySeq = 0;
   // After an explicit open, saved preferences no longer choose the workspace.
   let workspaceRequest: object | null = null;
   const unlistens: Array<() => void> = [];
@@ -704,44 +702,13 @@ export function createSession(
     reloadTargetPhase(ws);
   }
 
-  /** Runs the cheap flag validator for one apply intent. Resolves false
-   * when a newer apply, reselection, navigation, workspace switch, or
-   * disposal made the intent stale; rethrows the diagnostic while it is
-   * still current. */
-  async function validateFlagApply(ws: Workspace, flags: string, intent: number): Promise<boolean> {
-    const target = ws.target;
-    const applied = ws.targetFlags;
-    const page = state.page;
-    const current = () =>
-      !disposed &&
-      state.workspace === ws &&
-      state.page === page &&
-      ws.target === target &&
-      ws.targetFlags === applied &&
-      flagApplySeq === intent;
-    try {
-      await transport.invoke<void>(COMMANDS.validateTargetFlags, { flags });
-    } catch (error) {
-      if (current()) throw error;
-      return false;
-    }
-    return current();
-  }
-
-  /** Applies build flags after a cheap syntactic validation; the active
-   * non-Definition phase reloads, even for unchanged flags. Definition
-   * keeps its static read. A rejected draft changes nothing, and a stale
-   * completion — newer apply, reselection, navigation, workspace switch,
-   * disposal — is ignored. */
-  async function applyTargetFlags(flags: string): Promise<void> {
-    if (disposed) return;
+  /** Applies build flags; the active non-Definition phase reloads, even
+   * for unchanged flags. Definition keeps its static read. Malformed or
+   * reserved flags are rejected by the backend before any Bazel process
+   * spawns and surface as the phase error. */
+  function applyTargetFlags(flags: string) {
     const ws = state.workspace;
-    if (!ws) return;
-    // Every apply — including Reset — supersedes an older in-flight
-    // validation, so only the newest intent may commit.
-    const intent = ++flagApplySeq;
-    if (flags !== "" && flags !== ws.targetFlags && !(await validateFlagApply(ws, flags, intent)))
-      return;
+    if (disposed || !ws) return;
     ws.targetFlags = flags;
     reloadTargetPhase(ws);
   }

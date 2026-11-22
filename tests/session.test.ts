@@ -253,15 +253,10 @@ async function resolveConfigured(h: ReturnType<typeof harness>) {
   await settle();
 }
 
-/** Apply flags, resolving the cheap validator the way the core would. */
+/** Apply flags; the phase reload's first read reaches the transport
+ * synchronously, so one settle publishes it. */
 async function applyFlags(h: ReturnType<typeof harness>, flags: string) {
-  const before = requestCount(h, "validate_target_flags");
-  const done = h.session.applyTargetFlags(flags);
-  await settle();
-  if (requestCount(h, "validate_target_flags") > before) {
-    lastPendingRequest(h, "validate_target_flags").reply.resolve(null);
-  }
-  await done;
+  h.session.applyTargetFlags(flags);
   await settle();
 }
 
@@ -1414,7 +1409,7 @@ test("leaving the targets page mid-read aborts before the next step and resumes"
   assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 });
 
-test("a rejected flag draft keeps the applied flags and issues no phase read", async () => {
+test("a managed flag fails the first read; reset recovers with default flags", async () => {
   const h = harness();
   await initReady(h);
   await loadSnapshot(h);
@@ -1422,60 +1417,37 @@ test("a rejected flag draft keeps the applied flags and issues no phase read", a
   await settle();
   pendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
   await settle();
-  h.session.setTargetTab("actions");
+  h.session.setTargetTab("configured");
   await settle();
-  await resolveActions(h);
-  await applyFlags(h, "--config=opt");
-  await resolveActions(h);
-  assert.equal(h.view.targetFlags, "--config=opt");
+  await resolveConfigured(h);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 
-  // A syntactically invalid draft is rejected before it can commit.
-  const before = requestCount(h, "read_target");
-  const done = h.session.applyTargetFlags("--output=files");
+  // --output is managed by the query itself: the backend rejects the
+  // applied flags before spawning Bazel, and the value still persists.
+  h.session.applyTargetFlags("--output=files");
   await settle();
-  lastPendingRequest(h, "validate_target_flags").reply.reject(
-    new Error("build flags must not override query options"),
-  );
-  await assert.rejects(done, /override query options/);
+  const failed = lastRead(h, "configuration");
+  assert.equal(failed.args?.flags, "--output=files");
+  failed.reply.reject(new Error("build flags must not override query options"));
   await settle();
-  assert.equal(h.view.targetFlags, "--config=opt");
-  assert.equal(requestCount(h, "read_target"), before);
-});
+  assert.equal(h.view.targetFlags, "--output=files");
+  assert.equal(h.view.targetPhase, null);
+  assert.match(h.view.targetPhaseError ?? "", /override query options/);
+  // Only the configuration step ran under the bad flags; the staged
+  // transitions and outputs reads were never issued.
+  const flagged = readRequests(h).filter((call) => call.args?.flags === "--output=files");
+  assert.equal(flagged.length, 1);
+  assert.equal(JSON.stringify(flagged[0].args?.step), JSON.stringify("configuration"));
 
-test("an older flag validation cannot overwrite a newer apply or a reset", async () => {
-  const h = harness();
-  await initReady(h);
-  await loadSnapshot(h);
-  h.session.select({ kind: "target", label: "//app:first" });
+  // Reset issues a fresh configuration read under default flags, and the
+  // recovered aggregate clears the error.
+  h.session.applyTargetFlags("");
   await settle();
-  pendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
-  await settle();
-
-  // Two changed drafts validate concurrently; only the newest commits.
-  const first = h.session.applyTargetFlags("--config=opt");
-  await settle();
-  const second = h.session.applyTargetFlags("--config=dbg");
-  await settle();
-  const validations = h.pending.filter((call) => call.command === "validate_target_flags");
-  assert.equal(validations.length, 2);
-  validations[0].reply.resolve(null);
-  await settle();
-  assert.equal(h.view.targetFlags, "");
-  validations[1].reply.resolve(null);
-  await first;
-  await second;
-  await settle();
-  assert.equal(h.view.targetFlags, "--config=dbg");
-
-  // A reset during validation also wins over the stale draft.
-  const stale = h.session.applyTargetFlags("--config=opt");
-  await settle();
-  await applyFlags(h, "");
-  assert.equal(h.view.targetFlags, "");
-  lastPendingRequest(h, "validate_target_flags").reply.resolve(null);
-  await stale;
-  await settle();
-  assert.equal(h.view.targetFlags, "");
+  const retry = lastRead(h, "configuration");
+  assert.equal(retry.args?.flags, "");
+  await resolveConfigured(h);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
+  assert.equal(h.view.targetPhaseError, null);
 });
 
 test("history notifications coalesce and owned-state pushes do not refetch", async () => {

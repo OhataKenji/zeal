@@ -87,10 +87,7 @@
   </ul>
 {/snippet}
 
-<section
-  class="target-actions"
-  title="aquery actions run under Bazel-reported owner configurations; exec marks the tool configuration."
->
+<section class="target-actions">
   {#if showHeading}
     <h2>
       Actions{#if actions}
@@ -135,7 +132,7 @@
                 >
               {/if}
               {#if action.configuration?.isTool}
-                <span class="badge action-exec">exec</span>
+                <span class="badge action-exec" title="Tool configuration">exec</span>
               {/if}
             </summary>
             {#if open[index]}
