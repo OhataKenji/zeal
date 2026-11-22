@@ -36,11 +36,11 @@ test("WorkspaceSwitcher renders a single trigger and split actions", async (t) =
     assert.doesNotMatch(html, /ws-home|ws-path-row|Workspace home/);
   });
 
-  await t.test("missing workspace falls back to the Zeal label", () => {
+  await t.test("missing workspace falls back to the Zelith label", () => {
     const html = output({ workspace: null });
     const trigger = html.match(/<summary[^>]*>[\s\S]*?<\/summary>/)?.[0];
     assert.ok(trigger);
-    assert.match(trigger, />Zeal</);
+    assert.match(trigger, />Zelith</);
   });
 
   await t.test("opening disables the Open workspace footer", () => {

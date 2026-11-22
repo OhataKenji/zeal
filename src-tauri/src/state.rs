@@ -2,7 +2,7 @@
 //!
 //! One mutex guards workspace and owned-invocation maps plus the shutdown
 //! flag; it serializes map ownership and process reap/signal decisions, not
-//! admission capacity. Every Bazel operation Zeal starts gets its own
+//! admission capacity. Every Bazel operation Zelith starts gets its own
 //! [`OwnedInvocation`] entry keyed by a fresh id, so a later launch never
 //! overwrites an earlier one. External BES invocations are only observed and
 //! are never inserted here.
@@ -41,7 +41,7 @@ pub struct WorkspaceDto {
     pub scope: crate::scope::Scope,
 }
 
-/// One Bazel operation Zeal launched: build/test/run under a terminal, or a
+/// One Bazel operation Zelith launched: build/test/run under a terminal, or a
 /// query/cquery/aquery over pipes. It describes the local process only and is
 /// never persisted as BEP history.
 #[derive(Clone, Serialize)]
@@ -140,7 +140,7 @@ pub struct CoreState {
     pub last_workspace: Option<PathBuf>,
     /// Registered workspaces by canonical path, each with its discovery scope.
     pub workspaces: BTreeMap<PathBuf, crate::scope::Scope>,
-    /// Every Bazel operation Zeal launched, by invocation id.
+    /// Every Bazel operation Zelith launched, by invocation id.
     pub invocations: BTreeMap<String, OwnedInvocation>,
     /// Workspaces with a `bazel mod` operation in flight; the modules page
     /// fails fast per workspace rather than queueing.
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn workspace_lookup_requires_the_registered_canonical_id() {
-        let temp = std::env::temp_dir().join(format!("zeal-state-{}", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("zelith-state-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&temp).unwrap();
         let canonical = temp.canonicalize().unwrap();
         let core = Core::new();

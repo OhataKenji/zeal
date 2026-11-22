@@ -8,14 +8,14 @@ use std::time::Duration;
 /// Opt-in test against a locally installed Bazel. Uses a tiny executable
 /// rule with no external language rules or network dependencies.
 #[tokio::test]
-#[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+#[ignore = "set ZELITH_TEST_BAZEL to an installed Bazel 8.x binary"]
 async fn real_bazel_records_invocation_and_accepts_standard_input() {
     let fixture = BazelFixture::new().await;
     fixture.records_invocation("build", "//:double").await;
     fixture.records_invocation("test", "//:check").await;
     fixture.accepts_standard_input().await;
     assert_eq!(
-        zeal_lib::list_invocation_records(&fixture.data, &fixture.ws, &[])
+        zelith_lib::list_invocation_records(&fixture.data, &fixture.ws, &[])
             .unwrap()
             .len(),
         3
@@ -39,12 +39,16 @@ impl Drop for BazelFixture {
 
 impl BazelFixture {
     async fn new() -> Self {
-        let bazel = std::env::var("ZEAL_TEST_BAZEL").expect("ZEAL_TEST_BAZEL");
+        let bazel = std::env::var("ZELITH_TEST_BAZEL").expect("ZELITH_TEST_BAZEL");
         let temp = Temp::new();
         let ws = temp.0.join("workspace");
         let data = temp.0.join("data");
         fs::create_dir(&ws).unwrap();
-        fs::write(ws.join("WORKSPACE"), "workspace(name = 'zeal_bes_test')\n").unwrap();
+        fs::write(
+            ws.join("WORKSPACE"),
+            "workspace(name = 'zelith_bes_test')\n",
+        )
+        .unwrap();
         fs::write(
             ws.join("BUILD"),
             "load(':binary.bzl', 'binary', 'check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n",
@@ -53,7 +57,7 @@ impl BazelFixture {
         fs::write(ws.join("binary.bzl"), "def _impl(ctx):\n    out = ctx.actions.declare_file(ctx.label.name + '.py')\n    ctx.actions.write(out, '#!/usr/bin/env python3\\nprint(int(input()) * 2)\\n', is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary = rule(implementation=_impl, executable=True)\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(zeal_lib::serve_build_events(listener, data.clone()));
+        let server = tokio::spawn(zelith_lib::serve_build_events(listener, data.clone()));
         Self {
             temp,
             ws,
@@ -98,7 +102,7 @@ impl BazelFixture {
             .await
             .unwrap();
         assert_success(&output, cmd);
-        let record = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
+        let record = zelith_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&record, cmd, pattern);
         self.assert_profile_saved(&id);
     }
@@ -110,21 +114,22 @@ impl BazelFixture {
         let process =
             tokio::task::spawn_blocking(move || run_with_input_after_build(command, wait_input));
         self.wait_for_build(&id, &process).await;
-        let observed = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
+        let observed = zelith_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert!(observed.finished_at.is_some(), "BEP finishes before input");
         let _ = send_input.send(());
         let output = process.await.unwrap();
         assert_success(&output, "run");
         assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
-        let observed = zeal_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
+        let observed = zelith_lib::read_invocation_record(&self.data, &self.ws, &id).unwrap();
         assert_invocation(&observed, "run", "//:double");
         assert!(observed.finished_at.is_some());
         self.assert_profile_saved(&id);
     }
 
     fn assert_profile_saved(&self, id: &str) {
-        let file = zeal_lib::open_invocation_artifact(&self.data, &self.ws, id, "profile.json.gz")
-            .unwrap();
+        let file =
+            zelith_lib::open_invocation_artifact(&self.data, &self.ws, id, "profile.json.gz")
+                .unwrap();
         let profile: serde_json::Value =
             serde_json::from_reader(flate2::read::GzDecoder::new(file)).unwrap();
         assert_eq!(profile["otherData"]["build_id"], id);
@@ -156,7 +161,7 @@ fn assert_success(output: &std::process::Output, cmd: &str) {
 }
 
 /// The recorded invocation of `cmd pattern`, exited cleanly.
-fn assert_invocation(record: &zeal_lib::InvocationRecord, cmd: &str, pattern: &str) {
+fn assert_invocation(record: &zelith_lib::InvocationRecord, cmd: &str, pattern: &str) {
     assert_eq!(record.cmd.as_deref(), Some(cmd));
     assert_eq!(record.pattern.as_deref(), Some(pattern));
     assert_eq!(record.exit_code, Some(0));
@@ -168,7 +173,7 @@ async fn wait_for_build_receipt(
     id: &str,
     process: &tokio::task::JoinHandle<std::process::Output>,
 ) {
-    while !zeal_lib::read_invocation_record(data, workspace, id)
+    while !zelith_lib::read_invocation_record(data, workspace, id)
         .is_ok_and(|build| build.finished_at.is_some())
         && !process.is_finished()
     {
@@ -240,7 +245,7 @@ struct Temp(PathBuf);
 
 impl Temp {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("zeal-bes-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("zelith-bes-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }

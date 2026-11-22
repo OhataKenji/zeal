@@ -177,7 +177,7 @@ pub fn parse_zstd<R: Read>(input: R, length: u64) -> Parsed {
 
 /// One bounded pass builds both display sections. No event collection survives
 /// a frame, and reaching the BEP display limit does not stop log extraction.
-#[tracing::instrument(target = "zeal::operations", name = "detail.bep_parse", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "detail.bep_parse", skip_all)]
 pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
     let mut parsed = Parsed::default();
     let mut display_size = json_size(&parsed.bep);

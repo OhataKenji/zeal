@@ -1,18 +1,18 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128@2x.png" alt="Zeal logo" width="128">
+  <img src="src-tauri/icons/128x128@2x.png" alt="Zelith logo" width="128">
 </p>
 
-<h1 align="center">Zeal</h1>
+<h1 align="center">Zelith</h1>
 
 <p align="center">A local-first Bazel GUI client.</p>
 
 <p align="center">Explore targets and dependencies, run builds and tests, and analyze build history.</p>
 
 <p align="center">
-  <a href="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml"><img src="https://github.com/OhataKenji/zeal/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/OhataKenji/zelith/actions/workflows/ci.yml"><img src="https://github.com/OhataKenji/zelith/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-[![Watch the Zeal demo on YouTube](docs/screenshots/overview.jpg)](https://youtu.be/Kkmc5_eOLA0)
+[![Watch the Zelith demo on YouTube](docs/screenshots/overview.jpg)](https://youtu.be/Kkmc5_eOLA0)
 
 <p align="center">
   <a href="https://youtu.be/Kkmc5_eOLA0">Watch on YouTube</a>
@@ -21,7 +21,7 @@
 ## Getting Started
 
 > [!WARNING]
-> Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
+> Zelith is in development. Expect breaking changes. Local data may not carry over to new versions.
 
 ### Step1: Install
 
@@ -29,7 +29,7 @@
 
 Prebuilt releases currently support **macOS (Apple Silicon) only**.
 
-Download the app from [GitHub Releases](https://github.com/OhataKenji/zeal/releases).
+Download the app from [GitHub Releases](https://github.com/OhataKenji/zelith/releases).
 
 #### Option 2: Build from source
 
@@ -39,7 +39,7 @@ Follow the [Development guide](docs/development.md#getting-started).
 
 **Requires:** Bazelisk or Bazel on your `PATH`.
 
-On macOS and Linux, Zeal loads your login shell's `PATH`.
+On macOS and Linux, Zelith loads your login shell's `PATH`.
 
 Open only trusted repositories.
 
@@ -88,13 +88,13 @@ Compare commands, options, and outcomes of two invocations side by side.
 
 ### Analytics Page
 
-Filter build and test history from Zeal and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
+Filter build and test history from Zelith and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
 
 ![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
 
 ## Record terminal invocations
 
-Zeal records commands run in the app. To also record terminal commands, add to `.bazelrc`:
+Zelith records commands run in the app. To also record terminal commands, add to `.bazelrc`:
 
 ```bazelrc
 build --bes_backend=grpc://127.0.0.1:4718
@@ -103,9 +103,9 @@ build --bes_timeout=5s
 build --experimental_collect_system_network_usage
 ```
 
-While Zeal is open, run `bazel build //...`.
+While Zelith is open, run `bazel build //...`.
 
-If port 4718 is already in use, Zeal listens on a different port — open the
+If port 4718 is already in use, Zelith listens on a different port — open the
 Workspace page for a one-off `--bes_backend` flag to pass to Bazel for that
 session instead of editing `.bazelrc`.
 

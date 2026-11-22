@@ -127,7 +127,7 @@ pub fn refresh_timezone() {
     }
 }
 
-#[tracing::instrument(target = "zeal::operations", name = "analytics.query", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "analytics.query", skip_all)]
 pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, StoreError> {
     use rusqlite::OptionalExtension;
 
@@ -427,7 +427,7 @@ mod tests {
         }
         fn empty() -> Self {
             let root =
-                std::env::temp_dir().join(format!("zeal-analytics-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("zelith-analytics-{}", uuid::Uuid::new_v4()));
             let data = root.join("data");
             let ws = root.join("workspace");
             fs::create_dir_all(&ws).unwrap();

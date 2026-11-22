@@ -405,7 +405,7 @@ mod tests {
     fn parse_mod_graph_folds_captured_bazel_output() {
         let snap = fixture();
         assert_eq!(snap.root_key, "<root>");
-        assert_eq!(snap.root_label, "<root> (zeal_bzlmod_fixture@0.0.1)");
+        assert_eq!(snap.root_label, "<root> (zelith_bzlmod_fixture@0.0.1)");
         // Direct dependencies first, then name order.
         let keys: Vec<&str> = snap.modules.iter().map(|m| m.key.as_str()).collect();
         assert_eq!(keys, ["mod_a@_", "mod_b@_", "mod_c@3.0.0", "mod_e@2.0.0"]);

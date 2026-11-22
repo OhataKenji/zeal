@@ -199,7 +199,7 @@ fn validate_expr(expr: &str) -> Result<(), String> {
 
 /// Run one ad-hoc query. Blocks until the query exits or its
 /// stop is given up on.
-#[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "query.exec", skip_all)]
 pub fn run(app: AppHandle, core: Arc<Core>, request: &QueryRequest) -> Result<QueryOutput, String> {
     let (mut child, id) = spawn_query(&core, request)?;
     let _slot = runner::InvocationGuard {
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn spawned_queries_each_hold_their_own_invocation() {
-        let dir = std::env::temp_dir().join(format!("zeal-query-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("zelith-query-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         let workspace = dir.join("workspace");
         fs::create_dir(&workspace).unwrap();

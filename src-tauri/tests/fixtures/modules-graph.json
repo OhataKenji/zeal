@@ -1,8 +1,8 @@
 {
   "key": "<root>",
-  "name": "zeal_bzlmod_fixture",
+  "name": "zelith_bzlmod_fixture",
   "version": "0.0.1",
-  "apparentName": "zeal_bzlmod_fixture",
+  "apparentName": "zelith_bzlmod_fixture",
   "dependencies": [
     {
       "key": "mod_a@_",

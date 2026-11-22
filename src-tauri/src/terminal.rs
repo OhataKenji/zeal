@@ -91,7 +91,7 @@ impl Drop for Capture {
 /// The console session's captured output: a temp file unlinked on creation,
 /// so it disappears once every handle closes.
 pub fn session_log() -> io::Result<File> {
-    let path = std::env::temp_dir().join(format!("zeal-{}.log", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!("zelith-{}.log", uuid::Uuid::new_v4()));
     let log = OpenOptions::new()
         .read(true)
         .write(true)
@@ -102,7 +102,7 @@ pub fn session_log() -> io::Result<File> {
     Ok(log)
 }
 
-#[tracing::instrument(target = "zeal::operations", name = "bazel.spawn", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "bazel.spawn", skip_all)]
 pub fn spawn(command: &mut Command, log: &File) -> io::Result<(Child, Control, Capture)> {
     let mut log = log.try_clone()?;
     let size = Winsize {

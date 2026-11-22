@@ -45,7 +45,7 @@ fn from_env() -> Option<SdkTracerProvider> {
     if !cfg!(debug_assertions) {
         return None;
     }
-    let endpoint = std::env::var("ZEAL_OTLP_ENDPOINT").ok()?;
+    let endpoint = std::env::var("ZELITH_OTLP_ENDPOINT").ok()?;
     let provider = provider(&endpoint).or_else(|| {
         // Exporter errors may contain the endpoint or credentials.
         log::warn!("development tracing disabled: invalid OTLP configuration");
@@ -55,10 +55,10 @@ fn from_env() -> Option<SdkTracerProvider> {
     Some(provider)
 }
 
-// Export only Zeal's explicit operation instrumentation, never dependency events.
+// Export only Zelith's explicit operation instrumentation, never dependency events.
 fn subscriber(provider: &SdkTracerProvider) -> impl tracing::Subscriber + Send + Sync + 'static {
     let layer = tracing_opentelemetry::layer()
-        .with_tracer(provider.tracer("zeal"))
+        .with_tracer(provider.tracer("zelith"))
         .with_location(false)
         .with_threads(false)
         .with_target(false)
@@ -66,7 +66,7 @@ fn subscriber(provider: &SdkTracerProvider) -> impl tracing::Subscriber + Send +
         .with_tracked_inactivity(false)
         .with_context_activation(false)
         .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
-            metadata.is_span() && metadata.target() == "zeal::operations"
+            metadata.is_span() && metadata.target() == "zelith::operations"
         }));
     tracing_subscriber::registry().with(layer)
 }
@@ -101,7 +101,7 @@ fn provider(base: &str) -> Option<SdkTracerProvider> {
             // Do not read resource attributes from the developer's environment.
             .with_resource(
                 Resource::builder_empty()
-                    .with_service_name("zeal-dev")
+                    .with_service_name("zelith-dev")
                     .with_attribute(KeyValue::new("service.version", env!("CARGO_PKG_VERSION")))
                     .build(),
             )
@@ -149,9 +149,9 @@ mod tests {
         let mut process = isolated_probe("telemetry::tests::endpoint_env_probe");
         process
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9")
-            .env("ZEAL_TEST_EXPECT_ENABLED", expected.to_string());
+            .env("ZELITH_TEST_EXPECT_ENABLED", expected.to_string());
         if let Some(endpoint) = endpoint {
-            process.env("ZEAL_OTLP_ENDPOINT", endpoint);
+            process.env("ZELITH_OTLP_ENDPOINT", endpoint);
         }
         let output = process.output().unwrap();
         assert!(
@@ -174,7 +174,7 @@ mod tests {
         let provider = from_env();
         assert_eq!(
             provider.is_some(),
-            std::env::var("ZEAL_TEST_EXPECT_ENABLED").unwrap() == "true"
+            std::env::var("ZELITH_TEST_EXPECT_ENABLED").unwrap() == "true"
         );
         if let Some(provider) = provider {
             provider.shutdown().unwrap();
@@ -208,7 +208,7 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let output = tokio::task::spawn_blocking(move || {
             isolated_probe("telemetry::tests::http_export_probe")
-                .env("ZEAL_OTLP_ENDPOINT", endpoint)
+                .env("ZELITH_OTLP_ENDPOINT", endpoint)
                 .env("OTEL_BSP_SCHEDULE_DELAY", "60000") // Export only on force_flush.
                 .env(
                     header_variable,
@@ -254,10 +254,10 @@ mod tests {
     #[ignore = "invoked with isolated environment by the HTTP credential tests"]
     #[cfg(debug_assertions)]
     fn http_export_probe() {
-        let provider = from_env().expect("set a debug ZEAL_OTLP_ENDPOINT");
-        tracing::info_span!(target: "zeal::operations", "http.export_probe").in_scope(|| {
+        let provider = from_env().expect("set a debug ZELITH_OTLP_ENDPOINT");
+        tracing::info_span!(target: "zelith::operations", "http.export_probe").in_scope(|| {
             tracing::error!(target: "dependency", "private-token");
-            tracing::error!(target: "zeal::operations", "private-token");
+            tracing::error!(target: "zelith::operations", "private-token");
             // Arguments and returned errors must not become span fields.
             let private = std::path::Path::new("private-token");
             assert!(crate::store::read_record(private, private, "private-token").is_err());

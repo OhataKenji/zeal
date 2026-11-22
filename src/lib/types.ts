@@ -171,7 +171,7 @@ export interface TargetLoad {
   error: IngestError | null;
 }
 
-/** One Bazel operation Zeal launched; presence in `invocations` means the
+/** One Bazel operation Zelith launched; presence in `invocations` means the
  * core still owns its worker, including the final output drain. */
 export interface OwnedInvocation {
   id: string;

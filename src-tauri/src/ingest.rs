@@ -91,7 +91,7 @@ fn target_load(outcome: Outcome<Vec<Target>>) -> TargetLoad {
 
 /// Query the selected target in `ws`. The label's format is validated here;
 /// membership in the current target list is the caller's check.
-#[tracing::instrument(target = "zeal::operations", name = "target.detail", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "target.detail", skip_all)]
 pub fn target_detail(
     app: AppHandle,
     core: Arc<Core>,
@@ -216,7 +216,7 @@ pub enum TargetReadData {
 /// One inspector read for the selected target under the applied build
 /// flags: a single `cquery`/`aquery` process per call. Definition never
 /// reaches this command.
-#[tracing::instrument(target = "zeal::operations", name = "target.read", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "target.read", skip_all)]
 pub fn read_target(
     app: AppHandle,
     core: Arc<Core>,
@@ -268,7 +268,7 @@ fn command(ws: &Path, bazel: &Path, query: &str, output: &str) -> Command {
 }
 
 /// Run one scoped query and parse stdout.
-#[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "bazel.query", skip_all)]
 fn fetch<T: Send + 'static>(
     core: &Core,
     meta: runner::InvocationMeta<'_>,
@@ -432,7 +432,7 @@ mod tests {
     impl QueryFixture {
         fn new() -> Self {
             let workspace =
-                std::env::temp_dir().join(format!("zeal-ingest-stderr-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("zelith-ingest-stderr-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&workspace).unwrap();
             let result = query_schema::QueryResult {
                 target: vec![query_schema::Target {

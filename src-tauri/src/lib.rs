@@ -45,7 +45,7 @@ fn get_state(core: State<Arc<Core>>) -> AppStateDto {
 
 /// Fetch `bazel info` paths for a registered workspace.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "workspace.info", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "workspace.info", skip_all)]
 async fn get_workspace_info(
     core: State<'_, Arc<Core>>,
     workspace: String,
@@ -64,7 +64,7 @@ async fn get_workspace_info(
 /// `bazel mod graph` for a registered workspace, under one per-workspace
 /// fail-fast guard.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "modules.get", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "modules.get", skip_all)]
 async fn get_modules(
     core: State<'_, Arc<Core>>,
     workspace: String,
@@ -78,7 +78,7 @@ async fn get_modules(
 /// `bazel mod explain --verbose` for one module key in a registered
 /// workspace, under the same per-workspace fail-fast guard.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "modules.explain", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "modules.explain", skip_all)]
 async fn explain_module(
     core: State<'_, Arc<Core>>,
     workspace: String,
@@ -92,7 +92,11 @@ async fn explain_module(
 
 /// Load relationships for one target in `workspace`.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.detail.request", skip_all)]
+#[tracing::instrument(
+    target = "zelith::operations",
+    name = "target.detail.request",
+    skip_all
+)]
 async fn get_target_detail(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -119,7 +123,7 @@ async fn get_target_detail(
 /// actions) for `label` in `workspace`, resolved under the applied build
 /// flags. Each call runs at most one Bazel process.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.read.request", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "target.read.request", skip_all)]
 async fn read_target(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -149,7 +153,7 @@ async fn read_target(
 /// preference. It does not query; the caller refreshes explicitly. Running
 /// invocations in any workspace are unaffected.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "workspace.open", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "workspace.open", skip_all)]
 fn open_workspace(
     app: AppHandle,
     core: State<Arc<Core>>,
@@ -187,7 +191,7 @@ fn open_workspace(
 /// Manual refresh: run the target-list query for `workspace` under `scope`
 /// and return its result. Every call is an independent owned invocation.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "workspace.refresh", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "workspace.refresh", skip_all)]
 async fn refresh(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -225,7 +229,7 @@ async fn list_workspaces(app: AppHandle) -> Result<Vec<PathBuf>, String> {
 
 /// Start `bazel build|test|run <target>` in `workspace`.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "invocation.start", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "invocation.start", skip_all)]
 fn start_invocation(
     app: AppHandle,
     core: State<Arc<Core>>,
@@ -247,7 +251,7 @@ fn start_invocation(
 
 /// Stop the owned invocation `id` in `workspace`.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "invocation.stop", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "invocation.stop", skip_all)]
 fn stop_invocation(
     app: AppHandle,
     core: State<Arc<Core>>,
@@ -262,7 +266,7 @@ fn stop_invocation(
 /// invocation. The blocking work is spawned so this command does not hold
 /// the main thread for the whole query.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "query.exec", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "query.exec", skip_all)]
 async fn run_query(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -334,7 +338,7 @@ struct InvocationHistory {
 /// event; the projection alone resolves precedence — all validated
 /// against the registered workspace.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "invocations.list", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "invocations.list", skip_all)]
 async fn list_invocations(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
@@ -443,7 +447,7 @@ async fn get_analytics(
 /// Return the saved record, log and build results.
 #[tauri::command]
 #[tracing::instrument(
-    target = "zeal::operations",
+    target = "zelith::operations",
     name = "invocation.detail.request",
     skip_all
 )]
@@ -468,7 +472,7 @@ async fn get_invocation(
 /// Return the saved timing profile and its availability status.
 #[tauri::command]
 #[tracing::instrument(
-    target = "zeal::operations",
+    target = "zelith::operations",
     name = "invocation.profile.request",
     skip_all
 )]
@@ -615,7 +619,7 @@ mod tests {
     fn canonical_workspace_path_resolves_a_symlink() {
         use std::os::unix::fs::symlink;
 
-        let dir = std::env::temp_dir().join(format!("zeal-ws-path-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("zelith-ws-path-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         let child = dir.join("child");
         std::fs::create_dir(&child).unwrap();
@@ -633,7 +637,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         use std::os::unix::fs::symlink;
 
-        let dir = std::env::temp_dir().join(format!("zeal-ws-path-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("zelith-ws-path-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         let bad = dir.join(OsString::from_vec(b"bad\xff".to_vec()));
         std::fs::create_dir(&bad).unwrap();

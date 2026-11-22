@@ -17,7 +17,7 @@ fn unavailable() -> io::Error {
     )
 }
 
-#[tracing::instrument(target = "zeal::operations", name = "console.read", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "console.read", skip_all)]
 pub fn read(core: &Core, ws: &str, id: &str, offset: u64) -> io::Result<Output> {
     let file = {
         let state = core.state.lock().expect("application state lock poisoned");
@@ -66,7 +66,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("zeal-output-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("zelith-output-{}", uuid::Uuid::new_v4()));
             let workspace = root.join("workspace");
             let other = root.join("other");
             std::fs::create_dir_all(&workspace).unwrap();

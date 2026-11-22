@@ -1,4 +1,4 @@
-# Zeal 設計 M3: target を見つけて実行する
+# Zelith 設計 M3: target を見つけて実行する
 
 _OhataKenji_
 _Last update: 2026/11/18_
@@ -59,7 +59,7 @@ workspace、Bazel、BES が利用可能なら Send を受け付ける。
 snapshot がなくても手入力で実行できる。
 同じ output base を使うコマンドの排他は Bazel が行う。
 擬似端末(**PTY**)、Bazelイベントを受けるreceiverの準備に失敗したらspawnしない。
-cwdはworkspace root、stdinはPTYで扱い、観測flagはZealが組み立てる([M2](./m2-invocation-detail.md))。
+cwdはworkspace root、stdinはPTYで扱い、観測flagはZelithが組み立てる([M2](./m2-invocation-detail.md))。
 
 ### ログと更新
 
@@ -81,7 +81,7 @@ stop は現在保持しているプロセスグループへ SIGINT を送り、3
 履歴のビルド結果はBEPの事実を維持し、processの状態から補完しない。
 自動再実行、自動 query、無期限の復旧ループを持たず、残存プロセスへの対処を利用者に任せる。
 以前のセッションのプロセスには signal を送らない。
-アプリ終了時は、Zeal が所有するすべての実行の停止を開始する。共通の短い猶予の後、残っている実行に SIGKILL を試みる。
+アプリ終了時は、Zelith が所有するすべての実行の停止を開始する。共通の短い猶予の後、残っている実行に SIGKILL を試みる。
 
 ## Caveats
 
@@ -94,7 +94,7 @@ stop は現在保持しているプロセスグループへ SIGINT を送り、3
 ## Security and Privacy
 
 入力制約と shell を介さない引数渡しは [overview](./overview.md#security-concerns) に従う。
-成果物は local の invocation ディレクトリに保存し、Zeal から外部へ共有しない。
+成果物は local の invocation ディレクトリに保存し、Zelith から外部へ共有しない。
 対象のコード自体を隔離するものではないため、既知のリポジトリで試す。
 
 ## Test Plan

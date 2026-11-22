@@ -36,7 +36,7 @@ pub enum Section<T> {
 /// Read the record and available observations from an invocation dir. A
 /// missing or unreadable observation never hides the record or another
 /// observation.
-#[tracing::instrument(target = "zeal::operations", name = "invocation.detail", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "invocation.detail", skip_all)]
 pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<InvocationDetail> {
     let record = store::read_record(data, workspace, id)?;
     let (log, bep) = match store::event_artifact(data, workspace, id).map_err(io::Error::from) {
@@ -167,7 +167,7 @@ mod tests {
         f.complete();
         let path = f.dir().join("attempt/1/bep.binpb.zst");
         fs::remove_file(&path).unwrap();
-        symlink(f.data.join("zeal.db"), path).unwrap();
+        symlink(f.data.join("zelith.db"), path).unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::ReadError { .. }));
         assert!(matches!(detail.bep, Section::ReadError { .. }));

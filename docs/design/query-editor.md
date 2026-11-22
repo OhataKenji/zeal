@@ -1,4 +1,4 @@
-# Zeal 設計: query editor
+# Zelith 設計: query editor
 
 _OhataKenji_
 _Last update: 2026/11/01_
