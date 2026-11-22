@@ -17,15 +17,11 @@ build --experimental_collect_system_network_usage`;
     <CopyButton {text} {label} onerror={(message) => (copyError = message)} />
   </div>
 {/snippet}
-<p class="scope-help">
-  Add these lines to your workspace's <code>.bazelrc</code> to record CLI invocations
-  when Zeal is listening on its default port (4718).
-</p>
+<p class="scope-help">Add to your workspace's <code>.bazelrc</code> to record CLI invocations:</p>
 {@render copyBlock(BAZELRC, "Copy .bazelrc settings")}
 {#if endpoint && endpoint !== DEFAULT_ENDPOINT}
   <p class="scope-help">
-    Zeal is listening on a different port. Override the setting on each Bazel command
-    this session with the following flag. Do not add it to <code>.bazelrc</code>.
+    Temporary port: pass this flag on each Bazel command this session, not in <code>.bazelrc</code>.
   </p>
   {@render copyBlock(`--bes_backend=${endpoint}`, "Copy session option")}
 {/if}
