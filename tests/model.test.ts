@@ -9,26 +9,24 @@ import {
   relations,
   shellQuote,
   splitLabel,
+  subtreeTargets,
 } from "../src/lib/model.ts";
-import type { Target, TargetDetail, TargetIndex } from "../src/lib/types.ts";
+import type { Target, TargetDetail } from "../src/lib/types.ts";
 
 function target(label: string, ruleClass = "cc_library"): Target {
   return { label, ...splitLabel(label), ruleClass, location: null };
 }
 
 // Deliberately unsorted labels across nested packages plus a root target.
-function treeFixture(): TargetIndex {
-  return {
-    meta: { fetchedAt: 0, status: "ok" },
-    targets: [
-      target("//zeta:top"),
-      target("//app:server"),
-      target("//app/lib:parser"),
-      target("//app:alpha"),
-      target("//:root_tool"),
-      target("//app/api:handler"),
-    ],
-  };
+function treeFixture(): Target[] {
+  return [
+    target("//zeta:top"),
+    target("//app:server"),
+    target("//app/lib:parser"),
+    target("//app:alpha"),
+    target("//:root_tool"),
+    target("//app/api:handler"),
+  ];
 }
 
 function rowKey(row: ReturnType<typeof flatten>[number]): string {
@@ -38,8 +36,9 @@ function rowKey(row: ReturnType<typeof flatten>[number]): string {
 }
 
 test("package tree sorts directories and targets and counts subtree totals", () => {
-  const tree = buildTree(treeFixture());
+  const { root: tree, byPath } = buildTree(treeFixture());
   assert.equal(tree.count, 6);
+  assert.equal(byPath.get(""), tree);
   assert.deepEqual(
     tree.dirs.map((d) => d.path),
     ["app", "zeta"],
@@ -63,10 +62,40 @@ test("package tree sorts directories and targets and counts subtree totals", () 
   assert.equal(app.dirs[0].count, 1);
   assert.equal(app.dirs[1].count, 1);
   assert.equal(tree.dirs[1].count, 1);
+  // byPath hands out the same node objects the tree rows render.
+  assert.equal(byPath.get("app/lib"), app.dirs[1]);
+});
+
+test("subtreeTargets puts direct targets first, then descendants by label", () => {
+  const generated = Array.from(
+    { length: 501 },
+    (_, i) => `//app/lib:t${String(i).padStart(4, "0")}`,
+  );
+  const { root, byPath } = buildTree([
+    target("//app:z"),
+    target("//app/deeper:x"),
+    target("//app2:sibling"),
+    target("//:root"),
+    ...generated.map((label) => target(label)),
+  ]);
+  const app = byPath.get("app");
+  assert.ok(app);
+  // The root's own target leads; descendants follow in label order.
+  assert.deepEqual(
+    subtreeTargets(root)
+      .map((t) => t.label)
+      .slice(0, 2),
+    ["//:root", "//app/deeper:x"],
+  );
+  // //app's direct target leads its descendants; //app2 stays out.
+  assert.deepEqual(
+    subtreeTargets(app).map((t) => t.label),
+    ["//app:z", "//app/deeper:x", ...generated],
+  );
 });
 
 test("flatten lists directories before target leaves at every level", () => {
-  const tree = buildTree(treeFixture());
+  const { root: tree } = buildTree(treeFixture());
 
   // Collapsed: only depth-0 rows — directories first, then the root leaves.
   assert.deepEqual(flatten(tree, new Set()).map(rowKey), [
@@ -96,7 +125,7 @@ test("flatten lists directories before target leaves at every level", () => {
 });
 
 test("revealing a target expands its package ancestors including the package itself", () => {
-  const tree = buildTree(treeFixture());
+  const { root: tree } = buildTree(treeFixture());
   const expanded = new Set<string>();
   for (const path of ancestorsOf(splitLabel("//app/lib:parser").pkg)) {
     expanded.add(path);
@@ -184,11 +213,10 @@ test("commandLine joins quoted arguments with spaces", () => {
 });
 
 test("directories and target leaves are distinct rows with no synthetic root", () => {
-  const index: TargetIndex = {
-    meta: { fetchedAt: 0, status: "ok" },
-    targets: ["//app/lib:parser", "//apple:server", "//:root"].map((label) => target(label)),
-  };
-  const rows = flatten(buildTree(index), new Set(["app", "app/lib"]));
+  const rows = flatten(
+    buildTree(["//app/lib:parser", "//apple:server", "//:root"].map((label) => target(label))).root,
+    new Set(["app", "app/lib"]),
+  );
   // Intermediate directories without their own targets still appear as rows.
   assert.deepEqual(
     rows.map((row) => rowKey(row)),

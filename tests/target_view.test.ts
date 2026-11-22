@@ -68,7 +68,6 @@ function makeAction(overrides: Partial<TargetAction> = {}): TargetAction {
 test("TargetView renders target details", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: TargetView } = await load("/src/lib/TargetView.svelte");
-  const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
   interface ViewOptions {
     phaseData?: TargetPhaseData | null;
@@ -91,6 +90,8 @@ test("TargetView renders target details", async (t) => {
         flags: options.flags ?? "",
         wsRoot: "/ws",
         onselect: () => {},
+        onrun: () => {},
+        onopenflags: () => {},
         ontab: () => {},
         onapply: () => {},
       },
@@ -245,7 +246,7 @@ test("TargetView renders target details", async (t) => {
     // The full path stays available as the title.
     assert.ok(html.includes('title="bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"'));
     // Closed rows do not materialize command details or input paths.
-    assert.equal((html.match(/<details\b/g) ?? []).length, 2);
+    assert.equal((html.match(/<details class="action-item"/g) ?? []).length, 2);
     assert.doesNotMatch(html, /class="action-details"/);
     assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
   });
@@ -330,42 +331,11 @@ test("TargetView renders target details", async (t) => {
     assert.match(html, />\s*app\/lib\/BUILD\.bazel:14\s*</);
 
     assert.ok(!view().includes("BUILD.bazel"));
-
-    const pkgHtml = render(PackageView, {
-      props: {
-        index: INDEX,
-        pkg: "app/lib",
-        onselect: () => {},
-        onrun: () => {},
-        onopenflags: () => {},
-      },
-    }).body.replace(/<!--[\s\S]*?-->/g, "");
-    assert.match(pkgHtml, /<h1[^>]*>\/\/app\/lib:all<\/h1>/);
-    assert.match(pkgHtml, />:parser</);
   });
 
   await t.test("a test_suite target offers Test as the primary action", () => {
-    const withActions = (ruleClass: string): string =>
-      render(TargetView, {
-        props: {
-          index: INDEX,
-          detail: { ...DETAIL, target: { ...PARSER, ruleClass } },
-          phaseData: null,
-          phaseError: null,
-          tab: "definition",
-          flags: "",
-          wsRoot: "/ws",
-          onselect: () => {},
-          onrun: () => {},
-          onopenflags: () => {},
-          ontab: () => {},
-          onapply: () => {},
-        },
-      })
-        .body.replace(/<!--[\s\S]*?-->/g, "")
-        .replace(/\s+/g, " ");
-    assert.match(withActions("test_suite"), />Test<\/button>/);
-    assert.match(withActions("cc_library"), />Build<\/button>/);
+    assert.match(view({ target: { ...PARSER, ruleClass: "test_suite" } }), />Test<\/button>/);
+    assert.match(view({ target: { ...PARSER, ruleClass: "cc_library" } }), />Build<\/button>/);
   });
 
   await t.test("attributes render without the label filter and keep Show more", () => {
@@ -442,26 +412,27 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
     return { label, ...splitLabel(label), ruleClass, location: null };
   }
 
-  function output(index: TargetIndex, pkg: string): string {
+  // The view consumes the same nodes the tree builds; pkg "" is the root.
+  function output(targets: readonly Target[], pkg = ""): string {
+    const { root, byPath } = buildTree(targets);
+    const node = pkg === "" ? root : byPath.get(pkg);
+    assert.ok(node, `no package node for //${pkg}`);
     return render(PackageView, {
-      props: { index, pkg, onselect: () => {}, onrun: () => {}, onopenflags: () => {} },
+      props: { node, onselect: () => {}, onrun: () => {}, onopenflags: () => {} },
     })
       .body.replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\s+/g, " ");
   }
 
-  const MIXED: TargetIndex = {
-    meta: { fetchedAt: 1, status: "ok" },
-    targets: [
-      indexedTarget("//app:top"),
-      indexedTarget("//app/lib:deep"),
-      indexedTarget("//other:solo"),
-      indexedTarget("//:root"),
-    ],
-  };
+  const MIXED: Target[] = [
+    indexedTarget("//app:top"),
+    indexedTarget("//app/lib:deep"),
+    indexedTarget("//other:solo"),
+    indexedTarget("//:root"),
+  ];
 
   await t.test("the root scope defaults to direct targets with a subtree switch", () => {
-    const html = output(MIXED, "");
+    const html = output(MIXED);
     assert.match(html, /<h1[^>]*>\/\/:all<\/h1>/);
     assert.match(html, />1 targets</);
     // Only the root package's own target shows; descendants wait for the switch.
@@ -489,11 +460,7 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
   });
 
   await t.test("a package with only descendants defaults to the subtree scope", () => {
-    const index: TargetIndex = {
-      meta: { fetchedAt: 1, status: "ok" },
-      targets: [indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")],
-    };
-    const html = output(index, "app");
+    const html = output([indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")], "app");
     assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
     // Descendant rows keep their package prefix; there is no switch to show.
     assert.ok(html.includes(">//app/lib</span>:deep</button>"));
@@ -510,58 +477,47 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
     assert.doesNotMatch(html, /aria-pressed/);
   });
 
-  await t.test("an empty scope reports no targets", () => {
-    const html = output(MIXED, "missing");
-    assert.match(html, /<h1[^>]*>\/\/missing\/\.\.\.<\/h1>/);
+  await t.test("an empty tree root reports no targets", () => {
+    const html = output([]);
+    assert.match(html, /<h1[^>]*>\/\/\.\.\.<\/h1>/);
     assert.match(html, /No targets in this scope\./);
     assert.match(html, />0 targets</);
   });
 
   await t.test("test_suite counts as a test for the primary action", () => {
-    const index: TargetIndex = {
-      meta: { fetchedAt: 1, status: "ok" },
-      targets: [indexedTarget("//app:all_tests", "test_suite"), indexedTarget("//app:lib")],
-    };
-    const html = output(index, "app");
+    const html = output(
+      [indexedTarget("//app:all_tests", "test_suite"), indexedTarget("//app:lib")],
+      "app",
+    );
     assert.match(html, />Test<\/button>/);
   });
 
-  await t.test("sorting does not mutate index.targets", () => {
-    const index: TargetIndex = {
-      meta: { fetchedAt: 1, status: "ok" },
-      targets: [indexedTarget("//z:-last"), indexedTarget("//a:first")],
-    };
-    const before = index.targets.map((t) => t.label);
-    output(index, "");
+  await t.test("sorting does not mutate the targets array", () => {
+    const targets = [indexedTarget("//z:-last"), indexedTarget("//a:first")];
+    const before = targets.map((t) => t.label);
+    output(targets);
     assert.deepEqual(
-      index.targets.map((t) => t.label),
+      targets.map((t) => t.label),
       before,
     );
-    const html = output(index, "");
+    const html = output(targets);
     assert.ok(
       html.indexOf(">//a</span>:first</button>") < html.indexOf(">//z</span>:-last</button>"),
     );
   });
 
   await t.test("more than 500 rows truncate with a notice", () => {
-    const index: TargetIndex = {
-      meta: { fetchedAt: 1, status: "ok" },
-      targets: Array.from({ length: 501 }, (_, i) =>
-        indexedTarget(`//app:t${String(i).padStart(4, "0")}`),
-      ),
-    };
-    const html = output(index, "app");
+    const targets = Array.from({ length: 501 }, (_, i) =>
+      indexedTarget(`//app:t${String(i).padStart(4, "0")}`),
+    );
+    const html = output(targets, "app");
     assert.equal((html.match(/class="clickable"/g) ?? []).length, 500);
     assert.match(
       html,
       /Showing first 500 of 501 targets — select a package or press ⌘K to narrow\./,
     );
 
-    const exact: TargetIndex = {
-      meta: { fetchedAt: 1, status: "ok" },
-      targets: index.targets.slice(0, 500),
-    };
-    const exactHtml = output(exact, "app");
+    const exactHtml = output(targets.slice(0, 500), "app");
     assert.equal((exactHtml.match(/class="clickable"/g) ?? []).length, 500);
     assert.doesNotMatch(exactHtml, /Showing first 500/);
   });
@@ -585,7 +541,7 @@ test("Tree marks grouping-only folders and renders root targets", async (t) => {
     ],
   };
   const html = render(Tree, {
-    props: { root: buildTree(index), selection: null, onselect: () => {} },
+    props: { root: buildTree(index.targets).root, selection: null, onselect: () => {} },
   })
     .body.replace(/<!--[\s\S]*?-->/g, "")
     .replace(/\s+/g, " ");

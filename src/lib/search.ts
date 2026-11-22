@@ -29,86 +29,66 @@ export function labelTarget(label: string, ruleClass: string): Target {
 }
 
 /**
- * Parses `//pkg:needle` and `//:needle` structured queries. The first colon
- * splits the package scope from the target-name fragment.
+ * Structured `//pkg:needle` matching: exact package scope (root `//:` means
+ * labels with no package), `needle` a case-insensitive name substring.
+ * Candidates sort by name; an empty needle lists the whole package.
  */
-function structured(query: string): { pkg: string; name: string } | null {
-  if (!query.startsWith("//")) return null;
-  const colon = query.indexOf(":");
-  if (colon < 0) return null;
-  return { pkg: query.slice(2, colon), name: query.slice(colon + 1) };
-}
-
-/**
- * Structured `//pkg:needle` matching: the package must match exactly — root
- * `//:` selects only targets whose labels have no package — and `needle` is a
- * case-insensitive substring of the target name. Candidates sort by name;
- * an empty needle lists the whole package.
- */
-function structuredMatches(index: SearchIndex, pkg: string, name: string, limit: number): Match[] {
-  const needle = name.toLowerCase();
-  const found = index.targets
-    .filter((target) => {
-      // labelTarget candidates carry no name; keep them out of label queries.
-      if (target.name === "") return false;
-      if (pkg === "") {
-        if (!target.label.startsWith("//:")) return false;
-      } else if (target.pkg !== pkg) {
-        return false;
-      }
-      return needle === "" || target.name.toLowerCase().includes(needle);
-    })
-    .sort(
-      (a, b) =>
-        a.name.localeCompare(b.name) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0),
+function packageMatches(
+  targets: readonly Target[],
+  pkg: string,
+  needle: string,
+  limit: number,
+): Match[] {
+  return targets
+    .filter(
+      (target) =>
+        // labelTarget candidates carry no name; keep them out of label queries.
+        target.name !== "" &&
+        target.pkg === pkg &&
+        (pkg !== "" || target.label.startsWith("//:")) &&
+        target.name.toLowerCase().includes(needle),
     )
-    .slice(0, limit);
-  return found.map((target) => {
-    const prefix = target.label.length - target.name.length;
-    const at = needle === "" ? -1 : target.name.toLowerCase().indexOf(needle);
-    return {
-      target,
-      indices: at < 0 ? [] : [[prefix + at, prefix + at + needle.length - 1] as const],
-    };
-  });
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((target) => {
+      const start =
+        target.label.length - target.name.length + target.name.toLowerCase().indexOf(needle);
+      return { target, indices: needle ? [[start, start + needle.length - 1] as const] : [] };
+    });
 }
 
 /**
- * Ordinary fuzzy matching over labels. fuzzysort decides matching, scoring
- * and matched positions; queries match subsequences and space-separated terms.
- * Root-package targets whose names start with the needle get a score boost so
- * `//:format` outranks `//app:format` for "format".
+ * Searches `index` for `query`: `//pkg:fragment` matches names inside one
+ * package, anything else fuzzy-matches whole labels. Root-package name
+ * matches get a score tier so `//:format` outranks `//app:format`.
  */
-function fuzzyMatches(index: SearchIndex, query: string, limit: number): Match[] {
-  const needle = query.toLowerCase();
+export function search(index: SearchIndex, query: string, limit = 20): Match[] {
+  const trimmed = query.trim();
+  if (trimmed === "" || limit <= 0) return [];
+  const colon = trimmed.indexOf(":");
+  if (trimmed.startsWith("//") && colon >= 0) {
+    return packageMatches(
+      index.targets,
+      trimmed.slice(2, colon),
+      trimmed.slice(colon + 1).toLowerCase(),
+      limit,
+    );
+  }
+  const needle = trimmed.toLowerCase();
   return fuzzysort
-    .go(query, index.labels, {
+    .go(trimmed, index.labels, {
       limit,
       threshold: 0,
       scoreFn: (result) => {
-        const name = result.obj.name.toLowerCase();
-        if (result.obj.pkg === "" && name.startsWith(needle)) {
-          return (name === needle ? 0.95 : 0.8) + 0.05 * result.score;
-        }
-        return 0.75 * result.score;
+        const name = result.obj.pkg === "" ? result.obj.name.toLowerCase() : "";
+        const tier = name === needle ? 2 : name.startsWith(needle) ? 1 : 0;
+        return (tier + result.score) / 3;
       },
     })
     .map((result) => ({
       target: result.obj,
       indices: result.indexes.map((position): readonly [number, number] => [position, position]),
     }));
-}
-
-/**
- * Searches `index` for `query`: a `//pkg:fragment` query matches target names
- * inside one package, anything else fuzzy-matches whole labels.
- */
-export function search(index: SearchIndex, query: string, limit = 20): Match[] {
-  const trimmed = query.trim();
-  if (trimmed === "" || limit <= 0) return [];
-  const scoped = structured(trimmed);
-  if (scoped !== null) return structuredMatches(index, scoped.pkg, scoped.name, limit);
-  return fuzzyMatches(index, trimmed, limit);
 }
 
 /** Merges sorted ranges, combining overlapping or adjacent ones. */

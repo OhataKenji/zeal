@@ -12,6 +12,9 @@ keep their state in their views.
 - Starts capture content and workspace-open identity. A target/package change
   invalidates the captured content; explicit-open intent blocks saved-workspace
   restoration even after failure.
+- The target explorer builds one package tree per snapshot: the sidebar tree
+  and the package table read the same nodes. Selection and target reads live
+  in the session; expansion and direct/subtree scope stay local to the views.
 - Target reads have two lifetimes: static detail once per selection, then one
   phase reader for the active target detail tab (configured or actions) under the
   workspace's applied build flags; Definition issues no phase read. The UI

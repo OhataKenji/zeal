@@ -7,12 +7,10 @@
   let {
     root,
     selection,
-    revealRequest = 0,
     onselect,
   }: {
     root: DirNode;
     selection: ExplorerSelection;
-    revealRequest?: number;
     onselect: (selection: ExplorerSelection) => void;
   } = $props();
 
@@ -42,7 +40,6 @@
   // package so its leaves show, while a package expands only its ancestors
   // so a folder the user collapsed stays collapsed.
   $effect(() => {
-    void revealRequest;
     const paths =
       selection?.kind === "target"
         ? ancestorsOf(splitLabel(selection.label).pkg)

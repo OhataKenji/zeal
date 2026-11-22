@@ -1,18 +1,16 @@
 <script lang="ts">
   import ActionPair from "./ActionPair.svelte";
-  import { isTestRule } from "./model";
-  import type { BazelCommand, Target, TargetIndex } from "./types";
+  import { isTestRule, subtreeTargets, type DirNode } from "./model";
+  import type { BazelCommand } from "./types";
 
   let {
-    index,
-    pkg,
+    node,
     canRun = true,
     onselect,
     onrun,
     onopenflags,
   }: {
-    index: TargetIndex;
-    pkg: string;
+    node: DirNode;
     canRun?: boolean;
     onselect: (label: string) => void;
     onrun: (cmd: BazelCommand, pattern: string) => void;
@@ -20,23 +18,14 @@
   } = $props();
 
   const ROW_CAP = 500;
-  function byLabel(a: Target, b: Target): number {
-    return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
-  }
-  // Filter before sorting so a package click does not re-sort the workspace.
-  const directTargets = $derived(index.targets.filter((t) => t.pkg === pkg).sort(byLabel));
-  const subTargets = $derived(
-    index.targets
-      .filter((t) => t.pkg !== pkg && (pkg === "" || t.pkg.startsWith(`${pkg}/`)))
-      .sort(byLabel),
-  );
   let subtreeRequested = $state(false);
   const recursive = $derived(
-    !directTargets.length || (subTargets.length > 0 && subtreeRequested),
+    node.targets.length === 0 || (node.dirs.length > 0 && subtreeRequested),
   );
-  const targets = $derived(recursive ? [...directTargets, ...subTargets] : directTargets);
-  const pattern = $derived(recursive ? (pkg ? `//${pkg}/...` : "//...") : `//${pkg}:all`);
-  const subtreeTotal = $derived(directTargets.length + subTargets.length);
+  const targets = $derived(recursive ? subtreeTargets(node) : node.targets);
+  const pattern = $derived(
+    recursive ? (node.path ? `//${node.path}/...` : "//...") : `//${node.path}:all`,
+  );
   const visible = $derived(targets.slice(0, ROW_CAP));
   const hasTests = $derived(targets.some((t) => isTestRule(t.ruleClass)));
 </script>
@@ -45,19 +34,17 @@
   <div>
     <h1 class="view-title mono">{pattern}</h1>
     <div class="view-meta">{targets.length} targets</div>
-    {#if directTargets.length > 0 && subTargets.length > 0}
+    {#if node.targets.length > 0 && node.dirs.length > 0}
       <div class="sub-switch" role="group" aria-label="Target scope">
         <button
           type="button"
           aria-pressed={!recursive}
-          class:active={!recursive}
-          onclick={() => (subtreeRequested = false)}>Direct (:all) · {directTargets.length}</button
+          onclick={() => (subtreeRequested = false)}>Direct (:all) · {node.targets.length}</button
         >
         <button
           type="button"
           aria-pressed={recursive}
-          class:active={recursive}
-          onclick={() => (subtreeRequested = true)}>Subtree (/...) · {subtreeTotal}</button
+          onclick={() => (subtreeRequested = true)}>Subtree (/...) · {node.count}</button
         >
       </div>
     {/if}
@@ -89,7 +76,7 @@
             type="button"
             class="table-link mono"
             onclick={() => onselect(target.label)}
-            >{#if target.pkg !== pkg}<span class="dim">//{target.pkg}</span>{/if}:{target.name}</button
+            >{#if target.pkg !== node.path}<span class="dim">//{target.pkg}</span>{/if}:{target.name}</button
           >
         </td>
         <td class="mono dim">{target.ruleClass}</td>

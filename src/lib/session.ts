@@ -729,6 +729,10 @@ export function createSession(
       (selection?.kind === "target" && target.detail.error !== null)
     ) {
       ws.target = targetSelection(selection);
+    } else {
+      // Same pick again: hand the view a fresh selection object so its
+      // effects observe the re-pick while the readers stay cached.
+      target.selection = selection;
     }
     publish();
     void loadTarget();

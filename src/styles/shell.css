@@ -365,7 +365,8 @@
 }
 
 .sub-switch button.active,
-.sub-switch button[aria-selected="true"] {
+.sub-switch button[aria-selected="true"],
+.sub-switch button[aria-pressed="true"] {
   background: rgba(255, 255, 255, 0.08);
   color: var(--foreground);
   font-weight: 500;

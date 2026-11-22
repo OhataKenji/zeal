@@ -42,16 +42,17 @@
   const st = $derived(view.state);
   const core = $derived(view.core);
   const snap = $derived(view.snapshot);
-  const tree = $derived(snap ? buildTree(snap) : null);
+  const tree = $derived(snap ? buildTree(snap.targets) : null);
   const selection = $derived(view.selection);
   const selectedTarget = $derived(selection?.kind === "target" ? selection.label : null);
-  const selectedPkg = $derived(selection?.kind === "package" ? selection.path : "");
+  const selectedDir = $derived(
+    selection?.kind === "package" ? tree?.byPath.get(selection.path) : tree?.root,
+  );
   const invocation = $derived(view.invocation);
 
   let opening = $state(false);
   let switchError = $state<string | null>(null);
   let historyFilter = $state<"all" | "failed" | "running">("all");
-  let treeRevealRequest = $state(0);
 
   // One surface owns the overlay layer at a time: the workspace prompt, the
   // command palette, or the run dialog. `opening` stays independent.
@@ -188,8 +189,7 @@
         openWorkspacePrompt("");
         break;
       case "target":
-        session.select({ kind: "target", label: action.label });
-        treeRevealRequest += 1;
+        selectTarget(action.label);
         break;
       case "invocation":
         if (!filteredInvocations.some((row) => row.record.id === action.id)) {
@@ -203,6 +203,10 @@
   function selectPage(page: Page) {
     surface = null;
     session.showPage(page);
+  }
+
+  function selectTarget(label: string) {
+    session.select({ kind: "target", label });
   }
 </script>
 
@@ -339,12 +343,7 @@
               </Notice>
             {/if}
             {#if snap && tree}
-              <Tree
-                root={tree}
-                {selection}
-                revealRequest={treeRevealRequest}
-                onselect={session.select}
-              />
+              <Tree root={tree.root} {selection} onselect={session.select} />
             {:else if view.snapshotLoading}
               <p class="dim">Loading targets…</p>
             {:else}
@@ -439,8 +438,8 @@
                       flags={view.targetFlags}
                       wsRoot={st.workspace}
                       canRun={canSend(view, selectedTarget)}
-                      onselect={(label) => session.select({ kind: "target", label })}
-                      onrun={(cmd, pattern) => session.start(cmd, pattern)}
+                      onselect={selectTarget}
+                      onrun={session.start}
                       onopenflags={openRunDialog}
                       ontab={session.setTargetTab}
                       onapply={session.applyTargetFlags}
@@ -457,14 +456,13 @@
                 {:else}
                   <p class="dim">Loading target details…</p>
                 {/if}
-              {:else}
-                {#key selectedPkg}
+              {:else if selectedDir}
+                {#key selectedDir.path}
                   <PackageView
-                    index={snap}
-                    pkg={selectedPkg}
+                    node={selectedDir}
                     canRun={canSend(view, "//...")}
-                    onselect={(label) => session.select({ kind: "target", label })}
-                    onrun={(cmd, pattern) => session.start(cmd, pattern)}
+                    onselect={selectTarget}
+                    onrun={session.start}
                     onopenflags={openRunDialog}
                   />
                 {/key}
@@ -496,7 +494,7 @@
                 reloadProfile={session.loadProfile}
                 onstop={session.stop}
                 onrerun={(cmd, pattern) => session.start(cmd, pattern)}
-                onselecttarget={(label) => session.select({ kind: "target", label })}
+                onselecttarget={selectTarget}
               />
             {/key}
           {:else}

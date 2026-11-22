@@ -1,4 +1,4 @@
-import type { FileEntry, Target, TargetDetail, TargetIndex } from "./types";
+import type { FileEntry, Target, TargetDetail } from "./types";
 
 /** Splits a Bazel label into package and target name. */
 export function splitLabel(label: string): { pkg: string; name: string } {
@@ -35,11 +35,6 @@ export function commandLine(action: { arguments: string[] }): string {
     .join(" ");
 }
 
-/** Returns the final slash-delimited segment of a path. */
-export function basename(path: string): string {
-  return path.split("/").pop() ?? path;
-}
-
 /** Drops the `bazel-out/<config>/bin/` prefix so output paths read short. */
 export function shortOutputPath(path: string): string {
   return path.replace(/^bazel-out\/[^/]+\/bin\//, "");
@@ -64,42 +59,61 @@ export interface DirNode {
   count: number;
 }
 
-/** Builds the package tree from target package paths. */
-export function buildTree(index: TargetIndex): DirNode {
-  const nodes = new Map<string, DirNode>();
-  const mk = (path: string): DirNode => ({
-    path,
-    name: path === "" ? "" : basename(path),
-    dirs: [],
-    targets: [],
-    count: 0,
-  });
-  const root = mk("");
-  nodes.set("", root);
-  const ensure = (path: string): DirNode => {
-    let n = nodes.get(path);
-    if (n) return n;
-    n = mk(path);
-    nodes.set(path, n);
-    const parent = ensure(path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
-    parent.dirs.push(n);
-    return n;
-  };
+function compare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
-  for (const target of index.targets) {
-    ensure(target.pkg).targets.push(target);
+/**
+ * Builds the package tree from target package paths; `byPath` resolves a
+ * package selection without another scan. Shared by the sidebar tree and
+ * the package view.
+ */
+export function buildTree(targets: readonly Target[]) {
+  const byPath = new Map<string, DirNode>();
+  function ensure(path: string): DirNode {
+    const existing = byPath.get(path);
+    if (existing) return existing;
+    const slash = path.lastIndexOf("/");
+    const node: DirNode = {
+      path,
+      name: path.slice(slash + 1),
+      dirs: [],
+      targets: [],
+      count: 0,
+    };
+    byPath.set(path, node);
+    if (path) ensure(slash < 0 ? "" : path.slice(0, slash)).dirs.push(node);
+    return node;
   }
+  const root = ensure("");
+  for (const target of targets) ensure(target.pkg).targets.push(target);
   // One bottom-up pass sorts each level and rolls child counts upward.
   const finish = (n: DirNode): number => {
     n.dirs.sort((a, b) => a.name.localeCompare(b.name));
-    n.targets.sort((a, b) => a.name.localeCompare(b.name));
-    let count = n.targets.length;
-    for (const child of n.dirs) count += finish(child);
-    n.count = count;
-    return count;
+    n.targets.sort((a, b) => compare(a.name, b.name));
+    n.count = n.targets.length;
+    for (const child of n.dirs) n.count += finish(child);
+    return n.count;
   };
   finish(root);
-  return root;
+  return { root, byPath };
+}
+
+/**
+ * Every target in the node's subtree: the node's own targets first, then
+ * descendant targets sorted by label.
+ */
+export function subtreeTargets(node: DirNode): Target[] {
+  const descendants: Target[] = [];
+  const collect = (parent: DirNode): void => {
+    for (const child of parent.dirs) {
+      for (const target of child.targets) descendants.push(target);
+      collect(child);
+    }
+  };
+  collect(node);
+  descendants.sort((a, b) => compare(a.label, b.label));
+  return node.targets.concat(descendants);
 }
 
 /** One visible tree row: a directory with its expansion state, or a target leaf. */
