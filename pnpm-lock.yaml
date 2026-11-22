@@ -227,7 +227,7 @@ importers:
         version: 2.12.4
       '@tsconfig/svelte':
         specifier: ^5.0.8
-        version: 5.0.8
+        version: 5.0.9
       '@types/diff-match-patch':
         specifier: 1.0.36
         version: 1.0.36
@@ -792,8 +792,8 @@ packages:
   '@tauri-apps/plugin-dialog@2.8.4':
     resolution: {integrity: sha512-+6ZOiXenOaxXwb8qCbBPdT2jX2cFPaVVHGIskrpmJLpmWj+qKRTD6X/z9x7hTdSQn7NedcoXCkWGej4a7dC4lw==}
 
-  '@tsconfig/svelte@5.0.8':
-    resolution: {integrity: sha512-UkNnw1/oFEfecR8ypyHIQuWYdkPvHiwcQ78sh+ymIiYoF+uc5H1UBetbjyqT+vgGJ3qQN6nhucJviX6HesWtKQ==}
+  '@tsconfig/svelte@5.0.9':
+    resolution: {integrity: sha512-gbtbqsEFq9gFzGmgJMIB3+leXVmkUttoFjzeHsbqN6qFKst40fvxnN9+3Ajdl8VlIGwPevs9LNJ8YUhQgchqaw==}
 
   '@types/diff-match-patch@1.0.36':
     resolution: {integrity: sha512-xFdR6tkm0MWvBfO8xXCSsinYxHcqkQUlcHeSpMC2ukzOb6lwQAfDmW+Qt0AvlGd8HpsS28qKsB+oPeJn9I39jg==}
@@ -1917,7 +1917,7 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.12.4
 
-  '@tsconfig/svelte@5.0.8': {}
+  '@tsconfig/svelte@5.0.9': {}
 
   '@types/diff-match-patch@1.0.36': {}
 
