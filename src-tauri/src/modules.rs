@@ -273,9 +273,9 @@ fn normalize_version(version: &str) -> String {
 fn project(
     mut nodes: BTreeMap<&str, ModuleNode>,
     mut edges: Vec<(&str, &str)>,
-    root: &RawNode,
+    root_key: &str,
+    root_name: &str,
 ) -> ModulesSnapshot {
-    let root_key = root.key.as_str();
     nodes.remove(root_key);
     edges.sort_unstable();
     edges.dedup();
@@ -298,7 +298,7 @@ fn project(
     });
     ModulesSnapshot {
         root_key: root_key.to_string(),
-        root_name: root.name.clone().unwrap_or_default(),
+        root_name: root_name.to_owned(),
         modules,
         warning: None,
     }
@@ -340,7 +340,12 @@ fn parse_mod_graph(stdout: &[u8]) -> Result<ModulesSnapshot, String> {
             pending.push((child, depth + 1, true));
         }
     }
-    Ok(project(nodes, edges, &root))
+    Ok(project(
+        nodes,
+        edges,
+        &root.key,
+        root.name.as_deref().unwrap_or_default(),
+    ))
 }
 
 /// Module keys travel to `bazel mod explain` as a single argv element after
@@ -431,7 +436,9 @@ mod tests {
             {"key":"odd@9.9","dependencies":[]},
             {"key":"under@_","name":"under","version":"_","dependencies":[]}
         ]}"#;
-        let modules = parse_mod_graph(json.as_bytes()).unwrap().modules;
+        let snap = parse_mod_graph(json.as_bytes()).unwrap();
+        assert_eq!(snap.root_name, "");
+        let modules = snap.modules;
         assert_eq!(modules.len(), 2);
         let odd = modules.iter().find(|m| m.key == "odd@9.9").unwrap();
         assert_eq!(odd.name, "odd");
