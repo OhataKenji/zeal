@@ -4,6 +4,7 @@ import { targetError } from "./target.ts";
 import type {
   AppState,
   BazelCommand,
+  ConfiguredTarget,
   ExplorerSelection,
   InvocationDetail,
   InvocationRecord,
@@ -15,8 +16,8 @@ import type {
   TargetDetail,
   TargetIndex,
   TargetLoad,
-  TargetOutputs,
   TargetScope,
+  TargetTab,
   WorkspaceInfo,
   WorkspaceState,
 } from "./types.ts";
@@ -35,8 +36,11 @@ interface Reader<T> {
 
 interface TargetSelection {
   selection: ExplorerSelection;
+  /** Static detail: fetched once per selection, independent of tab/flags. */
   detail: Reader<TargetDetail>;
-  outputs: Reader<TargetOutputs>;
+  /** Configured-phase data; replaced whenever its tab (re)activates. */
+  configured: Reader<ConfiguredTarget>;
+  /** Actions-phase data; replaced whenever its tab (re)activates. */
   actions: Reader<TargetActions>;
 }
 
@@ -48,6 +52,11 @@ interface Workspace {
   refresh: object | null;
   target: TargetSelection;
   targetBusy: boolean;
+  /** Inspector tab for the selected target; workspace-scoped so it survives
+   * refresh and reselection but resets on an actual workspace switch. */
+  targetTab: TargetTab;
+  /** Applied build flags for the configured/actions reads; "" is default. */
+  targetFlags: string;
   history: InvocationRecord[];
   historyError: string | null;
   historyBusy: boolean;
@@ -74,7 +83,12 @@ function reader<T>(value: T | null = null): Reader<T> {
 }
 
 function targetSelection(selection: ExplorerSelection = null): TargetSelection {
-  return { selection, detail: reader(), outputs: reader(), actions: reader() };
+  return {
+    selection,
+    detail: reader(),
+    configured: reader(),
+    actions: reader(),
+  };
 }
 
 function savedReaders(): Saved {
@@ -189,8 +203,10 @@ function sessionView(state: SessionState) {
     selection: target?.selection ?? null,
     targetDetail: target?.detail.value ?? null,
     targetDetailError: target?.detail.error ?? null,
-    targetOutputs: target?.outputs.value ?? null,
-    targetOutputsError: target?.outputs.error ?? null,
+    targetTab: ws?.targetTab ?? "definition",
+    targetFlags: ws?.targetFlags ?? "",
+    targetConfigured: target?.configured.value ?? null,
+    targetConfiguredError: target?.configured.error ?? null,
     targetActions: target?.actions.value ?? null,
     targetActionsError: target?.actions.error ?? null,
     starting: state.start !== null,
@@ -261,7 +277,48 @@ export function createSession(
     return current() && slot.error === null;
   }
 
-  /** The selected target's detail -> outputs -> actions chain, one at a time. */
+  /** The active non-Definition phase read; a no-op on Definition or away. */
+  async function readPhase(
+    ws: Workspace,
+    target: TargetSelection,
+    args: { workspace: string; label: string },
+    current: () => boolean,
+  ) {
+    if (state.page !== "targets" || ws.targetTab === "definition") return;
+    const flags = ws.targetFlags;
+    if (ws.targetTab === "configured") {
+      const phase = target.configured;
+      if (phase.value !== null || phase.error !== null) return;
+      await read(
+        phase,
+        () =>
+          transport.invoke<ConfiguredTarget>(COMMANDS.getConfiguredTarget, {
+            ...args,
+            flags,
+          }),
+        current,
+      );
+      return;
+    }
+    const phase = target.actions;
+    if (phase.value !== null || phase.error !== null) return;
+    await read(
+      phase,
+      () =>
+        transport.invoke<TargetActions>(COMMANDS.getTargetActions, {
+          ...args,
+          flags,
+        }),
+      current,
+    );
+  }
+
+  /**
+   * The selected target's reads: static detail once per selection, then only
+   * the active non-Definition phase while the targets page is showing. Tab
+   * and flag changes replace `ws.target`, so every awaited step re-checks
+   * that its reader is still current before scheduling another read.
+   */
   async function loadTarget() {
     const ws = state.workspace;
     const target = ws?.target;
@@ -282,29 +339,21 @@ export function createSession(
       !disposed && state.workspace === ws && ws.target === target && ws.refresh === null;
     ws.targetBusy = true;
     try {
-      const loaded = await read(
-        target.detail,
-        async () => {
-          const value = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, args);
-          if (value.target.label !== args.label) {
-            throw new Error("Target detail does not match the selected label");
-          }
-          return value;
-        },
-        current,
-      );
-      if (!loaded) return;
-      await read(
-        target.outputs,
-        () => transport.invoke<TargetOutputs>(COMMANDS.getTargetOutputs, args),
-        current,
-      );
-      if (!current()) return;
-      await read(
-        target.actions,
-        () => transport.invoke<TargetActions>(COMMANDS.getTargetActions, args),
-        current,
-      );
+      if (target.detail.value === null) {
+        const loaded = await read(
+          target.detail,
+          async () => {
+            const value = await transport.invoke<TargetDetail>(COMMANDS.getTargetDetail, args);
+            if (value.target.label !== args.label) {
+              throw new Error("Target detail does not match the selected label");
+            }
+            return value;
+          },
+          current,
+        );
+        if (!loaded) return;
+      }
+      await readPhase(ws, target, args, current);
     } finally {
       ws.targetBusy = false;
       if (!disposed && state.workspace === ws && ws.target !== target) void loadTarget();
@@ -555,6 +604,8 @@ export function createSession(
       refresh: null,
       target: targetSelection(),
       targetBusy: false,
+      targetTab: "definition",
+      targetFlags: "",
       history: [],
       historyError: null,
       historyBusy: false,
@@ -606,6 +657,13 @@ export function createSession(
     openInvocation(id, true);
   }
 
+  function maybeLoadWorkspaceInfo() {
+    const ws = state.workspace;
+    if (ws && ws.info.value === null && ws.info.error === null && !ws.info.loading) {
+      loadWorkspaceInfo();
+    }
+  }
+
   function showPage(page: Page) {
     if (disposed) return;
     const changed = state.page !== page;
@@ -617,12 +675,35 @@ export function createSession(
       publish();
       if (page === "history") ensureSaved();
     }
-    if (page === "workspace") {
-      const ws = state.workspace;
-      if (ws && ws.info.value === null && ws.info.error === null && !ws.info.loading) {
-        loadWorkspaceInfo();
-      }
-    }
+    if (page === "workspace") maybeLoadWorkspaceInfo();
+    // Returning to Targets kicks any phase read deferred while away.
+    if (page === "targets") void loadTarget();
+  }
+
+  /** Replaces both phase readers; loadTarget reloads only the active one. */
+  function reloadTargetPhase(ws: Workspace) {
+    ws.target = { ...ws.target, configured: reader(), actions: reader() };
+    publish();
+    void loadTarget();
+  }
+
+  /** Switches the inspector tab; phase readers restart, detail is kept. */
+  function setTargetTab(tab: TargetTab) {
+    if (disposed) return;
+    const ws = state.workspace;
+    if (!ws || ws.targetTab === tab) return;
+    ws.targetTab = tab;
+    reloadTargetPhase(ws);
+  }
+
+  /** Applies build flags; the active non-Definition phase reloads, even for
+   * unchanged flags. Definition keeps its static read. */
+  function applyTargetFlags(flags: string) {
+    if (disposed) return;
+    const ws = state.workspace;
+    if (!ws) return;
+    ws.targetFlags = flags;
+    reloadTargetPhase(ws);
   }
 
   function select(selection: ExplorerSelection) {
@@ -636,13 +717,13 @@ export function createSession(
     }
     const target = ws.target;
     if (sameSelection(target.selection, selection)) {
+      // Reselecting kicks reads deferred while another page was showing;
+      // loadTarget no-ops on busy readers and loaded phases.
       if (selection?.kind === "target" && target.detail.error !== null) {
         ws.target = targetSelection(selection);
-        publish();
-        void loadTarget();
-      } else {
-        publish();
       }
+      publish();
+      void loadTarget();
       return;
     }
     ws.target = targetSelection(selection);
@@ -832,5 +913,7 @@ export function createSession(
     loadProfile: readSavedProfile,
     loadInvocations: requestHistory,
     select,
+    setTargetTab,
+    applyTargetFlags,
   };
 }

@@ -12,9 +12,12 @@ keep their state in their views.
 - Starts capture content and workspace-open identity. A target/package change
   invalidates the captured content; explicit-open intent blocks saved-workspace
   restoration even after failure.
-- Target reads run detail → outputs → actions in order per selected workspace;
-  other workspaces do not wait. History notifications coalesce into one follow-up.
-  Saved detail/profile reads remain independent.
+- Target reads run detail first, then only the active inspector phase
+  (configured or actions) under the workspace's applied build flags; the
+  Definition tab stays static. Tab and flag changes replace the phase readers,
+  so stale replies cannot land. Other workspaces do not wait. History
+  notifications coalesce into one follow-up. Saved detail/profile reads remain
+  independent.
 - Query input changes clear results; execution is explicit.
 
 See [tests](../tests) for behavior and [development](../docs/development.md) for checks.

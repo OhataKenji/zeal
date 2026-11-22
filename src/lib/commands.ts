@@ -7,7 +7,7 @@ export const COMMANDS = {
   getModules: "get_modules",
   explainModule: "explain_module",
   getTargetDetail: "get_target_detail",
-  getTargetOutputs: "get_target_outputs",
+  getConfiguredTarget: "get_configured_target",
   getTargetActions: "get_target_actions",
   openWorkspace: "open_workspace",
   listWorkspaces: "list_workspaces",

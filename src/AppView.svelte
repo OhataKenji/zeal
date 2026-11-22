@@ -502,10 +502,12 @@
               <TargetView
                 index={snap}
                 detail={view.targetDetail}
-                outputs={view.targetOutputs}
-                outputsError={view.targetOutputsError}
+                configured={view.targetConfigured}
+                configuredError={view.targetConfiguredError}
                 actions={view.targetActions}
                 actionsError={view.targetActionsError}
+                tab={view.targetTab}
+                flags={view.targetFlags}
                 wsRoot={st.workspace}
                 canRun={canSend(view, selectedTarget)}
                 onselect={(label) => session.select({ kind: "target", label })}
@@ -513,6 +515,8 @@
                 onopenflags={openRunDialog}
                 onclose={() =>
                   session.select(selectedPkg ? { kind: "package", path: selectedPkg } : null)}
+                ontab={session.setTargetTab}
+                onapply={session.applyTargetFlags}
               />
             {/key}
           {:else if view.targetDetailError}

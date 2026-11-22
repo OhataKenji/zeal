@@ -293,6 +293,10 @@
   color: var(--success);
 }
 
+.copied-tag.copied-failed {
+  color: var(--destructive);
+}
+
 .scope-form {
   display: flex;
   flex-direction: column;

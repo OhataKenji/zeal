@@ -114,27 +114,33 @@ async fn get_target_detail(
     }
 }
 
-/// The selected target's output files, resolved by `bazel cquery`.
+/// The selected target's configuration, outputs, and dependency edges, all
+/// resolved by `bazel cquery`/`config` under the applied build flags.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.outputs.request", skip_all)]
-async fn get_target_outputs(
+#[tracing::instrument(
+    target = "zeal::operations",
+    name = "target.configured.request",
+    skip_all
+)]
+async fn get_configured_target(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
-) -> Result<ingest::TargetOutputs, String> {
+    flags: String,
+) -> Result<ingest::ConfiguredTarget, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_outputs(app, core, &workspace, &label)
+        ingest::configured_target(app, core, &workspace, &label, &flags)
     })
     .await
     {
         Ok(result) => result,
         Err(_) => {
             emit_core.emit(&emit_app);
-            Err("target outputs worker failed".to_string())
+            Err("configured target worker failed".to_string())
         }
     }
 }
@@ -146,12 +152,13 @@ async fn get_target_actions(
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
+    flags: String,
 ) -> Result<actions::TargetActions, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_actions(app, core, &workspace, &label)
+        ingest::target_actions(app, core, &workspace, &label, &flags)
     })
     .await
     {
@@ -517,7 +524,7 @@ pub fn run() {
             get_modules,
             explain_module,
             get_target_detail,
-            get_target_outputs,
+            get_configured_target,
             get_target_actions,
             read_console,
             write_console,

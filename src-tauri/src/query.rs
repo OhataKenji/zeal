@@ -87,17 +87,19 @@ pub struct QueryOutput {
 
 /// User flags precede the managed output settings so rc configs expand before
 /// them. Standalone flags must not consume the following argument as a value.
-fn build_flags(req: &QueryRequest) -> Result<Vec<String>, String> {
-    if req.flags.len() > MAX_FLAGS_LEN {
+/// Shared by the ad-hoc query runner and the inspector's configured-target
+/// reads so both enforce the same flag policy.
+pub(crate) fn build_flags(kind: QueryKind, flags: &str) -> Result<Vec<String>, String> {
+    if flags.len() > MAX_FLAGS_LEN {
         return Err("build flags exceed 16 KiB".into());
     }
-    if req.flags.chars().any(|c| c.is_control() && c != '\t') {
+    if flags.chars().any(|c| c.is_control() && c != '\t') {
         return Err("build flags contain control characters".into());
     }
-    if req.kind == QueryKind::Query && !req.flags.trim().is_empty() {
+    if kind == QueryKind::Query && !flags.trim().is_empty() {
         return Err("query does not accept build flags".into());
     }
-    let flags = runargs::parse_arguments(&req.flags)?;
+    let flags = runargs::parse_arguments(flags)?;
     if flags.len() > MAX_FLAGS {
         return Err("build flags exceed 128 tokens".into());
     }
@@ -141,7 +143,7 @@ fn build_flags(req: &QueryRequest) -> Result<Vec<String>, String> {
 fn argv(req: &QueryRequest) -> Result<Vec<String>, String> {
     validate_expr(&req.expr)?;
     let mut args = vec!["--noblock_for_lock".into(), req.kind.as_str().into()];
-    args.extend(build_flags(req)?);
+    args.extend(build_flags(req.kind, &req.flags)?);
     args.push(format!("--output={}", req.output));
     match (req.kind, req.output.as_str()) {
         (QueryKind::Query, "label" | "graph") => {
@@ -432,7 +434,7 @@ mod tests {
         let mut req = request(QueryKind::Cquery, "label");
         req.flags = "--output_groups=foo\t--output_filter='a b' --config=opt --keep_going --nokeep_going --verbose_failures --noremote_accept_cached --noremote_upload_local_results".into();
         assert_eq!(
-            build_flags(&req).unwrap(),
+            build_flags(req.kind, &req.flags).unwrap(),
             [
                 "--output_groups=foo",
                 "--output_filter=a b",

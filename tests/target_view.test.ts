@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type {
+  ConfiguredTarget,
   Target,
   TargetAction,
   TargetActions,
   TargetDetail,
   TargetIndex,
-  TargetOutputs,
+  TargetTab,
 } from "../src/lib/types.ts";
 import { splitLabel } from "../src/lib/model.ts";
 import { createSvelteHarness } from "./svelte.ts";
@@ -18,12 +19,34 @@ const PARSER: Target = {
   ruleClass: "java_library",
   location: null,
 };
+const HELPER: Target = {
+  label: "//app/lib:helper",
+  pkg: "app/lib",
+  name: "helper",
+  ruleClass: "cc_library",
+  location: null,
+};
 const INDEX: TargetIndex = {
   meta: { fetchedAt: 1, status: "ok" },
-  targets: [PARSER],
+  targets: [PARSER, HELPER],
 };
 const DETAIL: TargetDetail = { target: PARSER, edges: [], files: [], status: "ok" };
-const OUTPUTS: TargetOutputs = { paths: [], truncated: false };
+const CONFIGURED: ConfiguredTarget = {
+  configuration: { mnemonic: "k8-fastbuild", checksum: "0123456789abcdef0123" },
+  outputs: {
+    paths: [
+      "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
+      "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
+    ],
+    truncated: false,
+  },
+  deps: [
+    { label: "//app/lib:helper", transition: null },
+    { label: "//tools:protoc", transition: "exec" },
+    { label: "@bazel_tools//tools/cpp:toolchain", transition: null },
+  ],
+  depsTruncated: false,
+};
 
 function makeAction(overrides: Partial<TargetAction> = {}): TargetAction {
   const output = overrides.output ?? "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar";
@@ -47,23 +70,33 @@ test("TargetView renders target details", async (t) => {
   const { default: TargetView } = await load("/src/lib/TargetView.svelte");
   const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
-  function view(
-    actions: TargetActions | null,
-    actionsError: string | null = null,
-    target: Target = PARSER,
-    initialTab: "definition" | "actions" = "definition",
-  ): string {
+  interface ViewOptions {
+    actions?: TargetActions | null;
+    actionsError?: string | null;
+    configured?: ConfiguredTarget | null;
+    configuredError?: string | null;
+    tab?: TargetTab;
+    flags?: string;
+    target?: Target;
+    index?: TargetIndex;
+    detail?: TargetDetail;
+  }
+
+  function view(options: ViewOptions = {}): string {
     return render(TargetView, {
       props: {
-        index: INDEX,
-        detail: { ...DETAIL, target },
-        outputs: OUTPUTS,
-        outputsError: null,
-        actions,
-        actionsError,
+        index: options.index ?? INDEX,
+        detail: options.detail ?? { ...DETAIL, target: options.target ?? PARSER },
+        configured: options.configured ?? null,
+        configuredError: options.configuredError ?? null,
+        actions: options.actions ?? null,
+        actionsError: options.actionsError ?? null,
+        tab: options.tab ?? "definition",
+        flags: options.flags ?? "",
         wsRoot: "/ws",
         onselect: () => {},
-        initialTab,
+        ontab: () => {},
+        onapply: () => {},
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
   }
@@ -79,9 +112,115 @@ test("TargetView renders target details", async (t) => {
     );
   }
 
-  await t.test("mnemonic and primary output columns with collapsed detail rows", () => {
-    const html = view(
-      {
+  await t.test("three tabs render; the tab prop selects the panel", () => {
+    const html = view();
+    for (const label of ["Definition", "Configured", "Actions"]) {
+      assert.match(html, new RegExp(`role="tab"[^>]*>${label}`));
+    }
+    assert.match(html, /id="target-tab-definition"[^>]*aria-selected="true"/);
+    assert.match(html, /id="target-tab-configured"[^>]*aria-selected="false"/);
+    assert.match(html, /id="target-tab-actions"[^>]*aria-selected="false"/);
+    assert.match(html, />Attributes</);
+    assert.doesNotMatch(html, /class="action-summary"/);
+    assert.doesNotMatch(html, /configured-section/);
+
+    const configured = view({ tab: "configured" });
+    assert.match(configured, /id="target-tab-configured"[^>]*aria-selected="true"/);
+    assert.match(configured, /Loading configuration…/);
+
+    const actions = view({ tab: "actions", actions: { actions: [], truncated: false } });
+    assert.match(actions, /id="target-tab-actions"[^>]*aria-selected="true"/);
+    assert.match(actions, />None</);
+    assert.doesNotMatch(actions, />Attributes</);
+  });
+
+  await t.test("flag indicators mark the expensive tabs only when flags apply", () => {
+    const plain = view({ tab: "configured" });
+    assert.equal((plain.match(/tab-flag/g) ?? []).length, 0);
+    const flagged = view({ tab: "configured", flags: "--config=opt" });
+    assert.equal((flagged.match(/tab-flag/g) ?? []).length, 2);
+  });
+
+  await t.test("definition keeps attributes and declared outs without phase reads", () => {
+    const html = view();
+    assert.match(html, />Attributes</);
+    assert.match(html, />outs</);
+    assert.doesNotMatch(html, /flag-bar/);
+    assert.doesNotMatch(html, /configured-section/);
+
+    const withOuts = view({
+      detail: {
+        ...DETAIL,
+        files: [{ path: "app/lib/libparser.jar", owner: PARSER.label, role: "out" }],
+      },
+    });
+    assert.ok(withOuts.includes("libparser.jar"));
+  });
+
+  await t.test("the shared flags bar shows Default or the applied flags", () => {
+    const plain = view({ tab: "actions" });
+    assert.match(plain, /Config:/);
+    assert.match(plain, />Default</);
+    assert.match(plain, /\+ Flags/);
+    assert.doesNotMatch(plain, /flag-warning/);
+
+    const custom = view({ tab: "actions", flags: "--config=opt --cpu=k8" });
+    assert.ok(custom.includes("--config=opt --cpu=k8"));
+    assert.match(custom, /title="--config=opt --cpu=k8"/);
+    assert.match(custom, />Edit</);
+    assert.match(custom, /aria-label="Reset flags"/);
+    // The collapsed bar never materializes the editor or its warning.
+    assert.doesNotMatch(custom, /flag-bar-edit/);
+    assert.doesNotMatch(custom, /flag-warning/);
+  });
+
+  await t.test("configured shows mnemonic, hash, outputs, and deps", () => {
+    const html = view({ tab: "configured", configured: CONFIGURED });
+    assert.match(html, /k8-fastbuild/);
+    assert.ok(html.includes("0123456789ab"));
+    assert.match(html, /title="Copy configuration hash 0123456789abcdef0123"/);
+    assert.match(html, /Resolved Outputs \(2\)/);
+    assert.match(html, /Direct deps &amp; transitions \(3\)/);
+    // Outputs display the short path; the full path stays the title.
+    assert.ok(html.includes('title="bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"'));
+    assert.ok(html.includes(">app/lib/libparser.jar</span>"));
+    assert.equal((html.match(/configured-copy/g) ?? []).length, 2);
+    // Indexed deps navigate; external deps stay readable text.
+    assert.match(
+      html,
+      /<button[^>]*class="link configured-dep mono"[^>]*>\/\/app\/lib:helper<\/button>/,
+    );
+    assert.match(
+      html,
+      /class="configured-dep configured-dep-static mono"[^>]*>@bazel_tools\/\/tools\/cpp:toolchain<\/span>/,
+    );
+    assert.match(html, /<span class="badge dep-transition" title="exec">exec<\/span>/);
+  });
+
+  await t.test("configured loading, error, and empty states", () => {
+    assert.match(view({ tab: "configured" }), /Loading configuration…/);
+    assert.match(
+      view({ tab: "configured", configuredError: "cquery failed" }),
+      /Could not load configuration: cquery failed/,
+    );
+    const empty = view({
+      tab: "configured",
+      configured: {
+        configuration: null,
+        outputs: { paths: [], truncated: false },
+        deps: [],
+        depsTruncated: false,
+      },
+    });
+    assert.match(empty, /No configuration/);
+    assert.match(empty, /Resolved Outputs \(0\)/);
+    assert.match(empty, />None</);
+  });
+
+  await t.test("action summaries pair mnemonic with the short output path", () => {
+    const html = view({
+      tab: "actions",
+      actions: {
         actions: [
           makeAction({
             output: "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
@@ -95,50 +234,49 @@ test("TargetView renders target details", async (t) => {
         ],
         truncated: false,
       },
-      null,
-      PARSER,
-      "actions",
-    );
-    assert.match(html, /<th[^>]*>Mnemonic<\/th>/);
-    assert.match(html, /<th[^>]*>Primary output<\/th>/);
-    assert.doesNotMatch(html, /<th[^>]*>(Action|Owner)<\/th>/);
+    });
     assert.deepEqual(actionSummaries(html), [
-      ["Javac", "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"],
-      ["SourceJar", "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar"],
+      ["Javac", "app/lib/libparser.jar"],
+      ["SourceJar", "app/lib/libparser-src.jar"],
     ]);
-    // Closed rows do not materialize command details or input paths in the DOM.
+    // The full path stays available as the title.
+    assert.ok(html.includes('title="bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"'));
+    // Closed rows do not materialize command details or input paths.
     assert.equal((html.match(/<details\b/g) ?? []).length, 2);
     assert.doesNotMatch(html, /class="action-details"/);
     assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
   });
 
-  await t.test("extra outputs are counted next to the primary output", () => {
-    const html = view(
-      {
+  await t.test("exec badge and extra-output count survive long paths", () => {
+    const long = `bazel-out/k8-fastbuild/bin/app/lib/${"x".repeat(80)}.jar`;
+    const html = view({
+      tab: "actions",
+      actions: {
         actions: [
           makeAction({
-            outputs: [
-              "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
-              "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
-              "bazel-out/k8-fastbuild/bin/app/lib/libparser-tests.jar",
-            ],
+            output: long,
+            outputs: [long, `${long}.src`, `${long}.tests`],
+            configuration: {
+              mnemonic: "Javac",
+              platformName: "@local_config_platform//:host",
+              checksum: "abc123",
+              isTool: true,
+            },
           }),
         ],
         truncated: false,
       },
-      null,
-      PARSER,
-      "actions",
-    );
+    });
+    assert.match(html, /<span class="badge action-exec">exec<\/span>/);
     assert.match(html, /\+2<\/span>/);
     assert.match(html, /2 additional outputs/);
   });
 
-  await t.test("loading, empty, and error states", () => {
-    assert.match(view(null, null, PARSER, "actions"), /Loading actions…/);
-    assert.match(view({ actions: [], truncated: false }, null, PARSER, "actions"), />None</);
+  await t.test("actions loading, empty, and error states", () => {
+    assert.match(view({ tab: "actions" }), /Loading actions…/);
+    assert.match(view({ tab: "actions", actions: { actions: [], truncated: false } }), />None</);
     assert.match(
-      view(null, "aquery failed", PARSER, "actions"),
+      view({ tab: "actions", actionsError: "aquery failed" }),
       /Could not load actions: aquery failed/,
     );
   });
@@ -152,42 +290,38 @@ test("TargetView renders target details", async (t) => {
           outputs: [`bazel-out/k8-fastbuild/bin/app/lib/out${i}`],
         }),
       );
-      const truncated = view({ actions: rows, truncated: true }, null, PARSER, "actions");
+      const truncated = view({
+        tab: "actions",
+        actions: { actions: rows, truncated: true },
+      });
       assert.equal(actionSummaries(truncated).length, 100);
       assert.match(truncated, /Showing first 100 actions; more actions not shown\./);
-      assert.ok(truncated.includes(">100+</span>"));
+      // The loaded count shows on the tab itself.
+      assert.ok(truncated.includes("Actions"));
+      assert.match(truncated, /\(100\+\)<\/span>/);
 
-      const exact = view({ actions: rows, truncated: false }, null, PARSER, "actions");
+      const exact = view({
+        tab: "actions",
+        actions: { actions: rows, truncated: false },
+      });
       assert.equal(actionSummaries(exact).length, 100);
       assert.doesNotMatch(exact, /Showing first 100 actions/);
-      assert.ok(exact.includes(">100</span>"));
+      assert.match(exact, /\(100\)<\/span>/);
     },
   );
 
-  await t.test("definition is the default tab and actions renders via initialTab", () => {
-    const definition = view({ actions: [], truncated: false });
-    assert.match(definition, /role="tab"[^>]*aria-selected="true"[^>]*>Definition/);
-    assert.match(definition, />Outputs</);
-    assert.match(definition, />Attributes</);
-    assert.doesNotMatch(definition, /class="action-summary"/);
-
-    const actions = view({ actions: [], truncated: false }, null, PARSER, "actions");
-    assert.match(actions, /role="tab"[^>]*aria-selected="true"[^>]*>Actions \(0\)/);
-    assert.match(actions, />None</);
-    assert.doesNotMatch(actions, />Outputs</);
-    assert.doesNotMatch(actions, />Attributes</);
-  });
-
   await t.test("header shows the label, rule class, and relative source location", () => {
-    const html = view({ actions: [], truncated: false }, null, {
-      ...PARSER,
-      location: { file: "/ws/app/lib/BUILD.bazel", line: 14 },
+    const html = view({
+      target: {
+        ...PARSER,
+        location: { file: "/ws/app/lib/BUILD.bazel", line: 14 },
+      },
     });
     assert.match(html, /<h1>\/\/app\/lib:parser<\/h1>/);
     assert.ok(html.includes(PARSER.ruleClass));
     assert.match(html, />\s*app\/lib\/BUILD\.bazel:14\s*</);
 
-    assert.ok(!view({ actions: [], truncated: false }).includes("BUILD.bazel"));
+    assert.ok(!view().includes("BUILD.bazel"));
 
     const pkgHtml = render(PackageView, {
       props: {
@@ -203,7 +337,7 @@ test("TargetView renders target details", async (t) => {
   });
 
   await t.test("attributes render without the label filter and keep Show more", () => {
-    const html = view({ actions: [], truncated: false });
+    const html = view({ actions: { actions: [], truncated: false } });
     assert.ok(!html.includes("relation-filter"));
     assert.ok(!html.includes("Filter labels"));
     assert.ok(!html.includes("No matching"));
@@ -234,12 +368,16 @@ test("TargetView renders target details", async (t) => {
       props: {
         index: { ...INDEX, targets: [...INDEX.targets, ...deps] },
         detail: MANY,
-        outputs: OUTPUTS,
-        outputsError: null,
+        configured: null,
+        configuredError: null,
         actions: { actions: [], truncated: false },
         actionsError: null,
+        tab: "definition",
+        flags: "",
         wsRoot: "/ws",
         onselect: () => {},
+        ontab: () => {},
+        onapply: () => {},
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
 

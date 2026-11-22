@@ -1,15 +1,15 @@
 <script lang="ts">
-  import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { CaretDown, CaretUp } from "phosphor-svelte";
   import type {
     BazelCommand,
+    ConfiguredTarget,
     TargetActions,
     TargetDetail,
     TargetIndex,
-    TargetOutputs,
+    TargetTab,
   } from "./types";
-  import { displayLabel, displayPath, relations } from "./model";
+  import { displayLabel, displayPath, relations, shortOutputPath } from "./model";
   import { tabKeydown } from "./tabs";
   import ActionPair from "./ActionPair.svelte";
   import ActionsSection from "./TargetActions.svelte";
@@ -17,44 +17,45 @@
   let {
     index,
     detail,
-    outputs,
-    outputsError,
+    configured,
+    configuredError,
     actions,
     actionsError,
+    tab,
+    flags,
     wsRoot,
     canRun = true,
     onselect,
     onrun,
     onopenflags,
     onclose,
-    initialTab = "definition",
+    ontab,
+    onapply,
   }: {
     index: TargetIndex;
     detail: TargetDetail;
-    outputs: TargetOutputs | null;
-    outputsError: string | null;
+    configured: ConfiguredTarget | null;
+    configuredError: string | null;
     actions: TargetActions | null;
     actionsError: string | null;
+    tab: TargetTab;
+    flags: string;
     wsRoot: string;
     canRun?: boolean;
     onselect: (label: string) => void;
     onrun?: (cmd: BazelCommand, pattern: string) => void;
     onopenflags?: (cmd: BazelCommand, pattern: string) => void;
     onclose?: () => void;
-    initialTab?: "definition" | "actions";
+    ontab: (tab: TargetTab) => void;
+    onapply: (flags: string) => void;
   } = $props();
   const rel = $derived(relations(detail));
-  let tab = $state<"definition" | "actions">(untrack(() => initialTab));
-  const actionCount = $derived(
-    actions === null ? null : `${actions.actions.length}${actions.truncated ? "+" : ""}`,
-  );
-  const tabs = $derived([
+  const customFlags = $derived(flags.trim() !== "");
+  const tabs = [
     { id: "definition" as const, label: "Definition" },
-    {
-      id: "actions" as const,
-      label: `Actions${actionCount === null ? "" : ` (${actionCount})`}`,
-    },
-  ]);
+    { id: "configured" as const, label: "Configured" },
+    { id: "actions" as const, label: "Actions" },
+  ];
   const target = $derived(rel.target);
   const primary = $derived.by((): { cmd: BazelCommand; label: string } => {
     if (target.ruleClass.endsWith("_test")) return { cmd: "test", label: "Test" };
@@ -65,8 +66,38 @@
     new Map(index.targets.map((target) => [target.label, target])),
   );
   const expanded = new SvelteSet<string>();
+  // The flags editor holds a nullable draft: null is the collapsed bar,
+  // a string is the in-progress edit. Apply only fires from Enter or the
+  // button; nothing runs on draft changes or blur.
+  let flagsDraft = $state<string | null>(null);
+  let copyNote = $state<{ key: string; ok: boolean } | null>(null);
   function location(file: string, line: number) {
     return `${file.startsWith(wsRoot + "/") ? file.slice(wsRoot.length + 1) : file}:${line}`;
+  }
+  async function copy(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copyNote = { key, ok: true };
+    } catch {
+      copyNote = { key, ok: false };
+    }
+    setTimeout(() => {
+      if (copyNote?.key === key) copyNote = null;
+    }, 1500);
+  }
+  function applyFlags(event: SubmitEvent) {
+    event.preventDefault();
+    const draft = flagsDraft?.trim() ?? "";
+    // A blank draft never applies: clearing flags is the explicit ✕ reset.
+    if (!draft) return;
+    flagsDraft = null;
+    onapply(draft);
+  }
+  function flagKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      flagsDraft = null;
+    }
   }
 </script>
 
@@ -120,6 +151,60 @@
   </div>
 {/snippet}
 
+{#snippet flagsBar()}
+  {#if flagsDraft === null}
+    <div class="flag-bar">
+      <span class="flag-bar-value mono">
+        <span class="dim">Config:</span>
+        {#if customFlags}
+          <span class="flag-flags" title={flags}>{flags}</span>
+        {:else}
+          <span class="dim">Default</span>
+        {/if}
+      </span>
+      <span class="flag-bar-actions">
+        <button
+          type="button"
+          class="button button-ghost flag-button"
+          onclick={() => (flagsDraft = flags)}> {customFlags ? "Edit" : "+ Flags"}</button
+        >
+        {#if customFlags}
+          <button
+            type="button"
+            class="button button-ghost flag-button"
+            aria-label="Reset flags"
+            title="Reset to Default"
+            onclick={() => onapply("")}>✕</button
+          >
+        {/if}
+      </span>
+    </div>
+  {:else}
+    <form class="flag-bar flag-bar-edit" onsubmit={applyFlags}>
+      <input
+        class="input mono"
+        value={flagsDraft}
+        oninput={(event) => (flagsDraft = event.currentTarget.value)}
+        onkeydown={flagKeydown}
+        placeholder="--config=opt"
+        aria-label="Build flags"
+        spellcheck="false"
+      />
+      <button
+        type="submit"
+        class="button button-primary flag-apply"
+        disabled={!flagsDraft.trim()}>Apply</button
+      >
+      <button type="button" class="button button-ghost" onclick={() => (flagsDraft = null)}
+        >Cancel</button
+      >
+    </form>
+    <p class="flag-warning">
+      Changing build flags discards Bazel’s analysis cache for this workspace.
+    </p>
+  {/if}
+{/snippet}
+
   <header class="target-head">
     <div class="target-head-top">
       <h1>{target.label}</h1>
@@ -157,32 +242,19 @@
         aria-selected={tab === t.id}
         aria-controls={tab === t.id ? `target-panel-${t.id}` : undefined}
         tabindex={tab === t.id ? 0 : -1}
-        onclick={() => (tab = t.id)}
-        onkeydown={tabKeydown}>{t.label}</button
+        onclick={() => ontab(t.id)}
+        onkeydown={tabKeydown}>{t.label}{#if t.id === "actions" && actions}<span
+            class="dim"
+            > ({actions.actions.length}{actions.truncated ? "+" : ""})</span
+          >{/if}{#if customFlags && t.id !== "definition"}<span
+            class="tab-flag"
+            aria-hidden="true">•</span
+          >{/if}</button
       >
     {/each}
   </div>
   {#if tab === "definition"}
     <div id="target-panel-definition" role="tabpanel" aria-labelledby="target-tab-definition">
-      <section class="outputs">
-        <h2>Outputs</h2>
-        {#if outputsError}
-          <p class="dim">Could not load outputs: {outputsError}</p>
-        {:else if outputs === null}
-          <p class="dim">Loading outputs…</p>
-        {:else if outputs.paths.length === 0}
-          <p class="dim">None</p>
-        {:else}
-          <div class="chips">
-            {#each outputs.paths as path (path)}
-              <span class="chip file" title={path}>{path}</span>
-            {/each}
-            {#if outputs.truncated}<span class="chip more" title="More outputs not shown"
-                >…</span
-              >{/if}
-          </div>
-        {/if}
-      </section>
       <h2 class="attributes-head">Attributes</h2>
       <dl class="relations">
         {#each rel.attributes as attribute (attribute.name)}
@@ -209,10 +281,108 @@
         </dd>
       </dl>
     </div>
+  {:else if tab === "configured"}
+    <div id="target-panel-configured" role="tabpanel" aria-labelledby="target-tab-configured">
+      {@render flagsBar()}
+      {#if configuredError}
+        <p class="dim">Could not load configuration: {configuredError}</p>
+      {:else if configured === null}
+        <p class="dim">Loading configuration…</p>
+      {:else}
+        <section class="configured-section">
+          <h2 class="configured-head">Config</h2>
+          {#if configured.configuration}
+            <div class="configured-config mono">
+              <span>{configured.configuration.mnemonic}</span>
+              <span class="dim">·</span>
+              <button
+                type="button"
+                class="link mono"
+                title={`Copy configuration hash ${configured.configuration.checksum}`}
+                onclick={() =>
+                  copy("config", configured?.configuration?.checksum ?? "")}
+              >
+                {configured.configuration.checksum.slice(0, 12)}{#if copyNote?.key === "config"}<span
+                    class="copied-tag" class:copied-failed={!copyNote.ok}
+                    >{copyNote.ok ? "Copied" : "Copy failed"}</span
+                  >{/if}
+              </button>
+            </div>
+          {:else}
+            <p class="dim">No configuration</p>
+          {/if}
+        </section>
+        <section class="configured-section">
+          <h2 class="configured-head">
+            Resolved Outputs ({configured.outputs.paths.length}{configured.outputs.truncated
+              ? "+"
+              : ""})
+          </h2>
+          {#if configured.outputs.paths.length === 0}
+            <p class="dim">None</p>
+          {:else}
+            <div class="configured-rows">
+              {#each configured.outputs.paths as path}
+                <div class="configured-row">
+                  <span class="configured-path mono" title={path}
+                    >{shortOutputPath(path)}</span
+                  >
+                  <button
+                    type="button"
+                    class="button button-ghost configured-copy"
+                    onclick={() => copy(`out:${path}`, path)}
+                    >{copyNote?.key === `out:${path}`
+                      ? copyNote.ok
+                        ? "Copied"
+                        : "Copy failed"
+                      : "Copy"}</button
+                  >
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+        <section class="configured-section">
+          <h2 class="configured-head">
+            Direct deps &amp; transitions ({configured.deps.length}{configured.depsTruncated
+              ? "+"
+              : ""})
+          </h2>
+          {#if configured.deps.length === 0}
+            <p class="dim">None</p>
+          {:else}
+            <div class="configured-rows">
+              {#each configured.deps as dep}
+                <div class="configured-row">
+                  {#if targets.has(dep.label)}
+                    <button
+                      type="button"
+                      class="link configured-dep mono"
+                      title={dep.label}
+                      onclick={() => onselect(dep.label)}>{dep.label}</button
+                    >
+                  {:else}
+                    <span class="configured-dep configured-dep-static mono" title={dep.label}
+                      >{dep.label}</span
+                    >
+                  {/if}
+                  {#if dep.transition}
+                    <span class="badge dep-transition" title={dep.transition}
+                      >{dep.transition}</span
+                    >
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      {/if}
+    </div>
   {:else}
     <div id="target-panel-actions" role="tabpanel" aria-labelledby="target-tab-actions">
+      {@render flagsBar()}
       {#key target.label}
-        <ActionsSection actions={actions} error={actionsError} />
+        <ActionsSection actions={actions} error={actionsError} showHeading={false} />
       {/key}
     </div>
   {/if}
