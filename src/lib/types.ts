@@ -9,6 +9,7 @@ export interface ModuleNode {
 
 export interface ModulesSnapshot {
   rootKey: string;
+  rootLabel: string;
   modules: ModuleNode[];
   warning: string | null;
 }
