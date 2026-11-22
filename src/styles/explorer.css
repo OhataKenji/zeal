@@ -293,6 +293,12 @@ details[open] > .action-summary .action-mnemonic::before {
   color: var(--warning);
 }
 
+.flag-error {
+  margin: -6px 0 12px;
+  font-size: 11px;
+  color: var(--destructive);
+}
+
 .configured-section {
   margin-bottom: 14px;
 }

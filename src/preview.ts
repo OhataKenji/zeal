@@ -14,11 +14,12 @@ import type {
   TargetActions,
   TargetDetail,
   TargetIndex,
-  ConfiguredTarget,
-  TargetPhaseData,
+  ConfigSummary,
+  ConfiguredDep,
+  TargetOutputs,
   WorkspaceState,
 } from "./lib/types";
-import type { QueryOutput, QueryRequest } from "./lib/query.ts";
+import { previewWords, type QueryOutput, type QueryRequest } from "./lib/query.ts";
 import type { AnalyticsFilter } from "./lib/analytics";
 import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
@@ -470,12 +471,28 @@ function previewConfiguration(flags: string): { mnemonic: string; checksum: stri
     : { mnemonic: "k8-fastbuild", checksum: "4a8f12c61e0dd731" };
 }
 
-/** Sample configured-target data for one label under the given flags. */
-function previewConfigured(label: string, flags: string): ConfiguredTarget {
-  const { mnemonic: configDir, checksum } = previewConfiguration(flags);
+/** Sample `read_target` configuration step for the given flags. */
+function previewConfigurationStep(flags: string): ConfigSummary {
+  return previewConfiguration(flags);
+}
+
+/** Sample `read_target` outputs step for one label under the given flags. */
+function previewOutputs(label: string, flags: string): TargetOutputs {
+  const { mnemonic: configDir } = previewConfiguration(flags);
   const outputPaths = FULL_DATA.files
     .filter((file) => file.owner === label && file.role === "out")
     .map((file) => `bazel-out/${configDir}/bin/${file.path}`);
+  return {
+    paths: outputPaths.slice(0, 10),
+    truncated: outputPaths.length > 10,
+  };
+}
+
+/** Sample `read_target` transitions step for one label. */
+function previewTransitions(label: string): {
+  deps: ConfiguredDep[];
+  depsTruncated: boolean;
+} {
   const labels = new Set(FULL_DATA.edges.filter((e) => e.from === label).map((e) => e.to));
   if (label === PARSER) labels.add("//tools:protoc");
   const deps = Array.from(labels, (dep) => ({
@@ -483,15 +500,7 @@ function previewConfigured(label: string, flags: string): ConfiguredTarget {
     // Toolchain-ish packages plausibly sit behind an exec transition.
     transition: dep.startsWith("//tools") ? "exec" : null,
   }));
-  return {
-    configuration: { mnemonic: configDir, checksum },
-    outputs: {
-      paths: outputPaths.slice(0, 10),
-      truncated: outputPaths.length > 10,
-    },
-    deps: deps.slice(0, 200),
-    depsTruncated: deps.length > 200,
-  };
+  return { deps: deps.slice(0, 200), depsTruncated: deps.length > 200 };
 }
 
 /** Sample actions for one target, built from the demo workspace files. */
@@ -662,16 +671,29 @@ export function installPreview() {
         status: "ok",
       });
     },
-    get_target_phase: (payload): TargetPhaseData => {
+    read_target: (payload) => {
       wsEntry(payload?.workspace);
       const label = String(payload?.label);
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
       const flags = String(payload?.flags ?? "");
-      return payload?.phase === "actions"
-        ? { actions: previewActions(label, flags) }
-        : { configured: previewConfigured(label, flags) };
+      const step = payload?.step;
+      if (step === "actions") return previewActions(label, flags);
+      if (step === "outputs") return previewOutputs(label, flags);
+      if (step === "configuration") return previewConfigurationStep(flags);
+      if (typeof step === "object" && step !== null && "transitions" in step) {
+        return previewTransitions(label);
+      }
+      throw new Error("Unknown target read step");
+    },
+    validate_target_flags: (payload) => {
+      // Minimal truthful mock: the same word splitting the preview uses
+      // for display refuses control characters and unterminated quotes.
+      if (previewWords(String(payload?.flags ?? "")) === null) {
+        throw new Error("Invalid build flags");
+      }
+      return null;
     },
     list_invocations: (payload) =>
       structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),

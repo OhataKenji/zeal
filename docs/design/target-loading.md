@@ -19,6 +19,11 @@ UI へ渡すのは選択 target の詳細だけであり、query 結果全体は
 詳細取得中に別の target を選んだ場合、UI は最後の選択だけを待機させる。
 workspace、Scope、一覧の世代、選択 target が変わった後に届いた詳細は表示しない。
 
+インスペクタの Configured / Actions タブは、選択 target に対して `read_target` コマンドを段階的に呼ぶ。
+各呼び出しは 1 つの Bazel プロセスであり、`--noblock_for_lock` はプロセスごとに適用され、サブコマンド間でロックを保持しない。
+Configured は configuration → transitions（報告された checksum で照合）→ outputs の 3 段階で、タブ・フラグ・選択の変更は段階の合間で読み取りを止められる。
+フラグの下書きは `validate_target_flags` で構文だけを事前検証し、拒否された場合は適用済みフラグも読み取りも変わらない。
+
 ## 判断の根拠
 
 grpc/grpc `7088419`、Bazel 8.7.0、Scope `//...` の warm query を OpenTelemetry SDK で計測した。

@@ -121,6 +121,8 @@ pub(crate) fn build_flags(kind: QueryKind, flags: &str) -> Result<Vec<String>, S
                 | "--noinclude_artifacts"
                 | "--transitions"
                 | "--notransitions"
+                | "--proto:include_configurations"
+                | "--noproto:include_configurations"
         ) {
             return Err("build flags must not override query options".into());
         }

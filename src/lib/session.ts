@@ -11,10 +11,15 @@ import type {
   OwnedInvocation,
   Profile,
   Section,
+  ConfigSummary,
+  ConfiguredTarget,
+  TargetActions,
   TargetDetail,
   TargetIndex,
   TargetLoad,
+  TargetOutputs,
   TargetPhaseData,
+  TargetReadStep,
   TargetScope,
   TargetTab,
   WorkspaceInfo,
@@ -240,6 +245,8 @@ export function createSession(
 ) {
   const state = initialState(page);
   let disposed = false;
+  // Newest apply intent wins; older in-flight validations are ignored.
+  let flagApplySeq = 0;
   // After an explicit open, saved preferences no longer choose the workspace.
   let workspaceRequest: object | null = null;
   const unlistens: Array<() => void> = [];
@@ -272,7 +279,10 @@ export function createSession(
     return current() && slot.error === null;
   }
 
-  /** The active non-Definition phase read; a no-op on Definition or away. */
+  /** The active non-Definition phase read; a no-op on Definition or away.
+   * Configured stages its three `read_target` steps so a stale context
+   * stops between them; leaving the targets page aborts without recording
+   * an error and the next visit restarts the read. */
   async function readPhase(
     ws: Workspace,
     target: TargetSelection,
@@ -283,15 +293,26 @@ export function createSession(
     if (state.page !== "targets" || phase === "definition") return;
     const slot = target.phase;
     if (slot.value !== null || slot.error !== null) return;
+    const active = () => current() && state.page === "targets";
+    const flags = ws.targetFlags;
+    const load = <T>(step: TargetReadStep) =>
+      transport.invoke<T>(COMMANDS.readTarget, { ...args, flags, step });
     await read(
       slot,
-      () =>
-        transport.invoke<TargetPhaseData>(COMMANDS.getTargetPhase, {
-          ...args,
-          phase,
-          flags: ws.targetFlags,
-        }),
-      current,
+      async (): Promise<TargetPhaseData> => {
+        if (phase === "actions") {
+          return { actions: await load<TargetActions>("actions") };
+        }
+        const configuration = await load<ConfigSummary | null>("configuration");
+        if (!active()) throw new Error("Target selection changed");
+        const edges = await load<Pick<ConfiguredTarget, "deps" | "depsTruncated">>({
+          transitions: { checksum: configuration?.checksum ?? null },
+        });
+        if (!active()) throw new Error("Target selection changed");
+        const outputs = await load<TargetOutputs>("outputs");
+        return { configured: { configuration, outputs, ...edges } };
+      },
+      active,
     );
   }
 
@@ -678,12 +699,33 @@ export function createSession(
     reloadTargetPhase(ws);
   }
 
-  /** Applies build flags; the active non-Definition phase reloads, even for
-   * unchanged flags. Definition keeps its static read. */
-  function applyTargetFlags(flags: string) {
+  /** Applies build flags after a cheap syntactic validation; the active
+   * non-Definition phase reloads, even for unchanged flags. Definition
+   * keeps its static read. A rejected draft changes nothing, and a stale
+   * completion — newer apply, reselection, workspace switch, disposal —
+   * is ignored. */
+  async function applyTargetFlags(flags: string): Promise<void> {
     if (disposed) return;
     const ws = state.workspace;
     if (!ws) return;
+    if (flags !== "" && flags !== ws.targetFlags) {
+      const intent = ++flagApplySeq;
+      const target = ws.target;
+      const applied = ws.targetFlags;
+      const current = () =>
+        !disposed &&
+        state.workspace === ws &&
+        ws.target === target &&
+        ws.targetFlags === applied &&
+        flagApplySeq === intent;
+      try {
+        await transport.invoke<void>(COMMANDS.validateTargetFlags, { flags });
+      } catch (error) {
+        if (current()) throw error;
+        return;
+      }
+      if (!current()) return;
+    }
     ws.targetFlags = flags;
     reloadTargetPhase(ws);
   }

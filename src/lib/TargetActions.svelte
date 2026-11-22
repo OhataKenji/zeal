@@ -8,11 +8,13 @@
     error,
     oninputclick,
     showHeading = true,
+    showOwner = true,
   }: {
     actions: TargetActions | null;
     error: string | null;
     oninputclick?: (path: string, owner: string) => void;
     showHeading?: boolean;
+    showOwner?: boolean;
   } = $props();
 
   let copyState = $state<{ index: number; status: "copied" | "failed" } | null>(null);
@@ -53,7 +55,7 @@
     const parts: string[] = [];
     // QueryView lists actions from many owners, so the owner stays visible
     // there; in the inspector the owner is already the selected target.
-    if (showHeading) parts.push(action.owner);
+    if (showOwner) parts.push(action.owner);
     const mnemonic = action.configuration?.mnemonic;
     if (mnemonic) parts.push(mnemonic);
     const platform = action.executionPlatform || action.configuration?.platformName;
@@ -85,7 +87,10 @@
   </ul>
 {/snippet}
 
-<section class="target-actions">
+<section
+  class="target-actions"
+  title="aquery actions run under Bazel-reported owner configurations; exec marks the tool configuration."
+>
   {#if showHeading}
     <h2>
       Actions{#if actions}

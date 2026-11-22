@@ -2,6 +2,7 @@ mod actions;
 mod bazel_output;
 mod bep;
 mod bes;
+mod configured;
 mod console;
 mod detail;
 mod ingest;
@@ -114,32 +115,40 @@ async fn get_target_detail(
     }
 }
 
-/// One inspector phase read (configured or actions) for `label` in
-/// `workspace`, resolved under the applied build flags.
+/// One inspector read step (configuration, transitions, outputs, or
+/// actions) for `label` in `workspace`, resolved under the applied build
+/// flags. Each call runs at most one Bazel process.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.phase.request", skip_all)]
-async fn get_target_phase(
+#[tracing::instrument(target = "zeal::operations", name = "target.read.request", skip_all)]
+async fn read_target(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
     flags: String,
-    phase: ingest::TargetPhase,
-) -> Result<ingest::TargetPhaseData, String> {
+    step: ingest::TargetRead,
+) -> Result<ingest::TargetReadData, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_phase(app, core, &workspace, &label, &flags, phase)
+        ingest::read_target(app, core, &workspace, &label, &flags, step)
     })
     .await
     {
         Ok(result) => result,
         Err(_) => {
             emit_core.emit(&emit_app);
-            Err("target phase worker failed".to_string())
+            Err("target read worker failed".to_string())
         }
     }
+}
+
+/// Cheap syntactic check of a build-flags draft; execution revalidates
+/// anyway, so this only rejects malformed input before it is committed.
+#[tauri::command]
+fn validate_target_flags(flags: String) -> Result<(), String> {
+    query::build_flags(query::QueryKind::Cquery, &flags).map(drop)
 }
 
 /// Register a directory as a Bazel workspace: validate it, canonicalize it,
@@ -496,7 +505,8 @@ pub fn run() {
             get_modules,
             explain_module,
             get_target_detail,
-            get_target_phase,
+            read_target,
+            validate_target_flags,
             read_console,
             write_console,
             resize_console,

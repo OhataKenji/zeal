@@ -14,10 +14,14 @@ keep their state in their views.
   restoration even after failure.
 - Target reads have two lifetimes: static detail once per selection, then one
   phase reader for the active inspector tab (configured or actions) under the
-  workspace's applied build flags; Definition issues no phase read. A single
-  `get_target_phase` command carries the phase and branches to the matching
-  Bazel read natively. Tab and flag changes replace the phase reader, so stale
-  replies cannot land. Other workspaces do not wait. History notifications
+  workspace's applied build flags; Definition issues no phase read. The UI
+  stages the Configured tab's three `read_target` steps — configuration,
+  transitions (keyed by the reported checksum), outputs — so a tab, flag, or
+  selection change can stop between them; each step is one Bazel process and
+  `--noblock_for_lock` applies per process, never across them. Flag drafts
+  pass a cheap `validate_target_flags` check before they commit; a rejected
+  draft changes nothing. Tab and flag changes replace the phase reader, so
+  stale replies cannot land. Other workspaces do not wait. History notifications
   coalesce into one follow-up. Saved detail/profile reads remain independent.
 - Query input changes clear results; execution is explicit.
 

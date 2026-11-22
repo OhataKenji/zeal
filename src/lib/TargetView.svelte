@@ -42,7 +42,7 @@
     onopenflags?: (cmd: BazelCommand, pattern: string) => void;
     onclose?: () => void;
     ontab: (tab: TargetTab) => void;
-    onapply: (flags: string) => void;
+    onapply: (flags: string) => void | Promise<void>;
   } = $props();
   const rel = $derived(relations(detail));
   const configured = $derived(
@@ -71,7 +71,16 @@
   // a string is the in-progress edit. Apply only fires from Enter or the
   // button; nothing runs on draft changes or blur.
   let flagsDraft = $state<string | null>(null);
+  let flagsError = $state<string | null>(null);
+  let flagsBusy = $state(false);
   let copyNote = $state<{ key: string; ok: boolean } | null>(null);
+  $effect(() => {
+    if (!copyNote) return;
+    const id = setTimeout(() => {
+      copyNote = null;
+    }, 1500);
+    return () => clearTimeout(id);
+  });
   function location(file: string, line: number) {
     return `${file.startsWith(wsRoot + "/") ? file.slice(wsRoot.length + 1) : file}:${line}`;
   }
@@ -82,22 +91,30 @@
     } catch {
       copyNote = { key, ok: false };
     }
-    setTimeout(() => {
-      if (copyNote?.key === key) copyNote = null;
-    }, 1500);
   }
-  function applyFlags(event: SubmitEvent) {
+  async function applyFlags(event: SubmitEvent) {
     event.preventDefault();
     const draft = flagsDraft?.trim() ?? "";
     // A blank draft never applies: clearing flags is the explicit ✕ reset.
-    if (!draft) return;
-    flagsDraft = null;
-    onapply(draft);
+    if (!draft || flagsBusy) return;
+    const form = event.currentTarget as HTMLFormElement;
+    flagsBusy = true;
+    flagsError = null;
+    try {
+      await onapply(draft);
+      // The editor may have been replaced by navigation mid-validation.
+      if (form.isConnected) flagsDraft = null;
+    } catch (error) {
+      if (form.isConnected) flagsError = String(error);
+    } finally {
+      if (form.isConnected) flagsBusy = false;
+    }
   }
   function flagKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
       event.preventDefault();
       flagsDraft = null;
+      flagsError = null;
     }
   }
 </script>
@@ -167,7 +184,11 @@
         <button
           type="button"
           class="button button-ghost flag-button"
-          onclick={() => (flagsDraft = flags)}> {customFlags ? "Edit" : "+ Flags"}</button
+          onclick={() => {
+            flagsError = null;
+            flagsDraft = flags;
+          }}
+          > {customFlags ? "Edit" : "+ Flags"}</button
         >
         {#if customFlags}
           <button
@@ -175,7 +196,7 @@
             class="button button-ghost flag-button"
             aria-label="Reset flags"
             title="Reset to Default"
-            onclick={() => onapply("")}>✕</button
+            onclick={() => void onapply("")}>✕</button
           >
         {/if}
       </span>
@@ -190,16 +211,26 @@
         placeholder="--config=opt"
         aria-label="Build flags"
         spellcheck="false"
+        disabled={flagsBusy}
       />
       <button
         type="submit"
         class="button button-primary flag-apply"
-        disabled={!flagsDraft.trim()}>Apply</button
+        disabled={flagsBusy || !flagsDraft.trim()}>Apply</button
       >
-      <button type="button" class="button button-ghost" onclick={() => (flagsDraft = null)}
-        >Cancel</button
+      <button
+        type="button"
+        class="button button-ghost"
+        disabled={flagsBusy}
+        onclick={() => {
+          flagsDraft = null;
+          flagsError = null;
+        }}>Cancel</button
       >
     </form>
+    {#if flagsError}
+      <p class="flag-error" role="alert">{flagsError}</p>
+    {/if}
     <p class="flag-warning">
       Changing build flags discards Bazel’s analysis cache for this workspace.
     </p>
@@ -378,7 +409,12 @@
           </section>
         {/if}
       {:else}
-        <ActionsSection actions={actions} error={phaseError} showHeading={false} />
+        <ActionsSection
+          actions={actions}
+          error={phaseError}
+          showHeading={false}
+          showOwner={false}
+        />
       {/if}
     {/if}
   </div>
