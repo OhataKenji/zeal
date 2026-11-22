@@ -65,7 +65,11 @@ test("a rejected local process is a failure without claiming a BEP build result"
     kind: "failed",
     label: "✗ process failed (exit 9)",
   });
-  assert.equal(invocationStatus(run, undefined, 8).kind, "interrupted");
+  assert.deepEqual(invocationStatus(run, undefined, 8), {
+    kind: "failed",
+    label: "✗ process failed (exit 8)",
+  });
+  assert.equal(invocationStatus(RECORD, undefined, 8).kind, "interrupted");
   assert.equal(invocationStatus(run, undefined, 0).kind, "unknown");
   assert.equal(invocationStatus(run, undefined, null).kind, "unknown");
 });

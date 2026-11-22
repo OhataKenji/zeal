@@ -58,7 +58,10 @@ export function invocationStatus(
       : { kind: "running", label: "● running" };
   }
   if (record?.exitCode !== undefined) return bepStatus(record);
-  if (processExitCode === 8) return { kind: "interrupted", label: "■ process interrupted" };
+  // A run can forward its program's own exit code, including 8.
+  if (processExitCode === 8 && (record?.cmd === "build" || record?.cmd === "test")) {
+    return { kind: "interrupted", label: "■ process interrupted" };
+  }
   if (processExitCode != null && processExitCode !== 0) {
     return { kind: "failed", label: `✗ process failed (exit ${processExitCode})` };
   }
