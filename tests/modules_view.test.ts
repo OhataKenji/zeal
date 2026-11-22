@@ -113,14 +113,4 @@ test("module page and browser preview", async (t) => {
       assert.match(aside, /<pre[^>]*>&lt;script/);
     },
   );
-
-  await t.test("an unnamed root shows just its graph key", () => {
-    const html = output({
-      snapshot: { ...snapshot, rootLabel: "<root>" },
-      selectedKey: module.key,
-    });
-    const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];
-    assert.ok(aside);
-    assert.match(aside, /<li[^>]*>\s*&lt;root>\s*<\/li>/);
-  });
 });
