@@ -9,7 +9,7 @@ import type {
   TargetPhaseData,
   TargetTab,
 } from "../src/lib/types.ts";
-import { splitLabel } from "../src/lib/model.ts";
+import { buildTree, splitLabel } from "../src/lib/model.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 const PARSER: Target = {
@@ -344,6 +344,30 @@ test("TargetView renders target details", async (t) => {
     assert.match(pkgHtml, />:parser</);
   });
 
+  await t.test("a test_suite target offers Test as the primary action", () => {
+    const withActions = (ruleClass: string): string =>
+      render(TargetView, {
+        props: {
+          index: INDEX,
+          detail: { ...DETAIL, target: { ...PARSER, ruleClass } },
+          phaseData: null,
+          phaseError: null,
+          tab: "definition",
+          flags: "",
+          wsRoot: "/ws",
+          onselect: () => {},
+          onrun: () => {},
+          onopenflags: () => {},
+          ontab: () => {},
+          onapply: () => {},
+        },
+      })
+        .body.replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/\s+/g, " ");
+    assert.match(withActions("test_suite"), />Test<\/button>/);
+    assert.match(withActions("cc_library"), />Build<\/button>/);
+  });
+
   await t.test("attributes render without the label filter and keep Show more", () => {
     const html = view({ phaseData: { actions: { actions: [], truncated: false } } });
     assert.ok(!html.includes("relation-filter"));
@@ -410,12 +434,12 @@ test("TargetView renders target details", async (t) => {
   });
 });
 
-test("PackageView scope labels, root //..., and the row cap", async (t) => {
+test("PackageView direct and subtree scopes, the scope switch, and the row cap", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
-  function indexedTarget(label: string): Target {
-    return { label, ...splitLabel(label), ruleClass: "cc_library", location: null };
+  function indexedTarget(label: string, ruleClass = "cc_library"): Target {
+    return { label, ...splitLabel(label), ruleClass, location: null };
   }
 
   function output(index: TargetIndex, pkg: string): string {
@@ -436,30 +460,70 @@ test("PackageView scope labels, root //..., and the row cap", async (t) => {
     ],
   };
 
-  await t.test('pkg "" is //... with full labels and no ///...', () => {
+  await t.test("the root scope defaults to direct targets with a subtree switch", () => {
     const html = output(MIXED, "");
-    assert.match(html, /<h1[^>]*>\/\/\.\.\.<\/h1>/);
-    assert.doesNotMatch(html, /\/\/\/\.\.\.|\/\/:all/);
-    // Every target in the workspace is listed under its full label.
-    for (const label of ["//app:top", "//app/lib:deep", "//other:solo", "//:root"]) {
-      assert.ok(html.includes(`>${label}</button>`), `missing ${label}`);
-    }
+    assert.match(html, /<h1[^>]*>\/\/:all<\/h1>/);
+    assert.match(html, />1 targets</);
+    // Only the root package's own target shows; descendants wait for the switch.
+    assert.ok(html.includes(">:root</button>"));
     assert.doesNotMatch(html, />:top</);
+    assert.doesNotMatch(html, />:deep</);
+    assert.doesNotMatch(html, />:solo</);
+    assert.doesNotMatch(html, /\/\/app\/lib<\/span>/);
+    // Both scopes are non-empty, so the switch offers Direct and Subtree.
+    assert.ok(html.includes("Direct (:all) · 1"));
+    assert.ok(html.includes("Subtree (/...) · 4"));
+    assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 1);
+    assert.equal((html.match(/aria-pressed="false"/g) ?? []).length, 1);
   });
 
-  await t.test("sub-packages widen the scope to //pkg/... and keep full labels", () => {
+  await t.test("a package with direct targets and descendants shows the switch counts", () => {
     const html = output(MIXED, "app");
-    assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
+    assert.match(html, /<h1[^>]*>\/\/app:all<\/h1>/);
     assert.ok(html.includes(">:top</button>"));
-    assert.ok(html.includes(">//app/lib:deep</button>"));
-    assert.ok(!html.includes(">//other:solo</button>"));
+    assert.doesNotMatch(html, />:deep</);
+    assert.doesNotMatch(html, />:solo</);
+    assert.doesNotMatch(html, />:root</);
+    assert.ok(html.includes("Direct (:all) · 1"));
+    assert.ok(html.includes("Subtree (/...) · 2"));
   });
 
-  await t.test("a leaf package scopes to //pkg:all", () => {
+  await t.test("a package with only descendants defaults to the subtree scope", () => {
+    const index: TargetIndex = {
+      meta: { fetchedAt: 1, status: "ok" },
+      targets: [indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")],
+    };
+    const html = output(index, "app");
+    assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
+    // Descendant rows keep their package prefix; there is no switch to show.
+    assert.ok(html.includes(">//app/lib</span>:deep</button>"));
+    assert.ok(html.includes(">//app/web</span>:ui</button>"));
+    assert.doesNotMatch(html, /sub-switch/);
+    assert.doesNotMatch(html, /aria-pressed/);
+  });
+
+  await t.test("a leaf package scopes to //pkg:all without a switch", () => {
     const html = output(MIXED, "other");
     assert.match(html, /<h1[^>]*>\/\/other:all<\/h1>/);
     assert.ok(html.includes(">:solo</button>"));
-    assert.ok(!html.includes(">//other:solo</button>"));
+    assert.doesNotMatch(html, /sub-switch/);
+    assert.doesNotMatch(html, /aria-pressed/);
+  });
+
+  await t.test("an empty scope reports no targets", () => {
+    const html = output(MIXED, "missing");
+    assert.match(html, /<h1[^>]*>\/\/missing\/\.\.\.<\/h1>/);
+    assert.match(html, /No targets in this scope\./);
+    assert.match(html, />0 targets</);
+  });
+
+  await t.test("test_suite counts as a test for the primary action", () => {
+    const index: TargetIndex = {
+      meta: { fetchedAt: 1, status: "ok" },
+      targets: [indexedTarget("//app:all_tests", "test_suite"), indexedTarget("//app:lib")],
+    };
+    const html = output(index, "app");
+    assert.match(html, />Test<\/button>/);
   });
 
   await t.test("sorting does not mutate index.targets", () => {
@@ -474,7 +538,9 @@ test("PackageView scope labels, root //..., and the row cap", async (t) => {
       before,
     );
     const html = output(index, "");
-    assert.ok(html.indexOf(">//a:first</button>") < html.indexOf(">//z:-last</button>"));
+    assert.ok(
+      html.indexOf(">//a</span>:first</button>") < html.indexOf(">//z</span>:-last</button>"),
+    );
   });
 
   await t.test("more than 500 rows truncate with a notice", () => {
@@ -499,4 +565,45 @@ test("PackageView scope labels, root //..., and the row cap", async (t) => {
     assert.equal((exactHtml.match(/class="clickable"/g) ?? []).length, 500);
     assert.doesNotMatch(exactHtml, /Showing first 500/);
   });
+});
+
+test("Tree marks grouping-only folders and renders root targets", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: Tree } = await load("/src/lib/Tree.svelte");
+
+  const index: TargetIndex = {
+    meta: { fetchedAt: 1, status: "ok" },
+    targets: [
+      {
+        label: "//outer/inner:t",
+        ...splitLabel("//outer/inner:t"),
+        ruleClass: "cc_library",
+        location: null,
+      },
+      { label: "//real:t", ...splitLabel("//real:t"), ruleClass: "cc_library", location: null },
+      { label: "//:r", ...splitLabel("//:r"), ruleClass: "cc_library", location: null },
+    ],
+  };
+  const html = render(Tree, {
+    props: { root: buildTree(index), selection: null, onselect: () => {} },
+  })
+    .body.replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\s+/g, " ");
+
+  function dirRow(caretLabel: string): string {
+    const rows = html.match(/<div class="tree-row dir[\s\S]*?<\/div>/g) ?? [];
+    const row = rows.find((r: string) => r.includes(caretLabel));
+    assert.ok(row, `missing directory row for ${caretLabel}`);
+    return row;
+  }
+
+  // //outer has no direct targets (only //outer/inner does), so it groups.
+  assert.match(dirRow("Expand //outer"), /grouping/);
+  // //real declares :t itself, so it is a real package row.
+  assert.doesNotMatch(dirRow("Expand //real"), /grouping/);
+  // Collapsed dirs hide their children; the root package's own target still
+  // renders as a depth-zero leaf.
+  assert.equal((html.match(/tree-row target/g) ?? []).length, 1);
+  assert.match(html, /<span class="dim">:<\/span>r/);
+  assert.match(html, /\/\/:r \(cc_library\)/);
 });

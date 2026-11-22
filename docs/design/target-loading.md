@@ -19,7 +19,7 @@ UI へ渡すのは選択 target の詳細だけであり、query 結果全体は
 詳細取得中に別の target を選んだ場合、UI は最後の選択だけを待機させる。
 workspace、Scope、一覧の世代、選択 target が変わった後に届いた詳細は表示しない。
 
-インスペクタの Configured / Actions タブは、選択 target に対して `read_target` コマンドを段階的に呼ぶ。
+target 詳細の Configured / Actions タブは、選択 target に対して `read_target` コマンドを段階的に呼ぶ。
 各呼び出しは 1 つの Bazel プロセスであり、`--noblock_for_lock` はプロセスごとに適用され、サブコマンド間でロックを保持しない。
 Configured は configuration → transitions → outputs の 3 段階で、各 cquery は選択 target 自身の `config()` だけを問い合わせる。タブ・フラグ・選択の変更は段階の合間で読み取りを止められる。
 適用済みフラグはそのまま保持される。`read_target` は malformed または予約済みのフラグを Bazel プロセスの起動前に拒否し、その診断はフェーズのエラーとして表示される。

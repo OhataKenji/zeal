@@ -13,7 +13,7 @@ keep their state in their views.
   invalidates the captured content; explicit-open intent blocks saved-workspace
   restoration even after failure.
 - Target reads have two lifetimes: static detail once per selection, then one
-  phase reader for the active inspector tab (configured or actions) under the
+  phase reader for the active target detail tab (configured or actions) under the
   workspace's applied build flags; Definition issues no phase read. The UI
   stages the Configured tab's three `read_target` steps — configuration,
   transitions, outputs — each a `config(label, target)` cquery scoped to the

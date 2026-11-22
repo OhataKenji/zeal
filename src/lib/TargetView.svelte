@@ -8,7 +8,13 @@
     TargetPhaseData,
     TargetTab,
   } from "./types";
-  import { displayLabel, displayPath, relations, shortOutputPath } from "./model";
+  import {
+    displayLabel,
+    displayPath,
+    isTestRule,
+    relations,
+    shortOutputPath,
+  } from "./model";
   import { tabKeydown } from "./tabs";
   import ActionPair from "./ActionPair.svelte";
   import ActionsSection from "./TargetActions.svelte";
@@ -25,7 +31,6 @@
     onselect,
     onrun,
     onopenflags,
-    onclose,
     ontab,
     onapply,
   }: {
@@ -40,7 +45,6 @@
     onselect: (label: string) => void;
     onrun?: (cmd: BazelCommand, pattern: string) => void;
     onopenflags?: (cmd: BazelCommand, pattern: string) => void;
-    onclose?: () => void;
     ontab: (tab: TargetTab) => void;
     onapply: (flags: string) => void;
   } = $props();
@@ -59,7 +63,7 @@
   ];
   const target = $derived(rel.target);
   const primary = $derived.by((): { cmd: BazelCommand; label: string } => {
-    if (target.ruleClass.endsWith("_test")) return { cmd: "test", label: "Test" };
+    if (isTestRule(target.ruleClass)) return { cmd: "test", label: "Test" };
     if (target.ruleClass.endsWith("_binary")) return { cmd: "run", label: "Run" };
     return { cmd: "build", label: "Build" };
   });
@@ -214,12 +218,7 @@
 {/snippet}
 
   <header class="target-head">
-    <div class="target-head-top">
-      <h1>{target.label}</h1>
-      {#if onclose}
-        <button type="button" class="button button-ghost icon-button" aria-label="Close" onclick={onclose}>✕</button>
-      {/if}
-    </div>
+    <h1>{target.label}</h1>
     <div class="target-head-meta">
       <span class="badge">{target.ruleClass}</span>
       {#if target.location}

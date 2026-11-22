@@ -1,9 +1,8 @@
 <script lang="ts">
-  import type { SnapshotKey } from "fuzzysort";
   import { tick } from "svelte";
   import QueryExpr from "./QueryExpr.svelte";
   import SearchInput from "./SearchInput.svelte";
-  import type { Target } from "./types";
+  import type { SearchIndex } from "./search";
   import {
     FUNCTIONS,
     KIND_GROUPS,
@@ -28,9 +27,9 @@
     node: Expr;
     queryKind: QueryKind;
     errors: Map<string, string>;
-    searchIndex: SnapshotKey<Target> | null;
-    kindIndex: SnapshotKey<Target> | null;
-    attrIndex: SnapshotKey<Target> | null;
+    searchIndex: SearchIndex | null;
+    kindIndex: SearchIndex | null;
+    attrIndex: SearchIndex | null;
     context?: string;
   } = $props();
 
@@ -59,7 +58,7 @@
   }
 
   // Scalar args with a candidate population get the shared fuzzy combobox.
-  function argIndex(fn: string, arg: ArgSpec): SnapshotKey<Target> | null {
+  function argIndex(fn: string, arg: ArgSpec): SearchIndex | null {
     if (fn === "kind" && arg.name === "pattern") return kindIndex;
     if (arg.name === "name" || arg.name === "attr_name") return attrIndex;
     return null;

@@ -45,13 +45,7 @@
   const tree = $derived(snap ? buildTree(snap) : null);
   const selection = $derived(view.selection);
   const selectedTarget = $derived(selection?.kind === "target" ? selection.label : null);
-  const selectedPkg = $derived(
-    selection?.kind === "package"
-      ? selection.path
-      : selection?.kind === "target"
-        ? (snap?.targets.find((t) => t.label === selection.label)?.pkg ?? "")
-        : "",
-  );
+  const selectedPkg = $derived(selection?.kind === "package" ? selection.path : "");
   const invocation = $derived(view.invocation);
 
   let opening = $state(false);
@@ -320,7 +314,13 @@
       {#if view.page === "targets"}
         <aside class="sidebar">
           <div class="sidebar-head">
-            <span>Packages</span>
+            <button
+              type="button"
+              class="sidebar-root"
+              title="Show root package"
+              aria-label="Show root package"
+              onclick={() => session.select(null)}>Targets</button
+            >
             <button
               type="button"
               class="button button-ghost icon-button"
@@ -341,7 +341,7 @@
             {#if snap && tree}
               <Tree
                 root={tree}
-                activePkg={selectedPkg}
+                {selection}
                 revealRequest={treeRevealRequest}
                 onselect={session.select}
               />
@@ -423,15 +423,53 @@
             </Notice>
           {/if}
           {#if snap}
-            <PackageView
-              index={snap}
-              pkg={selectedPkg}
-              selectedLabel={selectedTarget}
-              canRun={canSend(view, "//...")}
-              onselect={(label) => session.select({ kind: "target", label })}
-              onrun={(cmd, pattern) => session.start(cmd, pattern)}
-              onopenflags={openRunDialog}
-            />
+            <div class="page-center">
+              {#if selectedTarget !== null}
+                {#if view.targetDetail?.target.label === selectedTarget}
+                  {#if view.targetDetail.status === "partial"}
+                    <Notice tone="warning">Some target details could not be loaded.</Notice>
+                  {/if}
+                  {#key `${selectedTarget}:${snap.meta.fetchedAt}`}
+                    <TargetView
+                      index={snap}
+                      detail={view.targetDetail}
+                      phaseData={view.targetPhase}
+                      phaseError={view.targetPhaseError}
+                      tab={view.targetTab}
+                      flags={view.targetFlags}
+                      wsRoot={st.workspace}
+                      canRun={canSend(view, selectedTarget)}
+                      onselect={(label) => session.select({ kind: "target", label })}
+                      onrun={(cmd, pattern) => session.start(cmd, pattern)}
+                      onopenflags={openRunDialog}
+                      ontab={session.setTargetTab}
+                      onapply={session.applyTargetFlags}
+                    />
+                  {/key}
+                {:else if view.targetDetailError}
+                  <Notice
+                    tone="error"
+                    onaction={() =>
+                      view.snapshotError ? session.refresh() : session.select(selection)}
+                  >
+                    Could not load target details: {view.targetDetailError}
+                  </Notice>
+                {:else}
+                  <p class="dim">Loading target details…</p>
+                {/if}
+              {:else}
+                {#key selectedPkg}
+                  <PackageView
+                    index={snap}
+                    pkg={selectedPkg}
+                    canRun={canSend(view, "//...")}
+                    onselect={(label) => session.select({ kind: "target", label })}
+                    onrun={(cmd, pattern) => session.start(cmd, pattern)}
+                    onopenflags={openRunDialog}
+                  />
+                {/key}
+              {/if}
+            </div>
           {:else if view.snapshotLoading}
             <p class="dim">Loading targets…</p>
           {:else if view.snapshotError}
@@ -499,44 +537,6 @@
         </main>
       {/if}
 
-      {#if view.page === "targets" && snap && selectedTarget}
-        <aside class="inspector" aria-label="Target details">
-          {#if view.targetDetail?.target.label === selectedTarget}
-            {#if view.targetDetail.status === "partial"}
-              <Notice tone="warning">Some target details could not be loaded.</Notice>
-            {/if}
-            {#key `${selectedTarget}:${snap.meta.fetchedAt}`}
-              <TargetView
-                index={snap}
-                detail={view.targetDetail}
-                phaseData={view.targetPhase}
-                phaseError={view.targetPhaseError}
-                tab={view.targetTab}
-                flags={view.targetFlags}
-                wsRoot={st.workspace}
-                canRun={canSend(view, selectedTarget)}
-                onselect={(label) => session.select({ kind: "target", label })}
-                onrun={(cmd, pattern) => session.start(cmd, pattern)}
-                onopenflags={openRunDialog}
-                onclose={() =>
-                  session.select(selectedPkg ? { kind: "package", path: selectedPkg } : null)}
-                ontab={session.setTargetTab}
-                onapply={session.applyTargetFlags}
-              />
-            {/key}
-          {:else if view.targetDetailError}
-            <Notice
-              tone="error"
-              onaction={() =>
-                view.snapshotError ? session.refresh() : session.select(selection)}
-            >
-              Could not load target details: {view.targetDetailError}
-            </Notice>
-          {:else}
-            <p class="dim">Loading target details…</p>
-          {/if}
-        </aside>
-      {/if}
     </div>
 
     <CommandPalette

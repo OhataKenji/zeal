@@ -1,8 +1,7 @@
-import type { SnapshotKey } from "fuzzysort";
 import { invocationStatus } from "./invocation.ts";
-import { search } from "./search.ts";
+import { search, type SearchIndex } from "./search.ts";
 import { pages, type Page } from "./pages.ts";
-import type { InvocationRecord, OwnedInvocation, Target } from "./types.ts";
+import type { InvocationRecord, OwnedInvocation } from "./types.ts";
 
 export type PaletteGroup = "commands" | "targets" | "invocations";
 
@@ -25,7 +24,7 @@ export interface PaletteItem {
 
 export interface PaletteInput {
   readonly query: string;
-  readonly targetIndex: SnapshotKey<Target> | null;
+  readonly targetIndex: SearchIndex | null;
   readonly invocations: ReadonlyArray<{
     readonly record: InvocationRecord;
     readonly execution?: OwnedInvocation;

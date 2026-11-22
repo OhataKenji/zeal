@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   createIndex,
   keyAction,
+  labelTarget,
   moveIndex,
   optionId,
   search,
@@ -52,6 +53,21 @@ const GREETER_INDEX = createIndex(
   })),
 );
 
+// Root-package targets plus same-named decoys in other packages.
+const ROOT_INDEX = createIndex([
+  { label: "//:gazelle", pkg: "", name: "gazelle", ruleClass: "gazelle", location: null },
+  { label: "//:format", pkg: "", name: "format", ruleClass: "format_multirun", location: null },
+  { label: "//app:format", pkg: "app", name: "format", ruleClass: "sh_binary", location: null },
+  { label: "//app2:other", pkg: "app2", name: "other", ruleClass: "cc_library", location: null },
+  {
+    label: "//app/lib:parser",
+    pkg: "app/lib",
+    name: "parser",
+    ruleClass: "java_library",
+    location: null,
+  },
+]);
+
 for (const query of [
   "examplehellow",
   "example hellow",
@@ -92,6 +108,102 @@ test("file paths are not search candidates", () => {
   assert.deepEqual(search(SEARCH_INDEX, "Lexer.java"), []);
   assert.deepEqual(search(SEARCH_INDEX, "Parser.java"), []);
   assert.deepEqual(search(SEARCH_INDEX, "parser.jar"), []);
+});
+
+test("structured //pkg: queries match target names inside one package", () => {
+  assert.deepEqual(
+    search(SEARCH_INDEX, "//app/lib:").map((match) => match.target.label),
+    ["//app/lib:parser", "//app/lib:parser_test"],
+  );
+  assert.deepEqual(
+    search(SEARCH_INDEX, "//app/lib:par").map((match) => match.target.label),
+    ["//app/lib:parser", "//app/lib:parser_test"],
+  );
+  // The name fragment matches case-insensitively.
+  assert.deepEqual(
+    search(SEARCH_INDEX, "//app/lib:PAR").map((match) => match.target.label),
+    ["//app/lib:parser", "//app/lib:parser_test"],
+  );
+});
+
+test("structured queries require the exact package and never leak into children", () => {
+  // //app: sees only //app's own targets — not //app/lib's or //app2's.
+  assert.deepEqual(
+    search(ROOT_INDEX, "//app:").map((match) => match.target.label),
+    ["//app:format"],
+  );
+  assert.deepEqual(
+    search(ROOT_INDEX, "//app/lib:").map((match) => match.target.label),
+    ["//app/lib:parser"],
+  );
+  assert.deepEqual(
+    search(ROOT_INDEX, "//app2:").map((match) => match.target.label),
+    ["//app2:other"],
+  );
+  // A package path used as the name fragment is not a target name.
+  assert.deepEqual(search(ROOT_INDEX, "//app:lib"), []);
+  // The root scope //: lists only root-package targets, sorted by name.
+  assert.deepEqual(
+    search(ROOT_INDEX, "//:").map((match) => match.target.label),
+    ["//:format", "//:gazelle"],
+  );
+  assert.deepEqual(
+    search(ROOT_INDEX, "//:for").map((match) => match.target.label),
+    ["//:format"],
+  );
+  assert.deepEqual(
+    search(ROOT_INDEX, "//:FOR").map((match) => match.target.label),
+    ["//:format"],
+  );
+});
+
+test("structured queries exclude label-only candidates even with root-looking labels", () => {
+  const candidates = createIndex([
+    labelTarget("//:fake", "alias"),
+    labelTarget("//app:fake", "alias"),
+  ]);
+  assert.deepEqual(search(candidates, "//:"), []);
+  assert.deepEqual(search(candidates, "//app:"), []);
+  assert.deepEqual(search(candidates, "//:fake"), []);
+});
+
+test("structured matches highlight the matched name at its label offset", () => {
+  const match = search(SEARCH_INDEX, "//app/lib:par")[0];
+  assert.ok(match);
+  assert.equal(match.target.label, "//app/lib:parser");
+  // "//app/lib:" is 10 characters, so "par" highlights label [10, 12].
+  assert.deepEqual(match.indices, [[10, 12]]);
+  const mid = search(SEARCH_INDEX, "//app/lib:ser").find(
+    (candidate) => candidate.target.label === "//app/lib:parser",
+  );
+  assert.ok(mid);
+  // "ser" is name offset 3 inside "parser" → label offset 13.
+  assert.deepEqual(mid.indices, [[13, 15]]);
+  const deep = search(SEARCH_INDEX, "//very/deep/package:long")[0];
+  assert.ok(deep);
+  assert.equal(deep.target.label, "//very/deep/package:some_long_target_name");
+  // The name starts after "//very/deep/package:" (20 chars); "long" sits at
+  // name offset 5, so the highlight lands on label [25, 28].
+  assert.deepEqual(deep.indices, [[25, 28]]);
+  // An empty needle lists the package without highlight ranges.
+  const all = search(SEARCH_INDEX, "//app/lib:");
+  assert.equal(all.length, 2);
+  assert.ok(all.every((candidate) => candidate.indices.length === 0));
+});
+
+test("root-package name matches outrank other packages under a tight limit", () => {
+  assert.deepEqual(
+    search(ROOT_INDEX, "format", 1).map((match) => match.target.label),
+    ["//:format"],
+  );
+  assert.deepEqual(
+    search(ROOT_INDEX, "for", 1).map((match) => match.target.label),
+    ["//:format"],
+  );
+  assert.deepEqual(
+    search(ROOT_INDEX, "gaz", 1).map((match) => match.target.label),
+    ["//:gazelle"],
+  );
 });
 
 test("later searches do not change earlier results", () => {

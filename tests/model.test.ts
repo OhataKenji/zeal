@@ -5,85 +5,119 @@ import {
   buildTree,
   commandLine,
   flatten,
+  isTestRule,
   relations,
   shellQuote,
   splitLabel,
 } from "../src/lib/model.ts";
-import type { TargetDetail, TargetIndex } from "../src/lib/types.ts";
+import type { Target, TargetDetail, TargetIndex } from "../src/lib/types.ts";
 
-test("package tree leads with //... and counts targets per subtree", () => {
-  const snapshot: TargetIndex = {
+function target(label: string, ruleClass = "cc_library"): Target {
+  return { label, ...splitLabel(label), ruleClass, location: null };
+}
+
+// Deliberately unsorted labels across nested packages plus a root target.
+function treeFixture(): TargetIndex {
+  return {
     meta: { fetchedAt: 0, status: "ok" },
     targets: [
-      {
-        label: "//app:parser_test",
-        pkg: "app",
-        name: "parser_test",
-        ruleClass: "cc_test",
-        location: null,
-      },
-      {
-        label: "//app/lib:helper",
-        pkg: "app/lib",
-        name: "helper",
-        ruleClass: "cc_library",
-        location: null,
-      },
-      {
-        label: "//:root_target",
-        pkg: "",
-        name: "root_target",
-        ruleClass: "cc_library",
-        location: null,
-      },
+      target("//zeta:top"),
+      target("//app:server"),
+      target("//app/lib:parser"),
+      target("//app:alpha"),
+      target("//:root_tool"),
+      target("//app/api:handler"),
     ],
   };
-  const tree = buildTree(snapshot);
-  assert.equal(tree.count, 3);
-  assert.equal(tree.dirs.find((d) => d.path === "app")?.count, 2);
-  assert.equal(tree.dirs.find((d) => d.path === "app")?.dirs[0]?.count, 1);
+}
 
-  const rows = flatten(tree, new Set(["app"]));
+function rowKey(row: ReturnType<typeof flatten>[number]): string {
+  return row.kind === "dir"
+    ? `dir:${row.node.path}@${row.depth}`
+    : `tgt:${row.target.label}@${row.depth}`;
+}
+
+test("package tree sorts directories and targets and counts subtree totals", () => {
+  const tree = buildTree(treeFixture());
+  assert.equal(tree.count, 6);
   assert.deepEqual(
-    rows.map((row) => ({ path: row.path, name: row.name, depth: row.depth })),
-    [
-      { path: "", name: "//...", depth: 0 },
-      { path: "app", name: "app/", depth: 1 },
-      { path: "app/lib", name: "lib/", depth: 2 },
-    ],
+    tree.dirs.map((d) => d.path),
+    ["app", "zeta"],
   );
-  assert.equal(rows[0].count, 3);
-  assert.equal(rows[1].count, 2);
-  assert.equal(rows[2].count, 1);
-  assert.ok(rows.every((row) => !("kind" in row) && !("label" in row)));
+  assert.deepEqual(
+    tree.targets.map((t) => t.name),
+    ["root_tool"],
+  );
+
+  const app = tree.dirs[0];
+  // app holds two direct targets plus one target in each child package.
+  assert.equal(app.count, 4);
+  assert.deepEqual(
+    app.dirs.map((d) => d.path),
+    ["app/api", "app/lib"],
+  );
+  assert.deepEqual(
+    app.targets.map((t) => t.name),
+    ["alpha", "server"],
+  );
+  assert.equal(app.dirs[0].count, 1);
+  assert.equal(app.dirs[1].count, 1);
+  assert.equal(tree.dirs[1].count, 1);
 });
 
-test("expanding a package reveals its row without opening its children", () => {
-  const snapshot: TargetIndex = {
-    meta: { fetchedAt: 0, status: "ok" },
-    targets: ["//app/lib/deep:parser", "//other:lib", "//:root"].map((label) => ({
-      label,
-      ...splitLabel(label),
-      ruleClass: "cc_library",
-      location: null,
-    })),
-  };
-  const tree = buildTree(snapshot);
-  const expanded = new Set(["other"]);
+test("flatten lists directories before target leaves at every level", () => {
+  const tree = buildTree(treeFixture());
 
-  // Collapsed branches still show their own row; only //... is always open.
-  assert.deepEqual(
-    flatten(tree, expanded).map((row) => row.path),
-    ["", "app", "other"],
-  );
+  // Collapsed: only depth-0 rows — directories first, then the root leaves.
+  assert.deepEqual(flatten(tree, new Set()).map(rowKey), [
+    "dir:app@0",
+    "dir:zeta@0",
+    "tgt://:root_tool@0",
+  ]);
 
-  // Revealing //app/lib/deep opens its ancestors but not the package itself.
-  for (const path of ancestorsOf("app/lib/deep").slice(0, -1)) {
+  // Expanded app and app/lib: each level still leads with its directories.
+  const rows = flatten(tree, new Set(["app", "app/lib"]));
+  assert.deepEqual(rows.map(rowKey), [
+    "dir:app@0",
+    "dir:app/api@1",
+    "dir:app/lib@1",
+    "tgt://app/lib:parser@2",
+    "tgt://app:alpha@1",
+    "tgt://app:server@1",
+    "dir:zeta@0",
+    "tgt://:root_tool@0",
+  ]);
+  assert.equal(rows[0].kind === "dir" && rows[0].expanded, true);
+  assert.equal(rows[1].kind === "dir" && rows[1].expanded, false);
+  assert.equal(rows[2].kind === "dir" && rows[2].expanded, true);
+
+  // There is no synthetic //... row: the root only contributes its own leaves.
+  assert.ok(rows.every((row) => row.kind !== "dir" || row.node.path !== ""));
+});
+
+test("revealing a target expands its package ancestors including the package itself", () => {
+  const tree = buildTree(treeFixture());
+  const expanded = new Set<string>();
+  for (const path of ancestorsOf(splitLabel("//app/lib:parser").pkg)) {
     expanded.add(path);
   }
-  const paths = flatten(tree, expanded).map((row) => row.path);
-  assert.deepEqual(paths, ["", "app", "app/lib", "app/lib/deep", "other"]);
-  assert.deepEqual(ancestorsOf(splitLabel("//:root").pkg), []);
+  // ancestorsOf is inclusive: "app/lib" opens so its :parser leaf shows.
+  assert.deepEqual([...expanded].sort(), ["app", "app/lib"]);
+  const leaf = flatten(tree, expanded).find(
+    (row) => row.kind === "target" && row.target.label === "//app/lib:parser",
+  );
+  assert.ok(leaf);
+  assert.equal(leaf.depth, 2);
+  assert.deepEqual(ancestorsOf("app/lib"), ["app", "app/lib"]);
+  assert.deepEqual(ancestorsOf(""), []);
+});
+
+test("isTestRule covers test rules and test suites only", () => {
+  assert.equal(isTestRule("cc_test"), true);
+  assert.equal(isTestRule("java_test"), true);
+  assert.equal(isTestRule("test_suite"), true);
+  assert.equal(isTestRule("cc_library"), false);
+  assert.equal(isTestRule("contest"), false);
 });
 
 test("forward attributes retain target and file inputs under their original names", () => {
@@ -149,25 +183,19 @@ test("commandLine joins quoted arguments with spaces", () => {
   assert.equal(commandLine({ arguments: ["it's", "x"] }), `'it'\\''s' x`);
 });
 
-test("every package row is selectable and the root row stands for //...", () => {
+test("directories and target leaves are distinct rows with no synthetic root", () => {
   const index: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
-    targets: ["//app/lib:parser", "//apple:server", "//:root"].map((label) => ({
-      label,
-      ...splitLabel(label),
-      ruleClass: "cc_library",
-      location: null,
-    })),
+    targets: ["//app/lib:parser", "//apple:server", "//:root"].map((label) => target(label)),
   };
-  const rows = flatten(buildTree(index), new Set(["app"]));
+  const rows = flatten(buildTree(index), new Set(["app", "app/lib"]));
   // Intermediate directories without their own targets still appear as rows.
   assert.deepEqual(
-    rows.map((row) => row.path),
-    ["", "app", "app/lib", "apple"],
+    rows.map((row) => rowKey(row)),
+    ["dir:app@0", "dir:app/lib@1", "tgt://app/lib:parser@2", "dir:apple@0", "tgt://:root@0"],
   );
-  assert.equal(rows[0].name, "//...");
-  assert.equal(rows[0].expanded, true);
-  assert.equal(rows.find((row) => row.path === "app")?.count, 1);
-  assert.equal(rows.find((row) => row.path === "app/lib")?.count, 1);
-  assert.equal(rows.find((row) => row.path === "apple")?.count, 1);
+  const app = rows.find((row) => row.kind === "dir" && row.node.path === "app");
+  assert.equal(app?.kind === "dir" && app.node.count, 1);
+  const leaf = rows.find((row) => row.kind === "target" && row.target.label === "//:root");
+  assert.equal(leaf?.kind === "target" && leaf.depth, 0);
 });

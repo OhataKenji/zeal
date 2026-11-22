@@ -8,13 +8,19 @@ export interface Match {
   indices: ReadonlyArray<readonly [number, number]>;
 }
 
+/** The searchable targets plus their label snapshot, built once per index. */
+export interface SearchIndex {
+  targets: readonly Target[];
+  labels: SnapshotKey<Target>;
+}
+
 /**
  * Builds the index over `targets`. The session swaps the snapshot in on each
  * accepted refresh, so the component derives a fresh index once per fetch;
  * typing then only searches the index it holds.
  */
-export function createIndex(targets: Target[]): SnapshotKey<Target> {
-  return fuzzysort.snapshot(targets, { key: "label" });
+export function createIndex(targets: readonly Target[]): SearchIndex {
+  return { targets, labels: fuzzysort.snapshot(targets, { key: "label" }) };
 }
 
 /** A label-only candidate, for indexes over strings that are not targets. */
@@ -23,15 +29,86 @@ export function labelTarget(label: string, ruleClass: string): Target {
 }
 
 /**
- * fuzzysort decides matching, scoring and matched positions. Queries match
- * subsequences and space-separated terms; the matches drive the highlight.
+ * Parses `//pkg:needle` and `//:needle` structured queries. The first colon
+ * splits the package scope from the target-name fragment.
  */
-export function search(index: SnapshotKey<Target>, query: string, limit = 20): Match[] {
-  if (query.trim() === "" || limit <= 0) return [];
-  return fuzzysort.go(query, index, { limit, threshold: 0 }).map((result) => ({
-    target: result.obj,
-    indices: result.indexes.map((position): readonly [number, number] => [position, position]),
-  }));
+function structured(query: string): { pkg: string; name: string } | null {
+  if (!query.startsWith("//")) return null;
+  const colon = query.indexOf(":");
+  if (colon < 0) return null;
+  return { pkg: query.slice(2, colon), name: query.slice(colon + 1) };
+}
+
+/**
+ * Structured `//pkg:needle` matching: the package must match exactly — root
+ * `//:` selects only targets whose labels have no package — and `needle` is a
+ * case-insensitive substring of the target name. Candidates sort by name;
+ * an empty needle lists the whole package.
+ */
+function structuredMatches(index: SearchIndex, pkg: string, name: string, limit: number): Match[] {
+  const needle = name.toLowerCase();
+  const found = index.targets
+    .filter((target) => {
+      // labelTarget candidates carry no name; keep them out of label queries.
+      if (target.name === "") return false;
+      if (pkg === "") {
+        if (!target.label.startsWith("//:")) return false;
+      } else if (target.pkg !== pkg) {
+        return false;
+      }
+      return needle === "" || target.name.toLowerCase().includes(needle);
+    })
+    .sort(
+      (a, b) =>
+        a.name.localeCompare(b.name) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0),
+    )
+    .slice(0, limit);
+  return found.map((target) => {
+    const prefix = target.label.length - target.name.length;
+    const at = needle === "" ? -1 : target.name.toLowerCase().indexOf(needle);
+    return {
+      target,
+      indices: at < 0 ? [] : [[prefix + at, prefix + at + needle.length - 1] as const],
+    };
+  });
+}
+
+/**
+ * Ordinary fuzzy matching over labels. fuzzysort decides matching, scoring
+ * and matched positions; queries match subsequences and space-separated terms.
+ * Root-package targets whose names start with the needle get a score boost so
+ * `//:format` outranks `//app:format` for "format".
+ */
+function fuzzyMatches(index: SearchIndex, query: string, limit: number): Match[] {
+  const needle = query.toLowerCase();
+  return fuzzysort
+    .go(query, index.labels, {
+      limit,
+      threshold: 0,
+      scoreFn: (result) => {
+        const name = result.obj.name.toLowerCase();
+        if (result.obj.pkg === "" && name.startsWith(needle)) {
+          return (name === needle ? 0.95 : 0.8) + 0.05 * result.score;
+        }
+        return 0.75 * result.score;
+      },
+    })
+    .map((result) => ({
+      target: result.obj,
+      indices: result.indexes.map((position): readonly [number, number] => [position, position]),
+    }));
+}
+
+/**
+ * Searches `index` for `query`: a `//pkg:fragment` query matches target names
+ * inside one package, anything else fuzzy-matches whole labels.
+ */
+export function search(index: SearchIndex, query: string, limit = 20): Match[] {
+  const trimmed = query.trim();
+  if (trimmed === "" || limit <= 0) return [];
+  const scoped = structured(trimmed);
+  if (scoped !== null) return structuredMatches(index, scoped.pkg, scoped.name, limit);
+  return fuzzyMatches(index, trimmed, limit);
 }
 
 /** Merges sorted ranges, combining overlapping or adjacent ones. */
