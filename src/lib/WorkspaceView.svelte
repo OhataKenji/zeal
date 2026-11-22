@@ -96,23 +96,25 @@
   {#if loading && !info}
     <p class="dim">Loading bazel info…</p>
   {/if}
-  <table class="lens-table">
-    <tbody>
-      {#each info?.paths ?? [] as row (row.key)}
-        <tr
-          class="clickable"
-          onclick={() => void copyPath(row.key, row.path)}
-          title="Click to copy path"
-        >
-          <td class="mono">{row.key}</td>
-          <td class="mono path-cell">
-            {row.path}{#if copiedKey === row.key}{" "}
-              <span class="copied-tag">Copied</span>{/if}
-          </td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
+  {#if info && info.paths.length}
+    <table class="lens-table">
+      <tbody>
+        {#each info.paths as row (row.key)}
+          <tr
+            class="clickable"
+            onclick={() => void copyPath(row.key, row.path)}
+            title="Click to copy path"
+          >
+            <td class="mono">{row.key}</td>
+            <td class="mono path-cell">
+              {row.path}{#if copiedKey === row.key}{" "}
+                <span class="copied-tag">Copied</span>{/if}
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
 </section>
 
 <section class="section">

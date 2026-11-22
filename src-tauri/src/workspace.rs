@@ -3,20 +3,31 @@
 
 use crate::scope::Scope;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 const INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const INFO_STDOUT_CAP: usize = 64 * 1024;
+const PATH_KEYS: [&str; 6] = [
+    "workspace",
+    "output_base",
+    "execution_root",
+    "bazel-bin",
+    "bazel-testlogs",
+    "repository_cache",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
     pub version: Option<String>,
     pub paths: Vec<WorkspacePath>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspacePath {
     pub key: String,
     pub path: String,
@@ -24,34 +35,25 @@ pub struct WorkspacePath {
 
 #[must_use]
 fn parse_bazel_info(stdout: &str) -> WorkspaceInfo {
-    let mut info = WorkspaceInfo {
-        version: None,
-        paths: Vec::new(),
-    };
-    for line in stdout.lines() {
-        let Some((key, val)) = line.split_once(':') else {
-            continue;
-        };
-        let key = key.trim();
-        let val = val.trim();
-        if val.is_empty() {
-            continue;
-        }
-        match key {
-            "release" => {
-                info.version = Some(val.strip_prefix("release ").unwrap_or(val).to_owned());
-            }
-            "workspace" | "output_base" | "execution_root" | "repository_cache" | "bazel-bin"
-            | "bazel-testlogs" => {
-                info.paths.push(WorkspacePath {
-                    key: key.to_owned(),
-                    path: val.to_owned(),
-                });
-            }
-            _ => {}
-        }
-    }
-    info
+    let values: HashMap<_, _> = stdout
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .filter(|(_, value)| !value.is_empty())
+        .collect();
+    let version = values
+        .get("release")
+        .map(|&value| value.strip_prefix("release ").unwrap_or(value).to_owned());
+    let paths = PATH_KEYS
+        .into_iter()
+        .filter_map(|key| {
+            Some(WorkspacePath {
+                key: key.to_owned(),
+                path: values.get(key)?.to_string(),
+            })
+        })
+        .collect();
+    WorkspaceInfo { version, paths }
 }
 
 /// Run `bazel --noblock_for_lock info` in `ws` with bounded IO and timeout.
@@ -354,7 +356,7 @@ mod tests {
     #[test]
     fn parses_bazel_info_version_and_allowlisted_paths() {
         let info = parse_bazel_info(
-            "release: release 8.7.0\nworkspace: /ws\nbazel-bin: /reported/bin\nbazel-testlogs: /reported/logs\nrepository_cache: /cache:repos\noutput_base:\nunknown: ignored",
+            "repository_cache: /cache:repos\nbazel-testlogs: /reported/logs\nbazel-bin: /old/bin\nworkspace: /ws\nrelease: release 8.7.0\nbazel-bin: /reported/bin\nbazel-bin:\nunknown: ignored",
         );
         assert_eq!(info.version.as_deref(), Some("8.7.0"));
         let paths: Vec<_> = info
