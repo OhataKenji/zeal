@@ -397,16 +397,18 @@
       {#snippet pageContent()}
         {#if view.page === "workspace"}
           <div class="page-center">
-            <WorkspaceView
-              workspace={st.workspace}
-              scope={st.scope}
-              info={view.workspaceInfo}
-              loading={view.workspaceInfoLoading}
-              error={view.workspaceInfoError}
-              besEndpoint={core.besEndpoint}
-              onretry={session.loadWorkspaceInfo}
-              onsavescope={(scope) => session.openWorkspace(st.workspace, scope)}
-            />
+            {#key st.workspace}
+              <WorkspaceView
+                workspace={st.workspace}
+                scope={st.scope}
+                info={view.workspaceInfo}
+                loading={view.workspaceInfoLoading}
+                error={view.workspaceInfoError}
+                besEndpoint={core.besEndpoint}
+                onretry={session.loadWorkspaceInfo}
+                onsavescope={(scope) => session.openWorkspace(st.workspace, scope)}
+              />
+            {/key}
           </div>
         {:else if view.page === "targets"}
           {#if snap?.meta.status === "partial"}

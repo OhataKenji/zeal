@@ -15,6 +15,7 @@ import type {
   TargetDetail,
   TargetIndex,
   TargetOutputs,
+  WorkspaceInfo,
   WorkspaceState,
 } from "./lib/types";
 import type { QueryOutput, QueryRequest } from "./lib/query.ts";
@@ -602,17 +603,31 @@ export function installPreview() {
         warning: null,
       };
     },
-    get_workspace_info: (payload) => {
+    get_workspace_info: (payload): WorkspaceInfo => {
       const entry = wsEntry(payload?.workspace);
       const ob = `/private/var/tmp/_bazel_dev/preview`;
       return {
-        workspace: entry.workspace,
-        release: "release 8.7.0",
-        outputBase: ob,
-        executionRoot: `${ob}/execroot/_main`,
-        bazelBin: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
-        bazelTestlogs: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
-        repositoryCache: "/Users/dev/Library/Caches/bazel/repo_cache",
+        version: "8.7.0",
+        entries: [
+          {
+            key: "bazel-bin",
+            value: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
+          },
+          {
+            key: "bazel-testlogs",
+            value: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
+          },
+          { key: "execution_root", value: `${ob}/execroot/_main` },
+          { key: "install_base", value: "/private/var/tmp/_bazel_install/9f2c1d" },
+          { key: "max-heap-size", value: "4096MB" },
+          { key: "output_base", value: ob },
+          { key: "output_path", value: `${ob}/execroot/_main/bazel-out` },
+          { key: "release", value: "release 8.7.0" },
+          { key: "repository_cache", value: "/Users/dev/Library/Caches/bazel/repo_cache" },
+          { key: "server_log", value: `${ob}/server/jvm.out` },
+          { key: "server_pid", value: "48213" },
+          { key: "workspace", value: entry.workspace },
+        ],
       };
     },
     get_target_detail: (payload): TargetDetail => {
