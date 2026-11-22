@@ -1,38 +1,27 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import { onDestroy, untrack } from "svelte";
+  import { ArrowClockwise } from "phosphor-svelte";
   import Notice from "./Notice.svelte";
-  import {
-    createModules,
-    emptyModulesState,
-    filterModules,
-    type ModuleDepth,
-    type ModulesState,
-  } from "./modules";
+  import { filterModules, type ModuleDepth, type ModulesState } from "./modules";
 
   let {
-    workspace,
+    view,
     bazelAvailable,
-    initialState = emptyModulesState(),
+    onload,
+    onselect,
+    onexplain,
   }: {
-    workspace: string;
+    view: ModulesState;
     bazelAvailable: boolean;
-    initialState?: ModulesState;
+    onload: () => void;
+    onselect: (key: string | null) => void;
+    onexplain: () => void;
   } = $props();
 
-  const view = $state(untrack(() => ({ ...initialState })));
   let depth = $state<ModuleDepth>("all");
   let query = $state("");
   const snapshot = $derived(view.snapshot);
   const selected = $derived(snapshot?.modules.find((node) => node.key === view.selectedKey));
   const disabled = $derived(!bazelAvailable || view.busy !== null);
-  const controller = createModules(
-    untrack(() => workspace),
-    { invoke },
-    view,
-    () => bazelAvailable,
-  );
-  onDestroy(controller.dispose);
 </script>
 
 {#snippet bazelWarning(subject: "module graph" | "explanation", output: string)}
@@ -54,7 +43,7 @@
           {#if key === snapshot?.rootKey}
             {snapshot.rootName ? `${snapshot.rootName} (this workspace)` : "This workspace"}
           {:else}
-            <button type="button" class="table-link" onclick={() => controller.select(key)}>{key}</button>
+            <button type="button" class="table-link" onclick={() => onselect(key)}>{key}</button>
           {/if}
         </li>
       {:else}
@@ -72,8 +61,16 @@
         <div class="view-meta">Explore resolved Bzlmod dependencies and their selected versions.</div>
       </div>
       {#if snapshot}
-        <button type="button" class="button" {disabled} onclick={controller.load}>
-          {view.busy === "load" ? "Refreshing…" : "Refresh"}
+        <button
+          type="button"
+          class="button button-ghost icon-button"
+          aria-label="Refresh modules"
+          title="Refresh modules"
+          aria-busy={view.busy === "load"}
+          {disabled}
+          onclick={onload}
+        >
+          <ArrowClockwise size={14} aria-hidden="true" />
         </button>
       {/if}
     </header>
@@ -81,7 +78,7 @@
       <Notice tone="neutral">Bazel is unavailable. Install Bazel or Bazelisk to load modules.</Notice>
     {/if}
     {#if view.loadError !== null}
-      <Notice tone={snapshot ? "warning" : "error"} onaction={disabled ? undefined : controller.load}>
+      <Notice tone={snapshot ? "warning" : "error"} onaction={disabled ? undefined : onload}>
         {view.loadError}
       </Notice>
     {/if}
@@ -94,7 +91,7 @@
           Run <code>bazel mod graph</code> to load dependencies.
           With a cold cache, Bazel may take a few minutes to resolve dependencies.
         </p>
-        <button type="button" class="button button-primary" {disabled} onclick={controller.load}>
+        <button type="button" class="button button-primary" {disabled} onclick={onload}>
           {view.busy === "load" ? "Loading modules…" : "Load modules"}
         </button>
       {/if}
@@ -121,7 +118,7 @@
               class="clickable"
               class:selected={node.key === view.selectedKey}
               onclick={(e) => {
-                if (!(e.target as HTMLElement).closest("button")) controller.select(node.key);
+                if (!(e.target as HTMLElement).closest("button")) onselect(node.key);
               }}
             >
               <td>
@@ -129,7 +126,7 @@
                   type="button"
                   class="table-link mono"
                   aria-pressed={node.key === view.selectedKey}
-                  onclick={() => controller.select(node.key)}
+                  onclick={() => onselect(node.key)}
                 >{node.name}</button>
               </td>
               <td class="mono">{node.version || "—"}</td>
@@ -156,7 +153,7 @@
         type="button"
         class="button button-ghost icon-button"
         aria-label="Close"
-        onclick={() => controller.select(null)}>✕</button
+        onclick={() => onselect(null)}>✕</button
       >
     </header>
     {@render relations("Required by", selected.requiredBy)}
@@ -164,12 +161,12 @@
     <section class="section">
       <div class="section-head">
         <h3 class="section-title">Explain (MVS)</h3>
-        <button type="button" class="button" {disabled} onclick={controller.explain}>
+        <button type="button" class="button" {disabled} onclick={onexplain}>
           {view.busy === "explain" ? "Explanation in progress…" : "Explain"}
         </button>
       </div>
       {#if view.explanation && "error" in view.explanation}
-        <Notice tone="error" onaction={disabled ? undefined : controller.explain}>
+        <Notice tone="error" onaction={disabled ? undefined : onexplain}>
           {view.explanation.error}
         </Notice>
       {:else if view.explanation !== null}

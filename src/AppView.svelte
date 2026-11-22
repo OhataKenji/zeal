@@ -106,6 +106,10 @@
     surface = { kind: "workspace", path };
   }
 
+  function closeWorkspacePrompt() {
+    if (surface?.kind === "workspace") surface = null;
+  }
+
   // Registered workspaces switch in place; anything else (BES history paths)
   // goes through the prompt so a stray click cannot start `bazel query //...`.
   async function switchWorkspace(path: string) {
@@ -256,6 +260,7 @@
       {opening}
       onswitch={switchWorkspace}
       onopennew={() => openWorkspacePrompt()}
+      onreturn={st && surface?.kind === "workspace" ? closeWorkspacePrompt : undefined}
     />
     {#if st !== null}
       <button
@@ -290,13 +295,7 @@
           besEndpoint={core.besEndpoint}
           bind:opening
           onopen={session.openWorkspace}
-          onclose={
-            st
-              ? () => {
-                  if (surface?.kind === "workspace") surface = null;
-                }
-              : undefined
-          }
+          onclose={st ? closeWorkspacePrompt : undefined}
         />
       {/key}
     </div>
@@ -482,9 +481,15 @@
         {/if}
       {/snippet}
 
-      {#if view.page === "modules"}
+      {#if view.page === "modules" && view.modules}
         {#key st.workspace}
-          <ModulesView workspace={st.workspace} bazelAvailable={core.bazel !== null} />
+          <ModulesView
+            view={view.modules}
+            bazelAvailable={core.bazel !== null}
+            onload={session.loadModules}
+            onselect={session.selectModule}
+            onexplain={session.explainModule}
+          />
         {/key}
       {:else}
         <main class="content" class:invocation-content={view.page === "history"}>

@@ -7,6 +7,7 @@ import type {
   AppState,
   InvocationDetail,
   InvocationRecord,
+  ModulesSnapshot,
   OpenWorkspaceResult,
   OwnedInvocation,
   Profile,
@@ -86,6 +87,7 @@ const COMPLETED: InvocationDetail = {
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
+const MODULES_SNAPSHOT: ModulesSnapshot = { rootKey: "<root>", warning: null, modules: [] };
 const THIRD = "/third";
 const OFF_WINDOW_ID = "123e4567-e89b-42d3-a456-426614174000";
 
@@ -1556,6 +1558,51 @@ test("a live invocation arriving on an empty history page is selected", async ()
   // A console execution is not saved-reader eligible, so nothing was fetched.
   assert.equal(requestCount(h, "get_invocation"), 0);
   assert.equal(requestCount(h, "get_invocation_profile"), 0);
+});
+
+test("a modules load survives page navigation without a refetch", async () => {
+  const h = harness();
+  await initReady(h);
+  h.session.showPage("modules");
+  const loaded = h.session.loadModules();
+  h.session.showPage("targets");
+  const load = pendingRequest(h, "get_modules");
+  assert.deepEqual(load.args, { workspace: WS });
+  load.reply.resolve(MODULES_SNAPSHOT);
+  await loaded;
+  h.session.showPage("modules");
+  assert.deepEqual(h.view.modules?.snapshot, MODULES_SNAPSHOT);
+  assert.equal(requestCount(h, "get_modules"), 1);
+});
+
+test("a late modules reply cannot populate the next workspace's empty state", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  const before = h.view.modules;
+  h.session.loadModules();
+  await settle();
+  const stale = pendingRequest(h, "get_modules");
+  assert.deepEqual(stale.args, { workspace: WS });
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({
+      revision: 3,
+      workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    }),
+  });
+  await settle();
+  assert.equal(h.view.state?.workspace, OTHER);
+  assert.notEqual(h.view.modules, before);
+  assert.equal(h.view.modules?.snapshot, null);
+  stale.reply.resolve(MODULES_SNAPSHOT);
+  await settle();
+  assert.equal(h.view.modules?.snapshot, null);
+  assert.equal(h.view.modules?.busy, null);
+  assert.equal(h.view.modules?.loadError, null);
+  assert.equal(requestCount(h, "get_modules"), 1);
 });
 
 test("auto-selection never fires off the history page or over a selection", async () => {

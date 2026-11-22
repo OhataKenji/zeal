@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createModules, emptyModulesState, filterModules } from "../src/lib/modules.ts";
+import { createModules, filterModules } from "../src/lib/modules.ts";
 import type { ModuleExplanation, ModulesSnapshot } from "../src/lib/types.ts";
 
 const workspace = "/demo";
@@ -31,7 +31,7 @@ const partialExplanation: ModuleExplanation = {
   warning: "Bazel extension failed",
 };
 
-function harness(available = true, state = emptyModulesState()) {
+function harness(available = true) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   let resolve!: (value: unknown) => void;
   let reject!: (error: Error) => void;
@@ -46,13 +46,18 @@ function harness(available = true, state = emptyModulesState()) {
         }) as Promise<T>;
       },
     },
-    state,
     () => available,
+    () => {},
   );
   return {
-    ...controller,
+    load: controller.load,
+    select: controller.select,
+    explain: controller.explain,
+    dispose: controller.dispose,
     calls,
-    state,
+    get state() {
+      return controller.state;
+    },
     succeed: (value: unknown) => resolve(value),
     fail: () => reject(new Error("server busy")),
   };
@@ -153,18 +158,23 @@ test("a failed explanation can be retried, but returning to a selection does not
   assert.equal(h.calls.length, 3);
 });
 
-test("explain stores the partial result in the supplied state without an error", async () => {
-  const state = { ...emptyModulesState(), snapshot, selectedKey: a.key };
-  const h = harness(true, state);
+test("explain stores the partial result without an error", async () => {
+  const h = harness();
+  const load = h.load();
+  h.succeed(snapshot);
+  await load;
+  h.select(a.key);
   const pending = h.explain();
-  assert.equal(state.busy, "explain");
-  assert.equal(state.snapshot, snapshot);
+  assert.equal(h.state.busy, "explain");
+  assert.equal(h.state.snapshot, snapshot);
   h.succeed(partialExplanation);
   await pending;
-  assert.equal(h.state, state);
-  assert.equal(state.busy, null);
-  assert.equal(state.explanation, partialExplanation);
-  assert.deepEqual(h.calls, [{ command: "explain_module", args: { workspace, moduleKey: a.key } }]);
+  assert.equal(h.state.busy, null);
+  assert.equal(h.state.explanation, partialExplanation);
+  assert.deepEqual(h.calls, [
+    { command: "get_modules", args: { workspace } },
+    { command: "explain_module", args: { workspace, moduleKey: a.key } },
+  ]);
 });
 
 test("disposal suppresses late callbacks and new commands", async () => {

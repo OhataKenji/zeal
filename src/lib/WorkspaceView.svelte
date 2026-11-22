@@ -146,11 +146,9 @@
   </form>
 </section>
 
-{#if besEndpoint}
-  <section class="section">
-    <div class="section-head">
-      <h2 class="section-title">Local BES Receiver</h2>
-    </div>
-    <BesSetup endpoint={besEndpoint} />
-  </section>
-{/if}
+<section class="section">
+  <div class="section-head">
+    <h2 class="section-title">Local BES Receiver</h2>
+  </div>
+  <BesSetup endpoint={besEndpoint} />
+</section>

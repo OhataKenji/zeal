@@ -48,9 +48,11 @@ test("module page and browser preview", async (t) => {
   function output(overrides: Partial<ModulesState> = {}, bazelAvailable = true): string {
     return render(ModulesView, {
       props: {
-        workspace,
+        view: { ...emptyModulesState(), ...overrides },
         bazelAvailable,
-        initialState: { ...emptyModulesState(), ...overrides },
+        onload: () => {},
+        onselect: () => {},
+        onexplain: () => {},
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
   }

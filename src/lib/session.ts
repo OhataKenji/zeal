@@ -1,4 +1,5 @@
 import { COMMANDS } from "./commands.ts";
+import { createModules } from "./modules.ts";
 import type { Page } from "./pages.ts";
 import { targetError } from "./target.ts";
 import type {
@@ -48,6 +49,7 @@ interface Workspace {
   refresh: object | null;
   target: TargetSelection;
   targetBusy: boolean;
+  modules: ReturnType<typeof createModules>;
   history: InvocationRecord[];
   historyError: string | null;
   historyBusy: boolean;
@@ -193,6 +195,7 @@ function sessionView(state: SessionState) {
     targetOutputsError: target?.outputs.error ?? null,
     targetActions: target?.actions.value ?? null,
     targetActionsError: target?.actions.error ?? null,
+    modules: ws?.modules.state ?? null,
     starting: state.start !== null,
     error: state.error,
     invocations: history,
@@ -547,6 +550,7 @@ export function createSession(
 
   function selectWorkspace(path: string) {
     if (disposed || state.workspace?.path === path) return;
+    state.workspace?.modules.dispose();
     state.workspace = {
       path,
       info: reader(),
@@ -555,6 +559,7 @@ export function createSession(
       refresh: null,
       target: targetSelection(),
       targetBusy: false,
+      modules: createModules(path, transport, () => state.core?.bazel != null, publish),
       history: [],
       historyError: null,
       historyBusy: false,
@@ -814,6 +819,7 @@ export function createSession(
 
   function dispose() {
     disposed = true;
+    state.workspace?.modules.dispose();
     unlistens.splice(0).forEach((remove) => remove());
   }
 
@@ -826,6 +832,9 @@ export function createSession(
     openWorkspace,
     loadWorkspaceInfo,
     refresh: () => void refreshSnapshot(),
+    loadModules: () => state.workspace?.modules.load(),
+    selectModule: (key: string | null) => state.workspace?.modules.select(key),
+    explainModule: () => state.workspace?.modules.explain(),
     selectInvocation,
     showPage,
     loadDetail: readSavedDetail,
