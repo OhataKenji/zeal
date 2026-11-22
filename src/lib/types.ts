@@ -10,6 +10,7 @@ export interface ModuleNode {
 export interface ModulesSnapshot {
   rootKey: string;
   modules: ModuleNode[];
+  warning: string | null;
 }
 
 /** The one item currently selected in the target explorer. */
@@ -148,8 +149,8 @@ export interface OwnedInvocation {
 export interface AppState {
   revision: number;
   besError: string | null;
-  /** A receiver is available for new Bazel invocations, even if its preferred port is occupied. */
-  besReady: boolean;
+  /** The actual bound endpoint, or null if the receiver cannot accept invocations. */
+  besEndpoint: string | null;
   bazel: string | null;
   lastWorkspace: string | null;
   workspaces: WorkspaceState[];
