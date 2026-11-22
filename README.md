@@ -52,45 +52,41 @@ Open only trusted repositories.
 
 ## Features
 
-### Find and Run Targets
+### Workspace
 
-Select a folder in the Targets sidebar to browse its package, or a `:target` to open its details. A package with direct targets opens at `//pkg:all`; if it also has subpackages, choose **Subtree** to browse or run `//pkg/...` instead. The **Targets** heading returns to the root package.
+Find the output directory or test logs without sifting through `bazel info`. Set which packages Zeal explores and copy the `.bazelrc` settings to record terminal builds alongside runs started in Zeal.
 
-Search `//:` for root targets or `//pkg:` for targets in one package. Type a name after the colon to narrow the list, or omit the package prefix to fuzzy-search across packages.
+![Bazel Info for parcel-desk, including the output base, execution root, and test log directory](docs/screenshots/workspace-info.png)
 
-![Fuzzy search for Bazel targets](docs/screenshots/fuzzy-search.jpg)
+### Targets
 
-### Command Palette
+Browse packages or press `⌘K` / `Ctrl+K` to find a target by name, then build, test, or run it. Inspect its rule attributes in **Definition**, resolved outputs and dependencies in **Configured**, or the commands Bazel will execute in **Actions**.
 
-Press `⌘K` (macOS) or `Ctrl+K` — or the search button in the toolbar — to jump to a page, run Bazel, open a target, or open an invocation. Paste a full invocation ID to look up a build older than the recent history list.
+![The Configured tab for //rates:rate_server shows its executable, direct dependencies, and configuration transitions](docs/screenshots/target-configured.png)
 
-### Query Builder
+### Modules
 
-Build Bazel queries visually from preset examples or from scratch across all three query graphs: `query` (loading), `cquery` (analysis), and `aquery` (action graph). View results as target lists, dependency graphs, or action details.
+Find out why a Bzlmod dependency is in your build. Follow **Required by** back to its parents, or choose **Explain** to see why Bazel selected that version.
 
-![Query Builder with visual expression blocks and a dependency graph](docs/screenshots/query-builder.jpg)
+![The module inspector traces c-ares back to the root module through gRPC](docs/screenshots/module-explain.png)
 
-### Bzlmod Modules
+### Query
 
-Open **Modules** and choose **Load modules** to see which modules depend on each other. Select a module to browse its parents and dependencies, or choose **Explain** to ask Bazel why that version was selected.
+Build a `deps` expression from blocks and see both the dependency graph and the Bazel command that produced it. Switch to **Code** to edit the expression directly, or use `cquery` and `aquery` to inspect configured targets and build actions.
 
-### Invocation Page
+![The visual query builder, its generated bazel query command, and the resulting graph of platform dependencies](docs/screenshots/query-graph.png)
 
-View logs, results, details, and available timing data.
+### History
 
-![Invocation Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
+Follow live runs across worktrees, or open a finished invocation to inspect logs and test results. Select a span in **Timing** to see where a build spent its time, or use **Compare** to find which flags changed between two runs.
 
-### Compare Invocations
+![Timing trace for a rate_server build with the nine-second analysis and execution phase selected on the main thread](docs/screenshots/history-timing.png)
 
-Compare commands, options, and outcomes of two invocations side by side.
+### Analytics
 
-![Invocation comparison highlighting changed fields and distinguishing unrecorded options](docs/screenshots/invocation-comparison.jpg)
+Track daily outcomes and p50/p95 durations for builds and tests recorded locally. Filter by workspace, command, or target pattern, then rank patterns by total time to see where slower builds add up.
 
-### Analytics Page
-
-Filter build and test history from Zeal and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
-
-![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
+![Daily p50 and p95 duration lines above target patterns ranked by cumulative duration](docs/screenshots/analytics-duration.png)
 
 ## Record terminal invocations
 
