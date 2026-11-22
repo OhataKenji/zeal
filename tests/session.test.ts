@@ -594,10 +594,8 @@ test("history refresh preserves a newly selected shared run through release", as
   assert.deepEqual(h.view.invocation?.record, record);
   assert.equal(h.view.invocation?.execution, undefined);
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { workspace: WS, id: record.id });
-  assert.deepEqual(pendingRequest(h, "get_invocation_profile").args, {
-    workspace: WS,
-    id: record.id,
-  });
+  // Release starts only the detail read; the profile stays on-demand.
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("history must match both the ID and workspace to expose a foreign live execution", async () => {
@@ -706,6 +704,7 @@ test("late history/detail/profile replies cannot populate another workspace", as
   pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
   await settle();
   h.session.selectInvocation(RECORD.id);
+  h.session.loadProfile();
   await settle();
   const detailReq = pendingRequest(h, "get_invocation");
   const profileReq = pendingRequest(h, "get_invocation_profile");
@@ -785,10 +784,12 @@ test("dispose removes listeners and ignores late reads", async () => {
   ]);
   await settle();
   h.session.selectInvocation("run-a");
+  h.session.loadProfile();
   await settle();
   const detailA = pendingRequest(h, "get_invocation");
   const profileA = pendingRequest(h, "get_invocation_profile");
   h.session.selectInvocation("run-b");
+  h.session.loadProfile();
   await settle();
   const detailB = lastPendingRequest(h, "get_invocation");
   const profileB = lastPendingRequest(h, "get_invocation_profile");
@@ -999,11 +1000,9 @@ test("a start reply after release renders the saved result and reads for the sam
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, "inv-x");
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, "inv-x");
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("a live Console suppresses saved reads until the entry is released", async () => {
@@ -1033,11 +1032,9 @@ test("a live Console suppresses saved reads until the entry is released", async 
   assert.equal(h.view.page, "history");
   assert.equal(h.view.selectedInvocationId, "a-run");
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, "a-run");
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, "a-run");
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("saved reads require the record in history, not just an owned entry", async () => {
@@ -1483,6 +1480,7 @@ test("a history record change refreshes saved readers; retries stay per-reader",
   await initReady(h);
   await loadHistory(h, [COMPLETED_RECORD]);
   h.session.selectInvocation(RECORD.id);
+  h.session.loadProfile();
   await settle();
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
@@ -1525,6 +1523,46 @@ test("a history record change refreshes saved readers; retries stay per-reader",
   await settle();
   assert.equal(h.view.detailError, null);
   assert.equal(h.view.profileError, null);
+});
+
+test("the profile read stays on-demand until opened, then refreshes with history", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [COMPLETED_RECORD]);
+  h.session.selectInvocation(RECORD.id);
+  await settle();
+  // Selection starts only the detail read.
+  assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  await settle();
+
+  // A record change refreshes detail; an unopened profile is not fetched.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...COMPLETED_RECORD, exitCode: 1 }]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
+  await settle();
+
+  // Repeated opens share the single in-flight read.
+  h.session.loadProfile();
+  h.session.loadProfile();
+  await settle();
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.deepEqual(h.view.profile, PROFILE);
+
+  // Once opened, a record change refreshes the profile with detail.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...COMPLETED_RECORD, exitCode: 0 }]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 3);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
 });
 
 test("a failed refresh retains the snapshot and selection and exposes the error", async () => {
@@ -1741,6 +1779,7 @@ test("returning to history reloads detail when the selected record changed off-p
   pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
   await settle();
   h.session.selectInvocation(RECORD.id);
+  h.session.loadProfile();
   await settle();
   pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
   pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
@@ -1753,17 +1792,19 @@ test("returning to history reloads detail when the selected record changed off-p
   await settle();
   lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED_RECORD]);
   await settle();
+  // Off-page invalidation dropped the saved readers without fetching.
   assert.equal(requestCount(h, "get_invocation"), 1);
   assert.equal(requestCount(h, "get_invocation_profile"), 1);
 
   h.session.showPage("history");
   await settle();
+  // Detail reloads for the changed record; the profile needs a new open.
   assert.equal(requestCount(h, "get_invocation"), 2);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 1);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
+  assert.equal(h.view.profile, null);
 });
 
 test("selecting an off-window id pins it through a selected-id history read", async () => {
@@ -1781,11 +1822,9 @@ test("selecting an off-window id pins it through a selected-id history read", as
   assert.equal(h.view.historyLoading, false);
   assert.equal(h.view.invocation?.record.id, OFF_WINDOW_ID);
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, OFF_WINDOW_ID);
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, OFF_WINDOW_ID);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("an unknown off-window id converges without saved reads or extra fetches", async () => {
@@ -1864,16 +1903,16 @@ test("showPage(history) auto-selects the first invocation row", async () => {
 
   assert.equal(h.view.page, "history");
   assert.equal(h.view.selectedInvocationId, RECORD.id);
-  // Eligibility started exactly one detail/profile read pair.
+  // Eligibility starts only the detail read; the profile stays on-demand.
   assert.equal(requestCount(h, "get_invocation"), 1);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 
   // A later state publish must not reselect or refetch.
   h.emit("app-state", coreState({ revision: 2 }));
   await settle();
   assert.equal(h.view.selectedInvocationId, RECORD.id);
   assert.equal(requestCount(h, "get_invocation"), 1);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("history updates on the history page claim the first row once", async () => {
@@ -1893,6 +1932,7 @@ test("history updates on the history page claim the first row once", async () =>
 
   assert.equal(h.view.selectedInvocationId, RECORD.id);
   assert.equal(requestCount(h, "get_invocation"), 1);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("a live invocation arriving on an empty history page is selected", async () => {

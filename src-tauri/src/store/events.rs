@@ -2,7 +2,6 @@
 //! current receiving attempt; acknowledgements follow EOF, flush and SQL.
 use super::securefs::Dir;
 use super::{ErrorKind, Store, StoreError, database, fail, id};
-use crate::profile::COMPRESSED_LIMIT;
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
@@ -18,6 +17,7 @@ use url::Url;
 use zstd::stream::write::Encoder;
 
 pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
+const PROFILE_STORAGE_LIMIT: u64 = 512 * 1024 * 1024;
 
 #[derive(Default)]
 struct Facts {
@@ -325,12 +325,23 @@ fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
     if !metadata.is_file() || metadata.uid() != rustix::process::geteuid().as_raw() {
         return Err(io::Error::other("profile must be an owned regular file"));
     }
-    let mut copy = dir.file("profile.json.gz", true)?;
-    let size = io::copy(&mut source.take(COMPRESSED_LIMIT as u64 + 1), &mut copy)?;
-    if size > COMPRESSED_LIMIT as u64 {
+    if metadata.len() > PROFILE_STORAGE_LIMIT {
         return Err(io::Error::other("profile exceeds byte limit"));
     }
-    Ok(())
+    let mut copy = dir.file("profile.json.gz", true)?;
+    let copied = io::copy(&mut source.take(PROFILE_STORAGE_LIMIT + 1), &mut copy);
+    let result = copied.and_then(|size| {
+        if size > PROFILE_STORAGE_LIMIT {
+            Err(io::Error::other("profile exceeds byte limit"))
+        } else {
+            Ok(())
+        }
+    });
+    if result.is_err() {
+        // The exclusive create above makes the partial file ours to remove.
+        let _ = dir.remove_file("profile.json.gz");
+    }
+    result
 }
 
 /// Reserve a new attempt before opening its files. Completed receipts are replayed read-only.
@@ -531,23 +542,16 @@ mod tests {
     }
 
     #[test]
-    fn oversized_profile_copy_stops_at_the_limit_probe() {
+    fn oversized_profile_is_rejected_before_copying() {
         let fixture = Fixture::new();
         let source = fixture.root.join("source");
         File::create(&source)
             .unwrap()
-            .set_len(COMPRESSED_LIMIT as u64 + 2)
+            .set_len(PROFILE_STORAGE_LIMIT + 1)
             .unwrap();
         let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
         assert!(copy_profile(Url::from_file_path(source).unwrap().as_str(), &dir).is_err());
-        assert_eq!(
-            dir.artifact("profile.json.gz")
-                .unwrap()
-                .metadata()
-                .unwrap()
-                .len(),
-            COMPRESSED_LIMIT as u64 + 1
-        );
+        assert!(!dir.exists("profile.json.gz").unwrap());
     }
 
     fn profile_event(path: &Path) -> bep::BuildEvent {

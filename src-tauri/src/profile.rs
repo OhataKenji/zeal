@@ -9,10 +9,10 @@ use std::io::{self, BufReader, Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub const COMPRESSED_LIMIT: usize = 32 * 1024 * 1024;
-pub const EXPANDED_LIMIT: usize = 64 * 1024 * 1024;
-pub const EVENT_LIMIT: usize = 250_000;
-pub const IPC_LIMIT: usize = 32 * 1024 * 1024;
+const COMPRESSED_LIMIT: usize = 64 * 1024 * 1024;
+pub const EXPANDED_LIMIT: usize = 256 * 1024 * 1024;
+pub const EVENT_LIMIT: usize = 500_000;
+pub const IPC_LIMIT: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -691,11 +691,11 @@ mod tests {
     #[ignore = "manual near-limit profile measurement"]
     fn measure_profile_limits() {
         // The fixed JSON wrapper consumes 71 bytes. Leave a small margin.
-        measure("expanded_near_64MiB", EXPANDED_LIMIT - 128, 1, false, false);
-        measure("expanded_over_64MiB", EXPANDED_LIMIT, 1, false, true);
-        measure("events_at_250k", 0, EVENT_LIMIT, false, false);
-        measure("events_over_250k", 0, EVENT_LIMIT + 1, false, true);
-        measure("event_over_IPC32MiB", 0, 1, true, true);
+        measure("expanded_near_limit", EXPANDED_LIMIT - 128, 1, false, false);
+        measure("expanded_over_limit", EXPANDED_LIMIT, 1, false, true);
+        measure("events_at_limit", 0, EVENT_LIMIT, false, false);
+        measure("events_over_limit", 0, EVENT_LIMIT + 1, false, true);
+        measure("event_over_ipc_limit", 0, 1, true, true);
     }
 
     fn write_chunks(write: &mut impl FnMut(&[u8]), chunk: &[u8], count: usize) {

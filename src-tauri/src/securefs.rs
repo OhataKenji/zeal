@@ -176,6 +176,12 @@ impl Dir {
             Err(error) => Err(io::Error::from(error)),
         }
     }
+
+    /// Removes a child entry; callers must only remove files they created.
+    pub(super) fn remove_file(&self, child: &str) -> io::Result<()> {
+        rustix_fs::unlinkat(&self.fd, &name(OsStr::new(child))?, AtFlags::empty())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

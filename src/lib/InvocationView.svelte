@@ -29,7 +29,7 @@
   const selected = $derived(view.invocation);
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
   const execution = $derived(selected?.execution);
-  const profile = $derived(sectionData(view.profile ?? undefined));
+  const profile = $derived(view.profile?.status === "ok" ? view.profile.data : null);
   const bep = $derived(sectionData(view.detail?.bep));
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
@@ -221,6 +221,14 @@
                     >{sectionMessage(view.profile)}</Notice
                   >{/if}
                 {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
+                {#if view.profile.status === "incomplete"}<p class="panel-empty">
+                    Open the saved <code>profile.json.gz</code> in Perfetto to inspect it
+                    outside Zeal.
+                  </p>{/if}
+              {:else}
+                <p class="panel-empty">
+                  <button type="button" class="button" onclick={reloadProfile}>Open timeline</button>
+                </p>
               {/if}
             {/if}
           </section>

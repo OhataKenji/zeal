@@ -72,7 +72,7 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 toolの識別には `--tool_tag=zeal` を付ける。
 profileの保存先と補助flagは上書きせず、Zeal実行もCLI実行もBazelの設定に従う。
 
-receiverは `BuildToolLogs` の `command.profile.gz` が参照するローカルfileを32 MiBまでコピーし、表示時にparseする。
+receiverは `BuildToolLogs` の `command.profile.gz` が参照するローカルfileを512 MiBまで `invocations/<id>/attempt/<n>/profile.json.gz` に保存し、表示時にparseする。
 コピー失敗でもBEPの保存とACKは続ける。
 remote cache利用時の共通設定は[README](../../README.md#record-terminal-invocations)に従う。
 profiling無効、plain JSON、remote URIでは計時情報を保存しない。
@@ -95,11 +95,11 @@ BEP表示データとログを一度の逐次parseで組み立て、別のログ
 ### 表示時の parse
 
 `get_invocation` でBEPとログを一度に読む。
-`get_invocation_profile` ではprofileを別途読み、いずれも解析結果を保存しない。
+`get_invocation_profile` は timing の表示を求められたときだけprofileを読み、いずれも解析結果を保存しない。
 
 BEP は length-delimited protobuf event として parse し、末尾の frame が欠けた場合も受理できた結果を使う。
 長さ prefix の overflow や不正 protobuf も incomplete とする。
-profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error とする。
+profile は gzip と JSON が完結していることを前提とし、完結していなければ parse error、上限を超えれば incomplete とする。
 
 各成果物の状態(ok / incomplete / missing / parse error)は parse 時に決める。
 BEPの項目を省略した場合や、BEPが部分的な場合はincompleteとして理由を示す。
@@ -125,16 +125,16 @@ phase の帯は、profile の `build phase marker` を時刻順に並べ、次�
 Skymeld で analysis と execution が重なることを注記する。
 スレッド上の span を合計して invocation の経過時間や短縮可能時間とは扱わない。
 
-### 観測の負担と追加検証
+### 観測の負担と解析上限
 
 現在の profile parser は全体を展開して読む。
 通常 build と広い target pattern の両方で、profile サイズ、展開後のメモリ、parse 時間、UI への転送量を測定する。
 `--noslim_profile` の有無も比較し、現在の可視化に必要な event を残せるか確かめる。
 
-展開後 bytes、受理する event 数、一回の UI 送信 bytes の上限は、この測定で値を決めて導入する追加設計とする。
-これは未実装であり、現在の parser が無制限な展開を防げるとは扱わない。
+保存する profile は `invocations/<id>/attempt/<n>/profile.json.gz` に 512 MiB まで残す。
+parse の上限は gzip 64 MiB、展開後 256 MiB、event 500,000 件、一回の UI 送信 64 MiB とする。
 上限超過時は incomplete と理由を示し、完全な profile として表示しない。
-送信を分割する場合も event の field やスレッドの範囲を変えず、データの欠損とは区別する。
+生の file は残るため、不完全なときの完全な時系列は Perfetto などの外部 viewer で開ける。
 [BuildBuddy の設定一覧](https://www.buildbuddy.io/docs/config-all-options/)にあるイベント数や profile サイズの制限も、この境界を設ける根拠とする。
 
 ## Alternatives Considered
@@ -149,14 +149,14 @@ Skymeld で analysis と execution が重なることを注記する。
 - profile の可視化は計測された event の範囲を示す。記録が少ないことを、処理がなかったことや cache の不調とは解釈しない
 - BEPの開始終了時刻の差は壁時計上の差であり、monotonicな計測値ではない
 - 中断や強制終了では成果物が欠損するか、gzip/JSON の末尾が欠け得る
-- 観測 flag 自体に負担がある。profile の採用セットと解析上限の確定は Test Plan の実測を残して行う
+- 観測 flag 自体に負担がある。profile の採用セットの確定は Test Plan の実測を残して行う
 - 観測のために clean、shutdown、別の output base を強制せず、既存の Bazel の状態を維持する
 
 ## Security Concerns
 
 子プロセスの起動は [overview](./overview.md#security-concerns) の引数配列による実行に従う。
 profile や BEP の文字列は HTML や実行コードとして解釈しない。
-圧縮 profile の展開量と UI への転送量の制限は、追加検証に記した未実装の対策として追跡する。
+圧縮 profile の展開量と UI への転送量には上限を設け、超過は incomplete とする。
 
 ## Privacy Concerns
 
@@ -171,4 +171,4 @@ profile や BEP の文字列は HTML や実行コードとして解釈しない�
 - BEP と profile の golden test に、末尾の欠けた BEP、壊れた gzip/JSON、`Finishing` の欠損、成果物欠損を含める
 - 同名で異なる `tid`、重なる span、instant、counter を含む profile で、event を実行スレッドに限定せず可視化できることを確かめる
 - 観測 flag の有無、slim/noslim、snapshot 更新の有無を分けて、生成サイズ、追加時間、parse メモリ、UI 転送量を測定する
-- 追加の解析上限を導入する際は、超過が incomplete と理由付きで表示されることを fixture で確認する
+- 解析上限の超過が incomplete と理由付きで表示されることを fixture で確認する
