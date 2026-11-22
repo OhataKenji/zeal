@@ -593,11 +593,14 @@ export function installPreview() {
       }
       const node = MODULES.modules.find((item) => item.key === key);
       if (!node) throw new Error(`Unknown module: ${key}`);
-      return [
-        MODULES.rootKey,
-        ...node.requiredBy.filter((parent) => parent !== MODULES.rootKey),
-        key,
-      ].join(" -> ");
+      return {
+        text: [
+          MODULES.rootKey,
+          ...node.requiredBy.filter((parent) => parent !== MODULES.rootKey),
+          key,
+        ].join(" -> "),
+        warning: null,
+      };
     },
     get_workspace_info: (payload) => {
       const entry = wsEntry(payload?.workspace);

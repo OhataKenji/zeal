@@ -82,7 +82,7 @@ async fn explain_module(
     core: State<'_, Arc<Core>>,
     workspace: String,
     module_key: String,
-) -> Result<String, String> {
+) -> Result<modules::ModuleExplanation, String> {
     let op = modules::ModulesOperation::acquire(core.inner(), &workspace)?;
     tauri::async_runtime::spawn_blocking(move || op.explain(&module_key))
         .await
