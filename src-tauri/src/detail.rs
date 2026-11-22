@@ -57,7 +57,7 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
 /// reports its own completeness.
 fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Section<Bep>)> {
     let length = file.metadata()?.len();
-    let parsed = bep::parse_gzip(file, length);
+    let parsed = bep::parse_zstd(file, length);
     if parsed.invalid && parsed.events == 0 {
         let note = "BEP contains an invalid or incomplete event".to_string();
         return Ok(event_failure(parsed.read_error, note));
@@ -160,12 +160,12 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_gzip_artifact_reports_read_error() {
+    fn unsafe_zstd_artifact_reports_read_error() {
         use std::os::unix::fs::symlink;
 
         let f = Fixture::new();
         f.complete();
-        let path = f.dir().join("attempt/1/bep.binpb.gz");
+        let path = f.dir().join("attempt/1/bep.binpb.zst");
         fs::remove_file(&path).unwrap();
         symlink(f.data.join("zeal.db"), path).unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn live_gzip_never_reports_a_complete_observation() {
+    fn live_zstd_never_reports_a_complete_observation() {
         let f = Fixture::new();
         let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
         receipt.append(&f.ordered(1, f.started())).unwrap();
@@ -189,7 +189,7 @@ mod tests {
         f.complete();
         let id = &f.stream.invocation_id;
         let record = invocation_detail(&f.data, &f.ws, id).unwrap().record;
-        fs::remove_file(f.dir().join("attempt/1/bep.binpb.gz")).unwrap();
+        fs::remove_file(f.dir().join("attempt/1/bep.binpb.zst")).unwrap();
         let missing = invocation_detail(&f.data, &f.ws, id).unwrap();
         assert_eq!(missing.record, record);
         assert!(matches!(missing.log, Section::Missing));
@@ -197,16 +197,12 @@ mod tests {
     }
     #[test]
     fn malformed_event_artifact_marks_both_sections_parse_error() {
-        use std::io::Write;
-
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
-        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gzip.write_all(b"\xff").unwrap();
         fs::write(
-            f.dir().join("attempt/1/bep.binpb.gz"),
-            gzip.finish().unwrap(),
+            f.dir().join("attempt/1/bep.binpb.zst"),
+            zstd::stream::encode_all(&b"\xff"[..], 0).unwrap(),
         )
         .unwrap();
         let detail = invocation_detail(&f.data, &f.ws, id).unwrap();
@@ -216,10 +212,10 @@ mod tests {
     }
 
     #[test]
-    fn malformed_gzip_is_a_parse_error() {
+    fn malformed_zstd_is_a_parse_error() {
         let f = Fixture::new();
         f.complete();
-        fs::write(f.dir().join("attempt/1/bep.binpb.gz"), b"invalid gzip").unwrap();
+        fs::write(f.dir().join("attempt/1/bep.binpb.zst"), b"invalid zstd").unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::ParseError { .. }));
         assert!(matches!(detail.bep, Section::ParseError { .. }));

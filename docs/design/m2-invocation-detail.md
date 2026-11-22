@@ -49,7 +49,7 @@ BEP や profile が欠損した場合は、利用できるセクションだけ�
 ```mermaid
 flowchart LR
     SEND["Send: build / test"] --> SPAWN["bazel + 観測 flag"]
-    SPAWN -->|"共通BES receiver"| FILES["ログ込みbep.binpb.gz / 任意profile.json.gz"]
+    SPAWN -->|"共通BES receiver"| FILES["ログ込みbep.binpb.zst / 任意profile.json.gz"]
     FILES -->|"詳細を開くたびに parse"| VIEW["結果 / timing / phase の帯"]
 ```
 
@@ -60,7 +60,7 @@ flowchart LR
 M2 では snapshot の query 中か invocation 中なら Send を disabled にし、実行待ちの queue を持たない。
 保存先とDBの規則は[M4](./m4-invocation-history.md)に従う。
 
-- `attempt/<number>/bep.binpb.gz`：receiverが保存するログ込みBuildEvent
+- `attempt/<number>/bep.binpb.zst`：receiverが保存するログ込みBuildEvent
 - `attempt/<number>/profile.json.gz`：receiverが取り込む計時情報
 
 イベント送信には次のflagを付ける。
