@@ -41,7 +41,7 @@
       {#each keys as key (key)}
         <li>
           {#if key === snapshot?.rootKey}
-            {snapshot.rootName ? `${snapshot.rootName} (this workspace)` : "This workspace"}
+            {snapshot.rootName ? `${key} (${snapshot.rootName})` : key}
           {:else}
             <button type="button" class="table-link" onclick={() => onselect(key)}>{key}</button>
           {/if}

@@ -104,19 +104,19 @@ test("module page and browser preview", async (t) => {
       });
       const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];
       assert.ok(aside);
-      assert.equal(aside.match(/<li[^>]*>\s*my_project \(this workspace\)\s*<\/li>/g)?.length, 2);
+      assert.equal(aside.match(/<li[^>]*>\s*workspace@1 \(my_project\)\s*<\/li>/g)?.length, 2);
       assert.ok(aside.includes(`${module.dependencies[0]}</button>`));
       assert.match(aside, /<pre[^>]*>&lt;script/);
     },
   );
 
-  await t.test("an unnamed root shows a plain workspace label", () => {
+  await t.test("an unnamed root shows just its graph key", () => {
     const html = output({
       snapshot: { ...snapshot, rootName: "" },
       selectedKey: module.key,
     });
     const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];
     assert.ok(aside);
-    assert.match(aside, /<li[^>]*>\s*This workspace\s*<\/li>/);
+    assert.match(aside, /<li[^>]*>\s*&lt;root>\s*<\/li>/);
   });
 });
