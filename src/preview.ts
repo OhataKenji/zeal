@@ -605,19 +605,25 @@ export function installPreview() {
       const ob = `/private/var/tmp/_bazel_dev/preview`;
       return {
         version: "8.7.0",
-        paths: [
-          { key: "workspace", path: entry.workspace },
-          { key: "output_base", path: ob },
-          { key: "execution_root", path: `${ob}/execroot/_main` },
+        entries: [
           {
             key: "bazel-bin",
-            path: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
+            value: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
           },
           {
             key: "bazel-testlogs",
-            path: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
+            value: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
           },
-          { key: "repository_cache", path: "/Users/dev/Library/Caches/bazel/repo_cache" },
+          { key: "execution_root", value: `${ob}/execroot/_main` },
+          { key: "install_base", value: "/private/var/tmp/_bazel_install/9f2c1d" },
+          { key: "max-heap-size", value: "4096" },
+          { key: "output_base", value: ob },
+          { key: "output_path", value: `${ob}/execroot/_main/bazel-out` },
+          { key: "release", value: "release 8.7.0" },
+          { key: "repository_cache", value: "/Users/dev/Library/Caches/bazel/repo_cache" },
+          { key: "server_log", value: `${ob}/server/jvm.out` },
+          { key: "server_pid", value: "48213" },
+          { key: "workspace", value: entry.workspace },
         ],
       };
     },

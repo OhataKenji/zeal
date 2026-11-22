@@ -32,6 +32,23 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let copiedKey = $state<string | null>(null);
+  let expanded = $state(false);
+
+  const PRIMARY_KEYS = [
+    "workspace",
+    "output_base",
+    "execution_root",
+    "bazel-bin",
+    "bazel-testlogs",
+    "repository_cache",
+  ];
+  const entries = $derived(info?.entries ?? []);
+  const primary = $derived(
+    PRIMARY_KEYS.map((key) => entries.find((e) => e.key === key)).filter(
+      (e) => e !== undefined,
+    ),
+  );
+  const rows = $derived(expanded ? entries : primary);
 
   $effect(() => {
     if (persistedScope !== lastScopeKey) {
@@ -40,7 +57,7 @@
     }
   });
 
-  async function copyPath(key: string, value: string) {
+  async function copyValue(key: string, value: string) {
     try {
       await navigator.clipboard.writeText(value);
       copiedKey = key;
@@ -78,7 +95,7 @@
 
 <section class="section">
   <div class="section-head">
-    <h2 class="section-title bazel-info-title">Bazel Info</h2>
+    <h2 class="section-title">Bazel Info</h2>
     <button
       type="button"
       class="button button-ghost icon-button"
@@ -96,24 +113,34 @@
   {#if loading && !info}
     <p class="dim">Loading bazel info…</p>
   {/if}
-  {#if info && info.paths.length}
+  {#if rows.length}
     <table class="lens-table">
       <tbody>
-        {#each info.paths as row (row.key)}
+        {#each rows as row (row.key)}
           <tr
             class="clickable"
-            onclick={() => void copyPath(row.key, row.path)}
-            title="Click to copy path"
+            onclick={() => void copyValue(row.key, row.value)}
+            title="Click to copy"
           >
             <td class="mono">{row.key}</td>
             <td class="mono path-cell">
-              {row.path}{#if copiedKey === row.key}{" "}
+              {row.value}{#if copiedKey === row.key}{" "}
                 <span class="copied-tag">Copied</span>{/if}
             </td>
           </tr>
         {/each}
       </tbody>
     </table>
+  {/if}
+  {#if entries.length > primary.length}
+    <button
+      type="button"
+      class="button button-ghost"
+      aria-expanded={expanded}
+      onclick={() => (expanded = !expanded)}
+    >
+      {expanded ? "Show less" : `Show all (${entries.length})`}
+    </button>
   {/if}
 </section>
 
@@ -147,9 +174,3 @@
     <BesSetup endpoint={besEndpoint} />
   </section>
 {/if}
-
-<style>
-  .bazel-info-title {
-    text-transform: none;
-  }
-</style>

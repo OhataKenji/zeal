@@ -10,50 +10,45 @@ use std::time::{Duration, Instant};
 
 const INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const INFO_STDOUT_CAP: usize = 64 * 1024;
-const PATH_KEYS: [&str; 6] = [
-    "workspace",
-    "output_base",
-    "execution_root",
-    "bazel-bin",
-    "bazel-testlogs",
-    "repository_cache",
-];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
     pub version: Option<String>,
-    pub paths: Vec<WorkspacePath>,
+    pub entries: Vec<BazelInfoEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkspacePath {
+pub struct BazelInfoEntry {
     pub key: String,
-    pub path: String,
+    pub value: String,
 }
 
 #[must_use]
 fn parse_bazel_info(stdout: &str) -> WorkspaceInfo {
-    let values: HashMap<_, _> = stdout
-        .lines()
-        .filter_map(|line| line.split_once(':'))
-        .map(|(key, value)| (key.trim(), value.trim()))
-        .filter(|(_, value)| !value.is_empty())
-        .collect();
+    let mut keys = Vec::new();
+    let mut values = HashMap::new();
+    for (key, value) in stdout.lines().filter_map(|line| line.split_once(':')) {
+        let (key, value) = (key.trim(), value.trim());
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        if values.insert(key, value).is_none() {
+            keys.push(key);
+        }
+    }
     let version = values
         .get("release")
         .map(|&value| value.strip_prefix("release ").unwrap_or(value).to_owned());
-    let paths = PATH_KEYS
+    let entries = keys
         .into_iter()
-        .filter_map(|key| {
-            Some(WorkspacePath {
-                key: key.to_owned(),
-                path: values.get(key)?.to_string(),
-            })
+        .map(|key| BazelInfoEntry {
+            key: key.to_owned(),
+            value: values[key].to_owned(),
         })
         .collect();
-    WorkspaceInfo { version, paths }
+    WorkspaceInfo { version, entries }
 }
 
 /// Run `bazel --noblock_for_lock info` in `ws` with bounded IO and timeout.
@@ -354,24 +349,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_bazel_info_version_and_allowlisted_paths() {
+    fn parses_bazel_info_entries_in_first_seen_order() {
         let info = parse_bazel_info(
-            "repository_cache: /cache:repos\nbazel-testlogs: /reported/logs\nbazel-bin: /old/bin\nworkspace: /ws\nrelease: release 8.7.0\nbazel-bin: /reported/bin\nbazel-bin:\nunknown: ignored",
+            "release: release 8.7.0\noutput_base: /ob\nbazel-bin: /old/bin\nworkspace: /ws\nrepository_cache: /cache:repos\nserver_pid: 1234\nbazel-bin: /new/bin\nbazel-bin:\nbazel-testlogs: /reported/logs\nunknown_key: ignored\nno_delimiter_line\n: empty_key\nempty_value:\n",
         );
         assert_eq!(info.version.as_deref(), Some("8.7.0"));
-        let paths: Vec<_> = info
-            .paths
+        let entries: Vec<(&str, &str)> = info
+            .entries
             .iter()
-            .map(|p| (p.key.as_str(), p.path.as_str()))
+            .map(|e| (e.key.as_str(), e.value.as_str()))
             .collect();
         assert_eq!(
-            paths,
+            entries,
             [
+                ("release", "release 8.7.0"),
+                ("output_base", "/ob"),
+                ("bazel-bin", "/new/bin"),
                 ("workspace", "/ws"),
-                ("bazel-bin", "/reported/bin"),
-                ("bazel-testlogs", "/reported/logs"),
                 ("repository_cache", "/cache:repos"),
+                ("server_pid", "1234"),
+                ("bazel-testlogs", "/reported/logs"),
+                ("unknown_key", "ignored"),
             ]
+        );
+    }
+
+    #[test]
+    fn bazel_info_version_keeps_unprefixed_release() {
+        let info = parse_bazel_info("release: development version\n");
+        assert_eq!(info.version.as_deref(), Some("development version"));
+        assert_eq!(
+            info.entries,
+            [BazelInfoEntry {
+                key: "release".to_owned(),
+                value: "development version".to_owned(),
+            }]
         );
     }
 }
