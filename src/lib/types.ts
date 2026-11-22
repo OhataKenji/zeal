@@ -13,6 +13,11 @@ export interface ModulesSnapshot {
   warning: string | null;
 }
 
+export interface ModuleExplanation {
+  text: string;
+  warning: string | null;
+}
+
 /** The one item currently selected in the target explorer. */
 export type ExplorerSelection =
   | { kind: "target"; label: string }

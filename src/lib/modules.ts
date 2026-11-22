@@ -1,6 +1,6 @@
 import { COMMANDS } from "./commands.ts";
 import type { Transport } from "./query.ts";
-import type { ModuleNode, ModulesSnapshot } from "./types.ts";
+import type { ModuleExplanation, ModuleNode, ModulesSnapshot } from "./types.ts";
 
 export type ModuleDepth = "all" | "direct" | "transitive";
 
@@ -13,13 +13,14 @@ export function filterModules(modules: readonly ModuleNode[], query: string, dep
   );
 }
 
+type ExplanationResult = ModuleExplanation | { error: string };
+
 export interface ModulesState {
   snapshot: ModulesSnapshot | null;
   selectedKey: string | null;
   busy: "load" | "explain" | null;
   loadError: string | null;
-  explanation: string | null;
-  explainError: string | null;
+  explanation: ExplanationResult | null;
 }
 
 export function emptyModulesState(): ModulesState {
@@ -29,7 +30,6 @@ export function emptyModulesState(): ModulesState {
     busy: null,
     loadError: null,
     explanation: null,
-    explainError: null,
   };
 }
 
@@ -55,32 +55,30 @@ export function createModules(
       const selectedKey = snapshot.modules.some((node) => node.key === state.selectedKey)
         ? state.selectedKey
         : null;
-      update({ snapshot, selectedKey, busy: null, explanation: null, explainError: null });
+      update({ snapshot, selectedKey, busy: null, explanation: null });
     } catch (error) {
       update({ busy: null, loadError: String(error) });
     }
   }
 
   function select(key: string | null) {
-    if (key !== state.selectedKey)
-      update({ selectedKey: key, explanation: null, explainError: null });
+    if (key !== state.selectedKey) update({ selectedKey: key, explanation: null });
   }
 
   async function explain() {
     const moduleKey = state.selectedKey;
     if (disposed || state.busy || !moduleKey || !bazelAvailable()) return;
-    update({ busy: "explain", explanation: null, explainError: null });
-    let result: Pick<ModulesState, "explanation" | "explainError">;
+    update({ busy: "explain", explanation: null });
+    let explanation: ExplanationResult;
     try {
-      const explanation = await transport.invoke<string>(COMMANDS.explainModule, {
+      explanation = await transport.invoke<ModuleExplanation>(COMMANDS.explainModule, {
         workspace,
         moduleKey,
       });
-      result = { explanation, explainError: null };
     } catch (error) {
-      result = { explanation: null, explainError: String(error) };
+      explanation = { error: String(error) };
     }
-    update({ busy: null, ...(state.selectedKey === moduleKey ? result : {}) });
+    update({ busy: null, explanation: state.selectedKey === moduleKey ? explanation : null });
   }
 
   return {

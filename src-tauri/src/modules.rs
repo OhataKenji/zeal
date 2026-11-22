@@ -61,6 +61,12 @@ pub struct ModulesSnapshot {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ModuleExplanation {
+    pub text: String,
+    pub warning: Option<String>,
+}
+
 /// Fail-fast guard owning one workspace's `bazel mod` operations: the
 /// registered path, configured binary, shared shutdown signal and the busy
 /// mark are taken under a single state lock. Dropping the guard — at the end
@@ -98,15 +104,6 @@ impl ModulesOperation {
     /// The resolved module graph.
     pub fn snapshot(&self) -> Result<ModulesSnapshot, String> {
         let out = self.run(GRAPH_ARGS, GRAPH_STDOUT_CAP)?;
-        // Bazel emits a graph before reporting extension inspection failures.
-        // Only accept that exit with Bazel's explicit incomplete-result notice.
-        let partial = out.status.code() == Some(2)
-            && out.stderr().lines().any(|line| {
-                line.starts_with("ERROR: Results may be incomplete as ")
-                    && (line.ends_with(" extension failed.")
-                        || line.ends_with(" extensions failed."))
-            });
-        let out = if partial { out } else { out.require_success()? };
         if out.stdout_truncated {
             return Err("bazel mod graph output exceeded 16 MiB".into());
         }
@@ -116,13 +113,15 @@ impl ModulesOperation {
     }
 
     /// `bazel mod explain --verbose` output for one module key.
-    pub fn explain(&self, module_key: &str) -> Result<String, String> {
+    pub fn explain(&self, module_key: &str) -> Result<ModuleExplanation, String> {
         validate_module_key(module_key)?;
         // `explain` defaults to a shallow view that hides transitive modules;
         // the depth flag matches `mod graph` so leaves and MVS causes appear.
         let args = [
             "mod",
             "explain",
+            "--color=no",
+            "--noshow_timestamps",
             "--lockfile_mode=off",
             "--output=text",
             "--from=<root>",
@@ -132,22 +131,38 @@ impl ModulesOperation {
             "--",
             module_key,
         ];
-        let out = self.run(&args, EXPLAIN_STDOUT_CAP)?.require_success()?;
-        Ok(explain_output(&out.stdout, out.stdout_truncated))
+        let out = self.run(&args, EXPLAIN_STDOUT_CAP)?;
+        Ok(ModuleExplanation {
+            text: explain_output(&out.stdout, out.stdout_truncated),
+            warning: out.failure(),
+        })
     }
 
     /// One bounded Bazel call. `MODULE.bazel` is re-checked before every
     /// spawn so Bazel can never recreate it.
     fn run(&self, args: &[&str], cap: usize) -> Result<bazel_output::BoundedOutput, String> {
         require_module_bazel(&self.workspace)?;
-        bazel_output::run_bazel_bounded(
+        let out = bazel_output::run_bazel_bounded(
             &self.bazel,
             &self.workspace,
             args,
             Instant::now() + OPERATION_TIMEOUT,
             cap,
             &self.cancelled,
-        )
+        )?;
+        // Bazel can write a result before reporting extension inspection failures.
+        let partial = out.status.code() == Some(2)
+            && out.stderr().lines().any(|line| {
+                line.starts_with("ERROR: Results may be incomplete as ")
+                    && (line.ends_with(" extension failed.")
+                        || line.ends_with(" extensions failed."))
+            })
+            && !String::from_utf8_lossy(&out.stdout).trim().is_empty();
+        if partial {
+            Ok(out)
+        } else {
+            out.require_success()
+        }
     }
 }
 
@@ -688,9 +703,12 @@ mod tests {
                 &dir,
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > args\necho 'mod_a@_ was selected'\n",
             );
-            assert_eq!(op.explain("mod_a@_").unwrap(), "mod_a@_ was selected\n");
+            let explanation = op.explain("mod_a@_").unwrap();
+            assert_eq!(explanation.text, "mod_a@_ was selected\n");
+            assert_eq!(explanation.warning, None);
             let args = fs::read_to_string(dir.path().join("args")).unwrap();
             let lines: Vec<&str> = args.lines().collect();
+            assert!(lines.contains(&"--color=no") && lines.contains(&"--noshow_timestamps"));
             assert!(
                 ["--depth=2147483647", "--noinclude_unused", "--verbose"]
                     .iter()
@@ -702,6 +720,37 @@ mod tests {
             // Validation happens before bazel is even spawned.
             let err = op.explain("-bad").unwrap_err();
             assert!(err.contains("module key"), "{err}");
+        }
+
+        #[test]
+        fn explain_keeps_bazels_partial_output_with_the_extension_error() {
+            let dir = TempDir::new();
+            let op = operation(
+                &dir,
+                "#!/bin/sh\necho 'mod_a@_ was selected'\n\
+                 echo 'ERROR: missing generated repository' >&2\n\
+                 echo 'ERROR: Results may be incomplete as 2 extensions failed.' >&2\nexit 2\n",
+            );
+            let explanation = op.explain("mod_a@_").unwrap();
+            assert_eq!(explanation.text, "mod_a@_ was selected\n");
+            assert!(
+                explanation
+                    .warning
+                    .unwrap()
+                    .contains("missing generated repository")
+            );
+        }
+
+        #[test]
+        fn explain_rejects_extension_failure_without_an_explanation() {
+            let dir = TempDir::new();
+            let op = operation(
+                &dir,
+                "#!/bin/sh\necho '  '\n\
+                 echo 'ERROR: Results may be incomplete as 1 extension failed.' >&2\nexit 2\n",
+            );
+            let error = op.explain("mod_a@_").unwrap_err();
+            assert!(error.contains("1 extension failed"), "{error}");
         }
 
         #[test]

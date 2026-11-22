@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createModules, emptyModulesState, filterModules } from "../src/lib/modules.ts";
-import type { ModulesSnapshot } from "../src/lib/types.ts";
+import type { ModuleExplanation, ModulesSnapshot } from "../src/lib/types.ts";
 
 const workspace = "/demo";
 const a = {
@@ -24,6 +24,10 @@ const snapshot: ModulesSnapshot = {
   rootKey: "<root>",
   warning: null,
   modules: [a, b],
+};
+const partialExplanation: ModuleExplanation = {
+  text: "why alpha",
+  warning: "Bazel extension failed",
 };
 
 function harness(available = true, state = emptyModulesState()) {
@@ -79,12 +83,11 @@ for (const outcome of ["success", "error"]) {
     await h.load();
     assert.equal(h.state.busy, "explain");
     if (outcome === "error") h.fail();
-    else h.succeed("details of alpha");
+    else h.succeed(partialExplanation);
     await explain;
     assert.equal(h.state.selectedKey, b.key);
     assert.equal(h.state.busy, null);
     assert.equal(h.state.explanation, null);
-    assert.equal(h.state.explainError, null);
     assert.deepEqual(h.calls.slice(1), [
       { command: "explain_module", args: { workspace, moduleKey: a.key } },
     ]);
@@ -116,9 +119,9 @@ test("refresh clears explanations without re-explaining, preserving only an exis
   for (const modules of [[a, b], [b]]) {
     h.select(a.key);
     const explain = h.explain();
-    h.succeed("reason");
+    h.succeed(partialExplanation);
     await explain;
-    assert.equal(h.state.explanation, "reason");
+    assert.equal(h.state.explanation, partialExplanation);
     const refresh = h.load();
     h.succeed({ ...snapshot, modules });
     await refresh;
@@ -137,29 +140,29 @@ test("a failed explanation can be retried, but returning to a selection does not
   const first = h.explain();
   h.fail();
   await first;
-  assert.match(h.state.explainError ?? "", /server busy/);
+  assert.deepEqual(h.state.explanation, { error: "Error: server busy" });
   const retry = h.explain();
-  h.succeed("reason");
+  const explanation = { text: "reason", warning: null };
+  h.succeed(explanation);
   await retry;
-  assert.equal(h.state.explainError, null);
-  assert.equal(h.state.explanation, "reason");
+  assert.equal(h.state.explanation, explanation);
   h.select(a.key);
   h.select(b.key);
   assert.equal(h.state.explanation, null);
   assert.equal(h.calls.length, 3);
 });
 
-test("explain mutates the supplied state object in place", async () => {
+test("explain stores the partial result in the supplied state without an error", async () => {
   const state = { ...emptyModulesState(), snapshot, selectedKey: a.key };
   const h = harness(true, state);
   const pending = h.explain();
   assert.equal(state.busy, "explain");
   assert.equal(state.snapshot, snapshot);
-  h.succeed("why alpha");
+  h.succeed(partialExplanation);
   await pending;
   assert.equal(h.state, state);
   assert.equal(state.busy, null);
-  assert.equal(state.explanation, "why alpha");
+  assert.equal(state.explanation, partialExplanation);
   assert.deepEqual(h.calls, [{ command: "explain_module", args: { workspace, moduleKey: a.key } }]);
 });
 

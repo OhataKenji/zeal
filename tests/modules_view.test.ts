@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { invoke } from "@tauri-apps/api/core";
 import { emptyModulesState, type ModulesState } from "../src/lib/modules.ts";
-import type { AppState, ModulesSnapshot } from "../src/lib/types.ts";
+import type { AppState, ModuleExplanation, ModulesSnapshot } from "../src/lib/types.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 test("module page and browser preview", async (t) => {
@@ -19,8 +19,12 @@ test("module page and browser preview", async (t) => {
   const snapshot = await invoke<ModulesSnapshot>("get_modules", { workspace });
   const module = snapshot.modules.find((node) => node.direct && node.dependencies.length);
   assert.ok(module);
-  const explanation = await invoke<string>("explain_module", { workspace, moduleKey: module.key });
-  assert.ok(explanation.includes(module.key));
+  const explanation = await invoke<ModuleExplanation>("explain_module", {
+    workspace,
+    moduleKey: module.key,
+  });
+  assert.ok(explanation.text.includes(module.key));
+  assert.equal(explanation.warning, null);
 
   await t.test(
     "preview rejects unopened workspaces, malformed keys and unknown modules",
@@ -59,11 +63,19 @@ test("module page and browser preview", async (t) => {
     assert.match(error, /role="alert"[^>]*>[\s\S]*graph failed[\s\S]*Retry/);
   });
 
-  await t.test("partial results keep the module table visible with a warning", () => {
-    const html = output({ snapshot: { ...snapshot, warning: "Bazel extension failed" } });
-    assert.match(html, /role="status"[^>]*>[\s\S]*Bazel returned a partial module graph/);
-    assert.match(html, /<details[^>]*>[\s\S]*Show Bazel output[\s\S]*Bazel extension failed/);
-    assert.match(html, /<th[^>]*>Module<\/th>/);
+  await t.test("partial results show the module table and explanation with their warnings", () => {
+    const html = output({
+      snapshot: { ...snapshot, warning: "Graph extension failed" },
+      selectedKey: module.key,
+      explanation: { text: "<root> -> dependency@1", warning: "Explain extension failed" },
+    });
+    const [main, aside] = html.split("</main>");
+    assert.match(main, /role="status"[^>]*>[\s\S]*Bazel returned a partial module graph/);
+    assert.match(main, /<details[^>]*>[\s\S]*Show Bazel output[\s\S]*Graph extension failed/);
+    assert.match(main, /<th[^>]*>Module<\/th>/);
+    assert.match(aside, /role="status"[^>]*>[\s\S]*Bazel returned a partial explanation/);
+    assert.match(aside, /<details[^>]*>[\s\S]*Show Bazel output[\s\S]*Explain extension failed/);
+    assert.match(aside, /<pre[^>]*>&lt;root> -> dependency@1<\/pre>/);
   });
 
   await t.test(
@@ -85,7 +97,7 @@ test("module page and browser preview", async (t) => {
       const html = output({
         snapshot: cyclic,
         selectedKey: module.key,
-        explanation: "<script>example</script>",
+        explanation: { text: "<script>example</script>", warning: null },
       });
       const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];
       assert.ok(aside);

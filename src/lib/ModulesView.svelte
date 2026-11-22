@@ -35,6 +35,16 @@
   onDestroy(controller.dispose);
 </script>
 
+{#snippet bazelWarning(subject: "module graph" | "explanation", output: string)}
+  <Notice tone="warning">
+    Bazel returned a partial {subject}. Some module extensions failed.
+    <details>
+      <summary>Show Bazel output</summary>
+      <pre class="code-box">{output}</pre>
+    </details>
+  </Notice>
+{/snippet}
+
 {#snippet relations(title: string, keys: string[])}
   <section class="section">
     <h3 class="section-title">{title}</h3>
@@ -76,13 +86,7 @@
       </Notice>
     {/if}
     {#if snapshot?.warning}
-      <Notice tone="warning">
-        Bazel returned a partial module graph. Some module extensions failed.
-        <details>
-          <summary>Show Bazel output</summary>
-          <pre class="code-box">{snapshot.warning}</pre>
-        </details>
-      </Notice>
+      {@render bazelWarning("module graph", snapshot.warning)}
     {/if}
     {#if !snapshot}
       {#if view.loadError === null}
@@ -164,12 +168,15 @@
           {view.busy === "explain" ? "Explanation in progress…" : "Explain"}
         </button>
       </div>
-      {#if view.explainError !== null}
+      {#if view.explanation && "error" in view.explanation}
         <Notice tone="error" onaction={disabled ? undefined : controller.explain}>
-          {view.explainError}
+          {view.explanation.error}
         </Notice>
       {:else if view.explanation !== null}
-        <pre class="code-box">{view.explanation}</pre>
+        {#if view.explanation.warning}
+          {@render bazelWarning("explanation", view.explanation.warning)}
+        {/if}
+        <pre class="code-box">{view.explanation.text}</pre>
       {/if}
     </section>
   </aside>
