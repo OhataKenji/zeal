@@ -341,22 +341,86 @@ async fn list_invocations(
     workspace: String,
     selected_id: Option<String>,
 ) -> Result<InvocationHistory, String> {
-    let (ws, diagnostics, mut pinned_ids) = {
-        let state = core.state.lock().expect("application state lock poisoned");
-        let ws = state.workspace_path(&workspace)?;
-        let diagnostics = state.diagnostics_for(&ws);
-        let pinned_ids = state.invocations.keys().cloned().collect::<Vec<_>>();
-        (ws, diagnostics, pinned_ids)
-    };
-    pinned_ids.extend(selected_id);
-    let data = app.path().app_data_dir().ok();
-    let saved = tauri::async_runtime::spawn_blocking(move || {
-        let data = data.ok_or_else(|| "invocation history is unavailable".to_string())?;
-        store::list(&data, &ws, &pinned_ids).map_err(|error| error.to_string())
+    let ws = registered_workspace(&core, &workspace)?;
+    let core = core.inner().clone();
+    let data = app.path().app_data_dir().map_err(|error| error.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        load_invocation_history(&core, &ws, selected_id, data)
     })
     .await
-    .map_err(|_| "history list worker failed".to_string())?;
-    Ok(InvocationHistory { saved, diagnostics })
+    .map_err(|_| "history list worker failed".to_string())
+}
+
+/// The synchronous history read run inside the worker: snapshot the live
+/// and selected pins plus this workspace's diagnostic ids under the state
+/// lock, read the store without it, then lock again to retire diagnostics
+/// whose record was fetched and scope the reply. Diagnostic ids are
+/// lookup-only pins — they can pull an off-window record back for the
+/// retirement check but are never exposed as history rows themselves.
+fn load_invocation_history(
+    core: &Core,
+    ws: &Path,
+    selected_id: Option<String>,
+    data: Result<PathBuf, String>,
+) -> InvocationHistory {
+    let (visible_pins, lookup_pins) = {
+        let state = core.state.lock().expect("application state lock poisoned");
+        let mut visible_pins = state.invocations.keys().cloned().collect::<Vec<_>>();
+        visible_pins.extend(selected_id);
+        let mut lookup_pins = visible_pins.clone();
+        lookup_pins.extend(
+            state
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| Path::new(&diagnostic.workspace) == ws)
+                .map(|diagnostic| diagnostic.id.clone()),
+        );
+        (visible_pins, lookup_pins)
+    };
+    let mut saved =
+        data.and_then(|dir| store::list(&dir, ws, &lookup_pins).map_err(|error| error.to_string()));
+    let mut state = core.state.lock().expect("application state lock poisoned");
+    settle_invocation_history(&mut state, &mut saved, &visible_pins);
+    InvocationHistory {
+        saved,
+        diagnostics: state.diagnostics_for(ws),
+    }
+}
+
+/// Whether the fetched records hold this workspace's own record for the
+/// diagnostic's invocation id.
+fn owns_diagnostic_record(
+    records: &[InvocationRecord],
+    diagnostic: &state::ProcessDiagnostic,
+) -> bool {
+    records.iter().any(|record| {
+        record.id == diagnostic.id
+            && record.workspace.as_deref() == Some(diagnostic.workspace.as_str())
+    })
+}
+
+/// With the store read done: a fetched record owned by this workspace
+/// retires its diagnostic — only on success — and records beyond the
+/// recent window stay in the reply only for visible live or selected pins.
+fn settle_invocation_history(
+    state: &mut state::CoreState,
+    saved: &mut Result<Vec<InvocationRecord>, String>,
+    visible_pins: &[String],
+) {
+    let Ok(records) = saved else {
+        return;
+    };
+    state
+        .diagnostics
+        .retain(|diagnostic| !owns_diagnostic_record(records, diagnostic));
+    if records.len() > store::LIST_LIMIT {
+        let extras = records.split_off(store::LIST_LIMIT);
+        records.extend(
+            extras
+                .into_iter()
+                .filter(|record| visible_pins.contains(&record.id)),
+        );
+    }
 }
 
 /// Aggregate only a registered workspace; caller cannot name a DB or root.

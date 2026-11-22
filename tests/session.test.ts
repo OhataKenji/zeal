@@ -751,12 +751,34 @@ test("a diagnostic row fills the gap until saved history supersedes it", async (
   assert.deepEqual(h.view.invocations, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }]);
 });
 
-test("an unselected history page claims a diagnostic only without live or saved rows", async () => {
+test("an unselected history page claims the newest row; live pins stay first", async () => {
   const h = harness(Promise.resolve(coreState({ revision: 1 })), "history");
   await initReady(h);
-  // A foreign-workspace diagnostic in the reply is filtered out; the local
-  // one is claimed as the first row.
-  await loadHistory(h, [], [diagnostic("c-run", OTHER), diagnostic("b-run")]);
+  const diag = { ...diagnostic("b-run"), startedAt: 30 };
+  const newest = { ...RECORD, id: "s-new", startedAt: 20, finishedAt: 21, exitCode: 0 };
+  const older = { ...RECORD, id: "s-old", startedAt: 10, finishedAt: 11, exitCode: 0 };
+  const undatedA: InvocationRecord = { id: "s-none-a", workspace: WS };
+  const undatedB: InvocationRecord = { id: "s-none-b", workspace: WS };
+  // A foreign-workspace diagnostic is filtered out; among the rest the
+  // newest startedAt claims the first row and undated rows sort last in
+  // reply order.
+  await loadHistory(h, [newest, older, undatedA, undatedB], [diagnostic("c-run", OTHER), diag]);
+  assert.equal(h.view.selectedInvocationId, "b-run");
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["b-run", "s-new", "s-old", "s-none-a", "s-none-b"],
+  );
+  assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
+  // An older live execution still pins the head without disturbing the
+  // claimed selection.
+  const live = owned("live-old", WS, { startedAt: 5 });
+  h.emit("app-state", coreState({ revision: 2, invocations: [live] }));
+  await settle();
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["live-old", "b-run", "s-new", "s-old", "s-none-a", "s-none-b"],
+  );
+  assert.equal(h.view.invocationRows[0]?.execution, live);
   assert.equal(h.view.selectedInvocationId, "b-run");
   assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
 });

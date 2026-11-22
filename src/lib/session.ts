@@ -205,11 +205,13 @@ function addDiagnosticRows(ws: Workspace, rows: Map<string, InvocationRow>) {
 }
 
 /** The single row projection shared by the view, first-row claiming, and
- * saved-reader eligibility: live executions first, then saved records, then
- * this workspace's diagnostics. A saved record replaces its pinned row only
- * when this workspace owns it; a diagnostic yields to any same-owner row —
- * live or saved — and takes the place of a foreign same-id record, which is
- * a different build that stays in saved history only. */
+ * saved-reader eligibility. Pinned live executions keep the head — their
+ * local start time can differ from the timestamp a record later reports —
+ * and the rest sort newest first with undated rows last. A saved record
+ * replaces its pinned row only when this workspace owns it; a diagnostic
+ * yields to any same-owner row — live or saved — and takes the place of a
+ * foreign same-id record, which is a different build that stays in saved
+ * history only. */
 function invocationRows(state: SessionState): InvocationRow[] {
   const ws = state.workspace;
   if (!ws) return [];
@@ -217,9 +219,16 @@ function invocationRows(state: SessionState): InvocationRow[] {
   for (const execution of pinnedInvocations(state)) {
     rows.set(execution.id, { record: execution, execution });
   }
+  const pinnedCount = rows.size;
   addSavedRows(state, ws, rows);
   addDiagnosticRows(ws, rows);
-  return [...rows.values()];
+  const ordered = [...rows.values()];
+  return [
+    ...ordered.slice(0, pinnedCount),
+    ...ordered
+      .slice(pinnedCount)
+      .sort((a, b) => (b.record.startedAt ?? -1) - (a.record.startedAt ?? -1)),
+  ];
 }
 
 /** Flat projection of session state consumed by the Svelte views. */

@@ -502,6 +502,7 @@ mod tests {
     use super::*;
     use crate::state::OwnedInvocation;
     use crate::store;
+    use crate::store::events::test_support::Fixture;
     use std::path::{Path, PathBuf};
 
     const WS: &str = "/ws";
@@ -548,6 +549,30 @@ mod tests {
             id,
             emit: || (),
         });
+    }
+
+    /// Run the production retention path for a stub invocation whose console
+    /// already holds `bytes`, then release the entry like a finished worker.
+    fn remember_output(
+        core: &Core,
+        ws: &Path,
+        id: &str,
+        bytes: &[u8],
+        data: Option<&Path>,
+    ) -> bool {
+        let mut log = crate::terminal::session_log().unwrap();
+        log.write_all(bytes).unwrap();
+        hold_invocation(
+            core,
+            ws,
+            id,
+            crate::terminal::Control::stub(),
+            i32::MAX,
+            log,
+        );
+        let retained = remember_diagnostic(core, data, id, Some(9)).unwrap();
+        release_process(core, id);
+        retained
     }
 
     /// Spawn through the production path so the invocation owns its process,
@@ -646,7 +671,7 @@ mod tests {
         st.invocations.len()
     }
 
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     use std::sync::mpsc;
 
     struct LogDir(std::path::PathBuf);
@@ -802,6 +827,86 @@ mod tests {
                 .contains("Another command is running. Exiting immediately.")
         );
         assert!(st.diagnostics_for(&ws.with_file_name("other")).is_empty());
+    }
+
+    /// Only a real exit status becomes the diagnostic's process exit code.
+    #[test]
+    fn retain_wait_result_keeps_only_real_exit_codes() {
+        assert_eq!(
+            retain_wait_result(&Err(io::Error::other("wait failed"))),
+            None
+        );
+        assert_eq!(retain_wait_result(&Ok(-1)), None);
+        assert_eq!(retain_wait_result(&Ok(0)), Some(0));
+        assert_eq!(retain_wait_result(&Ok(9)), Some(9));
+    }
+
+    /// The retained tail is the file's last DIAGNOSTIC_TAIL bytes; a split
+    /// UTF-8 sequence decodes lossily, so the string can exceed the window.
+    #[test]
+    fn remember_diagnostic_reads_the_bounded_tail_lossily() {
+        let core = Core::new();
+        let ws = Path::new(WS);
+        let id = "tail-boundary";
+        // 'Z' + é (two bytes) + TAIL-1 ASCII: the window opens on é's
+        // second byte, which cannot start a UTF-8 sequence.
+        let mut bytes = vec![b'Z', 0xC3, 0xA9];
+        bytes.resize(2 + DIAGNOSTIC_TAIL as usize, b'A');
+        assert!(remember_output(&core, ws, id, &bytes, None));
+        let st = core.state.lock().unwrap();
+        let diagnostics = st.diagnostics_for(ws);
+        let [d] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic")
+        };
+        assert_eq!(
+            d.output,
+            format!("\u{FFFD}{}", "A".repeat(DIAGNOSTIC_TAIL as usize - 1))
+        );
+        assert!(d.output.len() > DIAGNOSTIC_TAIL as usize);
+    }
+
+    /// The cache keeps the newest DIAGNOSTICS_MAX diagnostics, newest first.
+    #[test]
+    fn diagnostics_evict_the_oldest_beyond_the_bound() {
+        let core = Core::new();
+        let ws = Path::new(WS);
+        for i in 0..=DIAGNOSTICS_MAX {
+            assert!(remember_output(&core, ws, &format!("d{i}"), b"out", None));
+        }
+        let st = core.state.lock().unwrap();
+        let diagnostics = st.diagnostics_for(ws);
+        assert_eq!(diagnostics.len(), DIAGNOSTICS_MAX);
+        assert_eq!(diagnostics[0].id, format!("d{DIAGNOSTICS_MAX}"));
+        assert_eq!(diagnostics[DIAGNOSTICS_MAX - 1].id, "d1");
+    }
+
+    /// Repo scope is not ownership: a record owned by this workspace
+    /// suppresses retention, while a sibling's same-id record does not.
+    #[test]
+    fn remember_diagnostic_only_yields_to_the_same_workspaces_record() {
+        let f = Fixture::new();
+        let mut sibling = Fixture::new();
+        sibling.data = f.data.clone();
+        crate::workspace::test_support::repo(&f.ws, "https://example.com/shared.git");
+        crate::workspace::test_support::repo(&sibling.ws, "https://example.com/shared.git");
+        store::refresh_workspace(&f.data, &f.ws).unwrap();
+        store::refresh_workspace(&f.data, &sibling.ws).unwrap();
+        f.complete();
+        sibling.complete();
+        let ws = f.ws.canonicalize().unwrap();
+        let core = Core::new();
+        let data = f.data.as_path();
+
+        let own = f.stream.invocation_id.clone();
+        assert!(!remember_output(&core, &ws, &own, b"out", Some(data)));
+        assert!(core.state.lock().unwrap().diagnostics_for(&ws).is_empty());
+
+        let sibling_id = sibling.stream.invocation_id.clone();
+        assert!(remember_output(&core, &ws, &sibling_id, b"out", Some(data)));
+        let st = core.state.lock().unwrap();
+        let diagnostics = st.diagnostics_for(&ws);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, sibling_id);
     }
 
     /// A stale worker can never affect another invocation: release removes

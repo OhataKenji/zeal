@@ -356,6 +356,7 @@ fn attempt_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{Core, ProcessDiagnostic};
     use crate::store::events::test_support::Fixture;
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -549,31 +550,58 @@ mod tests {
         fs::remove_dir_all(f.dir()).unwrap();
         assert_eq!(list(&f.data, &f.ws, &[]).unwrap().len(), 1);
     }
-    #[test]
-    fn list_includes_pinned_records_older_than_its_recent_limit() {
-        let (f, sibling) = shared_repo_pair();
-        let store = Store::open(&f.data).unwrap();
-        let ws_id = |ws: &Path| -> String {
-            store
-                .conn
-                .query_row(
-                    "SELECT id FROM workspace WHERE canonical_path=?1",
-                    [ws.canonicalize().unwrap().as_os_str().as_bytes()],
-                    |r| r.get(0),
-                )
-                .unwrap()
-        };
-        let ids = [ws_id(&f.ws), ws_id(&sibling.ws)];
-        let recent_ids: Vec<_> = (0..LIST_LIMIT).map(|i| format!("recent-{i}")).collect();
-        for (i, id) in recent_ids.iter().enumerate() {
+    fn workspace_id(store: &Store, ws: &Path) -> String {
+        store
+            .conn
+            .query_row(
+                "SELECT id FROM workspace WHERE canonical_path=?1",
+                [ws.canonicalize().unwrap().as_os_str().as_bytes()],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// Fill the recent window so earlier records need a pin to resurface.
+    fn insert_recent_window(store: &Store, ws_ids: &[String]) -> Vec<String> {
+        let ids: Vec<_> = (0..LIST_LIMIT).map(|i| format!("recent-{i}")).collect();
+        for (i, id) in ids.iter().enumerate() {
             store
                 .conn
                 .execute(
                     "INSERT INTO invocation(id,workspace_id,started_at_ms) VALUES(?1,?2,?3)",
-                    params![id, &ids[i % 2], 2000 + i as i64],
+                    params![id, &ws_ids[i % ws_ids.len()], 2000 + i as i64],
                 )
                 .unwrap();
         }
+        ids
+    }
+
+    /// Seed the in-memory cache the way a finished worker leaves it.
+    fn cache_diagnostic(core: &Core, ws: &Path, id: &str) {
+        core.state
+            .lock()
+            .unwrap()
+            .diagnostics
+            .push_back(ProcessDiagnostic {
+                id: id.to_string(),
+                workspace: ws.to_string_lossy().into_owned(),
+                cmd: "build".into(),
+                pattern: "//:app".into(),
+                started_at: 1,
+                process_exit_code: Some(9),
+                output: "tail".into(),
+            });
+    }
+
+    #[test]
+    fn list_includes_pinned_records_older_than_its_recent_limit() {
+        let (f, sibling) = shared_repo_pair();
+        let store = Store::open(&f.data).unwrap();
+        let ids = [
+            workspace_id(&store, &f.ws),
+            workspace_id(&store, &sibling.ws),
+        ];
+        let recent_ids = insert_recent_window(&store, &ids);
         drop(store);
         let recent = list(&f.data, &f.ws, &[]).unwrap();
         assert!(recent.iter().map(|r| &r.id).eq(recent_ids.iter().rev()));
@@ -591,6 +619,72 @@ mod tests {
         let mut expected = [selected_id, live_id];
         expected.sort();
         assert!(invocations[LIST_LIMIT..].iter().map(|r| &r.id).eq(expected));
+    }
+
+    /// A diagnostic whose record lands after the fact is retired by the
+    /// next history read: its id joins the store lookup only, so the aged
+    /// record is fetched for the check but never exposed unselected, and
+    /// later calls cannot resurrect the diagnostic.
+    #[test]
+    fn history_list_retires_a_diagnostic_once_its_record_is_persisted() {
+        let (f, sibling) = shared_repo_pair();
+        let ws = f.ws.canonicalize().unwrap();
+        let store = Store::open(&f.data).unwrap();
+        let ids = [workspace_id(&store, &ws), workspace_id(&store, &sibling.ws)];
+        insert_recent_window(&store, &ids);
+        drop(store);
+
+        let core = Core::new();
+        let recorded = f.stream.invocation_id.clone();
+        cache_diagnostic(&core, &ws, &recorded);
+
+        let history = crate::load_invocation_history(&core, &ws, None, Ok(f.data.clone()));
+        let saved = history.saved.unwrap();
+        assert_eq!(saved.len(), LIST_LIMIT);
+        assert!(saved.iter().all(|record| record.id.starts_with("recent-")));
+        assert!(history.diagnostics.is_empty());
+        assert!(core.state.lock().unwrap().diagnostics.is_empty());
+
+        // The selected pin still surfaces the same record.
+        let history =
+            crate::load_invocation_history(&core, &ws, Some(recorded.clone()), Ok(f.data.clone()));
+        let saved = history.saved.unwrap();
+        assert!(saved.iter().any(|record| record.id == recorded));
+        assert!(history.diagnostics.is_empty());
+
+        let history = crate::load_invocation_history(&core, &ws, None, Ok(f.data.clone()));
+        assert!(history.diagnostics.is_empty());
+    }
+
+    /// Repo scope is not ownership: a same-id record owned by a sibling
+    /// workspace cannot retire this workspace's diagnostic, and a store
+    /// failure keeps the diagnostic while reporting the error itself.
+    #[test]
+    fn history_list_keeps_diagnostics_without_a_matching_owner() {
+        let (f, sibling) = shared_repo_pair();
+        let ws = f.ws.canonicalize().unwrap();
+        let core = Core::new();
+        let sibling_id = sibling.stream.invocation_id.clone();
+        cache_diagnostic(&core, &ws, &sibling_id);
+
+        let history = crate::load_invocation_history(&core, &ws, None, Ok(f.data.clone()));
+        assert!(history.saved.is_ok());
+        assert_eq!(history.diagnostics.len(), 1);
+        assert_eq!(history.diagnostics[0].id, sibling_id);
+        assert_eq!(core.state.lock().unwrap().diagnostics.len(), 1);
+
+        let history = crate::load_invocation_history(
+            &core,
+            &ws,
+            None,
+            Err("specific path error".to_string()),
+        );
+        assert_eq!(
+            history.saved.as_ref().unwrap_err().as_str(),
+            "specific path error"
+        );
+        assert_eq!(history.diagnostics.len(), 1);
+        assert_eq!(core.state.lock().unwrap().diagnostics.len(), 1);
     }
 
     fn shared_repo_pair() -> (Fixture, Fixture) {
