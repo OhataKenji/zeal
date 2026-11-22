@@ -159,6 +159,7 @@ afterEach(() => {
 
 function harness(initial = Promise.resolve(READY), page: Page = "targets") {
   let view = emptyView(page);
+  const selections: Array<typeof view.selection> = [];
   let coreState = READY;
   let initialRequested = false;
   let stateReads = 0;
@@ -196,12 +197,14 @@ function harness(initial = Promise.resolve(READY), page: Page = "targets") {
     transport,
     (next) => {
       view = next;
+      selections.push(next.selection);
     },
     page,
   );
   cleanup.push(session.dispose);
   return {
     session,
+    selections,
     get view() {
       return view;
     },
@@ -1125,6 +1128,59 @@ test("outstanding refresh replies cannot overwrite the latest workspace's snapsh
   await settle();
   assert.equal(h.view.snapshot?.meta.fetchedAt, 1);
   assert.equal(h.view.snapshotError, null);
+});
+
+test("reload keeps an existing package selected, including a grouping directory", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  const selection = { kind: "package", path: "app" } as const;
+  h.session.select(selection);
+  const beforeRefresh = h.selections.length;
+  h.session.refresh();
+  assert.deepEqual(h.view.selection, selection);
+  assert.equal(h.view.snapshot?.targets[0].pkg, "app");
+  await loadSnapshot(h);
+  assert.deepEqual(h.view.selection, selection);
+  for (const published of h.selections.slice(beforeRefresh)) {
+    assert.deepEqual(published, selection, "reload must not briefly publish the root");
+  }
+
+  async function replaceTargets(pkg: string) {
+    h.session.refresh();
+    assert.deepEqual(h.view.selection, selection);
+    const target = { ...SNAPSHOT.targets[0], pkg, label: `//${pkg}:first` };
+    lastPendingRequest(h, "refresh").reply.resolve({
+      snapshot: { ...SNAPSHOT, targets: [target] },
+      error: null,
+    });
+    await settle();
+  }
+  await replaceTargets("app/lib");
+  assert.deepEqual(h.view.selection, selection);
+  await replaceTargets("apple");
+  assert.equal(h.view.selection, null);
+});
+
+test("a workspace switch drops the package even if the new workspace contains it", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "package", path: "app" });
+  h.session.refresh();
+  const abandoned = lastPendingRequest(h, "refresh");
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await settle();
+  assert.equal(h.view.selection, null);
+  await loadSnapshot(h);
+  abandoned.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(h.view.state?.workspace, OTHER);
+  assert.equal(h.view.selection, null);
 });
 
 test("an accepted refresh re-reads the selected target even when fetchedAt is unchanged", async () => {

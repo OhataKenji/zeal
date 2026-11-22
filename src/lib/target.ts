@@ -6,6 +6,18 @@
 // core accepts (`char::is_whitespace` is White_Space and `is_control` is Cc).
 const FORBIDDEN_CHARACTERS = /[\p{White_Space}\p{Cc}]/u;
 
+/** Explains Explorer's package wildcards without implying discovery limits Bazel. */
+export function packageScopeNote(pattern: string): string | null {
+  if (!pattern.startsWith("//")) return null;
+  if (pattern.endsWith(":all")) {
+    return "Bazel matches rules in this package, not just the targets listed in Explorer.";
+  }
+  if (pattern.endsWith("/...") && !pattern.includes(":")) {
+    return "Bazel matches rules recursively across packages, not just the targets listed in Explorer.";
+  }
+  return null;
+}
+
 /** Validates a single target token without trimming or splitting it. */
 export function targetError(raw: string): string | null {
   if (raw === "") return "Enter a target or pattern";
