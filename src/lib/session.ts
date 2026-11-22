@@ -536,8 +536,8 @@ export function createSession(
     );
   }
 
-  /** Starts the eligible saved detail read that has never produced a value. */
-  function ensureSavedDetail() {
+  /** Starts each eligible saved reader that has never produced a value. */
+  function ensureSaved() {
     const ctx = savedContext();
     if (!ctx) return;
     if (
@@ -546,6 +546,13 @@ export function createSession(
       !ctx.saved.detail.loading
     ) {
       readSavedDetail();
+    }
+    if (
+      ctx.saved.profile.value === null &&
+      ctx.saved.profile.error === null &&
+      !ctx.saved.profile.loading
+    ) {
+      readSavedProfile();
     }
   }
 
@@ -564,10 +571,7 @@ export function createSession(
       profile: reader(saved.profile.value),
     };
     readSavedDetail();
-    // The profile stays on-demand: only an already-opened one refreshes.
-    if (saved.profile.loading || saved.profile.value !== null || saved.profile.error !== null) {
-      readSavedProfile();
-    }
+    readSavedProfile();
   }
 
   /** Eligibility flips replace the readers; a gain starts fresh reads. */
@@ -575,7 +579,7 @@ export function createSession(
     const isEligible = savedEligible(state);
     if (wasEligible === isEligible) return;
     if (isEligible) {
-      ensureSavedDetail();
+      ensureSaved();
       return;
     }
     state.saved = savedReaders();
@@ -631,7 +635,7 @@ export function createSession(
       state.saved = savedReaders();
     }
     publish();
-    ensureSavedDetail();
+    ensureSaved();
     const saved = state.saved;
     if (!savedEligible(state)) {
       // An id the current history cannot show may still exist past the latest
@@ -648,8 +652,9 @@ export function createSession(
       }
       return;
     }
-    // Re-selecting the same invocation only retries a failed detail read.
+    // Re-selecting the same invocation only retries failed readers.
     if (saved.detail.error !== null) readSavedDetail();
+    if (saved.profile.error !== null) readSavedProfile();
   }
 
   function selectInvocation(id: string) {
@@ -672,7 +677,7 @@ export function createSession(
       // Claim History's first row before the frame so it never flashes empty.
       claimFirstInvocation();
       publish();
-      if (page === "history") ensureSavedDetail();
+      if (page === "history") ensureSaved();
     }
     if (page === "workspace") maybeLoadWorkspaceInfo();
     // Returning to Targets kicks any phase read deferred while away.
