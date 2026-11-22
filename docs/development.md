@@ -40,8 +40,8 @@ modules entirely (verified on Bazel 7, 8 and 9).
 
 `pnpm dev` serves the app shell in a plain browser. Open
 `http://localhost:1420/?preview` to mount the development preview, which
-answers Tauri IPC from fixtures captured from the
-[parcel-desk example](../examples/parcel-desk) (`src/preview/`):
+answers Tauri IPC from fixtures in `src/preview/`. These were captured from
+Parcel Desk, a separate Bazel workspace with a C++ gRPC rate service and a Python client:
 
 - `history.json` — three real invocations (build `//...`, build
   `//rates:rate_server`, test `//dispatch:quote_contract_test`) with their saved log,
