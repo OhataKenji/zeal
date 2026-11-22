@@ -26,6 +26,7 @@ import type { CommandName } from "./lib/commands.ts";
 const WORKSPACE = "/demo/cool-mono";
 const MODULES: ModulesSnapshot = {
   rootKey: "<root>",
+  rootName: "cool_mono",
   warning: null,
   modules: [
     {

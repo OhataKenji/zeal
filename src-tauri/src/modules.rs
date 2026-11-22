@@ -57,6 +57,7 @@ pub struct ModuleNode {
 #[serde(rename_all = "camelCase")]
 pub struct ModulesSnapshot {
     pub root_key: String,
+    pub root_name: String,
     pub modules: Vec<ModuleNode>,
     pub warning: Option<String>,
 }
@@ -272,8 +273,9 @@ fn normalize_version(version: &str) -> String {
 fn project(
     mut nodes: BTreeMap<&str, ModuleNode>,
     mut edges: Vec<(&str, &str)>,
-    root_key: &str,
+    root: &RawNode,
 ) -> ModulesSnapshot {
+    let root_key = root.key.as_str();
     nodes.remove(root_key);
     edges.sort_unstable();
     edges.dedup();
@@ -296,6 +298,7 @@ fn project(
     });
     ModulesSnapshot {
         root_key: root_key.to_string(),
+        root_name: root.name.clone().unwrap_or_default(),
         modules,
         warning: None,
     }
@@ -337,7 +340,7 @@ fn parse_mod_graph(stdout: &[u8]) -> Result<ModulesSnapshot, String> {
             pending.push((child, depth + 1, true));
         }
     }
-    Ok(project(nodes, edges, root.key.as_str()))
+    Ok(project(nodes, edges, &root))
 }
 
 /// Module keys travel to `bazel mod explain` as a single argv element after
@@ -391,6 +394,7 @@ mod tests {
     fn parse_mod_graph_folds_captured_bazel_output() {
         let snap = fixture();
         assert_eq!(snap.root_key, "<root>");
+        assert_eq!(snap.root_name, "zeal_bzlmod_fixture");
         // Direct dependencies first, then name order.
         let keys: Vec<&str> = snap.modules.iter().map(|m| m.key.as_str()).collect();
         assert_eq!(keys, ["mod_a@_", "mod_b@_", "mod_c@3.0.0", "mod_e@2.0.0"]);

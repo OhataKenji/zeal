@@ -52,7 +52,7 @@
       {#each keys as key (key)}
         <li>
           {#if key === snapshot?.rootKey}
-            {key}
+            {snapshot.rootName ? `${snapshot.rootName} (this workspace)` : "This workspace"}
           {:else}
             <button type="button" class="table-link" onclick={() => controller.select(key)}>{key}</button>
           {/if}
