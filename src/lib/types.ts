@@ -139,6 +139,10 @@ export interface ConfiguredTarget {
   depsTruncated: boolean;
 }
 
+/** The tagged result of one inspector phase read: exactly one key names the
+ * phase that produced it. */
+export type TargetPhaseData = { configured: ConfiguredTarget } | { actions: TargetActions };
+
 /** A user-facing summary for a failed core operation. */
 export interface IngestError {
   exitCode: number | null;

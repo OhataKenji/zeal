@@ -138,10 +138,13 @@ pub struct TargetOutputs {
 }
 
 /// The selected target's own configuration, resolved by the `config()`
-/// cquery expression under the applied build flags.
-#[derive(serde::Serialize)]
+/// cquery expression under the applied build flags. `id` keys the
+/// jsonproto `configurations` array — input only, never serialized.
+#[derive(Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigSummary {
+    #[serde(skip_serializing)]
+    pub id: u32,
     pub mnemonic: String,
     pub checksum: String,
 }
@@ -175,59 +178,56 @@ struct TargetTransitions {
     deps_truncated: bool,
 }
 
-/// Everything the Configured inspector tab needs for one target. Three
-/// sequential owned reads share the workspace lock: `config(label, target)`
-/// names the target's own configuration under the applied flags, then
-/// `deps(config(...), 1)` transitions and `config(...)` files are both
-/// scoped to that exact configuration, so retained copies of the same
-/// label under other configurations cannot leak in.
-#[tracing::instrument(target = "zeal::operations", name = "target.configured", skip_all)]
-pub fn configured_target(
+/// Which inspector phase a `target_phase` read serves.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetPhase {
+    Configured,
+    Actions,
+}
+
+/// One inspector phase read's tagged result: `{"configured": {...}}` or
+/// `{"actions": {...}}` on the wire.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetPhaseData {
+    Configured(ConfiguredTarget),
+    Actions(actions::TargetActions),
+}
+
+/// One inspector phase read for the selected target under the applied build
+/// flags: the Configured phase's `cquery` reads or the Actions phase's
+/// `aquery` read. Definition never reaches this command.
+#[tracing::instrument(target = "zeal::operations", name = "target.phase", skip_all)]
+pub fn target_phase(
     app: AppHandle,
     core: Arc<Core>,
     ws: &str,
     label: &str,
     flags: &str,
-) -> Result<ConfiguredTarget, String> {
+    phase: TargetPhase,
+) -> Result<TargetPhaseData, String> {
     let pattern = crate::scope::cquery_target(label)?;
-    let flags = crate::query::build_flags(crate::query::QueryKind::Cquery, flags)?;
+    let kind = match phase {
+        TargetPhase::Configured => crate::query::QueryKind::Cquery,
+        TargetPhase::Actions => crate::query::QueryKind::Aquery,
+    };
+    let flags = crate::query::build_flags(kind, flags)?;
     let reader = TargetReader::new(&core, &app, ws)?;
-
-    let root = format!("config(\"{pattern}\", target)");
-    let configuration = reader.read(
-        "cquery",
-        &flags,
-        &["--output=jsonproto", "--proto:include_configurations"],
-        &root,
-        parse_configuration,
-    )?;
-
-    let checksum = configuration.as_ref().map(|config| config.checksum.clone());
-    let transitions = reader.read(
-        "cquery",
-        &flags,
-        &["--output=transitions", "--transitions=lite"],
-        &format!("deps({root}, 1)"),
-        {
-            let label = label.to_string();
-            move |input| parse_transitions(input, &label, checksum.as_deref())
-        },
-    )?;
-
-    let outputs = reader.read(
-        "cquery",
-        &flags,
-        &["--output=files"],
-        &root,
-        parse_output_paths,
-    )?;
-
-    Ok(ConfiguredTarget {
-        configuration,
-        outputs,
-        deps: transitions.deps,
-        deps_truncated: transitions.deps_truncated,
-    })
+    match phase {
+        TargetPhase::Configured => reader
+            .configured_target(&pattern, &flags)
+            .map(TargetPhaseData::Configured),
+        TargetPhase::Actions => reader
+            .read(
+                "aquery",
+                &flags,
+                &ACTION_MANAGED,
+                &format!("\"{pattern}\""),
+                actions::parse,
+            )
+            .map(TargetPhaseData::Actions),
+    }
 }
 
 /// `--output=files` prints one workspace-relative output path per line. Only
@@ -254,7 +254,8 @@ fn parse_output_paths(input: impl BufRead) -> Result<TargetOutputs, String> {
 /// Parse the transitions report for `label` under `checksum` — the full
 /// config hash `config()` reported, or `None` for the null configuration.
 /// `deps(config(...))` yields exactly one matching header; same-label
-/// headers under other retained configurations are ignored.
+/// headers under other retained configurations are ignored. stdout is
+/// always drained — dropping the pipe early can fail Bazel.
 fn parse_transitions(
     input: impl BufRead,
     label: &str,
@@ -266,14 +267,27 @@ fn parse_transitions(
     let mut deps_truncated = false;
     for line in input.lines() {
         let line = line.map_err(|_| "could not read cquery output".to_string())?;
-        if line.starts_with(char::is_whitespace) {
-            collect_dep(&line, collecting, &mut deps, &mut deps_truncated);
+        if !line.starts_with(char::is_whitespace) {
+            // Only the first matching header collects; any later header —
+            // even a repeat — ends collection for good.
+            collecting = !found && is_target_header(&line, label, checksum);
+            found |= collecting;
             continue;
         }
-        // Only the first matching header collects; later headers — even a
-        // repeated one — end collection for good.
-        collecting = !found && header_matches_label(&line, label, checksum);
-        found |= collecting;
+        if !collecting || deps_truncated {
+            continue;
+        }
+        let Some(dep) = parse_transition_row(&line) else {
+            continue;
+        };
+        if deps.contains(&dep) {
+            continue;
+        }
+        if deps.len() < MAX_CONFIGURED_DEPS {
+            deps.push(dep);
+        } else {
+            deps_truncated = true;
+        }
     }
     if !found {
         return Err(format!("cquery reported no configuration for {label}"));
@@ -284,100 +298,46 @@ fn parse_transitions(
     })
 }
 
-/// Keep one indented row's dependency while `collecting` — deduplicated and
-/// bounded by [`MAX_CONFIGURED_DEPS`]; overflow only sets the flag.
-fn collect_dep(
-    line: &str,
-    collecting: bool,
-    deps: &mut Vec<ConfiguredDep>,
-    deps_truncated: &mut bool,
-) {
-    if !collecting {
-        return;
-    }
-    let Some(dep) = parse_transition_row(line) else {
-        return;
-    };
-    if deps.contains(&dep) {
-        return;
-    }
-    if deps.len() < MAX_CONFIGURED_DEPS {
-        deps.push(dep);
-    } else {
-        *deps_truncated = true;
-    }
-}
-
-/// A column-0 header names `label` under the selected configuration.
-fn header_matches_label(line: &str, label: &str, checksum: Option<&str>) -> bool {
-    let Some((header_label, id)) = parse_transition_header(line) else {
+/// A column-0 header `[<rule transition> -> ]<label> (<id>)` names `label`
+/// under the selected configuration. Labels cannot contain whitespace, so
+/// the segment after the last ` -> ` is the label; `<id>` is the
+/// configuration's short checksum — a prefix of the full hash `config()`
+/// reported — or `null` for targets without a configuration.
+fn is_target_header(line: &str, label: &str, checksum: Option<&str>) -> bool {
+    let Some((prefix, id)) = line
+        .strip_suffix(')')
+        .and_then(|line| line.rsplit_once(" ("))
+    else {
         return false;
     };
-    header_label == label && header_matches(id, checksum)
-}
-
-/// A header belongs to the selected configuration when its short checksum
-/// prefixes the full hash `config()` reported — or is `null` for targets
-/// without a configuration.
-fn header_matches(id: &str, checksum: Option<&str>) -> bool {
-    match checksum {
-        Some(sum) => sum.starts_with(id),
-        None => id == "null",
-    }
-}
-
-/// A column-0 transitions header: `[<rule transition> -> ]<label> (<id>)`,
-/// where `<id>` is the configuration checksum or `null`. Labels cannot
-/// contain whitespace, so the last ` -> ` separates the optional
-/// rule-class transition prefix from the label.
-fn parse_transition_header(line: &str) -> Option<(&str, &str)> {
-    if line.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let (prefix, rest) = line.rsplit_once(" (")?;
-    let id = rest.strip_suffix(')')?;
-    let label = prefix.rsplit_once(" -> ").map_or(prefix, |(_, l)| l);
-    (!label.is_empty() && !id.is_empty()).then_some((label, id))
+    !id.is_empty()
+        && prefix.rsplit(" -> ").next() == Some(label)
+        && checksum.map_or(id == "null", |sum| sum.starts_with(id))
 }
 
 /// One `attr#label#transition -> <ids>` row under a header. The attribute is
 /// the first `#` field and the transition name — which never contains `#` —
-/// is the last, so labels containing `#` stay intact.
+/// is the last, so labels containing `#` stay intact. `(null transition)`
+/// and `NoTransition` keep the parent's configuration; `exec` and
+/// `(exec + ...)` badge as `exec`; every other name stays whole.
 fn parse_transition_row(line: &str) -> Option<ConfiguredDep> {
     let (head, _) = line.rsplit_once("->")?;
     let (_, rest) = head.trim_end().split_once('#')?;
-    let (label, transition) = rest.rsplit_once('#')?;
+    let (label, name) = rest.rsplit_once('#')?;
     let label = label.trim();
     if label.is_empty() {
         return None;
     }
-    Some(ConfiguredDep {
-        label: label.to_string(),
-        transition: transition_badge(transition.trim()),
-    })
-}
-
-/// The badge shown for a dependency edge, or `None` when the edge keeps the
-/// parent's configuration (`NoTransition`) or has none (`(null transition)`,
-/// e.g. source files). Composite `exec` transitions badge as `exec`; every
-/// other name is kept whole for an honest display.
-fn transition_badge(name: &str) -> Option<String> {
-    match name {
+    let transition = match name.trim() {
         "(null transition)" | "NoTransition" => None,
         "exec" => Some("exec".to_string()),
-        _ if name.starts_with("(exec + ") => Some("exec".to_string()),
-        _ => Some(name.to_string()),
-    }
-}
-
-/// The `configurations` entry `config()` resolves to. Only the fields the
-/// inspector shows are declared — Bazel's remaining option payload is
-/// ignored rather than materialized.
-#[derive(Deserialize)]
-struct NamedConfig {
-    id: u32,
-    mnemonic: String,
-    checksum: String,
+        name if name.starts_with("(exec + ") => Some("exec".to_string()),
+        name => Some(name.to_string()),
+    };
+    Some(ConfiguredDep {
+        label: label.to_string(),
+        transition,
+    })
 }
 
 /// One `cquery --output=jsonproto` result's configuration reference.
@@ -388,13 +348,14 @@ struct ResultConfig {
 }
 
 /// `cquery --output=jsonproto` top level: the results plus the named
-/// configurations they reference.
+/// configurations they reference. Only the fields [`ConfigSummary`] declares
+/// are read — Bazel's remaining option payload is ignored.
 #[derive(Deserialize)]
 struct ConfigQuery {
     #[serde(default)]
     results: Vec<ResultConfig>,
     #[serde(default)]
-    configurations: Vec<NamedConfig>,
+    configurations: Vec<ConfigSummary>,
 }
 
 /// `config("label", target)` answers with exactly one result; its
@@ -417,33 +378,8 @@ fn parse_configuration(input: impl BufRead) -> Result<Option<ConfigSummary>, Str
         .configurations
         .into_iter()
         .find(|config| config.id == id)
-        .map(|config| {
-            Some(ConfigSummary {
-                mnemonic: config.mnemonic,
-                checksum: config.checksum,
-            })
-        })
+        .map(Some)
         .ok_or_else(|| format!("cquery config() referenced unknown configuration {id}"))
-}
-
-#[tracing::instrument(target = "zeal::operations", name = "target.actions", skip_all)]
-pub fn target_actions(
-    app: AppHandle,
-    core: Arc<Core>,
-    ws: &str,
-    label: &str,
-    flags: &str,
-) -> Result<actions::TargetActions, String> {
-    let pattern = crate::scope::cquery_target(label)?;
-    let flags = crate::query::build_flags(crate::query::QueryKind::Aquery, flags)?;
-    let reader = TargetReader::new(&core, &app, ws)?;
-    reader.read(
-        "aquery",
-        &flags,
-        &ACTION_MANAGED,
-        &format!("\"{pattern}\""),
-        actions::parse,
-    )
 }
 
 /// Resolve `ws`'s registered path and the bazel executable. Only that
@@ -485,6 +421,52 @@ impl<'a> TargetReader<'a> {
             app,
             ws,
             bazel,
+        })
+    }
+
+    /// The Configured phase's three sequential reads share the workspace
+    /// lock: `config(label, target)` names the target's own configuration
+    /// under the applied flags, then `deps(config(...), 1)` transitions and
+    /// `config(...)` files are both scoped to that exact configuration, so
+    /// retained copies of the same label under other configurations cannot
+    /// leak in.
+    fn configured_target(
+        &self,
+        pattern: &str,
+        flags: &[String],
+    ) -> Result<ConfiguredTarget, String> {
+        let root = format!("config(\"{pattern}\", target)");
+        let configuration = self.read(
+            "cquery",
+            flags,
+            &["--output=jsonproto", "--proto:include_configurations"],
+            &root,
+            parse_configuration,
+        )?;
+
+        let checksum = configuration.as_ref().map(|config| config.checksum.clone());
+        let label = pattern.to_string();
+        let transitions = self.read(
+            "cquery",
+            flags,
+            &["--output=transitions", "--transitions=lite"],
+            &format!("deps({root}, 1)"),
+            move |input| parse_transitions(input, &label, checksum.as_deref()),
+        )?;
+
+        let outputs = self.read(
+            "cquery",
+            flags,
+            &["--output=files"],
+            &root,
+            parse_output_paths,
+        )?;
+
+        Ok(ConfiguredTarget {
+            configuration,
+            outputs,
+            deps: transitions.deps,
+            deps_truncated: transitions.deps_truncated,
         })
     }
 
@@ -1074,20 +1056,23 @@ NoTransition -> //app:a (aaa1111)
     }
 
     #[test]
-    fn transition_badge_marks_only_exec_and_keeps_other_names_whole() {
-        assert_eq!(transition_badge("(null transition)"), None);
-        assert_eq!(transition_badge("NoTransition"), None);
-        assert_eq!(transition_badge("exec"), Some("exec".to_string()));
+    fn transition_rows_mark_only_exec_and_keep_other_names_whole() {
+        let badge = |name: &str| {
+            parse_transition_row(&format!("  deps#//app:x#{name} ->"))
+                .unwrap()
+                .transition
+        };
+        assert_eq!(badge("(null transition)"), None);
+        assert_eq!(badge("NoTransition"), None);
+        assert_eq!(badge("exec"), Some("exec".to_string()));
         assert_eq!(
-            transition_badge(
-                "(exec + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
-            ),
+            badge("(exec + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"),
             Some("exec".to_string())
         );
         // Non-exec transition names stay whole so the badge stays honest.
         let starlark =
             "(Starlark transition:/ws/app/transition.bzl:4:40 + (TestTrimmingTransition))";
-        assert_eq!(transition_badge(starlark), Some(starlark.to_string()));
+        assert_eq!(badge(starlark), Some(starlark.to_string()));
     }
 
     #[test]
@@ -1124,12 +1109,6 @@ NoTransition -> //app:a (aaa1111)
         ))
         .unwrap();
         assert!(null.is_none());
-        // An explicit zero id is the same thing.
-        let zero = parse_configuration(std::io::Cursor::new(
-            r#"{"results": [{"configurationId": 0}], "configurations": []}"#,
-        ))
-        .unwrap();
-        assert!(zero.is_none());
         // Not exactly one result, or an id missing from configurations, fails.
         assert!(
             parse_configuration(std::io::Cursor::new(
@@ -1153,8 +1132,8 @@ NoTransition -> //app:a (aaa1111)
 
     #[test]
     fn configured_phases_reject_output_flag_overrides_before_launching() {
-        // build_flags runs before any fetch inside configured_target and
-        // target_actions, so an --output override can never reach a phase.
+        // build_flags runs before any fetch inside target_phase, so an
+        // --output override can never reach a phase.
         for (kind, flags) in [
             (crate::query::QueryKind::Cquery, "--output=files"),
             (crate::query::QueryKind::Cquery, "--output files"),
@@ -1192,30 +1171,11 @@ NoTransition -> //app:a (aaa1111)
                 "deps(\"//app:t\", 1)",
             ])
         );
-        // The jsonproto configuration read scopes to the `config()` root.
-        assert_eq!(
-            target_args(
-                "cquery",
-                &flags,
-                &["--output=jsonproto", "--proto:include_configurations"],
-                "config(\"//app:t\", target)"
-            ),
-            strings(&[
-                "--noblock_for_lock",
-                "cquery",
-                "--config=opt",
-                "--keep_going",
-                "--output=jsonproto",
-                "--proto:include_configurations",
-                "--",
-                "config(\"//app:t\", target)",
-            ])
-        );
     }
 
     #[test]
     fn action_read_quotes_the_label_and_keeps_managed_options() {
-        // The same arguments target_actions hands to TargetReader::read.
+        // The same arguments target_phase hands to TargetReader::read.
         let args = target_args(
             "aquery",
             &strings(&["--config=opt"]),
@@ -1238,8 +1198,11 @@ NoTransition -> //app:a (aaa1111)
     }
 
     #[test]
-    fn config_summary_serializes_only_mnemonic_and_checksum() {
+    fn config_summary_and_phase_data_keep_their_wire_shapes() {
+        // The jsonproto `id` never reaches the frontend; the phase result is
+        // tagged by its phase key.
         let summary = ConfigSummary {
+            id: 7,
             mnemonic: "k8-opt".to_string(),
             checksum: "abc123".to_string(),
         };
@@ -1250,5 +1213,41 @@ NoTransition -> //app:a (aaa1111)
                 "checksum": "abc123",
             })
         );
+        let configured = TargetPhaseData::Configured(ConfiguredTarget {
+            configuration: Some(summary),
+            outputs: TargetOutputs {
+                paths: vec![],
+                truncated: false,
+            },
+            deps: vec![],
+            deps_truncated: false,
+        });
+        assert_eq!(
+            serde_json::to_value(&configured).unwrap(),
+            serde_json::json!({
+                "configured": {
+                    "configuration": {"mnemonic": "k8-opt", "checksum": "abc123"},
+                    "outputs": {"paths": [], "truncated": false},
+                    "deps": [],
+                    "depsTruncated": false,
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(TargetPhaseData::Actions(actions::TargetActions {
+                actions: vec![],
+                truncated: false,
+            }))
+            .unwrap(),
+            serde_json::json!({"actions": {"actions": [], "truncated": false}})
+        );
+        assert!(matches!(
+            serde_json::from_str::<TargetPhase>("\"configured\"").unwrap(),
+            TargetPhase::Configured
+        ));
+        assert!(matches!(
+            serde_json::from_str::<TargetPhase>("\"actions\"").unwrap(),
+            TargetPhase::Actions
+        ));
     }
 }

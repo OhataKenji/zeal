@@ -15,6 +15,7 @@ import type {
   TargetDetail,
   TargetIndex,
   ConfiguredTarget,
+  TargetPhaseData,
   WorkspaceState,
 } from "./lib/types";
 import type { QueryOutput, QueryRequest } from "./lib/query.ts";
@@ -469,6 +470,30 @@ function previewConfiguration(flags: string): { mnemonic: string; checksum: stri
     : { mnemonic: "k8-fastbuild", checksum: "4a8f12c61e0dd731" };
 }
 
+/** Sample configured-target data for one label under the given flags. */
+function previewConfigured(label: string, flags: string): ConfiguredTarget {
+  const { mnemonic: configDir, checksum } = previewConfiguration(flags);
+  const outputPaths = FULL_DATA.files
+    .filter((file) => file.owner === label && file.role === "out")
+    .map((file) => `bazel-out/${configDir}/bin/${file.path}`);
+  const labels = new Set(FULL_DATA.edges.filter((e) => e.from === label).map((e) => e.to));
+  if (label === PARSER) labels.add("//tools:protoc");
+  const deps = Array.from(labels, (dep) => ({
+    label: dep,
+    // Toolchain-ish packages plausibly sit behind an exec transition.
+    transition: dep.startsWith("//tools") ? "exec" : null,
+  }));
+  return {
+    configuration: { mnemonic: configDir, checksum },
+    outputs: {
+      paths: outputPaths.slice(0, 10),
+      truncated: outputPaths.length > 10,
+    },
+    deps: deps.slice(0, 200),
+    depsTruncated: deps.length > 200,
+  };
+}
+
 /** Sample actions for one target, built from the demo workspace files. */
 function previewActions(label: string, flags = ""): TargetActions {
   const inputs = FULL_DATA.files
@@ -637,54 +662,16 @@ export function installPreview() {
         status: "ok",
       });
     },
-    get_configured_target: (payload): ConfiguredTarget => {
+    get_target_phase: (payload): TargetPhaseData => {
       wsEntry(payload?.workspace);
       const label = String(payload?.label);
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
       const flags = String(payload?.flags ?? "");
-      const { mnemonic: configDir, checksum } = previewConfiguration(flags);
-      const outputPaths = FULL_DATA.files
-        .filter((file) => file.owner === label && file.role === "out")
-        .map((file) => `bazel-out/${configDir}/bin/${file.path}`);
-      const seen = new Set<string>();
-      const deps = FULL_DATA.edges
-        .filter((edge) => edge.from === label)
-        .map((edge) => ({
-          label: edge.to,
-          // Toolchain-ish packages plausibly sit behind an exec transition.
-          transition: edge.to.startsWith("//tools") ? "exec" : null,
-        }))
-        .filter((dep) => {
-          const key = `${dep.label}${dep.transition ?? ""}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      if (label === PARSER && !deps.some((dep) => dep.label === "//tools:protoc")) {
-        deps.push({ label: "//tools:protoc", transition: "exec" });
-      }
-      return {
-        configuration: {
-          mnemonic: configDir,
-          checksum,
-        },
-        outputs: {
-          paths: outputPaths.slice(0, 10),
-          truncated: outputPaths.length > 10,
-        },
-        deps: deps.slice(0, 200),
-        depsTruncated: deps.length > 200,
-      };
-    },
-    get_target_actions: (payload): TargetActions => {
-      wsEntry(payload?.workspace);
-      const label = String(payload?.label);
-      if (!SNAPSHOT.targets.some((item) => item.label === label)) {
-        throw new Error("Target not found");
-      }
-      return previewActions(label, String(payload?.flags ?? ""));
+      return payload?.phase === "actions"
+        ? { actions: previewActions(label, flags) }
+        : { configured: previewConfigured(label, flags) };
     },
     list_invocations: (payload) =>
       structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),

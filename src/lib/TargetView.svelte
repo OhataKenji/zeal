@@ -3,10 +3,9 @@
   import { CaretDown, CaretUp } from "phosphor-svelte";
   import type {
     BazelCommand,
-    ConfiguredTarget,
-    TargetActions,
     TargetDetail,
     TargetIndex,
+    TargetPhaseData,
     TargetTab,
   } from "./types";
   import { displayLabel, displayPath, relations, shortOutputPath } from "./model";
@@ -17,10 +16,8 @@
   let {
     index,
     detail,
-    configured,
-    configuredError,
-    actions,
-    actionsError,
+    phaseData,
+    phaseError,
     tab,
     flags,
     wsRoot,
@@ -34,10 +31,8 @@
   }: {
     index: TargetIndex;
     detail: TargetDetail;
-    configured: ConfiguredTarget | null;
-    configuredError: string | null;
-    actions: TargetActions | null;
-    actionsError: string | null;
+    phaseData: TargetPhaseData | null;
+    phaseError: string | null;
     tab: TargetTab;
     flags: string;
     wsRoot: string;
@@ -50,6 +45,12 @@
     onapply: (flags: string) => void;
   } = $props();
   const rel = $derived(relations(detail));
+  const configured = $derived(
+    phaseData && "configured" in phaseData ? phaseData.configured : null,
+  );
+  const actions = $derived(
+    phaseData && "actions" in phaseData ? phaseData.actions : null,
+  );
   const customFlags = $derived(flags.trim() !== "");
   const tabs = [
     { id: "definition" as const, label: "Definition" },
@@ -253,8 +254,8 @@
       >
     {/each}
   </div>
-  {#if tab === "definition"}
-    <div id="target-panel-definition" role="tabpanel" aria-labelledby="target-tab-definition">
+  <div id="target-panel-{tab}" role="tabpanel" aria-labelledby="target-tab-{tab}">
+    {#if tab === "definition"}
       <h2 class="attributes-head">Attributes</h2>
       <dl class="relations">
         {#each rel.attributes as attribute (attribute.name)}
@@ -280,109 +281,104 @@
           )}
         </dd>
       </dl>
-    </div>
-  {:else if tab === "configured"}
-    <div id="target-panel-configured" role="tabpanel" aria-labelledby="target-tab-configured">
+    {:else}
       {@render flagsBar()}
-      {#if configuredError}
-        <p class="dim">Could not load configuration: {configuredError}</p>
-      {:else if configured === null}
-        <p class="dim">Loading configuration…</p>
-      {:else}
-        <section class="configured-section">
-          <h2 class="configured-head">Config</h2>
-          {#if configured.configuration}
-            <div class="configured-config mono">
-              <span>{configured.configuration.mnemonic}</span>
-              <span class="dim">·</span>
-              <button
-                type="button"
-                class="link mono"
-                title={`Copy configuration hash ${configured.configuration.checksum}`}
-                onclick={() =>
-                  copy("config", configured?.configuration?.checksum ?? "")}
-              >
-                {configured.configuration.checksum.slice(0, 12)}{#if copyNote?.key === "config"}<span
-                    class="copied-tag" class:copied-failed={!copyNote.ok}
-                    >{copyNote.ok ? "Copied" : "Copy failed"}</span
-                  >{/if}
-              </button>
-            </div>
-          {:else}
-            <p class="dim">No configuration</p>
-          {/if}
-        </section>
-        <section class="configured-section">
-          <h2 class="configured-head">
-            Resolved Outputs ({configured.outputs.paths.length}{configured.outputs.truncated
-              ? "+"
-              : ""})
-          </h2>
-          {#if configured.outputs.paths.length === 0}
-            <p class="dim">None</p>
-          {:else}
-            <div class="configured-rows">
-              {#each configured.outputs.paths as path}
-                <div class="configured-row">
-                  <span class="configured-path mono" title={path}
-                    >{shortOutputPath(path)}</span
-                  >
-                  <button
-                    type="button"
-                    class="button button-ghost configured-copy"
-                    onclick={() => copy(`out:${path}`, path)}
-                    >{copyNote?.key === `out:${path}`
-                      ? copyNote.ok
-                        ? "Copied"
-                        : "Copy failed"
-                      : "Copy"}</button
-                  >
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </section>
-        <section class="configured-section">
-          <h2 class="configured-head">
-            Direct deps &amp; transitions ({configured.deps.length}{configured.depsTruncated
-              ? "+"
-              : ""})
-          </h2>
-          {#if configured.deps.length === 0}
-            <p class="dim">None</p>
-          {:else}
-            <div class="configured-rows">
-              {#each configured.deps as dep}
-                <div class="configured-row">
-                  {#if targets.has(dep.label)}
+      {#if tab === "configured"}
+        {#if phaseError}
+          <p class="dim">Could not load configuration: {phaseError}</p>
+        {:else if configured === null}
+          <p class="dim">Loading configuration…</p>
+        {:else}
+          <section class="configured-section">
+            <h2 class="configured-head">Config</h2>
+            {#if configured.configuration}
+              <div class="configured-config mono">
+                <span>{configured.configuration.mnemonic}</span>
+                <span class="dim">·</span>
+                <button
+                  type="button"
+                  class="link mono"
+                  title={`Copy configuration hash ${configured.configuration.checksum}`}
+                  onclick={() =>
+                    copy("config", configured?.configuration?.checksum ?? "")}
+                >
+                  {configured.configuration.checksum.slice(0, 12)}{#if copyNote?.key === "config"}<span
+                      class="copied-tag" class:copied-failed={!copyNote.ok}
+                      >{copyNote.ok ? "Copied" : "Copy failed"}</span
+                    >{/if}
+                </button>
+              </div>
+            {:else}
+              <p class="dim">No configuration</p>
+            {/if}
+          </section>
+          <section class="configured-section">
+            <h2 class="configured-head">
+              Resolved Outputs ({configured.outputs.paths.length}{configured.outputs.truncated
+                ? "+"
+                : ""})
+            </h2>
+            {#if configured.outputs.paths.length === 0}
+              <p class="dim">None</p>
+            {:else}
+              <div class="configured-rows">
+                {#each configured.outputs.paths as path}
+                  <div class="configured-row">
+                    <span class="configured-path mono" title={path}
+                      >{shortOutputPath(path)}</span
+                    >
                     <button
                       type="button"
-                      class="link configured-dep mono"
-                      title={dep.label}
-                      onclick={() => onselect(dep.label)}>{dep.label}</button
+                      class="button button-ghost configured-copy"
+                      onclick={() => copy(`out:${path}`, path)}
+                      >{copyNote?.key === `out:${path}`
+                        ? copyNote.ok
+                          ? "Copied"
+                          : "Copy failed"
+                        : "Copy"}</button
                     >
-                  {:else}
-                    <span class="configured-dep configured-dep-static mono" title={dep.label}
-                      >{dep.label}</span
-                    >
-                  {/if}
-                  {#if dep.transition}
-                    <span class="badge dep-transition" title={dep.transition}
-                      >{dep.transition}</span
-                    >
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </section>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </section>
+          <section class="configured-section">
+            <h2 class="configured-head">
+              Direct deps &amp; transitions ({configured.deps.length}{configured.depsTruncated
+                ? "+"
+                : ""})
+            </h2>
+            {#if configured.deps.length === 0}
+              <p class="dim">None</p>
+            {:else}
+              <div class="configured-rows">
+                {#each configured.deps as dep}
+                  <div class="configured-row">
+                    {#if targets.has(dep.label)}
+                      <button
+                        type="button"
+                        class="link configured-dep mono"
+                        title={dep.label}
+                        onclick={() => onselect(dep.label)}>{dep.label}</button
+                      >
+                    {:else}
+                      <span class="configured-dep configured-dep-static mono" title={dep.label}
+                        >{dep.label}</span
+                      >
+                    {/if}
+                    {#if dep.transition}
+                      <span class="badge dep-transition" title={dep.transition}
+                        >{dep.transition}</span
+                      >
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </section>
+        {/if}
+      {:else}
+        <ActionsSection actions={actions} error={phaseError} showHeading={false} />
       {/if}
-    </div>
-  {:else}
-    <div id="target-panel-actions" role="tabpanel" aria-labelledby="target-tab-actions">
-      {@render flagsBar()}
-      {#key target.label}
-        <ActionsSection actions={actions} error={actionsError} showHeading={false} />
-      {/key}
-    </div>
-  {/if}
+    {/if}
+  </div>

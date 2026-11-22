@@ -12,12 +12,13 @@ keep their state in their views.
 - Starts capture content and workspace-open identity. A target/package change
   invalidates the captured content; explicit-open intent blocks saved-workspace
   restoration even after failure.
-- Target reads run detail first, then only the active inspector phase
-  (configured or actions) under the workspace's applied build flags; the
-  Definition tab stays static. Tab and flag changes replace the phase readers,
-  so stale replies cannot land. Other workspaces do not wait. History
-  notifications coalesce into one follow-up. Saved detail/profile reads remain
-  independent.
+- Target reads have two lifetimes: static detail once per selection, then one
+  phase reader for the active inspector tab (configured or actions) under the
+  workspace's applied build flags; Definition issues no phase read. A single
+  `get_target_phase` command carries the phase and branches to the matching
+  Bazel read natively. Tab and flag changes replace the phase reader, so stale
+  replies cannot land. Other workspaces do not wait. History notifications
+  coalesce into one follow-up. Saved detail/profile reads remain independent.
 - Query input changes clear results; execution is explicit.
 
 See [tests](../tests) for behavior and [development](../docs/development.md) for checks.

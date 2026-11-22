@@ -114,58 +114,30 @@ async fn get_target_detail(
     }
 }
 
-/// The selected target's configuration, outputs, and dependency edges, all
-/// resolved by `bazel cquery`/`config` under the applied build flags.
+/// One inspector phase read (configured or actions) for `label` in
+/// `workspace`, resolved under the applied build flags.
 #[tauri::command]
-#[tracing::instrument(
-    target = "zeal::operations",
-    name = "target.configured.request",
-    skip_all
-)]
-async fn get_configured_target(
+#[tracing::instrument(target = "zeal::operations", name = "target.phase.request", skip_all)]
+async fn get_target_phase(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
     flags: String,
-) -> Result<ingest::ConfiguredTarget, String> {
+    phase: ingest::TargetPhase,
+) -> Result<ingest::TargetPhaseData, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::configured_target(app, core, &workspace, &label, &flags)
+        ingest::target_phase(app, core, &workspace, &label, &flags, phase)
     })
     .await
     {
         Ok(result) => result,
         Err(_) => {
             emit_core.emit(&emit_app);
-            Err("configured target worker failed".to_string())
-        }
-    }
-}
-
-#[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.actions.request", skip_all)]
-async fn get_target_actions(
-    app: AppHandle,
-    core: State<'_, Arc<Core>>,
-    workspace: String,
-    label: String,
-    flags: String,
-) -> Result<actions::TargetActions, String> {
-    let core = core.inner().clone();
-    let emit_core = core.clone();
-    let emit_app = app.clone();
-    match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_actions(app, core, &workspace, &label, &flags)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            emit_core.emit(&emit_app);
-            Err("target actions worker failed".to_string())
+            Err("target phase worker failed".to_string())
         }
     }
 }
@@ -524,8 +496,7 @@ pub fn run() {
             get_modules,
             explain_module,
             get_target_detail,
-            get_configured_target,
-            get_target_actions,
+            get_target_phase,
             read_console,
             write_console,
             resize_console,

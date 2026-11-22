@@ -4,9 +4,9 @@ import type {
   ConfiguredTarget,
   Target,
   TargetAction,
-  TargetActions,
   TargetDetail,
   TargetIndex,
+  TargetPhaseData,
   TargetTab,
 } from "../src/lib/types.ts";
 import { splitLabel } from "../src/lib/model.ts";
@@ -71,10 +71,8 @@ test("TargetView renders target details", async (t) => {
   const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
   interface ViewOptions {
-    actions?: TargetActions | null;
-    actionsError?: string | null;
-    configured?: ConfiguredTarget | null;
-    configuredError?: string | null;
+    phaseData?: TargetPhaseData | null;
+    phaseError?: string | null;
     tab?: TargetTab;
     flags?: string;
     target?: Target;
@@ -87,10 +85,8 @@ test("TargetView renders target details", async (t) => {
       props: {
         index: options.index ?? INDEX,
         detail: options.detail ?? { ...DETAIL, target: options.target ?? PARSER },
-        configured: options.configured ?? null,
-        configuredError: options.configuredError ?? null,
-        actions: options.actions ?? null,
-        actionsError: options.actionsError ?? null,
+        phaseData: options.phaseData ?? null,
+        phaseError: options.phaseError ?? null,
         tab: options.tab ?? "definition",
         flags: options.flags ?? "",
         wsRoot: "/ws",
@@ -128,7 +124,10 @@ test("TargetView renders target details", async (t) => {
     assert.match(configured, /id="target-tab-configured"[^>]*aria-selected="true"/);
     assert.match(configured, /Loading configuration…/);
 
-    const actions = view({ tab: "actions", actions: { actions: [], truncated: false } });
+    const actions = view({
+      tab: "actions",
+      phaseData: { actions: { actions: [], truncated: false } },
+    });
     assert.match(actions, /id="target-tab-actions"[^>]*aria-selected="true"/);
     assert.match(actions, />None</);
     assert.doesNotMatch(actions, />Attributes</);
@@ -175,7 +174,7 @@ test("TargetView renders target details", async (t) => {
   });
 
   await t.test("configured shows mnemonic, hash, outputs, and deps", () => {
-    const html = view({ tab: "configured", configured: CONFIGURED });
+    const html = view({ tab: "configured", phaseData: { configured: CONFIGURED } });
     assert.match(html, /k8-fastbuild/);
     assert.ok(html.includes("0123456789ab"));
     assert.match(html, /title="Copy configuration hash 0123456789abcdef0123"/);
@@ -200,16 +199,18 @@ test("TargetView renders target details", async (t) => {
   await t.test("configured loading, error, and empty states", () => {
     assert.match(view({ tab: "configured" }), /Loading configuration…/);
     assert.match(
-      view({ tab: "configured", configuredError: "cquery failed" }),
+      view({ tab: "configured", phaseError: "cquery failed" }),
       /Could not load configuration: cquery failed/,
     );
     const empty = view({
       tab: "configured",
-      configured: {
-        configuration: null,
-        outputs: { paths: [], truncated: false },
-        deps: [],
-        depsTruncated: false,
+      phaseData: {
+        configured: {
+          configuration: null,
+          outputs: { paths: [], truncated: false },
+          deps: [],
+          depsTruncated: false,
+        },
       },
     });
     assert.match(empty, /No configuration/);
@@ -220,19 +221,21 @@ test("TargetView renders target details", async (t) => {
   await t.test("action summaries pair mnemonic with the short output path", () => {
     const html = view({
       tab: "actions",
-      actions: {
-        actions: [
-          makeAction({
-            output: "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
-            mnemonic: "Javac",
-          }),
-          makeAction({
-            output: "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
-            mnemonic: "SourceJar",
-            owner: "//tools:gen",
-          }),
-        ],
-        truncated: false,
+      phaseData: {
+        actions: {
+          actions: [
+            makeAction({
+              output: "bazel-out/k8-fastbuild/bin/app/lib/libparser.jar",
+              mnemonic: "Javac",
+            }),
+            makeAction({
+              output: "bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar",
+              mnemonic: "SourceJar",
+              owner: "//tools:gen",
+            }),
+          ],
+          truncated: false,
+        },
       },
     });
     assert.deepEqual(actionSummaries(html), [
@@ -251,20 +254,22 @@ test("TargetView renders target details", async (t) => {
     const long = `bazel-out/k8-fastbuild/bin/app/lib/${"x".repeat(80)}.jar`;
     const html = view({
       tab: "actions",
-      actions: {
-        actions: [
-          makeAction({
-            output: long,
-            outputs: [long, `${long}.src`, `${long}.tests`],
-            configuration: {
-              mnemonic: "Javac",
-              platformName: "@local_config_platform//:host",
-              checksum: "abc123",
-              isTool: true,
-            },
-          }),
-        ],
-        truncated: false,
+      phaseData: {
+        actions: {
+          actions: [
+            makeAction({
+              output: long,
+              outputs: [long, `${long}.src`, `${long}.tests`],
+              configuration: {
+                mnemonic: "Javac",
+                platformName: "@local_config_platform//:host",
+                checksum: "abc123",
+                isTool: true,
+              },
+            }),
+          ],
+          truncated: false,
+        },
       },
     });
     assert.match(html, /<span class="badge action-exec">exec<\/span>/);
@@ -274,9 +279,12 @@ test("TargetView renders target details", async (t) => {
 
   await t.test("actions loading, empty, and error states", () => {
     assert.match(view({ tab: "actions" }), /Loading actions…/);
-    assert.match(view({ tab: "actions", actions: { actions: [], truncated: false } }), />None</);
     assert.match(
-      view({ tab: "actions", actionsError: "aquery failed" }),
+      view({ tab: "actions", phaseData: { actions: { actions: [], truncated: false } } }),
+      />None</,
+    );
+    assert.match(
+      view({ tab: "actions", phaseError: "aquery failed" }),
       /Could not load actions: aquery failed/,
     );
   });
@@ -292,7 +300,7 @@ test("TargetView renders target details", async (t) => {
       );
       const truncated = view({
         tab: "actions",
-        actions: { actions: rows, truncated: true },
+        phaseData: { actions: { actions: rows, truncated: true } },
       });
       assert.equal(actionSummaries(truncated).length, 100);
       assert.match(truncated, /Showing first 100 actions; more actions not shown\./);
@@ -302,7 +310,7 @@ test("TargetView renders target details", async (t) => {
 
       const exact = view({
         tab: "actions",
-        actions: { actions: rows, truncated: false },
+        phaseData: { actions: { actions: rows, truncated: false } },
       });
       assert.equal(actionSummaries(exact).length, 100);
       assert.doesNotMatch(exact, /Showing first 100 actions/);
@@ -337,7 +345,7 @@ test("TargetView renders target details", async (t) => {
   });
 
   await t.test("attributes render without the label filter and keep Show more", () => {
-    const html = view({ actions: { actions: [], truncated: false } });
+    const html = view({ phaseData: { actions: { actions: [], truncated: false } } });
     assert.ok(!html.includes("relation-filter"));
     assert.ok(!html.includes("Filter labels"));
     assert.ok(!html.includes("No matching"));
@@ -368,10 +376,8 @@ test("TargetView renders target details", async (t) => {
       props: {
         index: { ...INDEX, targets: [...INDEX.targets, ...deps] },
         detail: MANY,
-        configured: null,
-        configuredError: null,
-        actions: { actions: [], truncated: false },
-        actionsError: null,
+        phaseData: { actions: { actions: [], truncated: false } },
+        phaseError: null,
         tab: "definition",
         flags: "",
         wsRoot: "/ws",

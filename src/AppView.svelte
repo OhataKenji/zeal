@@ -502,10 +502,8 @@
               <TargetView
                 index={snap}
                 detail={view.targetDetail}
-                configured={view.targetConfigured}
-                configuredError={view.targetConfiguredError}
-                actions={view.targetActions}
-                actionsError={view.targetActionsError}
+                phaseData={view.targetPhase}
+                phaseError={view.targetPhaseError}
                 tab={view.targetTab}
                 flags={view.targetFlags}
                 wsRoot={st.workspace}

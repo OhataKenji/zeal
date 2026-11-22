@@ -4,7 +4,6 @@ import { targetError } from "./target.ts";
 import type {
   AppState,
   BazelCommand,
-  ConfiguredTarget,
   ExplorerSelection,
   InvocationDetail,
   InvocationRecord,
@@ -12,10 +11,10 @@ import type {
   OwnedInvocation,
   Profile,
   Section,
-  TargetActions,
   TargetDetail,
   TargetIndex,
   TargetLoad,
+  TargetPhaseData,
   TargetScope,
   TargetTab,
   WorkspaceInfo,
@@ -38,10 +37,9 @@ interface TargetSelection {
   selection: ExplorerSelection;
   /** Static detail: fetched once per selection, independent of tab/flags. */
   detail: Reader<TargetDetail>;
-  /** Configured-phase data; replaced whenever its tab (re)activates. */
-  configured: Reader<ConfiguredTarget>;
-  /** Actions-phase data; replaced whenever its tab (re)activates. */
-  actions: Reader<TargetActions>;
+  /** The active non-Definition phase's tagged result; replaced whenever its
+   * tab (re)activates or the applied flags change. */
+  phase: Reader<TargetPhaseData>;
 }
 
 interface Workspace {
@@ -86,8 +84,7 @@ function targetSelection(selection: ExplorerSelection = null): TargetSelection {
   return {
     selection,
     detail: reader(),
-    configured: reader(),
-    actions: reader(),
+    phase: reader(),
   };
 }
 
@@ -205,10 +202,8 @@ function sessionView(state: SessionState) {
     targetDetailError: target?.detail.error ?? null,
     targetTab: ws?.targetTab ?? "definition",
     targetFlags: ws?.targetFlags ?? "",
-    targetConfigured: target?.configured.value ?? null,
-    targetConfiguredError: target?.configured.error ?? null,
-    targetActions: target?.actions.value ?? null,
-    targetActionsError: target?.actions.error ?? null,
+    targetPhase: target?.phase.value ?? null,
+    targetPhaseError: target?.phase.error ?? null,
     starting: state.start !== null,
     error: state.error,
     invocations: history,
@@ -284,30 +279,17 @@ export function createSession(
     args: { workspace: string; label: string },
     current: () => boolean,
   ) {
-    if (state.page !== "targets" || ws.targetTab === "definition") return;
-    const flags = ws.targetFlags;
-    if (ws.targetTab === "configured") {
-      const phase = target.configured;
-      if (phase.value !== null || phase.error !== null) return;
-      await read(
-        phase,
-        () =>
-          transport.invoke<ConfiguredTarget>(COMMANDS.getConfiguredTarget, {
-            ...args,
-            flags,
-          }),
-        current,
-      );
-      return;
-    }
-    const phase = target.actions;
-    if (phase.value !== null || phase.error !== null) return;
+    const phase = ws.targetTab;
+    if (state.page !== "targets" || phase === "definition") return;
+    const slot = target.phase;
+    if (slot.value !== null || slot.error !== null) return;
     await read(
-      phase,
+      slot,
       () =>
-        transport.invoke<TargetActions>(COMMANDS.getTargetActions, {
+        transport.invoke<TargetPhaseData>(COMMANDS.getTargetPhase, {
           ...args,
-          flags,
+          phase,
+          flags: ws.targetFlags,
         }),
       current,
     );
@@ -680,9 +662,9 @@ export function createSession(
     if (page === "targets") void loadTarget();
   }
 
-  /** Replaces both phase readers; loadTarget reloads only the active one. */
+  /** Replaces the phase reader; loadTarget reloads only the active one. */
   function reloadTargetPhase(ws: Workspace) {
-    ws.target = { ...ws.target, configured: reader(), actions: reader() };
+    ws.target = { ...ws.target, phase: reader() };
     publish();
     void loadTarget();
   }
@@ -716,17 +698,15 @@ export function createSession(
       return;
     }
     const target = ws.target;
-    if (sameSelection(target.selection, selection)) {
-      // Reselecting kicks reads deferred while another page was showing;
-      // loadTarget no-ops on busy readers and loaded phases.
-      if (selection?.kind === "target" && target.detail.error !== null) {
-        ws.target = targetSelection(selection);
-      }
-      publish();
-      void loadTarget();
-      return;
+    // A new selection always replaces the target context; reselecting the
+    // same target only retries a failed detail read. Either way the shared
+    // tail publishes and lets loadTarget kick any deferred phase read.
+    if (
+      !sameSelection(target.selection, selection) ||
+      (selection?.kind === "target" && target.detail.error !== null)
+    ) {
+      ws.target = targetSelection(selection);
     }
-    ws.target = targetSelection(selection);
     publish();
     void loadTarget();
   }

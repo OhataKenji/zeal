@@ -15,6 +15,7 @@ import type {
   TargetActions,
   TargetDetail,
   TargetIndex,
+  TargetPhaseData,
   WorkspaceState,
 } from "../src/lib/types.ts";
 
@@ -108,6 +109,8 @@ const CONFIGURED: ConfiguredTarget = {
   depsTruncated: false,
 };
 const ACTIONS: TargetActions = { actions: [], truncated: false };
+const CONFIGURED_DATA: TargetPhaseData = { configured: CONFIGURED };
+const ACTIONS_DATA: TargetPhaseData = { actions: ACTIONS };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -197,6 +200,24 @@ function lastPendingRequest(h: ReturnType<typeof harness>, command: string) {
 
 function requestCount(h: ReturnType<typeof harness>, command: string) {
   return h.pending.filter((call) => call.command === command).length;
+}
+
+function phaseRequests(h: ReturnType<typeof harness>, phase: "configured" | "actions") {
+  return h.pending.filter(
+    (call) => call.command === "get_target_phase" && call.args?.phase === phase,
+  );
+}
+
+function pendingPhase(h: ReturnType<typeof harness>, phase: "configured" | "actions") {
+  const request = phaseRequests(h, phase)[0];
+  assert.ok(request, `No get_target_phase(${phase}) request is pending.`);
+  return request;
+}
+
+function lastPendingPhase(h: ReturnType<typeof harness>, phase: "configured" | "actions") {
+  const request = phaseRequests(h, phase).at(-1);
+  assert.ok(request, `No get_target_phase(${phase}) request is pending.`);
+  return request;
 }
 
 async function settle() {
@@ -633,8 +654,8 @@ test("scope change invalidates stale target results and readers name the workspa
   assert.equal(h.view.snapshot?.targets.length, 0);
   assert.equal(h.view.selection, null);
   assert.equal(h.view.targetDetail, null);
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
 });
 
 test("late history/detail/profile replies cannot populate another workspace", async () => {
@@ -1026,16 +1047,16 @@ test("rapid target selection queues the newest target without concurrent detail 
   first.reply.resolve(targetDetail("//app:first"));
   await settle();
   // The stale detail never launches phase reads for the old context.
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
   const latest = lastPendingRequest(h, "get_target_detail");
   assert.equal(latest.args?.label, "//app:first");
   latest.reply.resolve(targetDetail("//app:first"));
   await settle();
   // Definition is the default tab: the static detail alone is enough and no
   // configured/actions read runs until its tab activates.
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
   assert.equal(h.view.targetDetail?.target.label, "//app:first");
   assert.deepEqual(h.view.selection, { kind: "target", label: "//app:first" });
 });
@@ -1055,8 +1076,8 @@ test("a package selection issues no target reads and drops the in-flight detail"
   assert.equal(h.view.targetDetail, null);
   assert.equal(h.view.targetDetailError, null);
   assert.equal(requestCount(h, "get_target_detail"), 1);
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
 });
 
 test("definition loads only static detail; each tab reads only its own phase", async () => {
@@ -1069,31 +1090,31 @@ test("definition loads only static detail; each tab reads only its own phase", a
   await settle();
   assert.equal(h.view.targetDetail?.target.label, "//app:first");
   assert.equal(h.view.targetTab, "definition");
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
 
   // The Configured tab issues only its own read, carrying the applied flags.
   h.session.setTargetTab("configured");
   await settle();
-  const configured = pendingRequest(h, "get_configured_target");
+  const configured = pendingPhase(h, "configured");
   assert.equal(configured.args?.workspace, WS);
   assert.equal(configured.args?.label, "//app:first");
   assert.equal(configured.args?.flags, "");
-  configured.reply.resolve(CONFIGURED);
+  configured.reply.resolve(CONFIGURED_DATA);
   await settle();
-  assert.deepEqual(h.view.targetConfigured, CONFIGURED);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
+  assert.equal(phaseRequests(h, "actions").length, 0);
 
-  // The Actions tab issues only its own read; the configured value stays.
+  // The Actions tab replaces the phase reader and issues its own read.
   h.session.setTargetTab("actions");
   await settle();
-  const actions = pendingRequest(h, "get_target_actions");
+  const actions = pendingPhase(h, "actions");
   assert.equal(actions.args?.label, "//app:first");
   assert.equal(actions.args?.flags, "");
-  actions.reply.resolve(ACTIONS);
+  actions.reply.resolve(ACTIONS_DATA);
   await settle();
-  assert.deepEqual(h.view.targetActions, ACTIONS);
-  assert.equal(requestCount(h, "get_configured_target"), 1);
+  assert.deepEqual(h.view.targetPhase, ACTIONS_DATA);
+  assert.equal(phaseRequests(h, "configured").length, 1);
 });
 
 test("applyTargetFlags reloads the active phase, even for unchanged flags", async () => {
@@ -1106,28 +1127,28 @@ test("applyTargetFlags reloads the active phase, even for unchanged flags", asyn
   await settle();
   h.session.setTargetTab("actions");
   await settle();
-  pendingRequest(h, "get_target_actions").reply.resolve(ACTIONS);
+  pendingPhase(h, "actions").reply.resolve(ACTIONS_DATA);
   await settle();
-  assert.deepEqual(h.view.targetActions, ACTIONS);
+  assert.deepEqual(h.view.targetPhase, ACTIONS_DATA);
 
   // Re-applying the same flags still reloads the active phase.
   h.session.applyTargetFlags("");
   await settle();
-  const reloaded = lastPendingRequest(h, "get_target_actions");
+  const reloaded = lastPendingPhase(h, "actions");
   assert.equal(reloaded.args?.flags, "");
-  reloaded.reply.resolve(ACTIONS);
+  reloaded.reply.resolve(ACTIONS_DATA);
   await settle();
 
   // New flags reach the next read; the configured reader is untouched until
   // its tab activates.
   h.session.applyTargetFlags("--config=opt");
   await settle();
-  const flagged = lastPendingRequest(h, "get_target_actions");
+  const flagged = lastPendingPhase(h, "actions");
   assert.equal(flagged.args?.flags, "--config=opt");
-  flagged.reply.resolve(ACTIONS);
+  flagged.reply.resolve(ACTIONS_DATA);
   await settle();
   assert.equal(h.view.targetFlags, "--config=opt");
-  assert.equal(requestCount(h, "get_configured_target"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
 });
 
 test("flags stored on Definition reach the phase read when its tab opens", async () => {
@@ -1142,15 +1163,15 @@ test("flags stored on Definition reach the phase read when its tab opens", async
   h.session.applyTargetFlags("--config=opt");
   await settle();
   assert.equal(h.view.targetFlags, "--config=opt");
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
   h.session.setTargetTab("configured");
   await settle();
-  const configured = pendingRequest(h, "get_configured_target");
+  const configured = pendingPhase(h, "configured");
   assert.equal(configured.args?.flags, "--config=opt");
-  configured.reply.resolve(CONFIGURED);
+  configured.reply.resolve(CONFIGURED_DATA);
   await settle();
-  assert.deepEqual(h.view.targetConfigured, CONFIGURED);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 });
 
 test("tab and flags survive refresh and reselection but reset on workspace switch", async () => {
@@ -1163,11 +1184,11 @@ test("tab and flags survive refresh and reselection but reset on workspace switc
   await settle();
   h.session.setTargetTab("configured");
   await settle();
-  pendingRequest(h, "get_configured_target").reply.resolve(CONFIGURED);
+  pendingPhase(h, "configured").reply.resolve(CONFIGURED_DATA);
   await settle();
   h.session.applyTargetFlags("--config=opt");
   await settle();
-  lastPendingRequest(h, "get_configured_target").reply.resolve(CONFIGURED);
+  lastPendingPhase(h, "configured").reply.resolve(CONFIGURED_DATA);
   await settle();
   assert.equal(h.view.targetTab, "configured");
   assert.equal(h.view.targetFlags, "--config=opt");
@@ -1179,20 +1200,20 @@ test("tab and flags survive refresh and reselection but reset on workspace switc
   await settle();
   lastPendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
   await settle();
-  const refetched = lastPendingRequest(h, "get_configured_target");
+  const refetched = lastPendingPhase(h, "configured");
   assert.equal(refetched.args?.flags, "--config=opt");
-  refetched.reply.resolve(CONFIGURED);
+  refetched.reply.resolve(CONFIGURED_DATA);
   await settle();
   assert.equal(h.view.targetTab, "configured");
   assert.equal(h.view.targetFlags, "--config=opt");
 
   // Reselecting the same target preserves prefs without new reads.
   const details = requestCount(h, "get_target_detail");
-  const configuredReads = requestCount(h, "get_configured_target");
+  const configuredReads = phaseRequests(h, "configured").length;
   h.session.select({ kind: "target", label: "//app:first" });
   await settle();
   assert.equal(requestCount(h, "get_target_detail"), details);
-  assert.equal(requestCount(h, "get_configured_target"), configuredReads);
+  assert.equal(phaseRequests(h, "configured").length, configuredReads);
   assert.equal(h.view.targetTab, "configured");
   assert.equal(h.view.targetFlags, "--config=opt");
 
@@ -1220,29 +1241,31 @@ test("a stale phase reply after a tab or flag change is dropped", async () => {
   await settle();
   h.session.setTargetTab("configured");
   await settle();
-  const stale = pendingRequest(h, "get_configured_target");
+  const stale = pendingPhase(h, "configured");
   assert.equal(stale.args?.flags, "");
 
   // Switching tabs orphans the in-flight read; its reply cannot land.
   h.session.setTargetTab("actions");
   h.session.applyTargetFlags("--config=opt");
-  stale.reply.resolve(CONFIGURED);
+  stale.reply.resolve(CONFIGURED_DATA);
   await settle();
-  const actionsReq = lastPendingRequest(h, "get_target_actions");
+  // The stale configured reply never reached the shared phase slot; the
+  // actions read is still in flight.
+  assert.equal(h.view.targetPhase, null);
+  const actionsReq = lastPendingPhase(h, "actions");
   assert.equal(actionsReq.args?.flags, "--config=opt");
-  actionsReq.reply.resolve(ACTIONS);
+  actionsReq.reply.resolve(ACTIONS_DATA);
   await settle();
-  assert.equal(h.view.targetConfigured, null);
-  assert.deepEqual(h.view.targetActions, ACTIONS);
+  assert.deepEqual(h.view.targetPhase, ACTIONS_DATA);
 
   // Returning to Configured issues a fresh read under the applied flags.
   h.session.setTargetTab("configured");
   await settle();
-  const fresh = lastPendingRequest(h, "get_configured_target");
+  const fresh = lastPendingPhase(h, "configured");
   assert.equal(fresh.args?.flags, "--config=opt");
-  fresh.reply.resolve(CONFIGURED);
+  fresh.reply.resolve(CONFIGURED_DATA);
   await settle();
-  assert.deepEqual(h.view.targetConfigured, CONFIGURED);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 });
 
 test("reselecting a target resumes a phase read deferred on another page", async () => {
@@ -1261,17 +1284,17 @@ test("reselecting a target resumes a phase read deferred on another page", async
   h.session.showPage("query");
   detailReq.reply.resolve(targetDetail("//app:second"));
   await settle();
-  assert.equal(requestCount(h, "get_configured_target"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
 
   // Reselecting the same target kicks the deferred read with stored flags.
   h.session.select({ kind: "target", label: "//app:second" });
   await settle();
-  const configured = pendingRequest(h, "get_configured_target");
+  const configured = pendingPhase(h, "configured");
   assert.equal(configured.args?.label, "//app:second");
   assert.equal(configured.args?.flags, "--config=opt");
-  configured.reply.resolve(CONFIGURED);
+  configured.reply.resolve(CONFIGURED_DATA);
   await settle();
-  assert.deepEqual(h.view.targetConfigured, CONFIGURED);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 });
 
 test("a failed detail read blocks phase reads; reselecting retries it", async () => {
@@ -1285,8 +1308,8 @@ test("a failed detail read blocks phase reads; reselecting retries it", async ()
   assert.match(h.view.targetDetailError ?? "", /detail failed/);
   h.session.setTargetTab("configured");
   await settle();
-  assert.equal(requestCount(h, "get_configured_target"), 0);
-  assert.equal(requestCount(h, "get_target_actions"), 0);
+  assert.equal(phaseRequests(h, "configured").length, 0);
+  assert.equal(phaseRequests(h, "actions").length, 0);
   h.session.select({ kind: "target", label: "//app:first" });
   await settle();
   const retry = lastPendingRequest(h, "get_target_detail");
@@ -1295,10 +1318,10 @@ test("a failed detail read blocks phase reads; reselecting retries it", async ()
   assert.equal(h.view.targetDetail?.target.label, "//app:first");
   assert.equal(h.view.targetDetailError, null);
   // The tab preference survived the retry, so the configured read follows.
-  const configured = pendingRequest(h, "get_configured_target");
-  configured.reply.resolve(CONFIGURED);
+  const configured = pendingPhase(h, "configured");
+  configured.reply.resolve(CONFIGURED_DATA);
   await settle();
-  assert.deepEqual(h.view.targetConfigured, CONFIGURED);
+  assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 });
 
 test("history notifications coalesce and owned-state pushes do not refetch", async () => {
