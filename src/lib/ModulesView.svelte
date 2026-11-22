@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ArrowClockwise } from "phosphor-svelte";
   import Notice from "./Notice.svelte";
   import { filterModules, type ModuleDepth, type ModulesState } from "./modules";
 
@@ -60,8 +61,16 @@
         <div class="view-meta">Explore resolved Bzlmod dependencies and their selected versions.</div>
       </div>
       {#if snapshot}
-        <button type="button" class="button" {disabled} onclick={onload}>
-          {view.busy === "load" ? "Refreshing…" : "Refresh"}
+        <button
+          type="button"
+          class="button button-ghost icon-button"
+          aria-label="Refresh modules"
+          title="Refresh modules"
+          aria-busy={view.busy === "load"}
+          {disabled}
+          onclick={onload}
+        >
+          <ArrowClockwise size={14} aria-hidden="true" />
         </button>
       {/if}
     </header>
