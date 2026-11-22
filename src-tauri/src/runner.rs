@@ -9,8 +9,7 @@
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
 use crate::state::{
-    ActiveInvocation, Core, CoreState, DiagnosticTail, OwnedInvocation, ProcessDiagnostic,
-    now_millis,
+    ActiveInvocation, Core, CoreState, OwnedInvocation, ProcessDiagnostic, now_millis,
 };
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
@@ -33,7 +32,7 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// and its process slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
 /// Only the tail of a released invocation's output is retained for its
-/// diagnostic, bounded well under the console read chunk.
+/// diagnostic.
 const DIAGNOSTIC_TAIL: u64 = 16 * 1024;
 /// The diagnostic cache bound: the newest completions win.
 const DIAGNOSTICS_MAX: usize = 32;
@@ -175,10 +174,10 @@ pub fn start(
             log::warn!("Failed to capture terminal output: {error}");
         }
         let data = app.path().app_data_dir().ok();
-        if let Err(error) =
-            remember_diagnostic(&core, data.as_deref(), &id, retain_wait_result(&waited))
-        {
-            log::warn!("Failed to retain invocation diagnostics: {error}");
+        match remember_diagnostic(&core, data.as_deref(), &id, retain_wait_result(&waited)) {
+            Ok(true) => crate::emit_invocations_changed(&app),
+            Ok(false) => {}
+            Err(error) => log::warn!("Failed to retain invocation diagnostics: {error}"),
         }
     });
     Ok(result)
@@ -190,24 +189,26 @@ fn retain_wait_result(result: &io::Result<i32>) -> Option<i32> {
     result.as_ref().ok().copied().filter(|code| *code >= 0)
 }
 
-/// Retain a finished terminal invocation's metadata and output tail when no
-/// readable build-event record exists for it. Saved history supersedes the
-/// diagnostic, so a matching record skips retention; a store failure never
-/// loses the terminal facts. The entry's metadata and output handle are
-/// cloned under one lock hold; all I/O runs after it is dropped.
+/// Retain a finished terminal invocation's metadata and bounded output tail
+/// when no readable build-event record exists for it. Saved history
+/// supersedes the diagnostic, so a matching record owned by the same
+/// workspace skips retention; a store failure never loses the terminal
+/// facts. The entry's metadata and output handle are cloned under one lock
+/// hold; all I/O runs after it is dropped. Returns true only when a
+/// diagnostic was inserted.
 fn remember_diagnostic(
     core: &Core,
     data: Option<&Path>,
     id: &str,
     process_exit_code: Option<i32>,
-) -> io::Result<()> {
-    let (diagnostic, file) = {
+) -> io::Result<bool> {
+    let (mut diagnostic, file) = {
         let st = core.state.lock().expect("application state lock poisoned");
         let Some(invocation) = st.invocations.get(id) else {
-            return Ok(());
+            return Ok(false);
         };
         let Some(console) = invocation.console.as_ref() else {
-            return Ok(());
+            return Ok(false);
         };
         (
             ProcessDiagnostic {
@@ -217,6 +218,7 @@ fn remember_diagnostic(
                 pattern: invocation.pattern.clone(),
                 started_at: invocation.started_at,
                 process_exit_code,
+                output: String::new(),
             },
             console.try_clone()?,
         )
@@ -226,7 +228,7 @@ fn remember_diagnostic(
             // Only this workspace's own record supersedes the diagnostic; the
             // repo-scoped read can surface a sibling workspace's record.
             Ok(record) if record.workspace.as_deref() == Some(diagnostic.workspace.as_str()) => {
-                return Ok(());
+                return Ok(false);
             }
             Ok(_) => {}
             Err(error) if error.kind == crate::store::ErrorKind::Missing => {}
@@ -235,18 +237,13 @@ fn remember_diagnostic(
     }
     let length = file.metadata()?.len();
     let start = length.saturating_sub(DIAGNOSTIC_TAIL);
-    let mut output = vec![0; (length - start) as usize];
-    file.read_exact_at(&mut output, start)?;
+    let mut tail = vec![0; (length - start) as usize];
+    file.read_exact_at(&mut tail, start)?;
+    diagnostic.output = String::from_utf8_lossy(&tail).into_owned();
     let mut st = core.state.lock().expect("application state lock poisoned");
-    st.diagnostics.push_front((
-        diagnostic,
-        DiagnosticTail {
-            start,
-            data: output,
-        },
-    ));
+    st.diagnostics.push_front(diagnostic);
     st.diagnostics.truncate(DIAGNOSTICS_MAX);
-    Ok(())
+    Ok(true)
 }
 
 /// A capture failure must stop the still-owned child before its output blocks.
@@ -767,17 +764,14 @@ mod tests {
     }
 
     /// A terminal completion without a readable build-event record keeps a
-    /// bounded diagnostic: its metadata reaches app-state and its captured
-    /// tail stays readable after release, while another invocation stays
-    /// owned and foreign reads stay rejected.
+    /// bounded diagnostic: the history accessor reports its metadata and
+    /// output tail for its own workspace only, even without a database.
     #[test]
     fn failed_process_releases_entry_and_retains_a_readable_diagnostic() {
         let temp = LogDir::new();
         let ws = temp.0.join("workspace");
         fs::create_dir(&ws).unwrap();
         let ws = ws.canonicalize().unwrap();
-        let data = temp.0.join("data");
-        fs::create_dir(&data).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let core = Arc::new(Core::new());
         let mut command = Command::new("sh");
@@ -795,64 +789,19 @@ mod tests {
                 id: &id,
             },
         );
-        hold_process(&core, &ws, "other", Some(i32::MAX));
-        let code = complete_gui_run(
-            child,
-            capture,
-            core.clone(),
-            &ws,
-            id.clone(),
-            None,
-            Some(data.clone()),
-        );
+        let code = complete_gui_run(child, capture, core.clone(), &ws, id.clone(), None, None);
         assert_eq!(code, 9);
-        assert_released_diagnostic(&core, &data, &ws, &id);
-    }
-
-    /// A released failure without a readable record: nothing was saved, the
-    /// entry left the map while another invocation stayed owned, app-state
-    /// reports metadata only, and the retained tail answers console reads.
-    fn assert_released_diagnostic(core: &Core, data: &Path, ws: &Path, id: &str) {
-        assert_eq!(
-            store::read_record(data, ws, id).unwrap_err().kind,
-            store::ErrorKind::Missing
+        let st = core.state.lock().unwrap();
+        let diagnostics = st.diagnostics_for(&ws);
+        let [d] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic")
+        };
+        assert_eq!((&d.id, d.process_exit_code), (&id, Some(9)));
+        assert!(
+            d.output
+                .contains("Another command is running. Exiting immediately.")
         );
-        let dto = serde_json::to_value(core.dto()).unwrap();
-        assert_other_invocation_owned(&dto, id);
-        assert_diagnostic_reported(&dto, ws, id);
-        let text = console_text(core, ws, id);
-        assert!(text.contains("Another command is running. Exiting immediately."));
-    }
-
-    /// The failed run left the live list while the other invocation stayed
-    /// owned.
-    fn assert_other_invocation_owned(dto: &serde_json::Value, id: &str) {
-        let active: Vec<&str> = dto["invocations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|invocation| invocation["id"].as_str().unwrap())
-            .collect();
-        assert!(!active.contains(&id));
-        assert!(active.contains(&"other"));
-    }
-
-    /// App-state reports the diagnostic's metadata and no output bytes.
-    fn assert_diagnostic_reported(dto: &serde_json::Value, ws: &Path, id: &str) {
-        let reported = dto["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|diagnostic| diagnostic["id"] == id)
-            .expect("app-state must report the diagnostic");
-        assert_eq!(
-            reported["workspace"].as_str().unwrap(),
-            ws.to_string_lossy()
-        );
-        assert_eq!(reported["cmd"], "build");
-        assert_eq!(reported["pattern"], "//:b");
-        assert_eq!(reported["processExitCode"], 9);
-        assert!(reported.get("data").is_none() && reported.get("output").is_none());
+        assert!(st.diagnostics_for(&ws.with_file_name("other")).is_empty());
     }
 
     /// A stale worker can never affect another invocation: release removes
@@ -1281,19 +1230,24 @@ mod tests {
 
     /// The lock contender left the invocation map while the owner kept its
     /// entry, and only the contender gained a diagnostic.
-    fn assert_contender_diagnostic(core: &Core, owner_id: &str, contender_id: &str) {
+    fn assert_contender_diagnostic(core: &Core, ws: &Path, owner_id: &str, contender_id: &str) {
         let st = core.state.lock().unwrap();
         assert!(
             st.invocations.contains_key(owner_id),
             "owner lost its entry"
         );
         assert!(!st.invocations.contains_key(contender_id));
-        let (diagnostic, _) = st
-            .diagnostics
+        let diagnostics = st.diagnostics_for(ws);
+        let diagnostic = diagnostics
             .iter()
-            .find(|(diagnostic, _)| diagnostic.id == contender_id)
+            .find(|diagnostic| diagnostic.id == contender_id)
             .expect("rejected contender must retain a diagnostic");
         assert_eq!(diagnostic.process_exit_code, Some(9));
+        assert!(
+            diagnostic.output.contains("Another command"),
+            "diagnostic must keep the lock rejection: {}",
+            diagnostic.output
+        );
     }
 
     /// A contender rejected by the output-base lock exits without a build
@@ -1325,24 +1279,18 @@ mod tests {
             .expect("contender must be rejected promptly")
             .unwrap();
         assert_eq!(
-            contender_code,
-            9,
-            "{}",
-            console_text(&core, &fixture.ws, &contender_id)
+            contender_code, 9,
+            "contender did not exit with Bazel's lock refusal"
         );
-        // The rejection left no record; its tail stays readable after release.
+        // The rejection left no record; its bounded output rides on the
+        // diagnostic instead of a console.
         assert_eq!(
             store::read_record(&fixture.data, &fixture.ws, &contender_id)
                 .unwrap_err()
                 .kind,
             store::ErrorKind::Missing
         );
-        assert_contender_diagnostic(&core, &owner_id, &contender_id);
-        let text = console_text(&core, &fixture.ws, &contender_id);
-        assert!(
-            text.contains("Another command"),
-            "diagnostic must keep the lock rejection: {text}"
-        );
+        assert_contender_diagnostic(&core, &fixture.ws, &owner_id, &contender_id);
         // Releasing the gate lets the owner finish with its own record; the
         // owner's matching record means it never gains a diagnostic.
         fs::write(&gate, "").unwrap();
@@ -1354,9 +1302,9 @@ mod tests {
         assert_gui_record(&fixture, "build", "//:blocker", &owner_id);
         let st = core.state.lock().unwrap();
         assert!(
-            !st.diagnostics
+            !st.diagnostics_for(&fixture.ws)
                 .iter()
-                .any(|(diagnostic, _)| diagnostic.id == owner_id),
+                .any(|diagnostic| diagnostic.id == owner_id),
             "a recorded invocation must not keep a diagnostic"
         );
         drop(st);

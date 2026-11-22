@@ -10,7 +10,6 @@
     summarizeRunners,
   } from "./invocation";
   import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
-  import DiagnosticLog from "./invocation/DiagnosticLog.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
   import Notice from "./Notice.svelte";
   import ProfileView from "./ProfileView.svelte";
@@ -66,9 +65,7 @@
       No build event record. Bazel process exit code: {diagnostic.processExitCode ??
         "unknown"}.
     </Notice>
-    {#key `${diagnostic.workspace}:${diagnostic.id}`}
-      <DiagnosticLog {diagnostic} />
-    {/key}
+    <LogPanel section={{ status: "ok", data: diagnostic.output }} loading={false} />
   </div>
 {:else if shown}
   <div class="invocation-page">

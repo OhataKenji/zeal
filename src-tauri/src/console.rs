@@ -3,7 +3,6 @@ use crate::state::Core;
 use serde::Serialize;
 use std::io;
 use std::os::unix::fs::FileExt;
-use std::path::Path;
 
 #[derive(Debug, Serialize)]
 pub struct Output {
@@ -20,54 +19,39 @@ fn unavailable() -> io::Error {
 
 #[tracing::instrument(target = "zeal::operations", name = "console.read", skip_all)]
 pub fn read(core: &Core, ws: &str, id: &str, offset: u64) -> io::Result<Output> {
-    let state = core.state.lock().expect("application state lock poisoned");
-    let ws = state
-        .workspace_path(ws)
-        .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
-    if let Some(invocation) = state.invocations.get(id) {
+    let file = {
+        let state = core.state.lock().expect("application state lock poisoned");
+        let ws = state
+            .workspace_path(ws)
+            .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
+        let Some(invocation) = state.invocations.get(id) else {
+            return Err(unavailable());
+        };
         if invocation.workspace != ws {
             return Err(unavailable());
         }
         let Some(console) = invocation.console.as_ref() else {
             return Err(unavailable());
         };
-        let file = console.try_clone()?;
-        drop(state);
-        let length = file.metadata()?.len();
-        if offset > length {
-            return Err(io::Error::other("invalid terminal output offset"));
-        }
-        let mut bytes = vec![0; (length - offset).min(64 * 1024) as usize];
-        file.read_exact_at(&mut bytes, offset)?;
-        let offset = offset + bytes.len() as u64;
-        return Ok(Output {
-            data: bytes,
-            offset,
-        });
-    }
-    // A released terminal completion keeps its bounded output tail readable
-    // while no live entry or write path remains. Offsets still name the
-    // original stream: bytes before the retained window are gone.
-    let Some((_, tail)) = state.diagnostics.iter().find(|(diagnostic, _)| {
-        diagnostic.id == id && Path::new(&diagnostic.workspace) == ws.as_path()
-    }) else {
-        return Err(unavailable());
+        console.try_clone()?
     };
-    let end = tail.start + tail.data.len() as u64;
-    if offset > end {
+    let length = file.metadata()?.len();
+    if offset > length {
         return Err(io::Error::other("invalid terminal output offset"));
     }
-    let start = offset.saturating_sub(tail.start) as usize;
+    let mut bytes = vec![0; (length - offset).min(64 * 1024) as usize];
+    file.read_exact_at(&mut bytes, offset)?;
+    let offset = offset + bytes.len() as u64;
     Ok(Output {
-        data: tail.data[start..].to_vec(),
-        offset: end,
+        data: bytes,
+        offset,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ActiveInvocation, DiagnosticTail, OwnedInvocation, ProcessDiagnostic};
+    use crate::state::{ActiveInvocation, OwnedInvocation};
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -147,24 +131,6 @@ mod tests {
         fn release(&self) {
             self.core.state.lock().unwrap().invocations.remove(&self.id);
         }
-
-        /// The worker retained this invocation's diagnostic tail.
-        fn retain_diagnostic(&self, start: u64, data: &[u8]) {
-            self.core.state.lock().unwrap().diagnostics.push_front((
-                ProcessDiagnostic {
-                    id: self.id.clone(),
-                    workspace: self.ws().to_string(),
-                    cmd: "build".to_string(),
-                    pattern: "//:b".to_string(),
-                    started_at: 1,
-                    process_exit_code: Some(9),
-                },
-                DiagnosticTail {
-                    start,
-                    data: data.to_vec(),
-                },
-            ));
-        }
     }
 
     impl Drop for Fixture {
@@ -200,66 +166,6 @@ mod tests {
         assert!(
             crate::terminal::write(&fixture.core, fixture.ws(), &fixture.id, b"input").is_err()
         );
-    }
-
-    #[test]
-    fn a_released_diagnostic_serves_its_tail_without_live_state() {
-        let fixture = Fixture::new();
-        fixture.reap();
-        fixture.release();
-        // The tail begins at offset 100 of the original stream: offsets keep
-        // naming that stream, so a reader polling near the end stays correct.
-        let tail = b"Another command is running. Exiting immediately.\r\n";
-        let start = 100;
-        let end = start + tail.len() as u64;
-        fixture.retain_diagnostic(start, tail);
-        // An offset before the retained window returns the whole tail.
-        let output = fixture.read(0);
-        assert_eq!(output.data, tail.to_vec());
-        assert_eq!(output.offset, end);
-        // An offset inside the window slices from the original position.
-        let inside = fixture.read(start + 7);
-        assert_eq!(inside.data, tail[7..].to_vec());
-        assert_eq!(inside.offset, end);
-        // The end is empty; beyond it an error.
-        let at_end = fixture.read(end);
-        assert!(at_end.data.is_empty());
-        assert_eq!(at_end.offset, end);
-        assert!(
-            read(&fixture.core, fixture.ws(), &fixture.id, end + 1).is_err(),
-            "an offset past the retained tail is invalid"
-        );
-    }
-
-    #[test]
-    fn a_released_diagnostic_rejects_foreign_reads_and_writes() {
-        let fixture = Fixture::new();
-        fixture.reap();
-        fixture.release();
-        fixture.retain_diagnostic(0, b"tail");
-        // Another registered workspace and an unknown id stay rejected.
-        assert_eq!(
-            read(
-                &fixture.core,
-                fixture.other.to_str().unwrap(),
-                &fixture.id,
-                0
-            )
-            .unwrap_err()
-            .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(
-            read(&fixture.core, fixture.ws(), "unknown-id", 0)
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-        // Read-only: no write or resize path opens for a released diagnostic.
-        assert!(
-            crate::terminal::write(&fixture.core, fixture.ws(), &fixture.id, b"input").is_err()
-        );
-        assert!(crate::terminal::resize(&fixture.core, fixture.ws(), &fixture.id, 80, 24).is_ok());
     }
 
     #[test]

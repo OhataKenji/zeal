@@ -208,7 +208,6 @@ const state: AppState = {
     },
   ],
   invocations: [],
-  diagnostics: [],
 };
 
 function emitState() {
@@ -694,8 +693,14 @@ export function installPreview() {
       if (step === "transitions") return previewTransitions(label);
       throw new Error("Unknown target read step");
     },
-    list_invocations: (payload) =>
-      structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),
+    list_invocations: (payload) => ({
+      saved: {
+        Ok: structuredClone(
+          records.filter((inv) => inv.workspace === String(payload?.workspace ?? "")),
+        ),
+      },
+      diagnostics: [],
+    }),
     read_console: (payload) =>
       readConsole(
         String(payload?.workspace ?? ""),

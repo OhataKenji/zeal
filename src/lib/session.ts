@@ -7,6 +7,7 @@ import type {
   BazelCommand,
   ExplorerSelection,
   InvocationDetail,
+  InvocationHistory,
   InvocationRecord,
   OpenWorkspaceResult,
   OwnedInvocation,
@@ -67,6 +68,8 @@ interface Workspace {
   historyError: string | null;
   historyBusy: boolean;
   historyDirty: boolean;
+  /** This workspace's local diagnostics from the last history reply. */
+  diagnostics: ProcessDiagnostic[];
 }
 
 interface Saved {
@@ -138,15 +141,13 @@ function selectedInvocationId(state: SessionState): string | null {
 
 function savedEligible(state: SessionState): boolean {
   const id = selectedInvocationId(state);
+  if (id === null || state.core === null || state.workspace === null) return false;
+  const row = invocationRows(state).find((entry) => entry.record.id === id);
   return !!(
-    id &&
-    state.core !== null &&
-    state.workspace !== null &&
-    !visibleExecution(state, id)?.console &&
-    // A diagnostic keeps its row even when shared history reports a same-id
-    // record owned elsewhere; saved readers wait for the owner to match.
-    !diagnosticInvocations(state).some((diagnostic) => diagnostic.id === id) &&
-    state.workspace.history.some((record) => record.id === id)
+    row &&
+    !row.execution?.console &&
+    !row.diagnostic &&
+    state.workspace.history.includes(row.record)
   );
 }
 
@@ -169,23 +170,56 @@ function pinnedInvocations(state: SessionState): OwnedInvocation[] {
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** Released terminal completions of the current workspace that no live
- * execution or saved record already represents, newest first. Only a record
- * this workspace could own suppresses one: shared history can report a
- * same-id record owned by a sibling workspace, which is not its build event. */
-function diagnosticInvocations(state: SessionState): ProcessDiagnostic[] {
+/** One History row: a live execution, a saved record, or a local diagnostic.
+ * A diagnostic's `record` carries the same fields a saved record would, but
+ * never an `exitCode` — its process exit is reported separately. */
+interface InvocationRow {
+  record: InvocationRecord;
+  execution?: OwnedInvocation;
+  diagnostic?: ProcessDiagnostic;
+}
+
+/** Saved records join the projection in history order: they upgrade a
+ * pinned row only when this workspace owns them, and attach a live
+ * execution of any workspace the record matches. */
+function addSavedRows(state: SessionState, ws: Workspace, rows: Map<string, InvocationRow>) {
+  const executions = state.core?.invocations ?? [];
+  for (const record of ws.history) {
+    const pinned = rows.get(record.id)?.execution;
+    if (pinned && !matchesOwner(record, pinned)) continue;
+    rows.set(record.id, {
+      record,
+      execution: pinned ?? executions.find((entry) => matchesOwner(record, entry)),
+    });
+  }
+}
+
+/** This workspace's diagnostics fill ids no same-owner row claims; a
+ * foreign same-id record yields to the local diagnostic. */
+function addDiagnosticRows(ws: Workspace, rows: Map<string, InvocationRow>) {
+  for (const diagnostic of ws.diagnostics) {
+    if (diagnostic.workspace !== ws.path) continue;
+    if (rows.get(diagnostic.id)?.record.workspace === ws.path) continue;
+    rows.set(diagnostic.id, { record: diagnostic, diagnostic });
+  }
+}
+
+/** The single row projection shared by the view, first-row claiming, and
+ * saved-reader eligibility: live executions first, then saved records, then
+ * this workspace's diagnostics. A saved record replaces its pinned row only
+ * when this workspace owns it; a diagnostic yields to any same-owner row —
+ * live or saved — and takes the place of a foreign same-id record, which is
+ * a different build that stays in saved history only. */
+function invocationRows(state: SessionState): InvocationRow[] {
   const ws = state.workspace;
   if (!ws) return [];
-  const live = new Set((state.core?.invocations ?? []).map((entry) => entry.id));
-  const saved = new Set(
-    ws.history
-      .filter((record) => record.workspace === undefined || record.workspace === ws.path)
-      .map((record) => record.id),
-  );
-  return (state.core?.diagnostics ?? []).filter(
-    (diagnostic) =>
-      diagnostic.workspace === ws.path && !live.has(diagnostic.id) && !saved.has(diagnostic.id),
-  );
+  const rows = new Map<string, InvocationRow>();
+  for (const execution of pinnedInvocations(state)) {
+    rows.set(execution.id, { record: execution, execution });
+  }
+  addSavedRows(state, ws, rows);
+  addDiagnosticRows(ws, rows);
+  return [...rows.values()];
 }
 
 /** Flat projection of session state consumed by the Svelte views. */
@@ -196,44 +230,8 @@ function sessionView(state: SessionState) {
   const core = state.core;
   const ws = state.workspace;
   const history = ws?.history ?? [];
-  const executions = core?.invocations ?? [];
-  const pinned = pinnedInvocations(state);
-  const pinnedIds = new Set(pinned.map((entry) => entry.id));
-  const diagnostics = diagnosticInvocations(state);
-  const diagnosticIds = new Set(diagnostics.map((diagnostic) => diagnostic.id));
-  const invocationRows: Array<{
-    record: InvocationRecord;
-    execution?: OwnedInvocation;
-    diagnostic?: ProcessDiagnostic;
-  }> = [
-    ...pinned.map((execution) => ({
-      record: history.find((record) => matchesOwner(record, execution)) ?? execution,
-      execution,
-    })),
-    ...history
-      .filter(
-        (record) =>
-          !pinnedIds.has(record.id) &&
-          // A same-id record owned elsewhere must not take a local
-          // diagnostic's row; it stays visible in its own workspace.
-          !(diagnosticIds.has(record.id) && record.workspace !== ws?.path),
-      )
-      .map((record) => ({
-        record,
-        execution: executions.find((entry) => matchesOwner(record, entry)),
-      })),
-    ...diagnostics.map((diagnostic) => ({
-      record: {
-        id: diagnostic.id,
-        workspace: diagnostic.workspace,
-        cmd: diagnostic.cmd,
-        pattern: diagnostic.pattern,
-        startedAt: diagnostic.startedAt,
-      },
-      diagnostic,
-    })),
-  ];
-  const selected = invocationRows.find((row) => row.record.id === state.selectedInvocationId);
+  const rows = invocationRows(state);
+  const selected = rows.find((row) => row.record.id === state.selectedInvocationId);
   const target = ws?.target ?? null;
   const saved = state.saved;
   return {
@@ -245,7 +243,7 @@ function sessionView(state: SessionState) {
     workspaceInfo: ws?.info.value ?? null,
     workspaceInfoLoading: ws?.info.loading ?? false,
     workspaceInfoError: ws?.info.error ?? null,
-    invocationRows,
+    invocationRows: rows,
     snapshot: ws?.snapshot ?? null,
     snapshotLoading: ws !== null && ws.refresh !== null,
     snapshotError: ws?.snapshotError ?? null,
@@ -472,14 +470,21 @@ export function createSession(
   /** Claims History's first row while the page sits unselected. */
   function claimFirstInvocation() {
     if (state.page !== "history" || state.selectedInvocationId !== null) return;
-    state.selectedInvocationId =
-      pinnedInvocations(state)[0]?.id ??
-      state.workspace?.history[0]?.id ??
-      diagnosticInvocations(state)[0]?.id ??
-      null;
+    state.selectedInvocationId = invocationRows(state)[0]?.record.id ?? null;
   }
 
-  function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {
+  function acceptHistory(ws: Workspace, result: InvocationHistory, selectedId: string | null) {
+    const wasEligible = savedEligible(state);
+    if ("Err" in result.saved) {
+      // A store failure keeps the last good saved history; this workspace's
+      // diagnostics still refresh and saved readers reconcile once.
+      ws.diagnostics = result.diagnostics;
+      ws.historyError = result.saved.Err;
+      claimFirstInvocation();
+      reconcileSaved(wasEligible);
+      return;
+    }
+    const records = result.saved.Ok;
     const id = state.selectedInvocationId;
     const next = records.find((record) => record.id === id);
     // Retry with the new selection pinned before replacing its history row.
@@ -487,7 +492,6 @@ export function createSession(
       ws.historyDirty = true;
       return;
     }
-    const wasEligible = savedEligible(state);
     const previous = ws.history.find((record) => record.id === id);
     const changed = JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
     const detail = state.saved.detail;
@@ -497,6 +501,7 @@ export function createSession(
       !detail.loading &&
       detail.error === null &&
       JSON.stringify(next) !== JSON.stringify(detail.value.record);
+    ws.diagnostics = result.diagnostics;
     ws.history = records;
     ws.historyError = null;
     // An unselected history page claims its first row; reconcileSaved below
@@ -523,11 +528,11 @@ export function createSession(
     publish();
     const current = () => !disposed && state.workspace === ws;
     try {
-      const records = await transport.invoke<InvocationRecord[]>(COMMANDS.listInvocations, {
+      const result = await transport.invoke<InvocationHistory>(COMMANDS.listInvocations, {
         workspace: ws.path,
         selectedId,
       });
-      if (current()) acceptHistory(ws, records, selectedId);
+      if (current()) acceptHistory(ws, result, selectedId);
     } catch (error) {
       if (current()) ws.historyError = String(error);
     } finally {
@@ -662,6 +667,7 @@ export function createSession(
       historyError: null,
       historyBusy: false,
       historyDirty: false,
+      diagnostics: [],
     };
     state.selectedInvocationId = null;
     state.start = null;

@@ -318,7 +318,21 @@ async fn read_console(
     .map_err(|_| "terminal read worker failed".to_string())?
 }
 
-/// Recent history plus live and selected records within the workspace's scope.
+/// The saved build-event history for one workspace plus the workspace's
+/// bounded in-memory diagnostics for terminal completions that never
+/// produced a readable record. A store failure stays visible in `saved`
+/// without hiding the local diagnostics.
+#[derive(serde::Serialize)]
+struct InvocationHistory {
+    saved: Result<Vec<InvocationRecord>, String>,
+    diagnostics: Vec<state::ProcessDiagnostic>,
+}
+
+/// Recent history plus live and selected records within the workspace's
+/// scope, and its local diagnostics — returned even while a live entry
+/// still owns the process, since a history read may precede the release
+/// event; the projection alone resolves precedence — all validated
+/// against the registered workspace.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocations.list", skip_all)]
 async fn list_invocations(
@@ -326,21 +340,23 @@ async fn list_invocations(
     core: State<'_, Arc<Core>>,
     workspace: String,
     selected_id: Option<String>,
-) -> Result<Vec<InvocationRecord>, String> {
-    let (ws, mut pinned_ids) = {
+) -> Result<InvocationHistory, String> {
+    let (ws, diagnostics, mut pinned_ids) = {
         let state = core.state.lock().expect("application state lock poisoned");
-        (
-            state.workspace_path(&workspace)?,
-            state.invocations.keys().cloned().collect::<Vec<_>>(),
-        )
+        let ws = state.workspace_path(&workspace)?;
+        let diagnostics = state.diagnostics_for(&ws);
+        let pinned_ids = state.invocations.keys().cloned().collect::<Vec<_>>();
+        (ws, diagnostics, pinned_ids)
     };
     pinned_ids.extend(selected_id);
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let data = app.path().app_data_dir().ok();
+    let saved = tauri::async_runtime::spawn_blocking(move || {
+        let data = data.ok_or_else(|| "invocation history is unavailable".to_string())?;
         store::list(&data, &ws, &pinned_ids).map_err(|error| error.to_string())
     })
     .await
-    .map_err(|_| "history list worker failed".to_string())?
+    .map_err(|_| "history list worker failed".to_string())?;
+    Ok(InvocationHistory { saved, diagnostics })
 }
 
 /// Aggregate only a registered workspace; caller cannot name a DB or root.

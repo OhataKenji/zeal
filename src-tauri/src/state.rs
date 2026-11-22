@@ -32,10 +32,6 @@ pub struct AppStateDto {
     pub last_workspace: Option<String>,
     pub workspaces: Vec<WorkspaceDto>,
     pub invocations: Vec<OwnedInvocationDto>,
-    /// Released terminal completions that may lack a readable build-event
-    /// record, newest first. Metadata only; output is fetched separately via
-    /// read_console.
-    pub diagnostics: Vec<ProcessDiagnostic>,
 }
 
 #[derive(Clone, Serialize)]
@@ -66,8 +62,9 @@ pub struct OwnedInvocationDto {
 }
 
 /// The local facts of one released terminal invocation whose build-event
-/// record is missing or unreadable. It describes the Bazel process only and
-/// is never persisted; a later saved record supersedes it.
+/// record is missing or unreadable. It describes the Bazel process only,
+/// carries a bounded tail of its own output, and is never persisted; a later
+/// saved record owned by the same workspace supersedes it.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessDiagnostic {
@@ -80,15 +77,8 @@ pub struct ProcessDiagnostic {
     /// The owned process's own exit; `None` when it was never confirmed. This
     /// is not a BEP exit code and must not be presented as one.
     pub process_exit_code: Option<i32>,
-}
-
-/// The retained tail of a released invocation's console output. `start` is
-/// the byte offset in the original stream where `data` begins, so console
-/// reads keep their absolute-offset semantics after release.
-#[derive(Clone)]
-pub struct DiagnosticTail {
-    pub start: u64,
-    pub data: Vec<u8>,
+    /// The bounded tail of the captured terminal output.
+    pub output: String,
 }
 
 /// Result of registering a workspace: its canonical path plus the new state.
@@ -157,7 +147,7 @@ pub struct CoreState {
     pub modules_running: BTreeSet<PathBuf>,
     /// Terminal completions retained for their metadata and bounded output
     /// tail, newest first. Saved history supersedes them in the projection.
-    pub diagnostics: VecDeque<(ProcessDiagnostic, DiagnosticTail)>,
+    pub diagnostics: VecDeque<ProcessDiagnostic>,
     /// The one shutdown fact: set at app exit, cloned into modules
     /// operations so their bounded Bazel runs cancel, and read under the
     /// same lock to reject new starts.
@@ -173,6 +163,17 @@ impl CoreState {
             .get_key_value(Path::new(ws))
             .map(|(path, _)| path.clone())
             .ok_or_else(|| "workspace is not open".to_string())
+    }
+
+    /// This workspace's retained diagnostics, newest first. A just-retained
+    /// diagnostic can coexist with its still-live entry until the worker's
+    /// guard releases it; projections keep the live row.
+    pub fn diagnostics_for(&self, ws: &Path) -> Vec<ProcessDiagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| Path::new(&diagnostic.workspace) == ws)
+            .cloned()
+            .collect()
     }
 }
 
@@ -251,11 +252,6 @@ impl Core {
                 .invocations
                 .iter()
                 .map(|(id, invocation)| owned_dto(id, invocation))
-                .collect(),
-            diagnostics: st
-                .diagnostics
-                .iter()
-                .map(|(diagnostic, _)| diagnostic.clone())
                 .collect(),
         }
     }

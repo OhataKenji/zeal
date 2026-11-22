@@ -5,8 +5,11 @@ unmount. `AppView.svelte` renders its view; `lib/session.ts` owns selection and
 fetched data and calls IPC. Forms, Query, Analytics, comparison, and Console
 keep their state in their views.
 
-- Rust owns processes by workspace and invocation ID. A selected live Console
-  becomes the same invocation's BEP result after release; other selections stay put.
+- Rust owns processes by workspace and invocation ID.
+- Console serves live terminal output; History is workspace-scoped and shows a
+  saved BEP record or, for a terminal completion without one, a bounded
+  in-memory process diagnostic (process exit code and output tail) that a
+  later matching BEP record supersedes.
 - Async responses must match their captured owner and a live session, including
   A→B→A navigation. Core snapshots must have a newer revision.
 - Starts capture content and workspace-open identity. A target/package change

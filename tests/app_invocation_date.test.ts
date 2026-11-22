@@ -18,7 +18,6 @@ const CORE: AppState = {
   lastWorkspace: "/workspace",
   workspaces: [WS],
   invocations: [],
-  diagnostics: [],
 };
 
 function renderSession() {
@@ -267,6 +266,7 @@ test("AppView renders a diagnostic invocation's notice and process exit", async 
       pattern: "//app:app",
       startedAt: 1_700_000_000_000,
       processExitCode,
+      output: "Another command is running. Exiting immediately.\n",
     };
     const record = {
       id: diagnostic.id,
@@ -292,7 +292,7 @@ test("AppView renders a diagnostic invocation's notice and process exit", async 
   const exited = output(9);
   assert.match(exited, /No build event record\. Bazel process exit code: 9\./);
   assert.match(exited, /\? outcome unknown/);
-  assert.match(exited, /Loading invocation output…/);
+  assert.match(exited, /Another command is running\. Exiting immediately\./);
   assert.doesNotMatch(exited, /role="tablist" aria-label="Invocation views"/);
 
   const unknown = output(null);
