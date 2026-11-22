@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { ArrowClockwise } from "phosphor-svelte";
   import BesSetup from "./BesSetup.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope, WorkspaceInfo } from "./types";
@@ -31,6 +32,23 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let copiedKey = $state<string | null>(null);
+  let expanded = $state(false);
+
+  const PRIMARY_KEYS = [
+    "workspace",
+    "output_base",
+    "execution_root",
+    "bazel-bin",
+    "bazel-testlogs",
+    "repository_cache",
+  ];
+  const entries = $derived(info?.entries ?? []);
+  const primary = $derived(
+    PRIMARY_KEYS.map((key) => entries.find((e) => e.key === key)).filter(
+      (e) => e !== undefined,
+    ),
+  );
+  const rows = $derived(expanded ? entries : primary);
 
   $effect(() => {
     if (persistedScope !== lastScopeKey) {
@@ -39,19 +57,7 @@
     }
   });
 
-  const rows = $derived.by(() => {
-    const list: Array<{ key: string; path: string | null }> = [
-      { key: "workspace", path: info?.workspace ?? workspace },
-      { key: "output_base", path: info?.outputBase ?? null },
-      { key: "execution_root", path: info?.executionRoot ?? null },
-      { key: "bazel-bin", path: info?.bazelBin ?? null },
-      { key: "bazel-testlogs", path: info?.bazelTestlogs ?? null },
-      { key: "repository_cache", path: info?.repositoryCache ?? null },
-    ];
-    return list;
-  });
-
-  async function copyPath(key: string, value: string) {
+  async function copyValue(key: string, value: string) {
     try {
       await navigator.clipboard.writeText(value);
       copiedKey = key;
@@ -82,46 +88,60 @@
   <div>
     <h1 class="view-title mono">{name}</h1>
     <div class="view-meta mono">
-      {workspace}{#if info?.release} · {info.release}{/if}
+      {workspace}{#if info?.version}{" · "}Bazel {info.version}{/if}
     </div>
   </div>
-  <button type="button" class="button" disabled={loading} onclick={onretry}>
-    {loading ? "Loading…" : "Refresh info"}
-  </button>
 </div>
 
 <section class="section">
   <div class="section-head">
-    <h2 class="section-title">Directories &amp; Caches (bazel info)</h2>
+    <h2 class="section-title">Bazel Info</h2>
+    <button
+      type="button"
+      class="button button-ghost icon-button"
+      aria-label="Reload Bazel info"
+      title="Reload Bazel info"
+      disabled={loading}
+      onclick={onretry}
+    >
+      <ArrowClockwise size={14} />
+    </button>
   </div>
   {#if error}
     <Notice tone="warning" onaction={onretry}>Could not read bazel info: {error}</Notice>
   {/if}
-  <table class="lens-table">
-    <thead>
-      <tr><th>Key</th><th>Path</th></tr>
-    </thead>
-    <tbody>
-      {#each rows as row (row.key)}
-        <tr
-          class:clickable={!!row.path}
-          onclick={() => row.path && void copyPath(row.key, row.path)}
-          title={row.path ? "Click to copy path" : undefined}
-        >
-          <td class="mono">{row.key}</td>
-          <td class="mono path-cell">
-            {#if row.path}
-              {row.path}{#if copiedKey === row.key} <span class="copied-tag">Copied</span>{/if}
-            {:else if loading}
-              <span class="dim">Loading…</span>
-            {:else}
-              <span class="dim">—</span>
-            {/if}
-          </td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
+  {#if loading && !info}
+    <p class="dim">Loading bazel info…</p>
+  {/if}
+  {#if rows.length}
+    <table class="lens-table">
+      <tbody>
+        {#each rows as row (row.key)}
+          <tr
+            class="clickable"
+            onclick={() => void copyValue(row.key, row.value)}
+            title="Click to copy"
+          >
+            <td class="mono">{row.key}</td>
+            <td class="mono path-cell">
+              {row.value}{#if copiedKey === row.key}{" "}
+                <span class="copied-tag">Copied</span>{/if}
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
+  {#if entries.length > primary.length}
+    <button
+      type="button"
+      class="button button-ghost"
+      aria-expanded={expanded}
+      onclick={() => (expanded = !expanded)}
+    >
+      {expanded ? "Show less" : `Show all (${entries.length})`}
+    </button>
+  {/if}
 </section>
 
 <section class="section">
@@ -146,11 +166,9 @@
   </form>
 </section>
 
-{#if besEndpoint}
-  <section class="section">
-    <div class="section-head">
-      <h2 class="section-title">Local BES Receiver</h2>
-    </div>
-    <BesSetup endpoint={besEndpoint} />
-  </section>
-{/if}
+<section class="section">
+  <div class="section-head">
+    <h2 class="section-title">Local BES Receiver</h2>
+  </div>
+  <BesSetup endpoint={besEndpoint} />
+</section>

@@ -107,7 +107,7 @@
     } catch (error) {
       if (form.isConnected) flagsError = String(error);
     } finally {
-      if (form.isConnected) flagsBusy = false;
+      flagsBusy = false;
     }
   }
   function flagKeydown(event: KeyboardEvent) {
@@ -409,12 +409,7 @@
           </section>
         {/if}
       {:else}
-        <ActionsSection
-          actions={actions}
-          error={phaseError}
-          showHeading={false}
-          showOwner={false}
-        />
+        <ActionsSection actions={actions} error={phaseError} showHeading={false} />
       {/if}
     {/if}
   </div>

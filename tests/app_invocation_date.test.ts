@@ -80,53 +80,28 @@ test("AppView renders workspace navigation and invocation history", async (t) =>
     assert.match(nav, /Analytics/);
   });
 
-  await t.test("shows the persistent BES settings in both workspace screens", () => {
-    const initial = render(AppView, {
-      props: { view: { ...emptyView(), core: CORE }, session },
-    }).body;
-    const workspace = render(AppView, {
-      props: { view: { ...emptyView("workspace"), core: CORE, state: WS }, session },
-    }).body;
-    const boundConfig =
-      /build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage/;
-    for (const html of [initial, workspace]) {
-      assert.match(html, boundConfig);
-      assert.match(html, /Copy \.bazelrc settings/);
-      assert.match(html, /workspace's\s*<code>\.bazelrc<\/code>/);
-    }
-  });
+  const boundConfig =
+    /<code>build --bes_backend=grpc:\/\/127\.0\.0\.1:4718\nbuild --experimental_build_event_upload_strategy=local\nbuild --bes_timeout=5s\nbuild --experimental_collect_system_network_usage<\/code>/;
 
-  await t.test("shows only a session flag for a temporary BES endpoint", () => {
-    const core = { ...CORE, besEndpoint: "grpc://127.0.0.1:12345" };
-    const initial = render(AppView, {
-      props: { view: { ...emptyView(), core }, session },
-    }).body;
-    const workspace = render(AppView, {
-      props: { view: { ...emptyView("workspace"), core, state: WS }, session },
-    }).body;
-    for (const html of [initial, workspace]) {
-      assert.match(html, /--bes_backend=grpc:\/\/127\.0\.0\.1:12345/);
-      assert.match(html, /Pass this\s+option to Bazel for this Zeal session only/);
-      assert.match(html, /Copy session option/);
-      assert.doesNotMatch(html, /build --bes_backend/);
-      assert.doesNotMatch(html, /\.bazelrc/);
-      assert.doesNotMatch(html, /Copy \.bazelrc/);
-    }
-  });
-
-  await t.test("offers no BES configuration without a bound receiver", () => {
-    const core = { ...CORE, besEndpoint: null };
-    const initial = render(AppView, {
-      props: { view: { ...emptyView(), core }, session },
-    }).body;
-    const workspace = render(AppView, {
-      props: { view: { ...emptyView("workspace"), core, state: WS }, session },
-    }).body;
-    for (const html of [initial, workspace]) {
-      assert.doesNotMatch(html, /--bes_backend|Copy \.bazelrc|Copy session option/);
-      assert.doesNotMatch(html, /Local BES Receiver/);
-    }
-  });
+  for (const besEndpoint of [CORE.besEndpoint, "grpc://127.0.0.1:12345", null]) {
+    await t.test(`shows CLI setup on both workspace screens with endpoint ${besEndpoint}`, () => {
+      const core = { ...CORE, besEndpoint };
+      for (const view of [
+        { ...emptyView(), core },
+        { ...emptyView("workspace"), core, state: WS },
+      ]) {
+        const { body } = render(AppView, { props: { view, session } });
+        assert.match(body, boundConfig);
+        assert.match(body, /Copy \.bazelrc settings/);
+        if (besEndpoint === "grpc://127.0.0.1:12345") {
+          assert.match(body, /<code>--bes_backend=grpc:\/\/127\.0\.0\.1:12345<\/code>/);
+          assert.match(body, /Copy session option/);
+        } else {
+          assert.doesNotMatch(body, /Copy session option/);
+        }
+      }
+    });
+  }
 
   await t.test("distinguishes simultaneous live rows by workspace", () => {
     const local: OwnedInvocation = {

@@ -32,7 +32,7 @@ pub struct ConfigSummary {
 /// One direct dependency edge of the configured target. `transition` is a
 /// short badge such as `exec`; `None` for edges that keep the parent's
 /// configuration or have none (source files).
-#[derive(PartialEq, Eq, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfiguredDep {
     pub label: String,
@@ -49,7 +49,7 @@ pub struct TargetOutputs {
 
 /// The target's dependency edges, parsed from `cquery
 /// --output=transitions --transitions=lite` over `deps(config(...))`.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetTransitions {
     pub deps: Vec<ConfiguredDep>,
@@ -89,10 +89,16 @@ pub(crate) fn parse_transitions(
 ) -> Result<TargetTransitions, String> {
     let mut found = false;
     let mut collecting = false;
+    let mut malformed = false;
     let mut deps = Vec::new();
     let mut deps_truncated = false;
     for line in input.lines() {
         let line = line.map_err(|_| "could not read cquery output".to_string())?;
+        // Blank lines are skipped before header detection: they neither
+        // start a row nor end the selected header's section.
+        if line.trim().is_empty() {
+            continue;
+        }
         if !line.starts_with(char::is_whitespace) {
             // Only the first matching header collects; any later header —
             // even a repeat — ends collection for good.
@@ -100,17 +106,14 @@ pub(crate) fn parse_transitions(
             found |= collecting;
             continue;
         }
-        if !collecting || deps_truncated {
-            continue;
-        }
-        if line.trim().is_empty() {
+        // A malformed row is recorded but stdout keeps draining: dropping
+        // the pipe early can fail Bazel.
+        if !collecting || deps_truncated || malformed {
             continue;
         }
         let Some(dep) = parse_transition_row(&line) else {
-            return Err(format!(
-                "unsupported cquery transitions row under {label}: {}",
-                line.trim()
-            ));
+            malformed = true;
+            continue;
         };
         if deps.contains(&dep) {
             continue;
@@ -120,6 +123,9 @@ pub(crate) fn parse_transitions(
         } else {
             deps_truncated = true;
         }
+    }
+    if malformed {
+        return Err(format!("unsupported cquery transitions row under {label}"));
     }
     if !found {
         return Err(format!("cquery reported no configuration for {label}"));
@@ -408,9 +414,7 @@ NoTransition -> //app:a (aaa1111)
         assert_eq!(parsed.deps[0].label, "//pkg:x#y");
         assert_eq!(
             parsed.deps[0].transition.as_deref(),
-            Some(
-                "(Starlark transition:/ws/rules#v2.bzl:4:40 + (TestTrimmingTransition))"
-            )
+            Some("(Starlark transition:/ws/rules#v2.bzl:4:40 + (TestTrimmingTransition))")
         );
     }
 
@@ -423,7 +427,26 @@ NoTransition -> //app:a (aaa1111)
   this is not a row
 ";
         let error = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap_err();
-        assert!(error.contains("unsupported cquery transitions row"), "{error}");
+        assert!(
+            error.contains("unsupported cquery transitions row"),
+            "{error}"
+        );
+        // The diagnostic is bounded: it names the label, never the row.
+        assert!(!error.contains("this is not a row"), "{error}");
+    }
+
+    #[test]
+    fn transition_rows_skip_blank_lines_without_ending_the_section() {
+        // A blank line is not a header: collection continues across it.
+        let input = "\
+NoTransition -> //app:a (aaa1111)
+
+  deps#//app:x#NoTransition ->
+
+  deps#//app:y#NoTransition ->
+";
+        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
+        assert_eq!(dep_pairs(&parsed), [("//app:x", None), ("//app:y", None)]);
     }
 
     #[test]

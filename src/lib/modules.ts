@@ -33,18 +33,20 @@ export function emptyModulesState(): ModulesState {
   };
 }
 
-/** One workspace-keyed view owns one in-flight request and at most one explanation. */
+/** Tracks at most one in-flight module request and one explanation for the selected workspace. */
 export function createModules(
   workspace: string,
   transport: Transport,
-  state: ModulesState,
-  bazelAvailable: () => boolean = () => true,
+  bazelAvailable: () => boolean,
+  changed: () => void,
 ) {
+  let state = emptyModulesState();
   let disposed = false;
 
   function update(patch: Partial<ModulesState>) {
     if (disposed) return;
-    Object.assign(state, patch);
+    state = { ...state, ...patch };
+    changed();
   }
 
   async function load() {
@@ -85,6 +87,9 @@ export function createModules(
     load,
     select,
     explain,
+    get state() {
+      return state;
+    },
     dispose: () => {
       disposed = true;
     },

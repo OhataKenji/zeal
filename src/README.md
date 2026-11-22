@@ -2,7 +2,7 @@
 
 `App.svelte` creates a session, calls `init` once on mount, and `dispose` on
 unmount. `AppView.svelte` renders its view; `lib/session.ts` owns selection and
-fetched data and calls IPC. Forms, Modules, Query, Analytics, comparison, and Console
+fetched data and calls IPC. Forms, Query, Analytics, comparison, and Console
 keep their state in their views.
 
 - Rust owns processes by workspace and invocation ID. A selected live Console
@@ -23,6 +23,9 @@ keep their state in their views.
   draft changes nothing. Tab and flag changes replace the phase reader, so
   stale replies cannot land. Other workspaces do not wait. History notifications
   coalesce into one follow-up. Saved detail/profile reads remain independent.
+- The selected workspace keeps the module graph, selection, and explanation across
+  page navigation. Switching workspaces discards them. Search and depth filters
+  are local to the Modules page and reset when you leave it.
 - Query input changes clear results; execution is explicit.
 
 See [tests](../tests) for behavior and [development](../docs/development.md) for checks.

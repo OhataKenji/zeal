@@ -8,7 +8,7 @@
     error,
     oninputclick,
     showHeading = true,
-    showOwner = true,
+    showOwner = false,
   }: {
     actions: TargetActions | null;
     error: string | null;

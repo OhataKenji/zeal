@@ -14,9 +14,9 @@ import type {
   TargetActions,
   TargetDetail,
   TargetIndex,
-  ConfigSummary,
   ConfiguredDep,
   TargetOutputs,
+  WorkspaceInfo,
   WorkspaceState,
 } from "./lib/types";
 import { previewWords, type QueryOutput, type QueryRequest } from "./lib/query.ts";
@@ -471,11 +471,6 @@ function previewConfiguration(flags: string): { mnemonic: string; checksum: stri
     : { mnemonic: "k8-fastbuild", checksum: "4a8f12c61e0dd731" };
 }
 
-/** Sample `read_target` configuration step for the given flags. */
-function previewConfigurationStep(flags: string): ConfigSummary {
-  return previewConfiguration(flags);
-}
-
 /** Sample `read_target` outputs step for one label under the given flags. */
 function previewOutputs(label: string, flags: string): TargetOutputs {
   const { mnemonic: configDir } = previewConfiguration(flags);
@@ -646,17 +641,31 @@ export function installPreview() {
         warning: null,
       };
     },
-    get_workspace_info: (payload) => {
+    get_workspace_info: (payload): WorkspaceInfo => {
       const entry = wsEntry(payload?.workspace);
       const ob = `/private/var/tmp/_bazel_dev/preview`;
       return {
-        workspace: entry.workspace,
-        release: "release 8.7.0",
-        outputBase: ob,
-        executionRoot: `${ob}/execroot/_main`,
-        bazelBin: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
-        bazelTestlogs: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
-        repositoryCache: "/Users/dev/Library/Caches/bazel/repo_cache",
+        version: "8.7.0",
+        entries: [
+          {
+            key: "bazel-bin",
+            value: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
+          },
+          {
+            key: "bazel-testlogs",
+            value: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
+          },
+          { key: "execution_root", value: `${ob}/execroot/_main` },
+          { key: "install_base", value: "/private/var/tmp/_bazel_install/9f2c1d" },
+          { key: "max-heap-size", value: "4096MB" },
+          { key: "output_base", value: ob },
+          { key: "output_path", value: `${ob}/execroot/_main/bazel-out` },
+          { key: "release", value: "release 8.7.0" },
+          { key: "repository_cache", value: "/Users/dev/Library/Caches/bazel/repo_cache" },
+          { key: "server_log", value: `${ob}/server/jvm.out` },
+          { key: "server_pid", value: "48213" },
+          { key: "workspace", value: entry.workspace },
+        ],
       };
     },
     get_target_detail: (payload): TargetDetail => {
@@ -681,7 +690,7 @@ export function installPreview() {
       const step = payload?.step;
       if (step === "actions") return previewActions(label, flags);
       if (step === "outputs") return previewOutputs(label, flags);
-      if (step === "configuration") return previewConfigurationStep(flags);
+      if (step === "configuration") return previewConfiguration(flags);
       if (typeof step === "object" && step !== null && "transitions" in step) {
         return previewTransitions(label);
       }

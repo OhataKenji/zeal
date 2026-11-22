@@ -12,7 +12,7 @@ use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target, TargetIndex};
 use crate::state::Core;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command};
@@ -195,14 +195,18 @@ pub fn read_target(
                     &flags,
                     &["--output=transitions", "--transitions=lite"],
                     &format!("deps({root}, 1)"),
-                    move |input| {
-                        configured::parse_transitions(input, &label, checksum.as_deref())
-                    },
+                    move |input| configured::parse_transitions(input, &label, checksum.as_deref()),
                 )
                 .map(TargetReadData::Transitions)
         }
         TargetRead::Outputs => reader
-            .read("cquery", &flags, &["--output=files"], &root, configured::parse_output_paths)
+            .read(
+                "cquery",
+                &flags,
+                &["--output=files"],
+                &root,
+                configured::parse_output_paths,
+            )
             .map(TargetReadData::Outputs),
         TargetRead::Actions => reader
             .read(
@@ -701,10 +705,22 @@ exit "$code"
             (crate::query::QueryKind::Aquery, "--output=files"),
             (crate::query::QueryKind::Aquery, "--output files"),
             (crate::query::QueryKind::Aquery, "--output_file=x"),
-            (crate::query::QueryKind::Cquery, "--proto:include_configurations"),
-            (crate::query::QueryKind::Cquery, "--noproto:include_configurations"),
-            (crate::query::QueryKind::Aquery, "--proto:include_configurations"),
-            (crate::query::QueryKind::Aquery, "--noproto:include_configurations"),
+            (
+                crate::query::QueryKind::Cquery,
+                "--proto:include_configurations",
+            ),
+            (
+                crate::query::QueryKind::Cquery,
+                "--noproto:include_configurations",
+            ),
+            (
+                crate::query::QueryKind::Aquery,
+                "--proto:include_configurations",
+            ),
+            (
+                crate::query::QueryKind::Aquery,
+                "--noproto:include_configurations",
+            ),
         ] {
             assert!(crate::query::build_flags(kind, flags).is_err(), "{flags:?}");
         }
@@ -804,7 +820,7 @@ exit "$code"
     }
 
     #[test]
-    fn target_read_deserializes_camel_case_steps() {
+    fn target_read_deserializes_unit_variants() {
         assert!(matches!(
             serde_json::from_str::<TargetRead>("\"configuration\"").unwrap(),
             TargetRead::Configuration
@@ -817,14 +833,17 @@ exit "$code"
             serde_json::from_str::<TargetRead>("\"actions\"").unwrap(),
             TargetRead::Actions
         ));
+    }
+
+    #[test]
+    fn target_read_deserializes_transitions_checksum() {
         assert!(matches!(
             serde_json::from_str::<TargetRead>("{\"transitions\":{\"checksum\":\"abc123\"}}")
                 .unwrap(),
             TargetRead::Transitions { .. }
         ));
         assert!(matches!(
-            serde_json::from_str::<TargetRead>("{\"transitions\":{\"checksum\":null}}")
-                .unwrap(),
+            serde_json::from_str::<TargetRead>("{\"transitions\":{\"checksum\":null}}").unwrap(),
             TargetRead::Transitions { checksum: None }
         ));
     }

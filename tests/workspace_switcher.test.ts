@@ -55,4 +55,21 @@ test("WorkspaceSwitcher renders a single trigger and split actions", async (t) =
     assert.doesNotMatch(enabledTag, /disabled/);
     assert.doesNotMatch(html, /Wait for the current Bazel operation/);
   });
+
+  await t.test("return mode is a single accessible button without a dropdown", () => {
+    const html = output({ onreturn: () => {} });
+    assert.doesNotMatch(html, /<details|<summary/);
+    const button = html.match(/<button[^>]*aria-label="Return to workspace"[^>]*>/)?.[0];
+    assert.ok(button, "missing return button");
+    assert.match(button, /title="Return to workspace"/);
+    assert.doesNotMatch(button, /\bdisabled\b/);
+    assert.match(html, />cool-mono</);
+  });
+
+  await t.test("return mode disables the button while opening", () => {
+    const html = output({ onreturn: () => {}, opening: true });
+    const button = html.match(/<button[^>]*class="[^"]*ws-switch[^"]*ws-trigger[^"]*"[^>]*>/)?.[0];
+    assert.ok(button, "missing return button");
+    assert.match(button, /\bdisabled\b/);
+  });
 });

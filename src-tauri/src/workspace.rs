@@ -3,6 +3,7 @@
 
 use crate::scope::Scope;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -13,46 +14,41 @@ const INFO_STDOUT_CAP: usize = 64 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
-    pub workspace: String,
-    pub release: Option<String>,
-    pub output_base: Option<String>,
-    pub execution_root: Option<String>,
-    pub bazel_bin: Option<String>,
-    pub bazel_testlogs: Option<String>,
-    pub repository_cache: Option<String>,
+    pub version: Option<String>,
+    pub entries: Vec<BazelInfoEntry>,
 }
 
-/// Pure parser for `bazel info` `key: value` output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BazelInfoEntry {
+    pub key: String,
+    pub value: String,
+}
+
 #[must_use]
-pub fn parse_bazel_info(stdout: &str, workspace: &Path) -> WorkspaceInfo {
-    let mut info = WorkspaceInfo {
-        workspace: workspace.to_string_lossy().into_owned(),
-        release: None,
-        output_base: None,
-        execution_root: None,
-        bazel_bin: None,
-        bazel_testlogs: None,
-        repository_cache: None,
-    };
-    for line in stdout.lines() {
-        let Some((key, val)) = line.split_once(':') else {
-            continue;
-        };
-        let val = val.trim();
-        if val.is_empty() {
+fn parse_bazel_info(stdout: &str) -> WorkspaceInfo {
+    let mut keys = Vec::new();
+    let mut values = HashMap::new();
+    for (key, value) in stdout.lines().filter_map(|line| line.split_once(':')) {
+        let (key, value) = (key.trim(), value.trim());
+        if key.is_empty() || value.is_empty() {
             continue;
         }
-        match key.trim() {
-            "release" => info.release = Some(val.to_owned()),
-            "output_base" => info.output_base = Some(val.to_owned()),
-            "execution_root" => info.execution_root = Some(val.to_owned()),
-            "bazel-bin" => info.bazel_bin = Some(val.to_owned()),
-            "bazel-testlogs" => info.bazel_testlogs = Some(val.to_owned()),
-            "repository_cache" => info.repository_cache = Some(val.to_owned()),
-            _ => {}
+        if values.insert(key, value).is_none() {
+            keys.push(key);
         }
     }
-    info
+    let version = values
+        .get("release")
+        .map(|&value| value.strip_prefix("release ").unwrap_or(value).to_owned());
+    let entries = keys
+        .into_iter()
+        .map(|key| BazelInfoEntry {
+            key: key.to_owned(),
+            value: values[key].to_owned(),
+        })
+        .collect();
+    WorkspaceInfo { version, entries }
 }
 
 /// Run `bazel --noblock_for_lock info` in `ws` with bounded IO and timeout.
@@ -75,7 +71,7 @@ fn fetch_info_with_timeout(
         &AtomicBool::new(false),
     )?
     .require_success()?;
-    Ok(parse_bazel_info(&String::from_utf8_lossy(&out.stdout), ws))
+    Ok(parse_bazel_info(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// A directory is a Bazel workspace root if it has MODULE.bazel or
@@ -353,30 +349,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_bazel_info_keys_and_ignores_unknown() {
-        let out = "\
-release: release 8.7.0
-output_base: /private/var/tmp/_bazel_dev/a9f3e12c
-execution_root: /private/var/tmp/_bazel_dev/a9f3e12c/execroot/_main
-bazel-bin: /private/var/tmp/_bazel_dev/a9f3e12c/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin
-bazel-testlogs: /private/var/tmp/_bazel_dev/a9f3e12c/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs
-repository_cache: /Users/dev/Library/Caches/bazel:repo_cache
-unknown_key: ignored
-empty_val:
-";
-        let info = parse_bazel_info(out, Path::new("/demo/ws"));
-        assert_eq!(info.workspace, "/demo/ws");
-        assert_eq!(info.release.as_deref(), Some("release 8.7.0"));
-        assert_eq!(
-            info.output_base.as_deref(),
-            Some("/private/var/tmp/_bazel_dev/a9f3e12c")
+    fn parses_bazel_info_entries_in_first_seen_order() {
+        let info = parse_bazel_info(
+            "release: release 8.7.0\noutput_base: /ob\nbazel-bin: /old/bin\nworkspace: /ws\nrepository_cache: /cache:repos\nserver_pid: 1234\nbazel-bin: /new/bin\nbazel-bin:\nbazel-testlogs: /reported/logs\nunknown_key: ignored\nno_delimiter_line\n: empty_key\nempty_value:\n",
         );
+        assert_eq!(info.version.as_deref(), Some("8.7.0"));
+        let entries: Vec<(&str, &str)> = info
+            .entries
+            .iter()
+            .map(|e| (e.key.as_str(), e.value.as_str()))
+            .collect();
         assert_eq!(
-            info.repository_cache.as_deref(),
-            Some("/Users/dev/Library/Caches/bazel:repo_cache")
+            entries,
+            [
+                ("release", "release 8.7.0"),
+                ("output_base", "/ob"),
+                ("bazel-bin", "/new/bin"),
+                ("workspace", "/ws"),
+                ("repository_cache", "/cache:repos"),
+                ("server_pid", "1234"),
+                ("bazel-testlogs", "/reported/logs"),
+                ("unknown_key", "ignored"),
+            ]
         );
-        assert!(info.bazel_bin.is_some());
-        assert!(info.bazel_testlogs.is_some());
-        assert!(info.execution_root.is_some());
+    }
+
+    #[test]
+    fn bazel_info_version_keeps_unprefixed_release() {
+        let info = parse_bazel_info("release: development version\n");
+        assert_eq!(info.version.as_deref(), Some("development version"));
+        assert_eq!(
+            info.entries,
+            [BazelInfoEntry {
+                key: "release".to_owned(),
+                value: "development version".to_owned(),
+            }]
+        );
     }
 }

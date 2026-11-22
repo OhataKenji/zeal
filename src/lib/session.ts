@@ -1,4 +1,5 @@
 import { COMMANDS } from "./commands.ts";
+import { createModules } from "./modules.ts";
 import type { Page } from "./pages.ts";
 import { targetError } from "./target.ts";
 import type {
@@ -60,6 +61,7 @@ interface Workspace {
   targetTab: TargetTab;
   /** Applied build flags for the configured/actions reads; "" is default. */
   targetFlags: string;
+  modules: ReturnType<typeof createModules>;
   history: InvocationRecord[];
   historyError: string | null;
   historyBusy: boolean;
@@ -209,6 +211,7 @@ function sessionView(state: SessionState) {
     targetFlags: ws?.targetFlags ?? "",
     targetPhase: target?.phase.value ?? null,
     targetPhaseError: target?.phase.error ?? null,
+    modules: ws?.modules.state ?? null,
     starting: state.start !== null,
     error: state.error,
     invocations: history,
@@ -599,6 +602,7 @@ export function createSession(
 
   function selectWorkspace(path: string) {
     if (disposed || state.workspace?.path === path) return;
+    state.workspace?.modules.dispose();
     state.workspace = {
       path,
       info: reader(),
@@ -609,6 +613,7 @@ export function createSession(
       targetBusy: false,
       targetTab: "definition",
       targetFlags: "",
+      modules: createModules(path, transport, () => state.core?.bazel != null, publish),
       history: [],
       historyError: null,
       historyBusy: false,
@@ -699,33 +704,44 @@ export function createSession(
     reloadTargetPhase(ws);
   }
 
+  /** Runs the cheap flag validator for one apply intent. Resolves false
+   * when a newer apply, reselection, navigation, workspace switch, or
+   * disposal made the intent stale; rethrows the diagnostic while it is
+   * still current. */
+  async function validateFlagApply(ws: Workspace, flags: string, intent: number): Promise<boolean> {
+    const target = ws.target;
+    const applied = ws.targetFlags;
+    const page = state.page;
+    const current = () =>
+      !disposed &&
+      state.workspace === ws &&
+      state.page === page &&
+      ws.target === target &&
+      ws.targetFlags === applied &&
+      flagApplySeq === intent;
+    try {
+      await transport.invoke<void>(COMMANDS.validateTargetFlags, { flags });
+    } catch (error) {
+      if (current()) throw error;
+      return false;
+    }
+    return current();
+  }
+
   /** Applies build flags after a cheap syntactic validation; the active
    * non-Definition phase reloads, even for unchanged flags. Definition
    * keeps its static read. A rejected draft changes nothing, and a stale
-   * completion — newer apply, reselection, workspace switch, disposal —
-   * is ignored. */
+   * completion — newer apply, reselection, navigation, workspace switch,
+   * disposal — is ignored. */
   async function applyTargetFlags(flags: string): Promise<void> {
     if (disposed) return;
     const ws = state.workspace;
     if (!ws) return;
-    if (flags !== "" && flags !== ws.targetFlags) {
-      const intent = ++flagApplySeq;
-      const target = ws.target;
-      const applied = ws.targetFlags;
-      const current = () =>
-        !disposed &&
-        state.workspace === ws &&
-        ws.target === target &&
-        ws.targetFlags === applied &&
-        flagApplySeq === intent;
-      try {
-        await transport.invoke<void>(COMMANDS.validateTargetFlags, { flags });
-      } catch (error) {
-        if (current()) throw error;
-        return;
-      }
-      if (!current()) return;
-    }
+    // Every apply — including Reset — supersedes an older in-flight
+    // validation, so only the newest intent may commit.
+    const intent = ++flagApplySeq;
+    if (flags !== "" && flags !== ws.targetFlags && !(await validateFlagApply(ws, flags, intent)))
+      return;
     ws.targetFlags = flags;
     reloadTargetPhase(ws);
   }
@@ -917,6 +933,7 @@ export function createSession(
 
   function dispose() {
     disposed = true;
+    state.workspace?.modules.dispose();
     unlistens.splice(0).forEach((remove) => remove());
   }
 
@@ -929,6 +946,9 @@ export function createSession(
     openWorkspace,
     loadWorkspaceInfo,
     refresh: () => void refreshSnapshot(),
+    loadModules: () => state.workspace?.modules.load(),
+    selectModule: (key: string | null) => state.workspace?.modules.select(key),
+    explainModule: () => state.workspace?.modules.explain(),
     selectInvocation,
     showPage,
     loadDetail: readSavedDetail,
