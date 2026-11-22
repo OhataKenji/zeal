@@ -1,4 +1,5 @@
 import { COMMANDS } from "./commands.ts";
+import type { InvocationRow } from "./invocation.ts";
 import { createModules } from "./modules.ts";
 import type { Page } from "./pages.ts";
 import { targetError } from "./target.ts";
@@ -124,15 +125,8 @@ function matchesOwner(record: InvocationRecord, execution: OwnedInvocation): boo
   return record.id === execution.id && record.workspace === execution.workspace;
 }
 
-function visibleExecution(state: SessionState, id: string | null): OwnedInvocation | null {
-  const ws = state.workspace;
-  const execution = state.core?.invocations.find((entry) => entry.id === id);
-  return ws &&
-    execution &&
-    (execution.workspace === ws.path ||
-      ws.history.some((record) => matchesOwner(record, execution)))
-    ? execution
-    : null;
+function visibleExecution(state: SessionState, id: string): OwnedInvocation | undefined {
+  return invocationRows(state).find((row) => row.record.id === id)?.execution;
 }
 
 function selectedInvocationId(state: SessionState): string | null {
@@ -162,25 +156,36 @@ function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boole
   return left === null && right === null;
 }
 
-/** Live executions owned by the current workspace, newest first. */
+/** Live executions in the current repository, even before BEP registration. */
 function pinnedInvocations(state: SessionState): OwnedInvocation[] {
+  const core = state.core;
   const ws = state.workspace;
-  return (state.core?.invocations ?? [])
-    .filter((entry) => entry.workspace === ws?.path)
+  if (!core?.invocations.length || !ws) return [];
+  const path = ws.path;
+  const group = wsEntry(core, path)?.repositoryGroup;
+  const owners = new Set<string>();
+  if (group !== undefined) {
+    for (const entry of core.workspaces) {
+      if (entry.repositoryGroup === group) owners.add(entry.workspace);
+    }
+  }
+  // Sharing history does not transfer ownership. A sibling with a reused
+  // id cannot hide a local saved record or diagnostic behind its console.
+  const localIds = new Set(
+    [...ws.history, ...ws.diagnostics]
+      .filter((entry) => entry.workspace === path)
+      .map((entry) => entry.id),
+  );
+  return core.invocations
+    .filter(
+      (entry) =>
+        entry.workspace === path || (owners.has(entry.workspace) && !localIds.has(entry.id)),
+    )
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** One History row: a live execution, a saved record, or a local diagnostic.
- * A diagnostic's `record` carries the same fields a saved record would, but
- * never an `exitCode` — its process exit is reported separately. */
-interface InvocationRow {
-  record: InvocationRecord;
-  execution?: OwnedInvocation;
-  diagnostic?: ProcessDiagnostic;
-}
-
 /** Saved records join the projection in history order: they upgrade a
- * pinned row only when this workspace owns them, and attach a live
+ * pinned row only when the execution owns them, and attach a live
  * execution of any workspace the record matches. */
 function addSavedRows(state: SessionState, ws: Workspace, rows: Map<string, InvocationRow>) {
   const executions = state.core?.invocations ?? [];
@@ -208,7 +213,7 @@ function addDiagnosticRows(ws: Workspace, rows: Map<string, InvocationRow>) {
  * saved-reader eligibility. Pinned live executions keep the head — their
  * local start time can differ from the timestamp a record later reports —
  * and the rest sort newest first with undated rows last. A saved record
- * replaces its pinned row only when this workspace owns it; a diagnostic
+ * replaces its pinned row only when the execution owns it; a diagnostic
  * yields to any same-owner row — live or saved — and takes the place of a
  * foreign same-id record, which is a different build that stays in saved
  * history only. */

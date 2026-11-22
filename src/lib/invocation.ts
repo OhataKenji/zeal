@@ -3,6 +3,7 @@ import type {
   BazelCommand,
   InvocationRecord,
   OwnedInvocation,
+  ProcessDiagnostic,
   RunnerCount,
   Section,
 } from "./types.ts";
@@ -11,6 +12,25 @@ import type {
 export interface InvocationStatus {
   kind: "succeeded" | "failed" | "interrupted" | "running" | "stopping" | "unknown";
   label: string;
+}
+
+/** A diagnostic's record never carries a BEP exit code. */
+export interface InvocationRow {
+  record: InvocationRecord;
+  execution?: OwnedInvocation;
+  diagnostic?: ProcessDiagnostic;
+}
+
+export type HistoryFilter = "all" | "failed" | "running";
+
+export function rowStatus({ record, execution, diagnostic }: InvocationRow): InvocationStatus {
+  return invocationStatus(record, execution, diagnostic?.processExitCode);
+}
+
+export function matchesHistoryFilter(row: InvocationRow, filter: HistoryFilter): boolean {
+  if (filter === "all") return true;
+  const { kind } = rowStatus(row);
+  return filter === "running" ? kind === "running" || kind === "stopping" : kind === "failed";
 }
 
 /** Labels a finished record: a `run` reports its build's BEP result, never
@@ -25,10 +45,12 @@ function bepStatus(record: InvocationRecord): InvocationStatus {
 
 /** Resolves an invocation's result: a live owned entry always reads as
  * running/stopping (a `run` program may outlive its successful build), then
- * the BEP exit code, then unknown. */
+ * the BEP exit code. Without BEP a nonzero local process exit can explain
+ * failure or interruption, but cannot tell us the build succeeded. */
 export function invocationStatus(
   record: InvocationRecord | undefined,
   execution?: OwnedInvocation,
+  processExitCode?: number | null,
 ): InvocationStatus {
   if (execution) {
     return execution.stopping
@@ -36,6 +58,10 @@ export function invocationStatus(
       : { kind: "running", label: "● running" };
   }
   if (record?.exitCode !== undefined) return bepStatus(record);
+  if (processExitCode === 8) return { kind: "interrupted", label: "■ process interrupted" };
+  if (processExitCode != null && processExitCode !== 0) {
+    return { kind: "failed", label: `✗ process failed (exit ${processExitCode})` };
+  }
   return { kind: "unknown", label: "? outcome unknown" };
 }
 

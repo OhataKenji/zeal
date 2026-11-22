@@ -162,6 +162,8 @@ export interface TargetScope {
 export interface WorkspaceState {
   workspace: string;
   scope: TargetScope;
+  /** Equal for matching Git origins within one app-state snapshot. */
+  repositoryGroup?: number;
 }
 
 /** The result of one target-list refresh: the parsed index, or the error

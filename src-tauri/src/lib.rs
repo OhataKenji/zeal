@@ -33,7 +33,7 @@ pub use store::{
 use detail::{InvocationDetail, Section};
 use profile::Profile;
 use query::QueryOutput;
-use state::{AppStateDto, Core, OpenWorkspaceResult};
+use state::{AppStateDto, Core, OpenWorkspaceResult, RegisteredWorkspace};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -166,15 +166,16 @@ fn open_workspace(
     }
     let ws = canonical_workspace_path(&ws)?;
     let bazel = workspace::resolve_bazel();
+    let data = app.path().app_data_dir().ok();
+    let registration = workspace_registration(&ws, scope.clone(), data.as_deref());
     {
         let mut st = core.state.lock().expect("application state lock poisoned");
         store::analytics::refresh_timezone();
-        st.workspaces.insert(ws.clone(), scope.clone());
+        st.workspaces.insert(ws.clone(), registration);
         st.bazel = bazel;
         st.last_workspace = Some(ws.clone());
     }
-    if let Ok(dir) = app.path().app_data_dir() {
-        let _ = store::refresh_workspace(&dir, &ws);
+    if let Some(dir) = data {
         workspace::save(&dir, &ws, &scope);
     }
     core.emit(&app);
@@ -517,6 +518,20 @@ fn registered_workspace(core: &Core, workspace: &str) -> Result<PathBuf, String>
         .workspace_path(workspace)
 }
 
+/// Sample the origin at open/restore, outside the core lock. The saved
+/// history store and live workspace registry use the same literal.
+fn workspace_registration(
+    ws: &Path,
+    scope: scope::Scope,
+    data: Option<&Path>,
+) -> RegisteredWorkspace {
+    let repo_url = workspace::repo_url(ws);
+    if let Some(data) = data {
+        let _ = store::refresh_workspace(data, ws, repo_url.as_deref());
+    }
+    RegisteredWorkspace { scope, repo_url }
+}
+
 fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
     // Re-register the last workspace, if it is still a workspace. Its saved
     // scope restores with it; the caller refreshes explicitly.
@@ -525,11 +540,11 @@ fn restore_workspace(app: &tauri::App, core: Arc<Core>) {
             workspace::load_saved(&dir).filter(|w| workspace::is_workspace(&w.path))
         && let Ok(ws) = canonical_workspace_path(&saved.path)
     {
-        let _ = store::refresh_workspace(&dir, &ws);
+        let registration = workspace_registration(&ws, saved.scope, Some(&dir));
         {
             let mut st = core.state.lock().expect("application state lock poisoned");
             store::analytics::refresh_timezone();
-            st.workspaces.insert(ws.clone(), saved.scope);
+            st.workspaces.insert(ws.clone(), registration);
             st.last_workspace = Some(ws);
         }
     }

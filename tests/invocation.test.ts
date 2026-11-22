@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   invocationStatus,
+  matchesHistoryFilter,
   sectionData,
   sectionMessage,
   sectionNoticeTone,
@@ -55,6 +56,43 @@ test("a finished run reports its build result, never the program's", () => {
   assert.equal(
     invocationStatus({ ...RECORD, finishedAt: 2, exitCode: 3 }).label,
     "✗ failed (exit 3)",
+  );
+});
+
+test("a rejected local process is a failure without claiming a BEP build result", () => {
+  const run = { ...RECORD, cmd: "run" };
+  assert.deepEqual(invocationStatus(run, undefined, 9), {
+    kind: "failed",
+    label: "✗ process failed (exit 9)",
+  });
+  assert.equal(invocationStatus(run, undefined, 8).kind, "interrupted");
+  assert.equal(invocationStatus(run, undefined, 0).kind, "unknown");
+  assert.equal(invocationStatus(run, undefined, null).kind, "unknown");
+});
+
+test("History filters distinguish process failures, running owners and saved results", () => {
+  const record = owned();
+  const diagnostic = { ...record, processExitCode: 9, output: "Another command is running." };
+  const rows = [
+    { record, diagnostic },
+    { record, diagnostic: { ...diagnostic, processExitCode: null } },
+    { record, execution: record },
+    { record, execution: owned({ stopping: true }) },
+    { record: { ...RECORD, exitCode: 1 } },
+    { record: { ...RECORD, exitCode: 0 } },
+    { record: { ...RECORD, exitCode: 8 } },
+  ];
+  assert.deepEqual(
+    rows.filter((row) => matchesHistoryFilter(row, "all")),
+    rows,
+  );
+  assert.deepEqual(
+    rows.filter((row) => matchesHistoryFilter(row, "failed")),
+    [rows[0], rows[4]],
+  );
+  assert.deepEqual(
+    rows.filter((row) => matchesHistoryFilter(row, "running")),
+    [rows[2], rows[3]],
   );
 });
 
