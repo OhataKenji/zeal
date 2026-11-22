@@ -326,7 +326,10 @@ fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
         return Err(io::Error::other("profile must be an owned regular file"));
     }
     let mut copy = dir.file("profile.json.gz", true)?;
-    let size = io::copy(&mut source.take(PROFILE_STORAGE_LIMIT as u64 + 1), &mut copy)?;
+    let size = io::copy(
+        &mut source.take(PROFILE_STORAGE_LIMIT as u64 + 1),
+        &mut copy,
+    )?;
     if size > PROFILE_STORAGE_LIMIT as u64 {
         return Err(io::Error::other("profile exceeds byte limit"));
     }
