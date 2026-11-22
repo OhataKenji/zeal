@@ -15,9 +15,9 @@ keep their state in their views.
 - Target reads run detail → outputs → actions in order per selected workspace;
   other workspaces do not wait. History notifications coalesce into one follow-up.
   Saved detail/profile reads remain independent.
-- Each selected workspace owns its modules state, so page navigation keeps the
-  loaded graph while a workspace switch or session dispose drops it. Loads stay
-  explicit.
+- The selected workspace keeps the module graph, selection, and explanation across
+  page navigation. Switching workspaces discards them. Search and depth filters
+  are local to the Modules page and reset when you leave it.
 - Query input changes clear results; execution is explicit.
 
 See [tests](../tests) for behavior and [development](../docs/development.md) for checks.

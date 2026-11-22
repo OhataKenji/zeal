@@ -33,7 +33,7 @@ export function emptyModulesState(): ModulesState {
   };
 }
 
-/** One workspace-keyed view owns one in-flight request and at most one explanation. */
+/** Tracks at most one in-flight module request and one explanation for the selected workspace. */
 export function createModules(
   workspace: string,
   transport: Transport,
