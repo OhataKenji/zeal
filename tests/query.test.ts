@@ -161,8 +161,8 @@ const EXPECTED: Record<string, string> = {
   "cquery/deps": "deps(//..., 1)",
   "cquery/kind": 'kind(".*_test rule", //...)',
   "aquery/mnemonic": 'mnemonic("CppCompile", //...)',
-  "aquery/inputs": 'inputs("\\.h$", //...)',
-  "aquery/outputs": 'outputs("\\.o$", //...)',
+  "aquery/inputs": 'inputs(".*\\.h$", //...)',
+  "aquery/outputs": 'outputs(".*\\.o$", //...)',
 };
 
 test("every example serializes to its golden text and parses back", () => {
@@ -189,6 +189,18 @@ test("every example serializes to its golden text and parses back", () => {
     }
   }
   assert.deepEqual(seen, Object.keys(EXPECTED));
+});
+
+test("the preview replays matching actions for both extension examples", () => {
+  const presets: { kind: QueryKind; expr: string; actionOutputs?: string[] }[] = JSON.parse(
+    readFileSync(new URL("../src/preview/queries.json", import.meta.url), "utf8"),
+  );
+  for (const name of ["inputs", "outputs"]) {
+    const expr = EXPECTED[`aquery/${name}`];
+    const preset = presets.find((p) => p.kind === "aquery" && p.expr === expr);
+    assert.ok(preset?.actionOutputs?.length, `expected captured matches for ${name}`);
+    if (name === "outputs") assert.ok(preset.actionOutputs.every((path) => path.endsWith(".o")));
+  }
 });
 
 test("the default example parses to a fresh tree and default flags are unchanged", () => {
@@ -851,8 +863,29 @@ test("Builder rejects an action filter as a direct argument of a target function
   );
 });
 
-test("Builder allows consecutive action filters and target functions inside action filters", () => {
-  const root = parseOk('mnemonic("Genrule", outputs("out", deps(//app:chosen)))', "aquery");
+test("Builder rejects action filters on either side of a target set operation", () => {
+  for (const op of ["union", "intersect", "except"]) {
+    const root = binaryNode(
+      parseOk(
+        `inputs("no-such-artifact", //:grpc_unsecure) ${op} outputs("obj", //:gpr)`,
+        "aquery",
+      ),
+    );
+    assert.deepEqual(
+      validateForKind(root, "aquery"),
+      new Map([
+        [`${root.left.id}:fn`, `inputs returns actions. ${op} expects targets.`],
+        [`${root.right.id}:fn`, `outputs returns actions. ${op} expects targets.`],
+      ]),
+    );
+  }
+});
+
+test("Builder allows outer action filter chains around target set operations and functions", () => {
+  const root = parseOk(
+    'mnemonic("Genrule", outputs("out", deps(//app:chosen) union //app:other))',
+    "aquery",
+  );
   assert.equal(validateForKind(root, "aquery").size, 0);
 });
 
