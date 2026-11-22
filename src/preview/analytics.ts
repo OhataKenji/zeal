@@ -202,3 +202,43 @@ export function previewAnalytics(
     workspaces,
   };
 }
+
+function sampleDayCount(day: Date, ago: number): number {
+  const weekend = day.getDay() === 0 || day.getDay() === 6;
+  return weekend ? ago % 3 : [8, 12, 5, 17, 9, 14, 6, 11][ago % 8];
+}
+
+function sampleExitCode(sequence: number): number {
+  return sequence % 37 === 0 ? 8 : sequence % 13 === 0 ? 1 : 0;
+}
+
+/** Synthetic prior days for the browser chart only; never invocation history. */
+export function sampleAnalyticsActivity(
+  seeds: readonly (AnalyticsRecord & { finishedAt: number })[],
+  workspace: string,
+  now: number,
+): AnalyticsRecord[] {
+  const rows: AnalyticsRecord[] = [];
+  for (let ago = 29; ago >= 1 && seeds.length > 0; ago--) {
+    const day = new Date(now);
+    day.setDate(day.getDate() - ago);
+    const count = sampleDayCount(day, ago);
+    for (let i = 0; i < count; i++) {
+      const seed = seeds[(ago + i) % seeds.length];
+      const startedAt = day.setHours(8, 35 * i + (ago % 23), 0, 0);
+      const elapsed = Math.round(
+        ((seed.finishedAt - seed.startedAt) * (65 + ((ago * 11 + i * 17) % 90))) / 100,
+      );
+      const sequence = rows.length + 1;
+      rows.push({
+        workspace,
+        cmd: seed.cmd,
+        pattern: seed.pattern,
+        startedAt,
+        finishedAt: startedAt + elapsed,
+        exitCode: sampleExitCode(sequence),
+      });
+    }
+  }
+  return rows;
+}

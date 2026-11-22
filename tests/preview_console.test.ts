@@ -2,29 +2,42 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { interpretConsoleInput } from "../src/preview/console.ts";
 
-test("preview console accumulates and echoes input across writes", () => {
-  const first = interpretConsoleInput("", "1");
-  assert.deepEqual(first, { input: "1", output: "1", exitCode: null });
-  assert.deepEqual(interpretConsoleInput(first.input, "2"), {
-    input: "12",
-    output: "2",
+test("preview console echoes typed characters across writes", () => {
+  const first = interpretConsoleInput("", "h");
+  assert.deepEqual(first, { input: "h", output: "h", exitCode: null });
+  assert.deepEqual(interpretConsoleInput(first.input, "i"), {
+    input: "hi",
+    output: "i",
     exitCode: null,
   });
 });
 
-test("preview console edits the input before submitting a number", () => {
-  assert.deepEqual(interpretConsoleInput("12", "\x7f3\r\nignored"), {
-    input: "13",
-    output: "\b \b3\r\n26\r\n",
-    exitCode: 0,
+test("preview console submits a line on Enter and keeps running", () => {
+  assert.deepEqual(interpretConsoleInput("hi", "\r"), {
+    input: "",
+    output: "\r\n",
+    exitCode: null,
+  });
+  assert.deepEqual(interpretConsoleInput("yo", "\n"), {
+    input: "",
+    output: "\r\n",
+    exitCode: null,
   });
 });
 
-test("preview console accepts a newline and doubles an empty input as zero", () => {
-  assert.deepEqual(interpretConsoleInput("", "\n"), {
-    input: "",
-    output: "\r\n0\r\n",
-    exitCode: 0,
+test("preview console treats CRLF as a single line ending", () => {
+  assert.deepEqual(interpretConsoleInput("hi", "\r\nthere"), {
+    input: "there",
+    output: "\r\nthere",
+    exitCode: null,
+  });
+});
+
+test("preview console edits the line before submitting and continues", () => {
+  assert.deepEqual(interpretConsoleInput("12", "\x7f3\r\nnext"), {
+    input: "next",
+    output: "\b \b3\r\nnext",
+    exitCode: null,
   });
 });
 
