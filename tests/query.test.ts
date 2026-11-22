@@ -489,10 +489,6 @@ test("commandLine puts managed output options after user flags, and the expressi
     commandLine(queryInputs("aquery", "a'b", "jsonproto", flags)),
     `bazel --noblock_for_lock aquery ${words} --output=jsonproto --include_commandline --include_artifacts -- 'a'\\''b'`,
   );
-  assert.equal(
-    commandLine(inputs("aquery", "text", flags)),
-    `bazel --noblock_for_lock aquery ${words} --output=text -- 'deps(//a)'`,
-  );
   assert.equal(commandLine(inputs("cquery", "label", { ...DEFAULT_FLAGS, flags: "--a='x" })), "");
 });
 
@@ -590,6 +586,7 @@ function loading(expr: string, output: "graph" | "label" = "label") {
 const OUTPUT: QueryOutput = {
   exitCode: 0,
   stdout: "//a:b\n",
+  stdoutTruncated: false,
   truncated: false,
   stderrTail: "",
   actions: null,
@@ -845,6 +842,20 @@ test("trace escapes a literal artifact path and scopes deps to the owner, not an
   }
 });
 
+test("Builder rejects an action filter as a direct argument of a target function", () => {
+  const root = callNode(parseOk('deps(mnemonic("Genrule", //app:chosen))', "aquery"));
+  const filter = root.args[0] as Expr;
+  assert.deepEqual(
+    validateForKind(root, "aquery"),
+    new Map([[`${filter.id}:fn`, "mnemonic returns actions. deps expects targets."]]),
+  );
+});
+
+test("Builder allows consecutive action filters and target functions inside action filters", () => {
+  const root = parseOk('mnemonic("Genrule", outputs("out", deps(//app:chosen)))', "aquery");
+  assert.equal(validateForKind(root, "aquery").size, 0);
+});
+
 test("cquery groups indented transitions under the preceding header only", () => {
   assert.deepEqual(
     parseCqueryOutput(
@@ -905,4 +916,29 @@ test("graph kind invalidates equal label outputs, but cquery Table/Raw shares in
   h.runner.select(req("cquery", "table", true));
   assert.equal(h.state.result, null);
   assert.equal(h.calls.length, 3, "switching views never executes a query");
+});
+
+test("aquery Table and Raw share one in-flight invocation and its result", async () => {
+  const h = harness();
+  const table = queryInputs(
+    "aquery",
+    "//a",
+    outputFormatFor("aquery", "table", false),
+    DEFAULT_FLAGS,
+  );
+  const raw = queryInputs("aquery", "//a", outputFormatFor("aquery", "raw", false), DEFAULT_FLAGS);
+  assert.equal(table.output, "jsonproto");
+  const pending = h.runner.run(table);
+  h.runner.select(raw);
+  const result: QueryOutput = {
+    ...OUTPUT,
+    stdout: "{}",
+    actions: { actions: [], truncated: false },
+  };
+  h.calls[0].resolve(result);
+  await pending;
+  assert.equal(h.state.result, result);
+  h.runner.select(table);
+  assert.equal(h.state.result, result);
+  assert.equal(h.calls.length, 1);
 });

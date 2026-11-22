@@ -511,20 +511,18 @@ function previewQueryOutput({ kind, output, expr, flags }: QueryRequest): QueryO
   let stdout = "";
   let actions: TargetActions | null = null;
   switch (output) {
-    case "jsonproto":
-    case "text": {
-      const set = previewActions(SNAPSHOT.targets.some((t) => t.label === expr) ? expr : PARSER);
-      if (output === "jsonproto") {
-        actions = set;
-      } else {
-        stdout = set.actions
-          .slice(0, 10)
-          .map(
-            (a) =>
-              `action '${a.mnemonic}'\n  Outputs: "${a.output}"\n  Owner: ${a.owner}\n  Inputs: ${a.inputs.length} file(s)\n`,
-          )
-          .join("\n");
-      }
+    case "jsonproto": {
+      actions = previewActions(SNAPSHOT.targets.some((t) => t.label === expr) ? expr : PARSER);
+      stdout = JSON.stringify(
+        {
+          actions: actions.actions.map((action) => ({
+            mnemonic: action.mnemonic,
+            arguments: action.arguments,
+          })),
+        },
+        null,
+        2,
+      );
       break;
     }
     case "transitions":
@@ -549,7 +547,7 @@ function previewQueryOutput({ kind, output, expr, flags }: QueryRequest): QueryO
         (kind === "cquery" ? labels.map((label) => `${label} (${config})`) : labels).join("\n") +
         "\n";
   }
-  return { exitCode: 0, stdout, truncated: false, stderrTail: "", actions };
+  return { exitCode: 0, stdout, stdoutTruncated: false, truncated: false, stderrTail: "", actions };
 }
 
 /** Installs mock core IPC for the development-only browser preview. */
