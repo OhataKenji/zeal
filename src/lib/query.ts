@@ -5,7 +5,7 @@ import type { Target, TargetActions } from "./types.ts";
 
 export type QueryKind = "query" | "cquery" | "aquery";
 export type ResultView = "raw" | "graph" | "table";
-export type OutputFormat = "label" | "graph" | "transitions" | "jsonproto" | "text";
+export type OutputFormat = "label" | "graph" | "transitions" | "jsonproto";
 
 export function outputFormatFor(
   kind: QueryKind,
@@ -14,7 +14,7 @@ export function outputFormatFor(
 ): OutputFormat {
   if (kind === "query") return view === "graph" ? "graph" : "label";
   if (kind === "cquery") return transitions ? "transitions" : "label";
-  return view === "raw" ? "text" : "jsonproto";
+  return "jsonproto";
 }
 
 /**
@@ -57,6 +57,7 @@ export interface ArgSpec {
  */
 export interface FnSpec {
   kinds?: readonly QueryKind[];
+  filtersActions?: boolean;
   signature: string;
   args: ArgSpec[];
   wrapArg: number;
@@ -69,6 +70,7 @@ export const UNIVERSE_HELP =
 function actionFilter(name: string): FnSpec {
   return {
     kinds: ["aquery"],
+    filtersActions: true,
     signature: `${name}(pattern, expr)`,
     args: [
       { name: "pattern", type: "word", default: ".*" },
@@ -595,14 +597,21 @@ function integerError(value: unknown, arg: ArgSpec): string | null {
   return null;
 }
 
+function callError(fn: string, kind: QueryKind, parentFn?: string): string | null {
+  if (!supportsFunction(fn, kind)) return `${fn} is not available in ${kind}.`;
+  if (FUNCTIONS[fn].filtersActions && parentFn && !FUNCTIONS[parentFn].filtersActions)
+    return `${fn} returns actions. ${parentFn} expects targets.`;
+  return null;
+}
+
 /**
  * Per-field errors for an expression tree, keyed like the mock's `data-err`
  * attributes: `${nodeId}:text` for target patterns and `${nodeId}:${index}`
- * for scalar call arguments.
+ * for scalar call arguments, or `${nodeId}:fn` for invalid calls.
  */
 export function validate(root: Expr, kind: QueryKind): Map<string, string> {
   const errors: { id: number; arg: string | number; msg: string }[] = [];
-  function walk(n: Expr) {
+  function walk(n: Expr, parentFn?: string) {
     switch (n.kind) {
       case "target": {
         const t = n.text;
@@ -635,14 +644,13 @@ export function validate(root: Expr, kind: QueryKind): Map<string, string> {
         walk(n.right);
         break;
       case "call": {
-        if (!supportsFunction(n.fn, kind)) {
-          errors.push({ id: n.id, arg: "fn", msg: `${n.fn} is not available in ${kind}.` });
-        }
         const schema = FUNCTIONS[n.fn];
+        const msg = callError(n.fn, kind, parentFn);
+        if (msg) errors.push({ id: n.id, arg: "fn", msg });
         schema.args.forEach((arg, i) => {
           const v = n.args[i];
           if (arg.type === "expr") {
-            walk(v as Expr);
+            walk(v as Expr, n.fn);
             return;
           }
           if (arg.type === "int") {
@@ -946,6 +954,7 @@ export function producerQuery(path: string, owner: string): string {
 export interface QueryOutput {
   exitCode: number | null;
   stdout: string;
+  stdoutTruncated: boolean;
   truncated: boolean;
   stderrTail: string;
   actions: TargetActions | null;

@@ -3,7 +3,8 @@
 //! Distinct from ingest's fixed `bazel query //...` snapshot fetch: the
 //! expression and the output format come from the editor. Execution registers
 //! its own owned invocation like every other Bazel operation, and keeps
-//! bounded output: the first bytes of stdout and the tail of stderr.
+//! bounded output: the first bytes of stdout and the tail of stderr. Action
+//! queries capture more stdout to parse the table, but share the Raw limit.
 //!
 //! Composer Stop and app exit use the same process-group lifecycle as other
 //! Bazel operations; queries have no separate timeout.
@@ -24,7 +25,7 @@ use tauri::AppHandle;
 /// Cap on the expression text: far beyond a hand-built query.
 const MAX_EXPR_LEN: usize = 100_000;
 
-/// First bytes of stdout kept for the result; the rest is drained and dropped.
+/// Maximum size of the stdout preview sent to the frontend.
 const STDOUT_CAP: usize = 4 * 1024 * 1024;
 const AQUERY_JSON_CAP: usize = 32 * 1024 * 1024;
 const MAX_FLAGS_LEN: usize = 16 * 1024;
@@ -78,7 +79,9 @@ pub struct QueryOutput {
     pub exit_code: Option<i32>,
     /// stdout, at most the first [`STDOUT_CAP`] bytes.
     pub stdout: String,
-    /// stdout exceeded the cap; only the first bytes are kept.
+    /// The preview does not contain all of stdout.
+    pub stdout_truncated: bool,
+    /// Structured output was cut short.
     pub truncated: bool,
     /// The last ~8 KiB of stderr, where bazel writes its errors.
     pub stderr_tail: String,
@@ -161,7 +164,6 @@ fn argv(req: &QueryRequest) -> Result<Vec<String>, String> {
             args.push("--include_commandline".into());
             args.push("--include_artifacts".into());
         }
-        (QueryKind::Aquery, "text") => {}
         _ => return Err("unsupported output for selected query mode".into()),
     }
     args.push("--".into());
@@ -206,7 +208,7 @@ pub fn run(app: AppHandle, core: Arc<Core>, request: &QueryRequest) -> Result<Qu
     // a full pipe; each reader sends its capture once, at end of stream.
     let (out_tx, out_rx) = mpsc::channel();
     let mut out_pipe = child.stdout.take().expect("stdout piped");
-    let json = request.kind == QueryKind::Aquery && request.output == "jsonproto";
+    let json = request.kind == QueryKind::Aquery;
     let cap = if json { AQUERY_JSON_CAP } else { STDOUT_CAP };
     thread::spawn(move || {
         let _ = out_tx.send(capture_head(&mut out_pipe, cap));
@@ -251,14 +253,27 @@ fn query_output(
     } else {
         None
     };
+    let preview = &stdout[..stdout.len().min(STDOUT_CAP)];
+    let stdout_truncated = truncated || preview.len() < stdout.len();
+    let mut stdout = match std::str::from_utf8(preview) {
+        Ok(text) => text.to_owned(),
+        Err(error) if stdout_truncated && error.error_len().is_none() => {
+            String::from_utf8_lossy(&preview[..error.valid_up_to()]).into_owned()
+        }
+        Err(_) => String::from_utf8_lossy(preview).into_owned(),
+    };
+    // Lossy decoding can grow the preview if Bazel emits invalid UTF-8.
+    let mut end = stdout.len().min(STDOUT_CAP);
+    while !stdout.is_char_boundary(end) {
+        end -= 1;
+    }
+    let stdout_truncated = stdout_truncated || end < stdout.len();
+    stdout.truncate(end);
     Ok(QueryOutput {
         exit_code,
-        stdout: if json {
-            String::new()
-        } else {
-            String::from_utf8_lossy(stdout).into_owned()
-        },
-        truncated,
+        stdout,
+        stdout_truncated,
+        truncated: if json { truncated } else { stdout_truncated },
         stderr_tail,
         actions,
     })
@@ -362,7 +377,6 @@ mod tests {
                 "jsonproto",
                 &["--include_commandline", "--include_artifacts"],
             ),
-            (QueryKind::Aquery, "text", &[]),
         ] {
             let req = QueryRequest {
                 flags: "--config=opt".into(),
@@ -379,6 +393,11 @@ mod tests {
             expected.extend(["--", "//app:chosen"]);
             assert_eq!(argv(&req).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn aquery_rejects_text_output() {
+        assert!(argv(&request(QueryKind::Aquery, "text")).is_err());
     }
 
     #[test]
@@ -546,7 +565,7 @@ mod tests {
         };
         let b = QueryRequest {
             workspace: ws.clone(),
-            ..request(QueryKind::Aquery, "text")
+            ..request(QueryKind::Aquery, "jsonproto")
         };
         let (mut child_a, id_a) = spawn_query(&core, &a).unwrap();
         let (mut child_b, id_b) = spawn_query(&core, &b).unwrap();
@@ -587,6 +606,7 @@ mod tests {
         let json = serde_json::to_value(QueryOutput {
             exit_code: Some(2),
             stdout: "//a:b\n".to_string(),
+            stdout_truncated: false,
             truncated: false,
             stderr_tail: "oops".to_string(),
             actions: None,
@@ -594,6 +614,7 @@ mod tests {
         .unwrap();
         assert_eq!(json["exitCode"], 2);
         assert_eq!(json["stderrTail"], "oops");
+        assert_eq!(json["stdoutTruncated"], false);
         assert!(json.get("stderr_tail").is_none());
     }
 
@@ -601,7 +622,8 @@ mod tests {
     fn jsonproto_parses_only_an_intact_successful_capture() {
         let valid = br#"{"actions":[{"targetId":1,"mnemonic":"Genrule"}],"targets":[{"id":1,"label":"//app:chosen"}]}"#;
         let out = query_output(true, Some(0), valid, false, String::new()).unwrap();
-        assert_eq!(out.stdout, "");
+        assert_eq!(out.stdout.as_bytes(), valid);
+        assert!(!out.stdout_truncated);
         assert_eq!(out.actions.unwrap().actions[0].owner, "//app:chosen");
         assert!(query_output(true, Some(0), b"bad json", false, String::new()).is_err());
     }
@@ -611,11 +633,25 @@ mod tests {
         for (exit, truncated) in [(Some(1), false), (None, false), (Some(0), true)] {
             let out = query_output(true, exit, b"partial", truncated, "error".into()).unwrap();
             assert!(out.actions.is_none());
-            assert_eq!(out.stdout, "");
+            assert_eq!(out.stdout, "partial");
+            assert_eq!(out.stdout_truncated, truncated);
             assert_eq!(out.exit_code, exit);
             assert_eq!(out.stderr_tail, "error");
             assert_eq!(out.truncated, truncated);
         }
+    }
+
+    #[test]
+    fn jsonproto_preview_cap_preserves_the_action_table() {
+        let prefix = r#"{"actions":[{"targetId":1,"mnemonic":"Genrule"}],"ignored":""#;
+        let filler = "x".repeat(STDOUT_CAP - prefix.len() - 3);
+        let json =
+            format!(r#"{prefix}{filler}😀","targets":[{{"id":1,"label":"//app:chosen"}}]}}"#);
+        let out = query_output(true, Some(0), json.as_bytes(), false, String::new()).unwrap();
+        assert_eq!(out.stdout, json[..STDOUT_CAP - 3]);
+        assert!(out.stdout_truncated);
+        assert!(!out.truncated);
+        assert_eq!(out.actions.unwrap().actions[0].owner, "//app:chosen");
     }
 
     struct InterruptOnce<R> {

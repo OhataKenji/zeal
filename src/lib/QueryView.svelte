@@ -180,8 +180,7 @@
   );
 
   $effect.pre(() => {
-    // Depend on the execution inputs, not the presentation: cquery's Table
-    // and Raw are two views of the same stdout, even during an in-flight run.
+    // Table and Raw share an execution for cquery and aquery.
     const next = request;
     untrack(() => controller.select(next));
   });
@@ -549,10 +548,11 @@
         {#if graphWarn && !stored?.truncated}
           <Notice tone="warning"><pre>{graphWarn}</pre></Notice>
         {/if}
-        {#if stored?.truncated && !failedOutput && !qstate.running}
+        {#if stored && !failedOutput && !qstate.running &&
+          (resultView === "raw" ? stored.stdoutTruncated : stored.truncated)}
           <Notice tone={resultView === "graph" ? "error" : "warning"}>
-            {#if resultView === "graph"}Bazel truncated the graph output — it
-              cannot be rendered.{:else if outputFormat === "jsonproto"}Action data exceeds 32 MiB. Narrow the expression and execute again.{:else}Bazel truncated this output.{/if}
+            {#if resultView === "raw"}Showing a truncated preview of the output.{:else if resultView === "graph"}Bazel truncated the graph output — it
+              cannot be rendered.{:else if kind === "aquery"}Action data exceeds 32 MiB. Narrow the expression and execute again.{:else}Bazel truncated this output.{/if}
           </Notice>
         {/if}
         {#if graphError}
