@@ -90,7 +90,7 @@ export function buildTree(index: TargetIndex): DirNode {
   return root;
 }
 
-/** A visible package row in the tree; the root row stands for `//...`. */
+/** A visible package row in the tree. */
 export interface Row {
   readonly path: string;
   readonly name: string;
@@ -104,10 +104,10 @@ export interface Row {
 export function flatten(root: DirNode, expanded: Set<string>): Row[] {
   const rows: Row[] = [];
   const visit = (node: DirNode, depth: number) => {
-    const open = depth === 0 || expanded.has(node.path);
+    const open = expanded.has(node.path);
     rows.push({
       path: node.path,
-      name: depth === 0 ? "//..." : `${node.name}/`,
+      name: `${node.name}/`,
       depth,
       count: node.count,
       hasChildren: node.dirs.length > 0,
@@ -115,7 +115,7 @@ export function flatten(root: DirNode, expanded: Set<string>): Row[] {
     });
     if (open) for (const child of node.dirs) visit(child, depth + 1);
   };
-  visit(root, 0);
+  for (const child of root.dirs) visit(child, 0);
   return rows;
 }
 

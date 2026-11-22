@@ -11,7 +11,7 @@ import {
 } from "../src/lib/model.ts";
 import type { TargetDetail, TargetIndex } from "../src/lib/types.ts";
 
-test("package tree leads with //... and counts targets per subtree", () => {
+test("package tree counts targets per subtree", () => {
   const snapshot: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: [
@@ -47,14 +47,12 @@ test("package tree leads with //... and counts targets per subtree", () => {
   assert.deepEqual(
     rows.map((row) => ({ path: row.path, name: row.name, depth: row.depth })),
     [
-      { path: "", name: "//...", depth: 0 },
-      { path: "app", name: "app/", depth: 1 },
-      { path: "app/lib", name: "lib/", depth: 2 },
+      { path: "app", name: "app/", depth: 0 },
+      { path: "app/lib", name: "lib/", depth: 1 },
     ],
   );
-  assert.equal(rows[0].count, 3);
-  assert.equal(rows[1].count, 2);
-  assert.equal(rows[2].count, 1);
+  assert.equal(rows[0].count, 2);
+  assert.equal(rows[1].count, 1);
   assert.ok(rows.every((row) => !("kind" in row) && !("label" in row)));
 });
 
@@ -71,10 +69,10 @@ test("expanding a package reveals its row without opening its children", () => {
   const tree = buildTree(snapshot);
   const expanded = new Set(["other"]);
 
-  // Collapsed branches still show their own row; only //... is always open.
+  // Collapsed branches still show their own row.
   assert.deepEqual(
     flatten(tree, expanded).map((row) => row.path),
-    ["", "app", "other"],
+    ["app", "other"],
   );
 
   // Revealing //app/lib/deep opens its ancestors but not the package itself.
@@ -82,7 +80,7 @@ test("expanding a package reveals its row without opening its children", () => {
     expanded.add(path);
   }
   const paths = flatten(tree, expanded).map((row) => row.path);
-  assert.deepEqual(paths, ["", "app", "app/lib", "app/lib/deep", "other"]);
+  assert.deepEqual(paths, ["app", "app/lib", "app/lib/deep", "other"]);
   assert.deepEqual(ancestorsOf(splitLabel("//:root").pkg), []);
 });
 
@@ -149,7 +147,7 @@ test("commandLine joins quoted arguments with spaces", () => {
   assert.equal(commandLine({ arguments: ["it's", "x"] }), `'it'\\''s' x`);
 });
 
-test("every package row is selectable and the root row stands for //...", () => {
+test("intermediate package directories appear as rows", () => {
   const index: TargetIndex = {
     meta: { fetchedAt: 0, status: "ok" },
     targets: ["//app/lib:parser", "//apple:server", "//:root"].map((label) => ({
@@ -163,10 +161,8 @@ test("every package row is selectable and the root row stands for //...", () => 
   // Intermediate directories without their own targets still appear as rows.
   assert.deepEqual(
     rows.map((row) => row.path),
-    ["", "app", "app/lib", "apple"],
+    ["app", "app/lib", "apple"],
   );
-  assert.equal(rows[0].name, "//...");
-  assert.equal(rows[0].expanded, true);
   assert.equal(rows.find((row) => row.path === "app")?.count, 1);
   assert.equal(rows.find((row) => row.path === "app/lib")?.count, 1);
   assert.equal(rows.find((row) => row.path === "apple")?.count, 1);
