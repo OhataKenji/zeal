@@ -38,7 +38,7 @@ libc = "0.2"
 rustix = { version = "1.1.6", features = ["event", "fs", "process", "termios"] }
 rustix-openpty = "0.2"
 
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 tonic = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"
