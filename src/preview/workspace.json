@@ -1,0 +1,3244 @@
+{
+  "edges": [
+    {
+      "attr": "plugin",
+      "from": "//api:_rates_cc_grpc_grpc_codegen",
+      "to": "@com_github_grpc_grpc//src/compiler:grpc_cpp_plugin"
+    },
+    {
+      "attr": "srcs",
+      "from": "//api:_rates_cc_grpc_grpc_codegen",
+      "to": "//api:rates_proto"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:python",
+      "to": "//api:rates_py_pb2"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:python",
+      "to": "//api:rates_py_pb2_grpc"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:rates_cc_grpc",
+      "to": "//api:rates_cc_proto"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:rates_cc_grpc",
+      "to": "@com_github_grpc_grpc//:grpc++_codegen_proto"
+    },
+    {
+      "attr": "hdrs",
+      "from": "//api:rates_cc_grpc",
+      "to": "//api:_rates_cc_grpc_grpc_codegen"
+    },
+    {
+      "attr": "srcs",
+      "from": "//api:rates_cc_grpc",
+      "to": "//api:_rates_cc_grpc_grpc_codegen"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:rates_cc_proto",
+      "to": "//api:rates_proto"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:rates_py_pb2",
+      "to": "//api:rates_proto"
+    },
+    {
+      "attr": "deps",
+      "from": "//api:rates_py_pb2_grpc",
+      "to": "//api:rates_proto"
+    },
+    {
+      "attr": "grpc_library",
+      "from": "//api:rates_py_pb2_grpc",
+      "to": "@com_github_grpc_grpc//src/python/grpcio/grpc:grpcio"
+    },
+    {
+      "attr": "py_deps",
+      "from": "//api:rates_py_pb2_grpc",
+      "to": "//api:rates_py_pb2"
+    },
+    {
+      "attr": "deps",
+      "from": "//dispatch:dispatch_lib",
+      "to": "//api:python"
+    },
+    {
+      "attr": "deps",
+      "from": "//dispatch:dispatch_lib",
+      "to": "@com_github_grpc_grpc//src/python/grpcio/grpc:grpcio"
+    },
+    {
+      "attr": "deps",
+      "from": "//dispatch:quote",
+      "to": "//dispatch:dispatch_lib"
+    },
+    {
+      "attr": "data",
+      "from": "//dispatch:quote_contract_test",
+      "to": "//rates:rate_server"
+    },
+    {
+      "attr": "deps",
+      "from": "//dispatch:quote_contract_test",
+      "to": "//dispatch:dispatch_lib"
+    },
+    {
+      "attr": "deps",
+      "from": "//rates:rate_server",
+      "to": "//api:rates_cc_grpc"
+    },
+    {
+      "attr": "deps",
+      "from": "//rates:rate_server",
+      "to": "//api:rates_cc_proto"
+    },
+    {
+      "attr": "deps",
+      "from": "//rates:rate_server",
+      "to": "//rates:tariff"
+    },
+    {
+      "attr": "deps",
+      "from": "//rates:rate_server",
+      "to": "@com_github_grpc_grpc//:grpc++"
+    },
+    {
+      "attr": "link_extra_lib",
+      "from": "//rates:rate_server",
+      "to": "@bazel_tools//tools/cpp:link_extra_lib"
+    },
+    {
+      "attr": "malloc",
+      "from": "//rates:rate_server",
+      "to": "@bazel_tools//tools/cpp:malloc"
+    },
+    {
+      "attr": "deps",
+      "from": "//rates:tariff",
+      "to": "//api:rates_cc_proto"
+    }
+  ],
+  "files": [
+    {
+      "owner": "//api:python",
+      "path": "api/__init__.py",
+      "role": "srcs"
+    },
+    {
+      "owner": "//api:rates_proto",
+      "path": "api/rates.proto",
+      "role": "srcs"
+    },
+    {
+      "owner": "//dispatch:dispatch_lib",
+      "path": "dispatch/__init__.py",
+      "role": "srcs"
+    },
+    {
+      "owner": "//dispatch:dispatch_lib",
+      "path": "dispatch/quote.py",
+      "role": "srcs"
+    },
+    {
+      "owner": "//dispatch:quote",
+      "path": "dispatch/quote.py",
+      "role": "main"
+    },
+    {
+      "owner": "//dispatch:quote",
+      "path": "dispatch/quote.py",
+      "role": "srcs"
+    },
+    {
+      "owner": "//dispatch:quote_contract_test",
+      "path": "dispatch/quote_contract_test.py",
+      "role": "srcs"
+    },
+    {
+      "owner": "//rates:rate_server",
+      "path": "rates/rate_server.cc",
+      "role": "srcs"
+    },
+    {
+      "owner": "//rates:rate_server",
+      "path": "rates/rate_server.dwp",
+      "role": "out"
+    },
+    {
+      "owner": "//rates:rate_server",
+      "path": "rates/rate_server.stripped",
+      "role": "out"
+    },
+    {
+      "owner": "//rates:tariff",
+      "path": "rates/tariff.cc",
+      "role": "srcs"
+    },
+    {
+      "owner": "//rates:tariff",
+      "path": "rates/tariff.h",
+      "role": "hdrs"
+    }
+  ],
+  "targets": [
+    {
+      "label": "//api:_rates_cc_grpc_grpc_codegen",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 19
+      },
+      "name": "_rates_cc_grpc_grpc_codegen",
+      "pkg": "api",
+      "ruleClass": "_generate_cc"
+    },
+    {
+      "label": "//api:python",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 39
+      },
+      "name": "python",
+      "pkg": "api",
+      "ruleClass": "py_library"
+    },
+    {
+      "label": "//api:rates_cc_grpc",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 19
+      },
+      "name": "rates_cc_grpc",
+      "pkg": "api",
+      "ruleClass": "cc_library"
+    },
+    {
+      "label": "//api:rates_cc_proto",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 14
+      },
+      "name": "rates_cc_proto",
+      "pkg": "api",
+      "ruleClass": "cc_proto_library"
+    },
+    {
+      "label": "//api:rates_proto",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 9
+      },
+      "name": "rates_proto",
+      "pkg": "api",
+      "ruleClass": "proto_library"
+    },
+    {
+      "label": "//api:rates_py_pb2",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 26
+      },
+      "name": "rates_py_pb2",
+      "pkg": "api",
+      "ruleClass": "py_proto_library"
+    },
+    {
+      "label": "//api:rates_py_pb2_grpc",
+      "location": {
+        "file": "/demo/parcel-desk/api/BUILD",
+        "line": 31
+      },
+      "name": "rates_py_pb2_grpc",
+      "pkg": "api",
+      "ruleClass": "_generate_pb2_grpc_src"
+    },
+    {
+      "label": "//dispatch:dispatch_lib",
+      "location": {
+        "file": "/demo/parcel-desk/dispatch/BUILD",
+        "line": 3
+      },
+      "name": "dispatch_lib",
+      "pkg": "dispatch",
+      "ruleClass": "py_library"
+    },
+    {
+      "label": "//dispatch:quote",
+      "location": {
+        "file": "/demo/parcel-desk/dispatch/BUILD",
+        "line": 16
+      },
+      "name": "quote",
+      "pkg": "dispatch",
+      "ruleClass": "py_binary"
+    },
+    {
+      "label": "//dispatch:quote_contract_test",
+      "location": {
+        "file": "/demo/parcel-desk/dispatch/BUILD",
+        "line": 24
+      },
+      "name": "quote_contract_test",
+      "pkg": "dispatch",
+      "ruleClass": "py_test"
+    },
+    {
+      "label": "//rates:rate_server",
+      "location": {
+        "file": "/demo/parcel-desk/rates/BUILD",
+        "line": 8
+      },
+      "name": "rate_server",
+      "pkg": "rates",
+      "ruleClass": "cc_binary"
+    },
+    {
+      "label": "//rates:tariff",
+      "location": {
+        "file": "/demo/parcel-desk/rates/BUILD",
+        "line": 1
+      },
+      "name": "tariff",
+      "pkg": "rates",
+      "ruleClass": "cc_library"
+    }
+  ],
+  "info": {
+    "version": "7.6.1",
+    "entries": [
+      {
+        "key": "bazel-bin",
+        "value": "/demo/cache/bazel/output-base/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin"
+      },
+      {
+        "key": "bazel-genfiles",
+        "value": "/demo/cache/bazel/output-base/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin"
+      },
+      {
+        "key": "bazel-testlogs",
+        "value": "/demo/cache/bazel/output-base/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs"
+      },
+      {
+        "key": "character-encoding",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "command_log",
+        "value": "/demo/cache/bazel/output-base/command.log"
+      },
+      {
+        "key": "committed-heap-size",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "execution_root",
+        "value": "/demo/cache/bazel/output-base/execroot/_main"
+      },
+      {
+        "key": "gc-count",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "gc-time",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "install_base",
+        "value": "/demo/cache/bazel/install-base"
+      },
+      {
+        "key": "java-home",
+        "value": "/demo/cache/bazel/install-base/embedded_tools/jdk"
+      },
+      {
+        "key": "java-runtime",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "java-vm",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "local_resources",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "max-heap-size",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "output_base",
+        "value": "/demo/cache/bazel/output-base"
+      },
+      {
+        "key": "output_path",
+        "value": "/demo/cache/bazel/output-base/execroot/_main/bazel-out"
+      },
+      {
+        "key": "package_path",
+        "value": "%workspace%"
+      },
+      {
+        "key": "release",
+        "value": "release 7.6.1"
+      },
+      {
+        "key": "repository_cache",
+        "value": "/demo/cache/bazel/repository-cache"
+      },
+      {
+        "key": "server_log",
+        "value": "/demo/cache/bazel/output-base/java.log"
+      },
+      {
+        "key": "server_pid",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "used-heap-size",
+        "value": "(not retained in preview)"
+      },
+      {
+        "key": "workspace",
+        "value": "/demo/parcel-desk"
+      }
+    ]
+  },
+  "modules": {
+    "modules": [
+      {
+        "dependencies": [
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13"
+        ],
+        "direct": true,
+        "key": "apple_support@1.24.5",
+        "name": "apple_support",
+        "requiredBy": [
+          "<root>",
+          "grpc@1.71.0",
+          "re2@2024-07-02",
+          "rules_apple@3.16.0",
+          "rules_swift@2.1.1",
+          "swift_argument_parser@1.3.1.1"
+        ],
+        "version": "1.24.5"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "apple_support@1.24.5",
+          "bazel_skylib@1.7.1",
+          "boringssl@0.20241024.0",
+          "c-ares@1.19.1",
+          "cython@3.0.11-1",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "googletest@1.15.2",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "opentelemetry-cpp@1.19.0",
+          "platforms@0.0.10",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "re2@2024-07-02",
+          "rules_apple@3.16.0",
+          "rules_cc@0.2.13",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0",
+          "xds@0.0.0-20240423-555b57e",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "direct": true,
+        "key": "grpc@1.71.0",
+        "name": "grpc",
+        "requiredBy": ["<root>"],
+        "version": "1.71.0"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "jsoncpp@1.9.5",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_fuzzing@0.5.2",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_kotlin@1.9.6",
+          "rules_license@1.0.0",
+          "rules_pkg@1.0.1",
+          "rules_python@0.40.0",
+          "rules_shell@0.2.0",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "direct": true,
+        "key": "protobuf@29.0",
+        "name": "protobuf",
+        "requiredBy": [
+          "<root>",
+          "cel-spec@0.15.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "gazelle@0.37.0",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "grpc-java@1.69.0",
+          "grpc-proto@0.0.0-20240627-ec30f58",
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "opencensus-proto@0.4.1",
+          "opentelemetry-cpp@1.19.0",
+          "opentelemetry-proto@1.5.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "rules_cc@0.2.13",
+          "rules_go@0.50.1",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0",
+          "rules_swift@2.1.1",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "29.0"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "protobuf@29.0",
+          "rules_cc@0.2.13",
+          "rules_license@1.0.0"
+        ],
+        "direct": true,
+        "key": "rules_proto@7.0.2",
+        "name": "rules_proto",
+        "requiredBy": [
+          "<root>",
+          "cel-spec@0.15.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "gazelle@0.37.0",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "grpc-java@1.69.0",
+          "grpc-proto@0.0.0-20240627-ec30f58",
+          "grpc@1.71.0",
+          "opencensus-proto@0.4.1",
+          "opentelemetry-cpp@1.19.0",
+          "opentelemetry-proto@1.5.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_kotlin@1.9.6",
+          "rules_python@0.40.0",
+          "rules_swift@2.1.1",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "7.0.2"
+      },
+      {
+        "dependencies": [
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "protobuf@29.0",
+          "rules_cc@0.2.13",
+          "rules_proto@7.0.2",
+          "stardoc@0.7.1"
+        ],
+        "direct": true,
+        "key": "rules_python@0.40.0",
+        "name": "rules_python",
+        "requiredBy": [
+          "<root>",
+          "cel-spec@0.15.0",
+          "cython@3.0.11-1",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "grpc@1.71.0",
+          "opentelemetry-proto@1.5.0",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "pybind11_bazel@2.12.0",
+          "re2@2024-07-02",
+          "rules_foreign_cc@0.10.1",
+          "rules_fuzzing@0.5.2",
+          "rules_kotlin@1.9.6",
+          "rules_pkg@1.0.1"
+        ],
+        "version": "0.40.0"
+      },
+      {
+        "dependencies": ["bazel_skylib@1.7.1", "googletest@1.15.2", "platforms@0.0.10"],
+        "direct": false,
+        "key": "abseil-cpp@20240722.0",
+        "name": "abseil-cpp",
+        "requiredBy": [
+          "cel-spec@0.15.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "googletest@1.15.2",
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "opentelemetry-cpp@1.19.0",
+          "protobuf@29.0",
+          "re2@2024-07-02",
+          "rules_fuzzing@0.5.2",
+          "rules_java@7.12.2"
+        ],
+        "version": "20240722.0"
+      },
+      {
+        "dependencies": ["bazel_skylib@1.7.1"],
+        "direct": false,
+        "key": "bazel_features@1.28.0",
+        "name": "bazel_features",
+        "requiredBy": [
+          "apple_support@1.24.5",
+          "gazelle@0.37.0",
+          "protobuf@29.0",
+          "rules_cc@0.2.13",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_python@0.40.0",
+          "rules_shell@0.2.0",
+          "rules_swift@2.1.1"
+        ],
+        "version": "1.28.0"
+      },
+      {
+        "dependencies": ["platforms@0.0.10", "rules_license@1.0.0"],
+        "direct": false,
+        "key": "bazel_skylib@1.7.1",
+        "name": "bazel_skylib",
+        "requiredBy": [
+          "abseil-cpp@20240722.0",
+          "apple_support@1.24.5",
+          "bazel_features@1.28.0",
+          "c-ares@1.19.1",
+          "cel-spec@0.15.0",
+          "curl@8.8.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "gazelle@0.37.0",
+          "google_benchmark@1.8.5",
+          "grpc-java@1.69.0",
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "opentelemetry-cpp@1.19.0",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "pybind11_bazel@2.12.0",
+          "rules_apple@3.16.0",
+          "rules_cc@0.2.13",
+          "rules_foreign_cc@0.10.1",
+          "rules_fuzzing@0.5.2",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_kotlin@1.9.6",
+          "rules_pkg@1.0.1",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0",
+          "rules_shell@0.2.0",
+          "rules_swift@2.1.1",
+          "stardoc@0.7.1",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "1.7.1"
+      },
+      {
+        "dependencies": [
+          "googletest@1.15.2",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_license@1.0.0"
+        ],
+        "direct": false,
+        "key": "boringssl@0.20241024.0",
+        "name": "boringssl",
+        "requiredBy": [
+          "civetweb@1.16",
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "prometheus-cpp@1.3.0"
+        ],
+        "version": "0.20241024.0"
+      },
+      {
+        "dependencies": ["bazel_skylib@1.7.1", "platforms@0.0.10"],
+        "direct": false,
+        "key": "c-ares@1.19.1",
+        "name": "c-ares",
+        "requiredBy": ["grpc@1.71.0"],
+        "version": "1.19.1"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_skylib@1.7.1",
+          "gazelle@0.37.0",
+          "protobuf@29.0",
+          "rules_cc@0.2.13",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_pkg@1.0.1",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "cel-spec@0.15.0",
+        "name": "cel-spec",
+        "requiredBy": ["grpc-java@1.69.0", "xds@0.0.0-20240423-555b57e"],
+        "version": "0.15.0"
+      },
+      {
+        "dependencies": ["boringssl@0.20241024.0", "platforms@0.0.10"],
+        "direct": false,
+        "key": "civetweb@1.16",
+        "name": "civetweb",
+        "requiredBy": ["prometheus-cpp@1.3.0"],
+        "version": "1.16"
+      },
+      {
+        "dependencies": ["bazel_skylib@1.7.1", "mbedtls@3.6.0", "platforms@0.0.10"],
+        "direct": false,
+        "key": "curl@8.8.0",
+        "name": "curl",
+        "requiredBy": [
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "opentelemetry-cpp@1.19.0",
+          "prometheus-cpp@1.3.0"
+        ],
+        "version": "8.8.0"
+      },
+      {
+        "dependencies": ["rules_python@0.40.0"],
+        "direct": false,
+        "key": "cython@3.0.11-1",
+        "name": "cython",
+        "requiredBy": ["grpc@1.71.0"],
+        "version": "3.0.11-1"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_skylib@1.7.1",
+          "gazelle@0.37.0",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "googletest@1.15.2",
+          "opencensus-proto@0.4.1",
+          "opentelemetry-proto@1.5.0",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "re2@2024-07-02",
+          "rules_go@0.50.1",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "direct": false,
+        "key": "envoy_api@0.0.0-20250128-4de3c74",
+        "name": "envoy_api",
+        "requiredBy": ["grpc-java@1.69.0", "grpc@1.71.0"],
+        "version": "0.0.0-20250128-4de3c74"
+      },
+      {
+        "dependencies": [
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "protobuf@29.0",
+          "rules_go@0.50.1",
+          "rules_proto@7.0.2"
+        ],
+        "direct": false,
+        "key": "gazelle@0.37.0",
+        "name": "gazelle",
+        "requiredBy": [
+          "cel-spec@0.15.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "rules_go@0.50.1",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "0.37.0"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "libpfm@4.11.0",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_foreign_cc@0.10.1"
+        ],
+        "direct": false,
+        "key": "google_benchmark@1.8.5",
+        "name": "google_benchmark",
+        "requiredBy": ["opencensus-cpp@0.0.0-20230502-50eb5de"],
+        "version": "1.8.5"
+      },
+      {
+        "dependencies": [
+          "grpc-java@1.69.0",
+          "protobuf@29.0",
+          "rules_go@0.50.1",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "googleapis@0.0.0-20240819-fe8ba054a",
+        "name": "googleapis",
+        "requiredBy": [
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "0.0.0-20240819-fe8ba054a"
+      },
+      {
+        "dependencies": ["abseil-cpp@20240722.0", "platforms@0.0.10", "re2@2024-07-02"],
+        "direct": false,
+        "key": "googletest@1.15.2",
+        "name": "googletest",
+        "requiredBy": [
+          "abseil-cpp@20240722.0",
+          "boringssl@0.20241024.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "rapidjson@1.1.0.bcr.20241007"
+        ],
+        "version": "1.15.2"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "cel-spec@0.15.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "grpc-proto@0.0.0-20240627-ec30f58",
+          "opencensus-proto@0.4.1",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "rules_cc@0.2.13",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_proto@7.0.2",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "direct": false,
+        "key": "grpc-java@1.69.0",
+        "name": "grpc-java",
+        "requiredBy": ["googleapis@0.0.0-20240819-fe8ba054a"],
+        "version": "1.69.0"
+      },
+      {
+        "dependencies": ["protobuf@29.0", "rules_proto@7.0.2"],
+        "direct": false,
+        "key": "grpc-proto@0.0.0-20240627-ec30f58",
+        "name": "grpc-proto",
+        "requiredBy": ["grpc-java@1.69.0"],
+        "version": "0.0.0-20240627-ec30f58"
+      },
+      {
+        "dependencies": [],
+        "direct": false,
+        "key": "jsoncpp@1.9.5",
+        "name": "jsoncpp",
+        "requiredBy": ["protobuf@29.0"],
+        "version": "1.9.5"
+      },
+      {
+        "dependencies": ["platforms@0.0.10", "rules_foreign_cc@0.10.1"],
+        "direct": false,
+        "key": "libpfm@4.11.0",
+        "name": "libpfm",
+        "requiredBy": ["google_benchmark@1.8.5"],
+        "version": "4.11.0"
+      },
+      {
+        "dependencies": ["platforms@0.0.10"],
+        "direct": false,
+        "key": "mbedtls@3.6.0",
+        "name": "mbedtls",
+        "requiredBy": ["curl@8.8.0"],
+        "version": "3.6.0"
+      },
+      {
+        "dependencies": [],
+        "direct": false,
+        "key": "nlohmann_json@3.11.3",
+        "name": "nlohmann_json",
+        "requiredBy": ["opentelemetry-cpp@1.19.0", "rules_swift@2.1.1"],
+        "version": "3.11.3"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_skylib@1.7.1",
+          "boringssl@0.20241024.0",
+          "curl@8.8.0",
+          "google_benchmark@1.8.5",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "googletest@1.15.2",
+          "opencensus-proto@0.4.1",
+          "prometheus-cpp@1.3.0",
+          "protobuf@29.0",
+          "rapidjson@1.1.0.bcr.20241007",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "direct": false,
+        "key": "opencensus-cpp@0.0.0-20230502-50eb5de",
+        "name": "opencensus-cpp",
+        "requiredBy": ["grpc@1.71.0"],
+        "version": "0.0.0-20230502-50eb5de"
+      },
+      {
+        "dependencies": ["protobuf@29.0", "rules_go@0.50.1", "rules_proto@7.0.2"],
+        "direct": false,
+        "key": "opencensus-proto@0.4.1",
+        "name": "opencensus-proto",
+        "requiredBy": [
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "grpc-java@1.69.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de"
+        ],
+        "version": "0.4.1"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_skylib@1.7.1",
+          "curl@8.8.0",
+          "nlohmann_json@3.11.3",
+          "opentelemetry-proto@1.5.0",
+          "opentracing-cpp@1.6.0",
+          "platforms@0.0.10",
+          "prometheus-cpp@1.3.0",
+          "protobuf@29.0",
+          "rules_proto@7.0.2",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "direct": false,
+        "key": "opentelemetry-cpp@1.19.0",
+        "name": "opentelemetry-cpp",
+        "requiredBy": ["grpc@1.71.0"],
+        "version": "1.19.0"
+      },
+      {
+        "dependencies": [
+          "protobuf@29.0",
+          "rules_go@0.50.1",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "opentelemetry-proto@1.5.0",
+        "name": "opentelemetry-proto",
+        "requiredBy": ["envoy_api@0.0.0-20250128-4de3c74", "opentelemetry-cpp@1.19.0"],
+        "version": "1.5.0"
+      },
+      {
+        "dependencies": [],
+        "direct": false,
+        "key": "opentracing-cpp@1.6.0",
+        "name": "opentracing-cpp",
+        "requiredBy": ["opentelemetry-cpp@1.19.0"],
+        "version": "1.6.0"
+      },
+      {
+        "dependencies": ["rules_license@1.0.0"],
+        "direct": false,
+        "key": "platforms@0.0.10",
+        "name": "platforms",
+        "requiredBy": [
+          "abseil-cpp@20240722.0",
+          "apple_support@1.24.5",
+          "bazel_skylib@1.7.1",
+          "boringssl@0.20241024.0",
+          "c-ares@1.19.1",
+          "civetweb@1.16",
+          "curl@8.8.0",
+          "google_benchmark@1.8.5",
+          "googletest@1.15.2",
+          "grpc@1.71.0",
+          "libpfm@4.11.0",
+          "mbedtls@3.6.0",
+          "opentelemetry-cpp@1.19.0",
+          "prometheus-cpp@1.3.0",
+          "protobuf@29.0",
+          "pybind11_bazel@2.12.0",
+          "re2@2024-07-02",
+          "rules_apple@3.16.0",
+          "rules_cc@0.2.13",
+          "rules_foreign_cc@0.10.1",
+          "rules_fuzzing@0.5.2",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_kotlin@1.9.6",
+          "rules_python@0.40.0",
+          "rules_shell@0.2.0",
+          "rules_swift@2.1.1",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "version": "0.0.10"
+      },
+      {
+        "dependencies": [
+          "boringssl@0.20241024.0",
+          "civetweb@1.16",
+          "curl@8.8.0",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "direct": false,
+        "key": "prometheus-cpp@1.3.0",
+        "name": "prometheus-cpp",
+        "requiredBy": ["opencensus-cpp@0.0.0-20230502-50eb5de", "opentelemetry-cpp@1.19.0"],
+        "version": "1.3.0"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "gazelle@0.37.0",
+          "protobuf@29.0",
+          "re2@2024-07-02",
+          "rules_cc@0.2.13",
+          "rules_go@0.50.1",
+          "rules_java@7.12.2",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "protoc-gen-validate@1.2.1.bcr.1",
+        "name": "protoc-gen-validate",
+        "requiredBy": [
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "grpc-java@1.69.0",
+          "grpc@1.71.0",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "1.2.1.bcr.1"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "pybind11_bazel@2.12.0",
+        "name": "pybind11_bazel",
+        "requiredBy": ["re2@2024-07-02"],
+        "version": "2.12.0"
+      },
+      {
+        "dependencies": ["googletest@1.15.2", "rules_cc@0.2.13"],
+        "direct": false,
+        "key": "rapidjson@1.1.0.bcr.20241007",
+        "name": "rapidjson",
+        "requiredBy": ["opencensus-cpp@0.0.0-20230502-50eb5de"],
+        "version": "1.1.0.bcr.20241007"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "apple_support@1.24.5",
+          "platforms@0.0.10",
+          "pybind11_bazel@2.12.0",
+          "rules_cc@0.2.13",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "re2@2024-07-02",
+        "name": "re2",
+        "requiredBy": [
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "googletest@1.15.2",
+          "grpc@1.71.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "2024-07-02"
+      },
+      {
+        "dependencies": [],
+        "direct": false,
+        "key": "rules_android@0.1.1",
+        "name": "rules_android",
+        "requiredBy": ["rules_jvm_external@6.3"],
+        "version": "0.1.1"
+      },
+      {
+        "dependencies": [
+          "apple_support@1.24.5",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_swift@2.1.1"
+        ],
+        "direct": false,
+        "key": "rules_apple@3.16.0",
+        "name": "rules_apple",
+        "requiredBy": ["grpc@1.71.0"],
+        "version": "3.16.0"
+      },
+      {
+        "dependencies": [
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "protobuf@29.0"
+        ],
+        "direct": false,
+        "key": "rules_cc@0.2.13",
+        "name": "rules_cc",
+        "requiredBy": [
+          "apple_support@1.24.5",
+          "boringssl@0.20241024.0",
+          "cel-spec@0.15.0",
+          "google_benchmark@1.8.5",
+          "grpc-java@1.69.0",
+          "grpc@1.71.0",
+          "prometheus-cpp@1.3.0",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "pybind11_bazel@2.12.0",
+          "rapidjson@1.1.0.bcr.20241007",
+          "re2@2024-07-02",
+          "rules_apple@3.16.0",
+          "rules_java@7.12.2",
+          "rules_kotlin@1.9.6",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0",
+          "rules_swift@2.1.1",
+          "zlib@1.3.1.bcr.3"
+        ],
+        "version": "0.2.13"
+      },
+      {
+        "dependencies": ["bazel_skylib@1.7.1", "platforms@0.0.10", "rules_python@0.40.0"],
+        "direct": false,
+        "key": "rules_foreign_cc@0.10.1",
+        "name": "rules_foreign_cc",
+        "requiredBy": ["google_benchmark@1.8.5", "libpfm@4.11.0"],
+        "version": "0.10.1"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_java@7.12.2",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "rules_fuzzing@0.5.2",
+        "name": "rules_fuzzing",
+        "requiredBy": ["protobuf@29.0"],
+        "version": "0.5.2"
+      },
+      {
+        "dependencies": [
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "gazelle@0.37.0",
+          "platforms@0.0.10",
+          "protobuf@29.0",
+          "rules_proto@7.0.2"
+        ],
+        "direct": false,
+        "key": "rules_go@0.50.1",
+        "name": "rules_go",
+        "requiredBy": [
+          "cel-spec@0.15.0",
+          "envoy_api@0.0.0-20250128-4de3c74",
+          "gazelle@0.37.0",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "grpc-java@1.69.0",
+          "opencensus-proto@0.4.1",
+          "opentelemetry-proto@1.5.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "xds@0.0.0-20240423-555b57e"
+        ],
+        "version": "0.50.1"
+      },
+      {
+        "dependencies": [
+          "abseil-cpp@20240722.0",
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_license@1.0.0",
+          "rules_proto@7.0.2"
+        ],
+        "direct": false,
+        "key": "rules_java@7.12.2",
+        "name": "rules_java",
+        "requiredBy": [
+          "cel-spec@0.15.0",
+          "grpc-java@1.69.0",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "rules_fuzzing@0.5.2",
+          "rules_jvm_external@6.3",
+          "rules_kotlin@1.9.6",
+          "stardoc@0.7.1"
+        ],
+        "version": "7.12.2"
+      },
+      {
+        "dependencies": [
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_android@0.1.1",
+          "rules_java@7.12.2",
+          "rules_kotlin@1.9.6",
+          "rules_license@1.0.0"
+        ],
+        "direct": false,
+        "key": "rules_jvm_external@6.3",
+        "name": "rules_jvm_external",
+        "requiredBy": ["grpc-java@1.69.0", "protobuf@29.0", "stardoc@0.7.1"],
+        "version": "6.3"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "platforms@0.0.10",
+          "rules_cc@0.2.13",
+          "rules_java@7.12.2",
+          "rules_proto@7.0.2",
+          "rules_python@0.40.0"
+        ],
+        "direct": false,
+        "key": "rules_kotlin@1.9.6",
+        "name": "rules_kotlin",
+        "requiredBy": ["protobuf@29.0", "rules_jvm_external@6.3"],
+        "version": "1.9.6"
+      },
+      {
+        "dependencies": [],
+        "direct": false,
+        "key": "rules_license@1.0.0",
+        "name": "rules_license",
+        "requiredBy": [
+          "bazel_skylib@1.7.1",
+          "boringssl@0.20241024.0",
+          "platforms@0.0.10",
+          "protobuf@29.0",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_pkg@1.0.1",
+          "rules_proto@7.0.2",
+          "stardoc@0.7.1"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "dependencies": ["bazel_skylib@1.7.1", "rules_license@1.0.0", "rules_python@0.40.0"],
+        "direct": false,
+        "key": "rules_pkg@1.0.1",
+        "name": "rules_pkg",
+        "requiredBy": ["cel-spec@0.15.0", "protobuf@29.0"],
+        "version": "1.0.1"
+      },
+      {
+        "dependencies": ["bazel_features@1.28.0", "bazel_skylib@1.7.1", "platforms@0.0.10"],
+        "direct": false,
+        "key": "rules_shell@0.2.0",
+        "name": "rules_shell",
+        "requiredBy": ["protobuf@29.0"],
+        "version": "0.2.0"
+      },
+      {
+        "dependencies": [
+          "apple_support@1.24.5",
+          "bazel_features@1.28.0",
+          "bazel_skylib@1.7.1",
+          "nlohmann_json@3.11.3",
+          "platforms@0.0.10",
+          "protobuf@29.0",
+          "rules_cc@0.2.13",
+          "rules_proto@7.0.2",
+          "swift_argument_parser@1.3.1.1"
+        ],
+        "direct": false,
+        "key": "rules_swift@2.1.1",
+        "name": "rules_swift",
+        "requiredBy": ["rules_apple@3.16.0"],
+        "version": "2.1.1"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "rules_java@7.12.2",
+          "rules_jvm_external@6.3",
+          "rules_license@1.0.0"
+        ],
+        "direct": false,
+        "key": "stardoc@0.7.1",
+        "name": "stardoc",
+        "requiredBy": ["rules_python@0.40.0"],
+        "version": "0.7.1"
+      },
+      {
+        "dependencies": ["apple_support@1.24.5"],
+        "direct": false,
+        "key": "swift_argument_parser@1.3.1.1",
+        "name": "swift_argument_parser",
+        "requiredBy": ["rules_swift@2.1.1"],
+        "version": "1.3.1.1"
+      },
+      {
+        "dependencies": [
+          "bazel_skylib@1.7.1",
+          "cel-spec@0.15.0",
+          "gazelle@0.37.0",
+          "googleapis@0.0.0-20240819-fe8ba054a",
+          "protobuf@29.0",
+          "protoc-gen-validate@1.2.1.bcr.1",
+          "re2@2024-07-02",
+          "rules_go@0.50.1",
+          "rules_proto@7.0.2"
+        ],
+        "direct": false,
+        "key": "xds@0.0.0-20240423-555b57e",
+        "name": "xds",
+        "requiredBy": ["envoy_api@0.0.0-20250128-4de3c74", "grpc-java@1.69.0", "grpc@1.71.0"],
+        "version": "0.0.0-20240423-555b57e"
+      },
+      {
+        "dependencies": ["platforms@0.0.10", "rules_cc@0.2.13"],
+        "direct": false,
+        "key": "zlib@1.3.1.bcr.3",
+        "name": "zlib",
+        "requiredBy": [
+          "grpc@1.71.0",
+          "opencensus-cpp@0.0.0-20230502-50eb5de",
+          "opentelemetry-cpp@1.19.0",
+          "prometheus-cpp@1.3.0",
+          "protobuf@29.0"
+        ],
+        "version": "1.3.1.bcr.3"
+      }
+    ],
+    "rootKey": "<root>",
+    "rootLabel": "<root> (parcel_desk@0.1.0)",
+    "warning": null
+  },
+  "actions": [
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "--plugin=protoc-gen-PLUGIN=bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/grpc~/src/compiler/grpc_cpp_plugin",
+        "--PLUGIN_out=bazel-out/darwin_arm64-fastbuild/bin",
+        "--proto_path=.",
+        "--proto_path=bazel-out/darwin_arm64-fastbuild/bin",
+        "api/rates.proto"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "api/rates.proto",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/grpc~/src/compiler/grpc_cpp_plugin",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Sprotobuf~_Sprotoc-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "Action",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.h",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.h",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.cc"
+      ],
+      "owner": "//api:_rates_cc_grpc_grpc_codegen"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "--invalidation_mode",
+        "checked_hash",
+        "--src",
+        "api/__init__.py",
+        "--src_name",
+        "api/__init__.py",
+        "--pyc",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/__pycache__/__init__.cpython-312.pyc",
+        "--optimize",
+        "0",
+        "--python_version",
+        "3.12"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "api/__init__.py",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Spython_Sprivate_Spython3-runfiles",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Stools_Sprecompiler_Sprecompiler-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "PyCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/__pycache__/__init__.cpython-312.pyc",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/__pycache__/__init__.cpython-312.pyc"],
+      "owner": "//api:python"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp",
+        "-D_FORTIFY_SOURCE=1",
+        "-fstack-protector",
+        "-fcolor-diagnostics",
+        "-Wall",
+        "-Wthread-safety",
+        "-Wself-assign",
+        "-fno-omit-frame-pointer",
+        "-O0",
+        "-DDEBUG",
+        "-fdebug-prefix-map=__BAZEL_EXECUTION_ROOT__=.",
+        "-fdebug-prefix-map=__BAZEL_XCODE_DEVELOPER_DIR__=/PLACEHOLDER_DEVELOPER_DIR",
+        "-iquote",
+        ".",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin",
+        "-iquote",
+        "external/protobuf~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~",
+        "-iquote",
+        "external/abseil-cpp~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/abseil-cpp~",
+        "[85 arguments omitted from preview]",
+        "-Wno-builtin-macro-redefined",
+        "-D__DATE__=\"redacted\"",
+        "-D__TIMESTAMP__=\"redacted\"",
+        "-D__TIME__=\"redacted\"",
+        "-c",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.cc",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.cc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.o",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.d"
+      ],
+      "owner": "//api:rates_cc_grpc"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "FileWrite",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a-2.params",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a-2.params"],
+      "owner": "//api:rates_cc_grpc"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "-D",
+        "-no_warning_for_no_symbols",
+        "-static",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a-2.params",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppArchive",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a"],
+      "owner": "//api:rates_cc_grpc"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "--descriptor_set_out=bazel-out/darwin_arm64-fastbuild/bin/api/rates_proto-descriptor-set.proto.bin",
+        "-I.",
+        "api/rates.proto",
+        "--retain_options",
+        "--direct_dependencies",
+        "api/rates.proto",
+        "--direct_dependencies_violation_msg=%s is imported, but //api:rates_proto doesn't directly depend on a proto_library that 'srcs' it."
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "api/rates.proto",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Sprotobuf~_Sprotoc-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "GenProtoDescriptorSet",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/rates_proto-descriptor-set.proto.bin",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/rates_proto-descriptor-set.proto.bin"],
+      "owner": "//api:rates_proto"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "--cpp_out=bazel-out/darwin_arm64-fastbuild/bin",
+        "-I.",
+        "api/rates.proto"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "api/rates.proto",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Sprotobuf~_Sprotoc-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "GenProto",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.h",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.h",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.cc"
+      ],
+      "owner": "//api:rates_proto"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp",
+        "-D_FORTIFY_SOURCE=1",
+        "-fstack-protector",
+        "-fcolor-diagnostics",
+        "-Wall",
+        "-Wthread-safety",
+        "-Wself-assign",
+        "-fno-omit-frame-pointer",
+        "-O0",
+        "-DDEBUG",
+        "-fdebug-prefix-map=__BAZEL_EXECUTION_ROOT__=.",
+        "-fdebug-prefix-map=__BAZEL_XCODE_DEVELOPER_DIR__=/PLACEHOLDER_DEVELOPER_DIR",
+        "-iquote",
+        ".",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin",
+        "-iquote",
+        "external/protobuf~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~",
+        "-iquote",
+        "external/abseil-cpp~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/abseil-cpp~",
+        "[40 arguments omitted from preview]",
+        "-Wno-builtin-macro-redefined",
+        "-D__DATE__=\"redacted\"",
+        "-D__TIMESTAMP__=\"redacted\"",
+        "-D__TIME__=\"redacted\"",
+        "-c",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.cc",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.cc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.o",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.d"
+      ],
+      "owner": "//api:rates_proto"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "FileWrite",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a-2.params",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a-2.params"],
+      "owner": "//api:rates_proto"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "-D",
+        "-no_warning_for_no_symbols",
+        "-static",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a-2.params",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppArchive",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a"],
+      "owner": "//api:rates_proto"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "--python_out=bazel-out/darwin_arm64-fastbuild/bin",
+        "--pyi_out=bazel-out/darwin_arm64-fastbuild/bin",
+        "--proto_path=.",
+        "--proto_path=bazel-out/darwin_arm64-fastbuild/bin",
+        "api/rates.proto"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "api/rates.proto",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Sprotobuf~_Sprotoc-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "ProtocInvocation",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi"
+      ],
+      "owner": "//api:rates_proto"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "--plugin=protoc-gen-PLUGIN=bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/grpc~/src/compiler/grpc_python_plugin",
+        "--PLUGIN_out=grpc_2_0:bazel-out/darwin_arm64-fastbuild/bin",
+        "--proto_path=.",
+        "--proto_path=bazel-out/darwin_arm64-fastbuild/bin",
+        "api/rates.proto"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "api/rates.proto",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/grpc~/src/compiler/grpc_python_plugin",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/protobuf~/protoc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Sprotobuf~_Sprotoc-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "ProtocInvocation",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2_grpc.py",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2_grpc.py"],
+      "owner": "//api:rates_py_pb2_grpc"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "--invalidation_mode",
+        "checked_hash",
+        "--src",
+        "dispatch/__init__.py",
+        "--src_name",
+        "dispatch/__init__.py",
+        "--pyc",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/__init__.cpython-312.pyc",
+        "--optimize",
+        "0",
+        "--python_version",
+        "3.12"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "dispatch/__init__.py",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Spython_Sprivate_Spython3-runfiles",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Stools_Sprecompiler_Sprecompiler-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "PyCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/__init__.cpython-312.pyc",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/__init__.cpython-312.pyc"
+      ],
+      "owner": "//dispatch:dispatch_lib"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "--invalidation_mode",
+        "checked_hash",
+        "--src",
+        "dispatch/quote.py",
+        "--src_name",
+        "dispatch/quote.py",
+        "--pyc",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote.cpython-312.pyc",
+        "--optimize",
+        "0",
+        "--python_version",
+        "3.12"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "dispatch/quote.py",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Spython_Sprivate_Spython3-runfiles",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Stools_Sprecompiler_Sprecompiler-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "PyCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote.cpython-312.pyc",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote.cpython-312.pyc"
+      ],
+      "owner": "//dispatch:dispatch_lib"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "--invalidation_mode",
+        "checked_hash",
+        "--src",
+        "dispatch/quote.py",
+        "--src_name",
+        "dispatch/quote.py",
+        "--pyc",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote.cpython-312.pyc",
+        "--optimize",
+        "0",
+        "--python_version",
+        "3.12"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "dispatch/quote.py",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Spython_Sprivate_Spython3-runfiles",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Stools_Sprecompiler_Sprecompiler-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "PyCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote.cpython-312.pyc",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote.cpython-312.pyc"
+      ],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": ["external/rules_python~/python/private/python_bootstrap_template.txt"],
+      "inputsTruncated": false,
+      "mnemonic": "TemplateExpand",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.temp",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.temp"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "RepoMappingManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip.repo_mapping",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip.repo_mapping"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [
+        "external/bazel_tools/tools/zip/zipper/zipper",
+        "cC",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip",
+        "__main__.py=bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.temp",
+        "__init__.py=",
+        "runfiles/_main/__init__.py=",
+        "runfiles/protobuf~/python/__init__.py=",
+        "runfiles/grpc~/src/python/grpcio/grpc/framework/interfaces/base/__init__.py=",
+        "runfiles/__init__.py=",
+        "runfiles/grpc~/src/python/grpcio/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/config-3.12-darwin/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/__init__.py=",
+        "runfiles/protobuf~/__init__.py=",
+        "runfiles/grpc~/src/python/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/lib-dynload/__init__.py=",
+        "runfiles/grpc~/src/__init__.py=",
+        "runfiles/grpc~/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/site-packages/__init__.py=",
+        "runfiles/protobuf~/python/google/__init__.py=",
+        "runfiles/_main/api/rates_pb2.py=bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "runfiles/_main/api/rates_pb2.pyi=bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+        "runfiles/protobuf~/python/google/protobuf/__init__.py=external/protobuf~/python/google/protobuf/__init__.py",
+        "[1939 arguments omitted from preview]",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/vistaTheme.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/vistaTheme.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/winTheme.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/winTheme.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/xpTheme.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/xpTheme.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/unsupported.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/unsupported.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/xmfbox.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/xmfbox.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.1=external/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.1",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.12.1=external/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.12.1",
+        "runfiles/_repo_mapping=bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip.repo_mapping"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "external/bazel_tools/tools/zip/zipper/zipper",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.temp",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip.repo_mapping",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+        "external/protobuf~/python/google/protobuf/__init__.py",
+        "external/protobuf~/python/google/protobuf/any.py",
+        "external/protobuf~/python/google/protobuf/compiler/__init__.py",
+        "external/protobuf~/python/google/protobuf/descriptor.py",
+        "external/protobuf~/python/google/protobuf/descriptor_database.py",
+        "external/protobuf~/python/google/protobuf/descriptor_pool.py",
+        "external/protobuf~/python/google/protobuf/duration.py",
+        "external/protobuf~/python/google/protobuf/internal/__init__.py",
+        "external/protobuf~/python/google/protobuf/internal/_parameterized.py",
+        "external/protobuf~/python/google/protobuf/internal/api_implementation.py",
+        "external/protobuf~/python/google/protobuf/internal/builder.py"
+      ],
+      "inputsTruncated": true,
+      "mnemonic": "PythonZipper",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": ["external/rules_python~/python/private/python_bootstrap_template.txt"],
+      "inputsTruncated": false,
+      "mnemonic": "TemplateExpand",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "RepoMappingManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.repo_mapping",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.repo_mapping"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "SourceSymlinkManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.runfiles_manifest",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.runfiles_manifest"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.runfiles_manifest"],
+      "inputsTruncated": false,
+      "mnemonic": "SymlinkTree",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.runfiles/MANIFEST",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.runfiles/MANIFEST"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.runfiles/MANIFEST",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.repo_mapping",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote",
+        "dispatch/quote.py",
+        "dispatch/__init__.py",
+        "api/__init__.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+        "external/protobuf~/python/google/protobuf/__init__.py",
+        "external/protobuf~/python/google/protobuf/any.py",
+        "external/protobuf~/python/google/protobuf/compiler/__init__.py",
+        "external/protobuf~/python/google/protobuf/descriptor.py",
+        "external/protobuf~/python/google/protobuf/descriptor_database.py",
+        "external/protobuf~/python/google/protobuf/descriptor_pool.py",
+        "external/protobuf~/python/google/protobuf/duration.py",
+        "external/protobuf~/python/google/protobuf/internal/__init__.py"
+      ],
+      "inputsTruncated": true,
+      "mnemonic": "Middleman",
+      "output": "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote-runfiles",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote-runfiles"],
+      "owner": "//dispatch:quote"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "--invalidation_mode",
+        "checked_hash",
+        "--src",
+        "dispatch/quote_contract_test.py",
+        "--src_name",
+        "dispatch/quote_contract_test.py",
+        "--pyc",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote_contract_test.cpython-312.pyc",
+        "--optimize",
+        "0",
+        "--python_version",
+        "3.12"
+      ],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "dispatch/quote_contract_test.py",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/python/private/python3",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Spython_Sprivate_Spython3-runfiles",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/rules_python~/tools/precompiler/precompiler",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/internal/_middlemen/external_Srules_Upython~_Stools_Sprecompiler_Sprecompiler-runfiles"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "PyCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote_contract_test.cpython-312.pyc",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/__pycache__/quote_contract_test.cpython-312.pyc"
+      ],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": ["external/rules_python~/python/private/python_bootstrap_template.txt"],
+      "inputsTruncated": false,
+      "mnemonic": "TemplateExpand",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.temp",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.temp"],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "RepoMappingManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip.repo_mapping",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip.repo_mapping"
+      ],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [
+        "external/bazel_tools/tools/zip/zipper/zipper",
+        "cC",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip",
+        "__main__.py=bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.temp",
+        "__init__.py=",
+        "runfiles/_main/__init__.py=",
+        "runfiles/protobuf~/python/__init__.py=",
+        "runfiles/grpc~/src/python/grpcio/grpc/framework/interfaces/base/__init__.py=",
+        "runfiles/__init__.py=",
+        "runfiles/grpc~/src/python/grpcio/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/config-3.12-darwin/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/__init__.py=",
+        "runfiles/protobuf~/__init__.py=",
+        "runfiles/grpc~/src/python/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/lib-dynload/__init__.py=",
+        "runfiles/grpc~/src/__init__.py=",
+        "runfiles/grpc~/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/__init__.py=",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/python3.12/site-packages/__init__.py=",
+        "runfiles/protobuf~/python/google/__init__.py=",
+        "runfiles/_main/api/rates_pb2.py=bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "runfiles/_main/api/rates_pb2.pyi=bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+        "runfiles/protobuf~/python/google/protobuf/__init__.py=external/protobuf~/python/google/protobuf/__init__.py",
+        "[1941 arguments omitted from preview]",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/vistaTheme.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/vistaTheme.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/winTheme.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/winTheme.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/xpTheme.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/ttk/xpTheme.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/unsupported.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/unsupported.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/xmfbox.tcl=external/rules_python~~python~python_3_12_aarch64-apple-darwin/lib/tk8.6/xmfbox.tcl",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.1=external/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.1",
+        "runfiles/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.12.1=external/rules_python~~python~python_3_12_aarch64-apple-darwin/share/man/man1/python3.12.1",
+        "runfiles/_repo_mapping=bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip.repo_mapping"
+      ],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "external/bazel_tools/tools/zip/zipper/zipper",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.temp",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip.repo_mapping",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+        "external/protobuf~/python/google/protobuf/__init__.py",
+        "external/protobuf~/python/google/protobuf/any.py",
+        "external/protobuf~/python/google/protobuf/compiler/__init__.py",
+        "external/protobuf~/python/google/protobuf/descriptor.py",
+        "external/protobuf~/python/google/protobuf/descriptor_database.py",
+        "external/protobuf~/python/google/protobuf/descriptor_pool.py",
+        "external/protobuf~/python/google/protobuf/duration.py",
+        "external/protobuf~/python/google/protobuf/internal/__init__.py",
+        "external/protobuf~/python/google/protobuf/internal/_parameterized.py",
+        "external/protobuf~/python/google/protobuf/internal/api_implementation.py",
+        "external/protobuf~/python/google/protobuf/internal/builder.py"
+      ],
+      "inputsTruncated": true,
+      "mnemonic": "PythonZipper",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip"],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": ["external/rules_python~/python/private/python_bootstrap_template.txt"],
+      "inputsTruncated": false,
+      "mnemonic": "TemplateExpand",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test"],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "RepoMappingManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.repo_mapping",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.repo_mapping"],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "SourceSymlinkManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.runfiles_manifest",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.runfiles_manifest"
+      ],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.runfiles_manifest"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "SymlinkTree",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.runfiles/MANIFEST",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.runfiles/MANIFEST"
+      ],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.runfiles/MANIFEST",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.repo_mapping",
+        "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test",
+        "dispatch/quote_contract_test.py",
+        "dispatch/__init__.py",
+        "dispatch/quote.py",
+        "api/__init__.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+        "external/protobuf~/python/google/protobuf/__init__.py",
+        "external/protobuf~/python/google/protobuf/any.py",
+        "external/protobuf~/python/google/protobuf/compiler/__init__.py",
+        "external/protobuf~/python/google/protobuf/descriptor.py",
+        "external/protobuf~/python/google/protobuf/descriptor_database.py",
+        "external/protobuf~/python/google/protobuf/descriptor_pool.py",
+        "external/protobuf~/python/google/protobuf/duration.py"
+      ],
+      "inputsTruncated": true,
+      "mnemonic": "Middleman",
+      "output": "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote_Ucontract_Utest-runfiles",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote_Ucontract_Utest-runfiles"
+      ],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [
+        "external/bazel_tools/tools/test/test-setup.sh",
+        "dispatch/quote_contract_test"
+      ],
+      "configuration": {
+        "checksum": "8e4ab22e89843aa348ba782be25eadb5bae40f2ae62dec3edd2cdaf809e8d7b1",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote_Ucontract_Utest-runfiles",
+        "external/bazel_tools/tools/test/test-setup.sh",
+        "external/bazel_tools/tools/test/generate-xml.sh"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "TestRunner",
+      "output": "bazel-out/darwin_arm64-fastbuild/testlogs/dispatch/quote_contract_test/test.log",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/testlogs/dispatch/quote_contract_test/test.log",
+        "bazel-out/darwin_arm64-fastbuild/testlogs/dispatch/quote_contract_test/test.cache_status",
+        "bazel-out/darwin_arm64-fastbuild/testlogs/dispatch/quote_contract_test/test.outputs"
+      ],
+      "owner": "//dispatch:quote_contract_test"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp",
+        "-D_FORTIFY_SOURCE=1",
+        "-fstack-protector",
+        "-fcolor-diagnostics",
+        "-Wall",
+        "-Wthread-safety",
+        "-Wself-assign",
+        "-fno-omit-frame-pointer",
+        "-O0",
+        "-DDEBUG",
+        "-fdebug-prefix-map=__BAZEL_EXECUTION_ROOT__=.",
+        "-fdebug-prefix-map=__BAZEL_XCODE_DEVELOPER_DIR__=/PLACEHOLDER_DEVELOPER_DIR",
+        "-iquote",
+        ".",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin",
+        "-iquote",
+        "external/protobuf~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~",
+        "-iquote",
+        "external/abseil-cpp~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/abseil-cpp~",
+        "[156 arguments omitted from preview]",
+        "-Wno-builtin-macro-redefined",
+        "-D__DATE__=\"redacted\"",
+        "-D__TIMESTAMP__=\"redacted\"",
+        "-D__TIME__=\"redacted\"",
+        "-c",
+        "rates/rate_server.cc",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "rates/rate_server.cc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.o",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.d"
+      ],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "FileWrite",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server-2.params",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server-2.params"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "-lc++",
+        "-Wl,-oso_prefix,__BAZEL_EXECUTION_ROOT__/",
+        "STRIP_DEBUG_SYMBOLS",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server",
+        "LINKED_BINARY=bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc++_xds_client.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc++_xds_server.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc++_base.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libcensus.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_backend_metric_filter.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_client_authority_filter.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_lb_policy_grpclb.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/proto/grpc/lb/v1/libload_balancer_proto.upb.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/proto/grpc/lb/v1/libload_balancer_proto.upb_minitable.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_lb_policy_outlier_detection.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_lb_policy_priority.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_lb_policy_round_robin.a",
+        "[1061 arguments omitted from preview]",
+        "-target",
+        "arm64-apple-macosx27.2",
+        "-fobjc-link-runtime",
+        "-Xlinker",
+        "-no_deduplicate",
+        "-framework",
+        "Foundation",
+        "-Wl,-no_warn_duplicate_libraries"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server-2.params",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc++_xds_client.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc++_xds_server.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc++_base.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libgrpc.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/libcensus.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_backend_metric_filter.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_client_authority_filter.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_lb_policy_grpclb.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/proto/grpc/lb/v1/libload_balancer_proto.upb.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/proto/grpc/lb/v1/libload_balancer_proto.upb_minitable.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/grpc~/src/core/libgrpc_lb_policy_outlier_detection.a"
+      ],
+      "inputsTruncated": true,
+      "mnemonic": "CppLink",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [
+        "/usr/bin/strip",
+        "-S",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.stripped",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CcStrip",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.stripped",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.stripped"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "FileWrite",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.dwp",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.dwp"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "RepoMappingManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.repo_mapping",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.repo_mapping"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "SourceSymlinkManifest",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.runfiles_manifest",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.runfiles_manifest"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.runfiles_manifest"],
+      "inputsTruncated": false,
+      "mnemonic": "SymlinkTree",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.runfiles/MANIFEST",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.runfiles/MANIFEST"],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.runfiles/MANIFEST",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server.repo_mapping"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "Middleman",
+      "output": "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/rates_Srate_Userver-runfiles",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/rates_Srate_Userver-runfiles"
+      ],
+      "owner": "//rates:rate_server"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp",
+        "-D_FORTIFY_SOURCE=1",
+        "-fstack-protector",
+        "-fcolor-diagnostics",
+        "-Wall",
+        "-Wthread-safety",
+        "-Wself-assign",
+        "-fno-omit-frame-pointer",
+        "-O0",
+        "-DDEBUG",
+        "-fdebug-prefix-map=__BAZEL_EXECUTION_ROOT__=.",
+        "-fdebug-prefix-map=__BAZEL_XCODE_DEVELOPER_DIR__=/PLACEHOLDER_DEVELOPER_DIR",
+        "-iquote",
+        ".",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin",
+        "-iquote",
+        "external/protobuf~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~",
+        "-iquote",
+        "external/abseil-cpp~",
+        "-iquote",
+        "bazel-out/darwin_arm64-fastbuild/bin/external/abseil-cpp~",
+        "[40 arguments omitted from preview]",
+        "-Wno-builtin-macro-redefined",
+        "-D__DATE__=\"redacted\"",
+        "-D__TIMESTAMP__=\"redacted\"",
+        "-D__TIME__=\"redacted\"",
+        "-c",
+        "rates/tariff.cc",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "rates/tariff.cc",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppCompile",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.o",
+      "outputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.d"
+      ],
+      "owner": "//rates:tariff"
+    },
+    {
+      "arguments": [],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [],
+      "inputsTruncated": false,
+      "mnemonic": "FileWrite",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a-2.params",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a-2.params"],
+      "owner": "//rates:tariff"
+    },
+    {
+      "arguments": [
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "-D",
+        "-no_warning_for_no_symbols",
+        "-static",
+        "-o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.o"
+      ],
+      "configuration": {
+        "checksum": "096dcc84165363e69a851ebe8131b032f5448c94ddc4951775429dc78e79f898",
+        "isTool": false,
+        "mnemonic": "darwin_arm64-fastbuild",
+        "platformName": "darwin_arm64"
+      },
+      "environmentVariables": [],
+      "executionPlatform": "@@platforms//host:host",
+      "inputs": [
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.o",
+        "bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a-2.params",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/cc_wrapper.sh",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/libtool",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang",
+        "bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/apple_support~/crosstool/wrapped_clang_pp"
+      ],
+      "inputsTruncated": false,
+      "mnemonic": "CppArchive",
+      "output": "bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a",
+      "outputs": ["bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a"],
+      "owner": "//rates:tariff"
+    }
+  ],
+  "outputs": {
+    "//api:_rates_cc_grpc_grpc_codegen": [
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.h",
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates.grpc.pb.cc"
+    ],
+    "//api:python": ["api/__init__.py"],
+    "//api:rates_cc_grpc": ["bazel-out/darwin_arm64-fastbuild/bin/api/librates_cc_grpc.a"],
+    "//api:rates_cc_proto": [
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.h",
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates.pb.cc",
+      "bazel-out/darwin_arm64-fastbuild/bin/api/librates_proto.a"
+    ],
+    "//api:rates_proto": [
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates_proto-descriptor-set.proto.bin"
+    ],
+    "//api:rates_py_pb2": [
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2.pyi",
+      "external/protobuf~/python/google/protobuf/__init__.py",
+      "external/protobuf~/python/google/protobuf/any.py",
+      "external/protobuf~/python/google/protobuf/compiler/__init__.py",
+      "external/protobuf~/python/google/protobuf/descriptor.py",
+      "external/protobuf~/python/google/protobuf/descriptor_database.py",
+      "external/protobuf~/python/google/protobuf/descriptor_pool.py",
+      "external/protobuf~/python/google/protobuf/duration.py",
+      "external/protobuf~/python/google/protobuf/internal/__init__.py",
+      "external/protobuf~/python/google/protobuf/internal/_parameterized.py",
+      "external/protobuf~/python/google/protobuf/internal/api_implementation.py",
+      "external/protobuf~/python/google/protobuf/internal/builder.py",
+      "external/protobuf~/python/google/protobuf/internal/containers.py",
+      "external/protobuf~/python/google/protobuf/internal/decoder.py",
+      "external/protobuf~/python/google/protobuf/internal/encoder.py",
+      "external/protobuf~/python/google/protobuf/internal/enum_type_wrapper.py",
+      "external/protobuf~/python/google/protobuf/internal/extension_dict.py",
+      "external/protobuf~/python/google/protobuf/internal/field_mask.py",
+      "external/protobuf~/python/google/protobuf/internal/message_listener.py",
+      "external/protobuf~/python/google/protobuf/internal/python_message.py",
+      "external/protobuf~/python/google/protobuf/internal/testing_refleaks.py",
+      "external/protobuf~/python/google/protobuf/internal/type_checkers.py",
+      "external/protobuf~/python/google/protobuf/internal/well_known_types.py",
+      "external/protobuf~/python/google/protobuf/internal/wire_format.py",
+      "external/protobuf~/python/google/protobuf/json_format.py",
+      "external/protobuf~/python/google/protobuf/message.py",
+      "external/protobuf~/python/google/protobuf/message_factory.py",
+      "external/protobuf~/python/google/protobuf/proto.py",
+      "external/protobuf~/python/google/protobuf/proto_builder.py",
+      "external/protobuf~/python/google/protobuf/proto_json.py",
+      "external/protobuf~/python/google/protobuf/pyext/__init__.py",
+      "external/protobuf~/python/google/protobuf/pyext/cpp_message.py",
+      "external/protobuf~/python/google/protobuf/reflection.py",
+      "external/protobuf~/python/google/protobuf/runtime_version.py",
+      "external/protobuf~/python/google/protobuf/service.py",
+      "external/protobuf~/python/google/protobuf/service_reflection.py",
+      "external/protobuf~/python/google/protobuf/symbol_database.py",
+      "external/protobuf~/python/google/protobuf/testdata/__init__.py",
+      "external/protobuf~/python/google/protobuf/text_encoding.py",
+      "external/protobuf~/python/google/protobuf/text_format.py",
+      "external/protobuf~/python/google/protobuf/timestamp.py",
+      "external/protobuf~/python/google/protobuf/unknown_fields.py",
+      "external/protobuf~/python/google/protobuf/util/__init__.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/internal/python_edition_defaults.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/any_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/api_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/duration_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/empty_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/field_mask_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/source_context_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/struct_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/timestamp_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/type_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/wrappers_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/descriptor_pb2.py",
+      "bazel-out/darwin_arm64-fastbuild/bin/external/protobuf~/python/google/protobuf/compiler/plugin_pb2.py"
+    ],
+    "//api:rates_py_pb2_grpc": ["bazel-out/darwin_arm64-fastbuild/bin/api/rates_pb2_grpc.py"],
+    "//dispatch:dispatch_lib": ["dispatch/__init__.py", "dispatch/quote.py"],
+    "//dispatch:quote": [
+      "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote",
+      "dispatch/quote.py"
+    ],
+    "//dispatch:quote_contract_test": [
+      "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test",
+      "dispatch/quote_contract_test.py"
+    ],
+    "//rates:rate_server": ["bazel-out/darwin_arm64-fastbuild/bin/rates/rate_server"],
+    "//rates:tariff": ["bazel-out/darwin_arm64-fastbuild/bin/rates/libtariff.a"]
+  },
+  "transitions": {
+    "//api:_rates_cc_grpc_grpc_codegen": [
+      {
+        "label": "//api:rates_proto",
+        "transition": null
+      },
+      {
+        "label": "@com_github_grpc_grpc//src/compiler:grpc_cpp_plugin",
+        "transition": "exec"
+      },
+      {
+        "label": "@com_google_protobuf//:protoc",
+        "transition": "exec"
+      }
+    ],
+    "//api:python": [
+      {
+        "label": "//api:rates_py_pb2",
+        "transition": null
+      },
+      {
+        "label": "//api:rates_py_pb2_grpc",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile_source_retention",
+        "transition": null
+      },
+      {
+        "label": "//api:__init__.py",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@rules_python//python/config_settings:add_srcs_to_runfiles",
+        "transition": null
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:py_exec_tools_toolchain",
+        "transition": null
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:python_runtimes",
+        "transition": null
+      }
+    ],
+    "//api:rates_cc_grpc": [
+      {
+        "label": "//api:_rates_cc_grpc_grpc_codegen",
+        "transition": null
+      },
+      {
+        "label": "//api:rates_cc_proto",
+        "transition": null
+      },
+      {
+        "label": "@com_github_grpc_grpc//:grpc++_codegen_proto",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/def_parser:def_parser",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/cpp:current_cc_toolchain",
+        "transition": null
+      },
+      {
+        "label": "@@apple_support~~apple_cc_configure_extension~local_config_apple_cc//:cc-compiler-darwin_arm64",
+        "transition": null
+      }
+    ],
+    "//api:rates_cc_proto": [
+      {
+        "label": "//api:rates_proto",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/proto:cc_toolchain",
+        "transition": null
+      }
+    ],
+    "//api:rates_proto": [
+      {
+        "label": "//api:rates.proto",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@com_google_protobuf//bazel/private:experimental_proto_descriptor_sets_include_source_info",
+        "transition": null
+      },
+      {
+        "label": "@com_google_protobuf//bazel/private:strict_proto_deps",
+        "transition": null
+      },
+      {
+        "label": "@com_google_protobuf//bazel/private:strict_public_imports",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/proto:protoc",
+        "transition": "exec"
+      }
+    ],
+    "//api:rates_py_pb2": [
+      {
+        "label": "//api:rates_proto",
+        "transition": null
+      },
+      {
+        "label": "@com_google_protobuf//:protoc",
+        "transition": "exec"
+      },
+      {
+        "label": "@com_google_protobuf//:protobuf_python",
+        "transition": null
+      }
+    ],
+    "//api:rates_py_pb2_grpc": [
+      {
+        "label": "//api:rates_proto",
+        "transition": null
+      },
+      {
+        "label": "//api:rates_py_pb2",
+        "transition": null
+      },
+      {
+        "label": "@com_github_grpc_grpc//src/compiler:grpc_python_plugin",
+        "transition": "exec"
+      },
+      {
+        "label": "@com_google_protobuf//:protoc",
+        "transition": "exec"
+      },
+      {
+        "label": "@com_github_grpc_grpc//src/python/grpcio/grpc:grpcio",
+        "transition": null
+      }
+    ],
+    "//dispatch:dispatch_lib": [
+      {
+        "label": "//api:python",
+        "transition": null
+      },
+      {
+        "label": "@com_github_grpc_grpc//src/python/grpcio/grpc:grpcio",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile_source_retention",
+        "transition": null
+      },
+      {
+        "label": "//dispatch:__init__.py",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "//dispatch:quote.py",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@rules_python//python/config_settings:add_srcs_to_runfiles",
+        "transition": null
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:py_exec_tools_toolchain",
+        "transition": null
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:python_runtimes",
+        "transition": null
+      }
+    ],
+    "//dispatch:quote": [
+      {
+        "label": "//dispatch:dispatch_lib",
+        "transition": null
+      },
+      {
+        "label": "//dispatch:quote.py",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile_source_retention",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python/config_settings:bootstrap_impl",
+        "transition": null
+      },
+      {
+        "label": "@platforms//os:windows",
+        "transition": "(NoConfigTransition + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
+      },
+      {
+        "label": "@bazel_tools//tools/python:python_bootstrap_template.txt",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@rules_python//tools/launcher:launcher",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python:toolchain_type",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/launcher:launcher_maker",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/zip:zipper",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:collect_cc_coverage",
+        "transition": "exec"
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:py_exec_tools_toolchain",
+        "transition": null
+      },
+      {
+        "label": "@@apple_support~~apple_cc_configure_extension~local_config_apple_cc//:cc-compiler-darwin_arm64",
+        "transition": null
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:python_runtimes",
+        "transition": null
+      }
+    ],
+    "//dispatch:quote_contract_test": [
+      {
+        "label": "@bazel_tools//tools/test:test_wrapper",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:xml_writer",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:runtime",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:test_setup",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:test_xml_generator",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:collect_coverage",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/test:coverage_support",
+        "transition": "exec"
+      },
+      {
+        "label": "//rates:rate_server",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "//dispatch:dispatch_lib",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "//dispatch:quote_contract_test.py",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "@rules_python//python/config_settings:precompile_source_retention",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "@rules_python//python/config_settings:bootstrap_impl",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "@platforms//os:windows",
+        "transition": "(NoConfigTransition + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
+      },
+      {
+        "label": "@bazel_tools//tools/python:python_bootstrap_template.txt",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "@rules_python//tools/launcher:launcher",
+        "transition": null
+      },
+      {
+        "label": "@rules_python//python:toolchain_type",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/launcher:launcher_maker",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/zip:zipper",
+        "transition": "exec"
+      },
+      {
+        "label": "@platforms//os:ios",
+        "transition": "(NoConfigTransition + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
+      },
+      {
+        "label": "@platforms//os:macos",
+        "transition": null
+      },
+      {
+        "label": "@platforms//os:tvos",
+        "transition": "(NoConfigTransition + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
+      },
+      {
+        "label": "@platforms//os:visionos",
+        "transition": "(NoConfigTransition + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
+      },
+      {
+        "label": "@platforms//os:watchos",
+        "transition": "(NoConfigTransition + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition))"
+      },
+      {
+        "label": "@bazel_tools//tools/test:collect_cc_coverage",
+        "transition": "exec"
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:py_exec_tools_toolchain",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "@@apple_support~~apple_cc_configure_extension~local_config_apple_cc//:cc-compiler-darwin_arm64",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      },
+      {
+        "label": "@@rules_python~~python~python_3_12_aarch64-apple-darwin//:python_runtimes",
+        "transition": "(TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)"
+      }
+    ],
+    "//rates:rate_server": [
+      {
+        "label": "//rates:rate_server.cc",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "//rates:tariff",
+        "transition": null
+      },
+      {
+        "label": "//api:rates_cc_grpc",
+        "transition": null
+      },
+      {
+        "label": "//api:rates_cc_proto",
+        "transition": null
+      },
+      {
+        "label": "@com_github_grpc_grpc//:grpc++",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/cpp:malloc",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/cpp:link_extra_lib",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/cpp:current_cc_toolchain",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/cpp:toolchain_type",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/def_parser:def_parser",
+        "transition": "exec"
+      },
+      {
+        "label": "@@apple_support~~apple_cc_configure_extension~local_config_apple_cc//:cc-compiler-darwin_arm64",
+        "transition": null
+      }
+    ],
+    "//rates:tariff": [
+      {
+        "label": "//rates:tariff.cc",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "//rates:tariff.h",
+        "transition": "NullTransition"
+      },
+      {
+        "label": "//api:rates_cc_proto",
+        "transition": null
+      },
+      {
+        "label": "@bazel_tools//tools/def_parser:def_parser",
+        "transition": "exec"
+      },
+      {
+        "label": "@bazel_tools//tools/cpp:current_cc_toolchain",
+        "transition": null
+      },
+      {
+        "label": "@@apple_support~~apple_cc_configure_extension~local_config_apple_cc//:cc-compiler-darwin_arm64",
+        "transition": null
+      }
+    ]
+  }
+}
