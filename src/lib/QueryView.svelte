@@ -582,7 +582,7 @@
               {/if}
             {:else if resultView === "table" && kind === "aquery"}
               {#if stored.actions}
-                <TargetActions actions={stored.actions} error={null} oninputclick={traceArtifactProducer} />
+                <TargetActions actions={stored.actions} error={null} oninputclick={traceArtifactProducer} showOwner />
               {/if}
             {:else if resultView === "table"}
               {#if !rows.length}

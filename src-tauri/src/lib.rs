@@ -2,6 +2,7 @@ mod actions;
 mod bazel_output;
 mod bep;
 mod bes;
+mod configured;
 mod console;
 mod detail;
 mod ingest;
@@ -114,51 +115,31 @@ async fn get_target_detail(
     }
 }
 
-/// The selected target's output files, resolved by `bazel cquery`.
+/// One inspector read step (configuration, transitions, outputs, or
+/// actions) for `label` in `workspace`, resolved under the applied build
+/// flags. Each call runs at most one Bazel process.
 #[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.outputs.request", skip_all)]
-async fn get_target_outputs(
+#[tracing::instrument(target = "zeal::operations", name = "target.read.request", skip_all)]
+async fn read_target(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     workspace: String,
     label: String,
-) -> Result<ingest::TargetOutputs, String> {
+    flags: String,
+    step: ingest::TargetRead,
+) -> Result<ingest::TargetReadData, String> {
     let core = core.inner().clone();
     let emit_core = core.clone();
     let emit_app = app.clone();
     match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_outputs(app, core, &workspace, &label)
+        ingest::read_target(app, core, &workspace, &label, &flags, step)
     })
     .await
     {
         Ok(result) => result,
         Err(_) => {
             emit_core.emit(&emit_app);
-            Err("target outputs worker failed".to_string())
-        }
-    }
-}
-
-#[tauri::command]
-#[tracing::instrument(target = "zeal::operations", name = "target.actions.request", skip_all)]
-async fn get_target_actions(
-    app: AppHandle,
-    core: State<'_, Arc<Core>>,
-    workspace: String,
-    label: String,
-) -> Result<actions::TargetActions, String> {
-    let core = core.inner().clone();
-    let emit_core = core.clone();
-    let emit_app = app.clone();
-    match tauri::async_runtime::spawn_blocking(move || {
-        ingest::target_actions(app, core, &workspace, &label)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            emit_core.emit(&emit_app);
-            Err("target actions worker failed".to_string())
+            Err("target read worker failed".to_string())
         }
     }
 }
@@ -517,8 +498,7 @@ pub fn run() {
             get_modules,
             explain_module,
             get_target_detail,
-            get_target_outputs,
-            get_target_actions,
+            read_target,
             read_console,
             write_console,
             resize_console,

@@ -6,12 +6,13 @@
 //! decides which reply is current.
 
 use crate::actions;
+use crate::configured;
 use crate::query_proto::{self, ParsedQuery};
 use crate::runner::{self, Output};
 use crate::snapshot::{self, Status, Target, TargetIndex};
 use crate::state::Core;
-use serde::Serialize;
-use std::io::{BufRead, BufReader, ErrorKind, Read};
+use serde::{Deserialize, Serialize};
+use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command};
@@ -22,9 +23,6 @@ use tauri::AppHandle;
 /// Maximum retained stderr diagnostic payload. Read storage, allocation
 /// capacity, UTF-8 conversion, and total process memory are separate.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
-
-/// Output paths shown on the target page before the "…" marker.
-const MAX_OUTPUT_PATHS: usize = 10;
 
 enum Outcome<T> {
     Ok(T),
@@ -125,107 +123,125 @@ pub fn target_detail(
         .ok_or_else(|| "target not found in the current Scope".to_string())
 }
 
-/// Output paths kept for the target page; larger results set `truncated`.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TargetOutputs {
-    pub paths: Vec<String>,
-    pub truncated: bool,
+/// Which single inspector read a `read_target` call performs. Each variant
+/// is one Bazel process; the frontend stages the Configured tab's three
+/// reads so a tab, flag, or selection change can stop between them.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetRead {
+    /// `cquery --output=jsonproto` `config(label, target)` summary.
+    Configuration,
+    /// `cquery --output=transitions` `config(label, target)` dependency rows.
+    Transitions,
+    /// `cquery --output=files` `config(label, target)` outputs.
+    Outputs,
+    /// `aquery` action list for the quoted label.
+    Actions,
 }
 
-/// The target's output files as `bazel cquery --output=files` prints them:
-/// configuration-resolved `bazel-out/...` paths, not declared output labels.
-#[tracing::instrument(target = "zeal::operations", name = "target.outputs", skip_all)]
-pub fn target_outputs(
-    app: AppHandle,
-    core: Arc<Core>,
-    ws: &str,
-    label: &str,
-) -> Result<TargetOutputs, String> {
-    let pattern = crate::scope::cquery_target(label)?;
-    let (ws_path, bazel) = acquire_target(&core, ws)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let mut command = Command::new(&bazel);
-    command
-        .arg("--noblock_for_lock")
-        .arg("cquery")
-        .arg(&pattern)
-        .arg("--output=files")
-        .current_dir(&ws_path);
-    match fetch(
-        &core,
-        runner::InvocationMeta {
-            workspace: &ws_path,
-            cmd: "cquery",
-            pattern: &pattern,
-            id: &id,
-        },
-        &mut command,
-        || core.emit(&app),
-        parse_output_paths,
-        |outputs: &TargetOutputs| !outputs.paths.is_empty(),
-    ) {
-        Outcome::Ok(outputs) | Outcome::Partial(outputs, _) => Ok(outputs),
-        Outcome::Failed(error) => Err(error.summary),
-    }
-}
-
-/// `--output=files` prints one workspace-relative output path per line. Only
-/// the first [`MAX_OUTPUT_PATHS`] are kept so filegroup-scale results stay
-/// cheap; the rest are reported through `truncated`.
-fn parse_output_paths(input: impl BufRead) -> Result<TargetOutputs, String> {
-    let mut paths = Vec::new();
-    let mut truncated = false;
-    for line in input.lines() {
-        let line = line.map_err(|_| "could not read cquery output".to_string())?;
-        let path = line.trim();
-        if path.is_empty() {
-            continue;
-        }
-        if paths.len() < MAX_OUTPUT_PATHS {
-            paths.push(path.to_string());
+impl TargetRead {
+    /// The Bazel argv for this step: `--noblock_for_lock`, the query kind,
+    /// the validated user flags, the fixed managed options, `--`, and the
+    /// expression. Every cquery format asks only about the selected
+    /// target's own `config()`; actions quotes the label for aquery.
+    fn command(
+        self,
+        bazel: &Path,
+        ws: &Path,
+        label: &str,
+        flags: &str,
+    ) -> Result<(Command, &'static str, String), String> {
+        let (kind, managed): (crate::query::QueryKind, &[&str]) = match self {
+            Self::Actions => (
+                crate::query::QueryKind::Aquery,
+                &[
+                    "--output=jsonproto",
+                    "--include_commandline",
+                    "--include_artifacts",
+                ],
+            ),
+            Self::Configuration => (
+                crate::query::QueryKind::Cquery,
+                &["--output=jsonproto", "--proto:include_configurations"],
+            ),
+            Self::Transitions => (
+                crate::query::QueryKind::Cquery,
+                &["--output=transitions", "--transitions=lite"],
+            ),
+            Self::Outputs => (crate::query::QueryKind::Cquery, &["--output=files"]),
+        };
+        let label = crate::scope::cquery_target(label)?;
+        let expr = if matches!(self, Self::Actions) {
+            format!("\"{label}\"")
         } else {
-            truncated = true;
+            format!("config(\"{label}\", target)")
+        };
+        let mut cmd = Command::new(bazel);
+        cmd.current_dir(ws)
+            .args(["--noblock_for_lock", kind.as_str()])
+            .args(crate::query::build_flags(kind, flags)?)
+            .args(managed)
+            .arg("--")
+            .arg(&expr);
+        Ok((cmd, kind.as_str(), expr))
+    }
+
+    /// Parse this step's stdout into its bare payload.
+    fn parse(self, input: BufReader<ChildStdout>) -> Result<TargetReadData, String> {
+        match self {
+            Self::Configuration => {
+                configured::parse_configuration(input).map(TargetReadData::Configuration)
+            }
+            Self::Transitions => {
+                configured::parse_transitions(input).map(TargetReadData::Transitions)
+            }
+            Self::Outputs => configured::parse_output_paths(input).map(TargetReadData::Outputs),
+            Self::Actions => actions::parse(input).map(TargetReadData::Actions),
         }
     }
-    Ok(TargetOutputs { paths, truncated })
 }
 
-#[tracing::instrument(target = "zeal::operations", name = "target.actions", skip_all)]
-pub fn target_actions(
+/// One inspector read's untagged result: the bare payload of the requested
+/// step (`{"mnemonic":…}`, `{"deps":[…]}`, `{"paths":[…]}`, or
+/// `{"actions":[…]}`).
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum TargetReadData {
+    Configuration(Option<configured::ConfigSummary>),
+    Transitions(configured::TargetTransitions),
+    Outputs(configured::TargetOutputs),
+    Actions(actions::TargetActions),
+}
+
+/// One inspector read for the selected target under the applied build
+/// flags: a single `cquery`/`aquery` process per call. Definition never
+/// reaches this command.
+#[tracing::instrument(target = "zeal::operations", name = "target.read", skip_all)]
+pub fn read_target(
     app: AppHandle,
     core: Arc<Core>,
     ws: &str,
     label: &str,
-) -> Result<actions::TargetActions, String> {
-    let pattern = crate::scope::cquery_target(label)?;
+    flags: &str,
+    step: TargetRead,
+) -> Result<TargetReadData, String> {
     let (ws_path, bazel) = acquire_target(&core, ws)?;
+    let (mut command, cmd, expr) = step.command(&bazel, &ws_path, label, flags)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let mut command = Command::new(&bazel);
-    command
-        .arg("--noblock_for_lock")
-        .arg("aquery")
-        .arg(format!("\"{pattern}\""))
-        .args([
-            "--output=jsonproto",
-            "--include_commandline",
-            "--include_artifacts",
-        ])
-        .current_dir(&ws_path);
     match fetch(
         &core,
         runner::InvocationMeta {
             workspace: &ws_path,
-            cmd: "aquery",
-            pattern: &pattern,
+            cmd,
+            pattern: &expr,
             id: &id,
         },
         &mut command,
         || core.emit(&app),
-        actions::parse,
-        |actions: &actions::TargetActions| !actions.actions.is_empty(),
+        move |input| step.parse(input),
+        |_| false,
     ) {
-        Outcome::Ok(actions) | Outcome::Partial(actions, _) => Ok(actions),
+        Outcome::Ok(data) | Outcome::Partial(data, _) => Ok(data),
         Outcome::Failed(error) => Err(error.summary),
     }
 }
@@ -304,7 +320,14 @@ fn fetch<T: Send + 'static>(
     let code = (exit >= 0).then_some(exit);
     let data = match parsed {
         Ok(data) => data,
-        Err(summary) => {
+        Err(parse_error) => {
+            // A nonzero Bazel exit can truncate stdout, so the parser error
+            // alone misleads; keep the real stderr diagnostic alongside it.
+            let summary = if code != Some(0) && !stderr_tail.trim().is_empty() {
+                format!("{} ({})", summarize(&stderr_tail), parse_error)
+            } else {
+                parse_error
+            };
             return Outcome::Failed(IngestError {
                 exit_code: code,
                 summary,
@@ -562,9 +585,13 @@ exit "$code"
     #[test]
     fn malformed_proto_fails_partial_output() {
         let fixture = QueryFixture::new();
+        // A nonzero exit with stderr keeps Bazel's diagnostic next to the
+        // parser detail instead of surfacing only the misleading parse error.
         assert!(
             matches!(fetch_detail(&fixture, "malformed-partial"), Outcome::Failed(error)
-            if error.exit_code == Some(9) && error.summary.contains("protobuf"))
+            if error.exit_code == Some(9)
+                && error.summary.contains("final diagnostic marker")
+                && error.summary.contains("protobuf"))
         );
     }
 
@@ -575,26 +602,6 @@ exit "$code"
             matches!(fetch_detail(&fixture, "failed"), Outcome::Failed(error)
             if error.exit_code == Some(7) && error.summary == "final diagnostic marker")
         );
-    }
-
-    #[test]
-    fn output_paths_skip_blank_lines_and_cap_the_list() {
-        let mut input = String::new();
-        for i in 0..MAX_OUTPUT_PATHS + 3 {
-            input.push_str(&format!("bazel-out/k8/bin/app/out{i}\n"));
-        }
-        input.push_str("\n  bazel-out/k8/bin/app/last \n");
-        let outputs = parse_output_paths(std::io::Cursor::new(input)).unwrap();
-        assert_eq!(outputs.paths.len(), MAX_OUTPUT_PATHS);
-        assert_eq!(outputs.paths[0], "bazel-out/k8/bin/app/out0");
-        assert!(outputs.truncated);
-
-        let outputs = parse_output_paths(std::io::Cursor::new(
-            "bazel-out/k8/bin/app/server\n\nbazel-out/k8/bin/app/lib.a\n",
-        ))
-        .unwrap();
-        assert_eq!(outputs.paths.len(), 2);
-        assert!(!outputs.truncated);
     }
 
     #[test]
@@ -637,5 +644,139 @@ exit "$code"
         let error = load.error.expect("failure carries an error");
         assert_eq!(error.exit_code, Some(7));
         assert_eq!(error.summary, "final diagnostic marker");
+    }
+
+    fn argv(cmd: &Command) -> Vec<&str> {
+        cmd.get_args().map(|arg| arg.to_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn read_command_scopes_every_cquery_step_to_the_target_configuration() {
+        let bazel = Path::new("/bin/bazel");
+        let ws = Path::new("/ws");
+        let managed = [
+            (
+                TargetRead::Configuration,
+                &["--output=jsonproto", "--proto:include_configurations"][..],
+            ),
+            (
+                TargetRead::Transitions,
+                &["--output=transitions", "--transitions=lite"][..],
+            ),
+            (TargetRead::Outputs, &["--output=files"][..]),
+        ];
+        for (step, options) in managed {
+            let (cmd, kind, expr) = step.command(bazel, ws, "//app:t", "--config=opt").unwrap();
+            assert_eq!(kind, "cquery");
+            assert_eq!(expr, "config(\"//app:t\", target)");
+            assert_eq!(cmd.get_program(), bazel);
+            let mut expected = vec!["--noblock_for_lock", "cquery", "--config=opt"];
+            expected.extend(options.iter().copied());
+            expected.extend(["--", "config(\"//app:t\", target)"]);
+            assert_eq!(argv(&cmd), expected);
+        }
+    }
+
+    #[test]
+    fn read_command_quotes_the_label_for_aquery() {
+        let (cmd, kind, expr) = TargetRead::Actions
+            .command(
+                Path::new("/bin/bazel"),
+                Path::new("/ws"),
+                "//app:t",
+                "--config=opt",
+            )
+            .unwrap();
+        assert_eq!(kind, "aquery");
+        assert_eq!(expr, "\"//app:t\"");
+        assert_eq!(
+            argv(&cmd),
+            [
+                "--noblock_for_lock",
+                "aquery",
+                "--config=opt",
+                "--output=jsonproto",
+                "--include_commandline",
+                "--include_artifacts",
+                "--",
+                "\"//app:t\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn read_command_rejects_managed_flag_overrides_before_launching() {
+        // build_flags runs inside command(), so an --output or managed
+        // option override can never reach a phase.
+        for step in [
+            TargetRead::Configuration,
+            TargetRead::Transitions,
+            TargetRead::Outputs,
+            TargetRead::Actions,
+        ] {
+            assert!(
+                step.command(
+                    Path::new("/bin/bazel"),
+                    Path::new("/ws"),
+                    "//app:t",
+                    "--output=files"
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn read_data_keeps_its_untagged_wire_shapes() {
+        // Each step serializes as its bare payload — no phase tag.
+        let summary = configured::ConfigSummary {
+            id: 7,
+            mnemonic: "k8-opt".to_string(),
+            checksum: "abc123".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(TargetReadData::Configuration(Some(summary))).unwrap(),
+            serde_json::json!({"mnemonic": "k8-opt", "checksum": "abc123"})
+        );
+        assert_eq!(
+            serde_json::to_value(TargetReadData::Configuration(None)).unwrap(),
+            serde_json::json!(null)
+        );
+        assert_eq!(
+            serde_json::to_value(TargetReadData::Transitions(configured::TargetTransitions {
+                deps: vec![],
+                deps_truncated: false,
+            }))
+            .unwrap(),
+            serde_json::json!({"deps": [], "depsTruncated": false})
+        );
+        assert_eq!(
+            serde_json::to_value(TargetReadData::Outputs(configured::TargetOutputs {
+                paths: vec![],
+                truncated: false,
+            }))
+            .unwrap(),
+            serde_json::json!({"paths": [], "truncated": false})
+        );
+        assert_eq!(
+            serde_json::to_value(TargetReadData::Actions(actions::TargetActions {
+                actions: vec![],
+                truncated: false,
+            }))
+            .unwrap(),
+            serde_json::json!({"actions": [], "truncated": false})
+        );
+    }
+
+    #[test]
+    fn target_read_deserializes_lowercase_steps() {
+        for json in [
+            "\"configuration\"",
+            "\"transitions\"",
+            "\"outputs\"",
+            "\"actions\"",
+        ] {
+            serde_json::from_str::<TargetRead>(json).unwrap();
+        }
     }
 }

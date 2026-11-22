@@ -14,6 +14,7 @@ import type {
   TargetActions,
   TargetDetail,
   TargetIndex,
+  ConfiguredDep,
   TargetOutputs,
   WorkspaceInfo,
   WorkspaceState,
@@ -463,15 +464,51 @@ function actionMnemonic(path: string): string {
   return "SingleJar";
 }
 
+/** The one configuration the preview reports for a flags string: `opt`
+ * anywhere selects the opt variant. Checksums are hex stand-ins. */
+function previewConfiguration(flags: string): { mnemonic: string; checksum: string } {
+  return flags.includes("opt")
+    ? { mnemonic: "k8-opt", checksum: "7c2a91ed841bda30" }
+    : { mnemonic: "k8-fastbuild", checksum: "4a8f12c61e0dd731" };
+}
+
+/** Sample `read_target` outputs step for one label under the given flags. */
+function previewOutputs(label: string, flags: string): TargetOutputs {
+  const { mnemonic: configDir } = previewConfiguration(flags);
+  const outputPaths = FULL_DATA.files
+    .filter((file) => file.owner === label && file.role === "out")
+    .map((file) => `bazel-out/${configDir}/bin/${file.path}`);
+  return {
+    paths: outputPaths.slice(0, 10),
+    truncated: outputPaths.length > 10,
+  };
+}
+
+/** Sample `read_target` transitions step for one label. */
+function previewTransitions(label: string): {
+  deps: ConfiguredDep[];
+  depsTruncated: boolean;
+} {
+  const labels = new Set(FULL_DATA.edges.filter((e) => e.from === label).map((e) => e.to));
+  if (label === PARSER) labels.add("//tools:protoc");
+  const deps = Array.from(labels, (dep) => ({
+    label: dep,
+    // Toolchain-ish packages plausibly sit behind an exec transition.
+    transition: dep.startsWith("//tools") ? "exec" : null,
+  }));
+  return { deps: deps.slice(0, 200), depsTruncated: deps.length > 200 };
+}
+
 /** Sample actions for one target, built from the demo workspace files. */
-function previewActions(label: string): TargetActions {
+function previewActions(label: string, flags = ""): TargetActions {
   const inputs = FULL_DATA.files
     .filter((file) => file.owner === label && file.role === "srcs")
     .map((file) => file.path);
+  const { mnemonic: configDir, checksum } = previewConfiguration(flags);
   const actions = FULL_DATA.files
     .filter((file) => file.owner === label && file.role === "out")
     .map((file) => {
-      const output = `bazel-out/k8-fastbuild/bin/${file.path}`;
+      const output = `bazel-out/${configDir}/bin/${file.path}`;
       const mnemonic = actionMnemonic(file.path);
       return {
         output,
@@ -492,10 +529,11 @@ function previewActions(label: string): TargetActions {
           { key: "LC_ALL", value: "C" },
         ],
         configuration: {
-          mnemonic: "k8-fastbuild",
+          mnemonic: configDir,
           platformName: "@local_config_platform//:host",
-          checksum: "0f3c9a1e7b2d4f60",
-          isTool: false,
+          checksum,
+          // Header compilation plausibly runs in the exec configuration.
+          isTool: mnemonic === "Javac",
         },
         executionPlatform: "@local_config_platform//:host",
       };
@@ -641,24 +679,19 @@ export function installPreview() {
         status: "ok",
       });
     },
-    get_target_outputs: (payload): TargetOutputs => {
+    read_target: (payload) => {
       wsEntry(payload?.workspace);
       const label = String(payload?.label);
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
       }
-      const paths = FULL_DATA.files
-        .filter((file) => file.owner === label && file.role === "out")
-        .map((file) => `bazel-out/k8-fastbuild/bin/${file.path}`);
-      return { paths: paths.slice(0, 10), truncated: paths.length > 10 };
-    },
-    get_target_actions: (payload): TargetActions => {
-      wsEntry(payload?.workspace);
-      const label = String(payload?.label);
-      if (!SNAPSHOT.targets.some((item) => item.label === label)) {
-        throw new Error("Target not found");
-      }
-      return previewActions(label);
+      const flags = String(payload?.flags ?? "");
+      const step = payload?.step;
+      if (step === "actions") return previewActions(label, flags);
+      if (step === "outputs") return previewOutputs(label, flags);
+      if (step === "configuration") return previewConfiguration(flags);
+      if (step === "transitions") return previewTransitions(label);
+      throw new Error("Unknown target read step");
     },
     list_invocations: (payload) =>
       structuredClone(records.filter((inv) => inv.workspace === String(payload?.workspace ?? ""))),

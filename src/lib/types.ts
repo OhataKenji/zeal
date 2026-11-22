@@ -113,6 +113,40 @@ export interface TargetActions {
   truncated: boolean;
 }
 
+/** The selected inspector tab. `definition` is static; the other two run
+ * configured-target reads under the applied build flags. */
+export type TargetTab = "definition" | "configured" | "actions";
+
+/** The configuration selected by `cquery` for this target. */
+export interface ConfigSummary {
+  mnemonic: string;
+  checksum: string;
+}
+
+/** One direct dependency edge of the configured target. `transition` is a
+ * short badge such as `exec`; null for edges that keep the parent's
+ * configuration or have none. */
+export interface ConfiguredDep {
+  label: string;
+  transition: string | null;
+}
+
+/** Everything the Configured tab needs: the target's configuration summary,
+ * its `cquery --output=files` outputs, and direct dependency edges. */
+export interface ConfiguredTarget {
+  configuration: ConfigSummary | null;
+  outputs: TargetOutputs;
+  deps: ConfiguredDep[];
+  depsTruncated: boolean;
+}
+
+/** The tagged result of one inspector phase read: exactly one key names the
+ * phase that produced it. */
+export type TargetPhaseData = { configured: ConfiguredTarget } | { actions: TargetActions };
+
+/** One inspector read; each step runs one Bazel command. */
+export type TargetReadStep = "configuration" | "transitions" | "outputs" | "actions";
+
 /** A user-facing summary for a failed core operation. */
 export interface IngestError {
   exitCode: number | null;

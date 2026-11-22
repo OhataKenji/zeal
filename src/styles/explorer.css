@@ -51,70 +51,30 @@
   overflow-wrap: anywhere;
 }
 
-.outputs,
 .target-actions {
   padding: 20px 0 12px;
 }
 
-.outputs h2,
 .target-actions h2 {
   margin: 0 0 10px;
   font-size: 13px;
   font-weight: 600;
-}
-
-.target-actions h2 {
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
 
-.actions-scroll {
-  max-height: 24rem;
-  overflow-y: auto;
+.action-list {
+  display: flex;
+  flex-direction: column;
 }
 
-.target-actions table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-  text-align: left;
-  font: 11px var(--mono);
-}
-
-.target-actions th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 6px 8px;
+.action-item {
   border-bottom: 1px solid var(--hairline);
-  background: var(--surface-panel);
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 600;
-  text-align: left;
 }
 
-.target-actions td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--hairline);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.target-actions th:nth-child(1) {
-  width: 32%;
-}
-
-.target-actions th:nth-child(2) {
-  width: 68%;
-}
-
-.target-actions .action-cell {
-  padding: 0;
-  overflow: visible;
-  white-space: normal;
+.action-item:last-child {
+  border-bottom: 0;
 }
 
 .target-actions .highlighted {
@@ -123,8 +83,9 @@
 }
 
 .action-summary {
-  display: grid;
-  grid-template-columns: 32% minmax(0, 1fr);
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 8px;
   cursor: pointer;
   list-style: none;
@@ -142,13 +103,24 @@
   white-space: nowrap;
 }
 
+.action-mnemonic {
+  flex: 0 1 auto;
+  max-width: 12rem;
+  font-weight: 500;
+}
+
+.action-output {
+  flex: 1 1 auto;
+  color: var(--muted-foreground);
+}
+
 .action-mnemonic::before {
   content: "▸";
   margin-right: 6px;
   color: var(--muted-foreground);
 }
 
-details[open] .action-mnemonic::before {
+details[open] > .action-summary .action-mnemonic::before {
   content: "▾";
 }
 
@@ -157,20 +129,30 @@ details[open] .action-mnemonic::before {
 }
 
 .action-extra {
-  margin-left: 6px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+}
+
+.action-exec {
+  flex-shrink: 0;
+  font-size: 10px;
 }
 
 .action-details {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px 24px;
-  padding: 2px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 4px 4px;
+  padding: 2px 0 12px 10px;
+  border-left: 2px solid var(--hairline);
 }
 
 .action-section h3 {
   margin: 0 0 6px;
   font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--muted-foreground);
 }
 
@@ -178,19 +160,26 @@ details[open] .action-mnemonic::before {
   margin: 0;
 }
 
-.action-command-section {
-  grid-column: 1 / -1;
+.action-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
-.action-command-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+.action-section-head h3 {
+  margin: 0;
+}
+
+.action-copy-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .action-command {
-  flex: 1;
-  min-width: 0;
   display: block;
   margin: 0;
   max-height: 9rem;
@@ -200,7 +189,6 @@ details[open] .action-mnemonic::before {
 }
 
 .action-copy {
-  flex-shrink: 0;
   height: 24px;
   padding: 0 8px;
   font-size: 11px;
@@ -218,25 +206,185 @@ details[open] .action-mnemonic::before {
   padding: 1px 0;
 }
 
-.action-paths code,
-.action-platform {
+.action-paths code {
   overflow-wrap: anywhere;
 }
 
-.action-config {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 2px 10px;
-  margin: 0;
+.action-inputs-summary {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  cursor: pointer;
 }
 
-.action-config dt {
+.action-input {
+  height: auto;
+  padding: 0;
+  font-size: inherit;
+}
+
+.action-meta {
+  margin: 0;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Configured inspector tab: shared flags bar, config summary, outputs, deps. */
+.flag-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  font-size: 11.5px;
+}
+
+.flag-bar-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flag-flags {
+  color: var(--primary);
+}
+
+.flag-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.flag-button {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.flag-bar-edit {
+  gap: 6px;
+}
+
+.flag-bar-edit .input {
+  height: 28px;
+  font-size: 12px;
+}
+
+.flag-apply {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.flag-warning {
+  margin: -6px 0 12px;
+  font-size: 11px;
+  color: var(--warning);
+}
+
+.configured-section {
+  margin-bottom: 14px;
+}
+
+.configured-section:last-child {
+  margin-bottom: 0;
+}
+
+.configured-head {
+  margin: 0 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--muted-foreground);
 }
 
-.action-config dd {
-  margin: 0;
-  overflow-wrap: anywhere;
+.configured-config {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.configured-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.configured-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.configured-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+
+.configured-copy {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.configured-dep {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.configured-dep-static {
+  color: var(--muted-foreground);
+}
+
+.dep-transition {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+
+.link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.tab-flag {
+  margin-left: 2px;
+  color: var(--primary);
 }
 
 .attributes-head {

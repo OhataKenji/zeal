@@ -40,6 +40,11 @@ export function basename(path: string): string {
   return path.split("/").pop() ?? path;
 }
 
+/** Drops the `bazel-out/<config>/bin/` prefix so output paths read short. */
+export function shortOutputPath(path: string): string {
+  return path.replace(/^bazel-out\/[^/]+\/bin\//, "");
+}
+
 // ---------------------------------------------------------------------------
 // Tree
 //
