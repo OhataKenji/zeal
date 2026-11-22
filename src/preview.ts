@@ -2,9 +2,9 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import historyJson from "./preview/history.json";
-import queriesJson from "./preview/queries.json";
-import workspaceJson from "./preview/workspace.json";
+import historyRaw from "./preview/history.json?raw";
+import queriesRaw from "./preview/queries.json?raw";
+import workspaceRaw from "./preview/workspace.json?raw";
 import type {
   ActionConfiguration,
   AppState,
@@ -26,7 +26,7 @@ import type {
 } from "./lib/types";
 import type { OutputFormat, QueryOutput, QueryRequest } from "./lib/query.ts";
 import type { AnalyticsFilter } from "./lib/analytics";
-import { previewAnalytics, sampleAnalyticsActivity } from "./preview/analytics.ts";
+import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
 
@@ -62,8 +62,9 @@ interface WorkspaceCapture {
 }
 
 const WORKSPACE = "/demo/parcel-desk";
-const history: CapturedInvocation[] = historyJson;
-const capture: WorkspaceCapture = workspaceJson;
+const history: CapturedInvocation[] = JSON.parse(historyRaw);
+const capture: WorkspaceCapture = JSON.parse(workspaceRaw);
+const queries: QueryPreset[] = JSON.parse(queriesRaw);
 const NOW = Date.now();
 // History timestamps are shifted so the newest capture ends "now"; profile
 // phase/thread timings inside each entry stay at their original values.
@@ -83,6 +84,52 @@ const records: PreviewRecord[] = history
   }))
   .toSorted((a, b) => b.startedAt - a.startedAt);
 const captured = new Map(history.map((h) => [h.record.id, h]));
+
+type AnalyticsSample = Pick<
+  PreviewRecord,
+  "cmd" | "pattern" | "workspace" | "startedAt" | "finishedAt" | "exitCode"
+>;
+
+function sampleDayCount(day: Date, ago: number): number {
+  const weekend = day.getDay() === 0 || day.getDay() === 6;
+  return weekend ? ago % 3 : [8, 12, 5, 17, 9, 14, 6, 11][ago % 8];
+}
+
+function sampleExitCode(sequence: number): number {
+  return sequence % 37 === 0 ? 8 : sequence % 13 === 0 ? 1 : 0;
+}
+
+/** Synthetic prior days for the browser chart only; never invocation history. */
+function sampleAnalyticsActivity(
+  seeds: readonly CapturedInvocation["record"][],
+  workspace: string,
+  now: number,
+): AnalyticsSample[] {
+  const rows: AnalyticsSample[] = [];
+  for (let ago = 29; ago >= 1 && seeds.length > 0; ago--) {
+    const day = new Date(now);
+    day.setDate(day.getDate() - ago);
+    const count = sampleDayCount(day, ago);
+    for (let i = 0; i < count; i++) {
+      const seed = seeds[(ago + i) % seeds.length];
+      const startedAt = day.setHours(8, 35 * i + (ago % 23), 0, 0);
+      const elapsed = Math.round(
+        ((seed.finishedAt - seed.startedAt) * (65 + ((ago * 11 + i * 17) % 90))) / 100,
+      );
+      const sequence = rows.length + 1;
+      rows.push({
+        workspace,
+        cmd: seed.cmd,
+        pattern: seed.pattern,
+        startedAt,
+        finishedAt: startedAt + elapsed,
+        exitCode: sampleExitCode(sequence),
+      });
+    }
+  }
+  return rows;
+}
+
 // Deterministic synthetic rows for the Analytics chart only; History and
 // Timing keep serving just the captured invocations.
 const analyticsSamples = sampleAnalyticsActivity(
@@ -158,7 +205,7 @@ function writeConsole(workspace: string, id: string, data: unknown) {
   const result = interpretConsoleInput(consoleInput.get(id) ?? "", text);
   consoleInput.set(id, result.input);
   consoleOutput.set(id, (consoleOutput.get(id) ?? "") + result.output);
-  if (result.exitCode !== null) finishOwned(id, result.exitCode);
+  if (result.exitCode !== null) finishOwned(id);
   return data.length;
 }
 
@@ -173,34 +220,27 @@ function getInvocation(workspace: string, id: unknown) {
   };
 }
 
-/** Records the simulated run's end on its history row, if it is still open. */
-function finishOwned(id: string, exitCode = 0) {
-  const record = records.find((inv) => inv.id === id);
-  const finished = record !== undefined && record.finishedAt === undefined;
-  if (record && finished) {
-    record.finishedAt = Date.now();
-    record.exitCode = exitCode;
-  }
+function finishOwned(id: string) {
   state.invocations = state.invocations.filter((entry) => entry.id !== id);
   consoleOutput.delete(id);
   consoleInput.delete(id);
   emitState();
-  // Query runs are not history rows; only a finished record needs a list refresh.
-  if (finished) void emit("invocations-changed");
 }
 
 function startInvocation(workspace: string, cmd: string, pattern: string) {
   wsEntry(workspace);
   const id = `preview-${crypto.randomUUID()}`;
   const now = Date.now();
-  // Simulated runs have no captured BEP or profile: the record starts without
-  // finish timing and both detail reads remain missing after it ends.
+  // The BEP build result exists independently of the owned process: a `run`
+  // program may outlive it, and its own output is never BEP history.
   const record: PreviewRecord = {
     id,
     workspace,
     cmd,
     pattern,
     startedAt: now,
+    finishedAt: now,
+    exitCode: 0,
   };
   records.unshift(record);
   const owned: OwnedInvocation = {
@@ -216,10 +256,10 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
   state.invocations.unshift(owned);
   consoleOutput.set(
     id,
-    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — simulated run, not a real Bazel process\r\n`,
+    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
   );
   if (cmd !== "run") {
-    // build/test finish on their own; `run` stays live until ^C/^D or Stop.
+    // build/test finish on their own; `run` stays live until input or Stop.
     setTimeout(() => finishOwned(id), 800);
   }
   emitState();
@@ -236,7 +276,7 @@ function stopInvocation(workspace: string, id: string) {
   if (!owned?.stoppable) return;
   owned.stopping = true;
   emitState();
-  finishOwned(id, 130);
+  finishOwned(id);
 }
 
 /** Default target configuration for rules without captured actions. */
@@ -259,40 +299,6 @@ function targetConfig(label: string): string {
   return ownerConfig(label)?.checksum.slice(0, 7) ?? "";
 }
 
-/** The preview answers only patterns it can resolve against the captured
- * rule-target set exactly; anything else is refused rather than guessed.
- * `:*` variants are unsupported because they also match file targets, which
- * the capture does not include. */
-function previewTargets(expr: string): string[] {
-  const inner = /^set\((.*)\)$/.exec(expr)?.[1];
-  if (inner !== undefined) return previewTargets(inner);
-  const labels = new Set(capture.targets.map((t) => t.label));
-  if (expr === "//...") {
-    return capture.targets.map((t) => t.label);
-  }
-  if (labels.has(expr)) return [expr];
-  const pkgAll = /^\/\/([^:]+):all$/.exec(expr);
-  if (pkgAll) {
-    return capture.targets.filter((t) => t.pkg === pkgAll[1]).map((t) => t.label);
-  }
-  const pkgTree = /^\/\/([^/]+(?:\/[^/]+)*)\/\.\.\.$/.exec(expr);
-  if (pkgTree) {
-    const prefix = pkgTree[1];
-    return capture.targets
-      .filter((t) => t.pkg === prefix || t.pkg.startsWith(`${prefix}/`))
-      .map((t) => t.label);
-  }
-  const pkgName = /^\/\/([^:]+)$/.exec(expr);
-  if (pkgName) {
-    const name = pkgName[1].split("/").pop() ?? "";
-    const label = `//${pkgName[1]}:${name}`;
-    if (labels.has(label)) return [label];
-  }
-  throw new Error(
-    `Preview cannot evaluate "${expr}"; it answers //..., //pkg/..., //pkg:all and exact labels from the captured workspace`,
-  );
-}
-
 /** A sidebar preset captured verbatim from a real query run: the raw stdout
  * for one output mode, or the action outputs an aquery selected. */
 interface QueryPreset {
@@ -303,9 +309,7 @@ interface QueryPreset {
   transitions?: string;
   actionOutputs?: string[];
 }
-const QUERY_PRESETS = new Map(
-  (queriesJson as QueryPreset[]).map((preset) => [`${preset.kind}\n${preset.expr}`, preset]),
-);
+const QUERY_PRESETS = new Map(queries.map((preset) => [`${preset.kind}\n${preset.expr}`, preset]));
 
 function queryOk(stdout: string, actions: TargetActions | null = null): QueryOutput {
   return { exitCode: 0, stdout, stdoutTruncated: false, truncated: false, stderrTail: "", actions };
@@ -321,7 +325,7 @@ function actionsOutput(matched: TargetAction[]): QueryOutput {
 }
 
 /** Replays a preset's captured output for the requested mode; null when the
- * preset does not cover it, so the caller falls back to projection. */
+ * preset does not cover it, so the caller falls back to captured data. */
 function presetOutput(preset: QueryPreset, output: OutputFormat): QueryOutput | null {
   if (output === "label" && preset.label !== undefined) return queryOk(preset.label);
   if (output === "graph" && preset.graph !== undefined) return queryOk(preset.graph);
@@ -339,27 +343,16 @@ function presetOutput(preset: QueryPreset, output: OutputFormat): QueryOutput | 
   return null;
 }
 
-/** Sample `run_query` reply over the captured graph: real labels, edges,
- * configuration checksums, transitions and actions — no query evaluation. */
+/** Sample `run_query` reply: sidebar presets replay their captured output;
+ * anything else falls back to the captured labels, edges, transitions and
+ * actions — no query evaluation. */
 function previewQueryOutput(request: QueryRequest): QueryOutput {
-  const { kind, output, expr, flags, noImplicitDeps, noToolDeps } = request;
-  if (kind !== "query") {
-    if (String(flags ?? "").trim() !== "") {
-      throw new Error(
-        "Preview captured only the default Bazel configuration; cquery/aquery flags are not supported",
-      );
-    }
-  } else if (!noImplicitDeps || noToolDeps) {
-    throw new Error(
-      "Preview target data was captured with --noimplicit_deps; dependency-scope flags are not supported",
-    );
-  }
-  const preset = QUERY_PRESETS.get(`${kind}\n${expr}`);
+  const preset = QUERY_PRESETS.get(`${request.kind}\n${request.expr}`);
   if (preset) {
-    const replayed = presetOutput(preset, output);
+    const replayed = presetOutput(preset, request.output);
     if (replayed) return replayed;
   }
-  return projectedQueryOutput(request);
+  return fallbackQueryOutput(request);
 }
 
 function unsupportedOutput(kind: string, output: OutputFormat): never {
@@ -399,15 +392,21 @@ function graphStdout(selected: string[], selectedSet: Set<string>): string {
   return `digraph mygraph {\n  node [shape=box];\n${body}\n}\n`;
 }
 
-function projectedQueryOutput({ kind, output, expr }: QueryRequest): QueryOutput {
-  const selected = previewTargets(expr);
+/** aquery answers with the actions owned by the exact label, or the whole
+ * capture when the expression does not name one target. */
+function aqueryOutput(expr: string, exact: boolean, output: OutputFormat): QueryOutput {
+  if (output !== "jsonproto") return unsupportedOutput("aquery", output);
+  const matched = exact ? capture.actions.filter((a) => a.owner === expr) : capture.actions;
+  return actionsOutput(matched);
+}
+
+/** Baseline fallback for expressions without a captured preset: an exact
+ * target label selects that owner, anything else selects the whole demo. */
+function fallbackQueryOutput({ kind, output, expr }: QueryRequest): QueryOutput {
+  const exact = capture.targets.some((t) => t.label === expr);
+  const selected = exact ? [expr] : capture.targets.map((t) => t.label);
   const selectedSet = new Set(selected);
-  if (kind === "aquery") {
-    if (output !== "jsonproto") return unsupportedOutput(kind, output);
-    const all = expr === "//..." || expr === "set(//...)";
-    const matched = all ? capture.actions : capture.actions.filter((a) => selectedSet.has(a.owner));
-    return actionsOutput(matched);
-  }
+  if (kind === "aquery") return aqueryOutput(expr, exact, output);
   if (kind === "cquery") return queryOk(cqueryStdout(selected, output));
   if (output === "graph") return queryOk(graphStdout(selected, selectedSet));
   if (output === "label") return queryOk(selected.join("\n").concat("\n"));
@@ -457,12 +456,14 @@ export function installPreview() {
       }
       const node = capture.modules.modules.find((item) => item.key === key);
       if (!node) throw new Error(`Unknown module: ${key}`);
-      // `bazel mod explain` output was not captured; the module key followed
-      // by its immediate parents from the module graph is the honest
-      // explanation available.
-      const parents = node.requiredBy.length > 0 ? node.requiredBy : ["(no parents)"];
+      // `bazel mod explain` output was not captured; the root-to-module chain
+      // built from the module graph stands in for it.
       return {
-        text: [key, ...parents].join("\n"),
+        text: [
+          capture.modules.rootKey,
+          ...node.requiredBy.filter((parent) => parent !== capture.modules.rootKey),
+          key,
+        ].join(" -> "),
         warning: capture.modules.warning,
       };
     },
@@ -492,12 +493,6 @@ export function installPreview() {
       const label = String(payload?.label);
       if (!SNAPSHOT.targets.some((item) => item.label === label)) {
         throw new Error("Target not found");
-      }
-      const flags = String(payload?.flags ?? "");
-      if (flags.trim() !== "") {
-        throw new Error(
-          "Preview captured only the default Bazel configuration; build flags are not supported",
-        );
       }
       const step = payload?.step;
       if (step === "actions") {

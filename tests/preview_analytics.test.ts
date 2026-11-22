@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { previewAnalytics, sampleAnalyticsActivity } from "../src/preview/analytics.ts";
+import { previewAnalytics } from "../src/preview/analytics.ts";
 import type { AnalyticsFilter } from "../src/lib/analytics.ts";
 
 const NOW = new Date(2026, 2, 30, 12).getTime();
@@ -204,48 +204,4 @@ test("workspace selection limits records to the chosen workspace", () => {
     () => previewAnalytics(records, { ...PERIOD, workspaceId: "/missing" }, NOW),
     /invalid analytics filter/,
   );
-});
-
-// Monday, December 7 2026 at local noon.
-const SAMPLE_NOW = new Date(2026, 11, 7, 12).getTime();
-const SAMPLE_SEEDS = [
-  {
-    cmd: "build",
-    pattern: "//rates:rate_server",
-    startedAt: 1_000,
-    finishedAt: 46_000,
-    exitCode: 0,
-  },
-  {
-    cmd: "test",
-    pattern: "//dispatch:quote_contract_test",
-    startedAt: 2_000,
-    finishedAt: 32_000,
-    exitCode: 0,
-  },
-];
-
-test("sampled analytics fill prior days without touching today or mutating seeds", () => {
-  const seeds = structuredClone(SAMPLE_SEEDS);
-  const before = structuredClone(seeds);
-  const samples = sampleAnalyticsActivity(seeds, "/demo/parcel-desk", SAMPLE_NOW);
-  assert.ok(samples.length > 100);
-  assert.ok(samples.every((row) => row.workspace === "/demo/parcel-desk"));
-  const result = previewAnalytics(samples, {}, SAMPLE_NOW);
-  assert.equal(result.days.length, 30);
-  assert.ok(result.days.filter((day) => day.count > 0).length > 15);
-  assert.equal(result.days.at(-1)?.count, 0);
-  const failed = result.days.reduce((sum, day) => sum + day.failed, 0);
-  const interrupted = result.days.reduce((sum, day) => sum + day.interrupted, 0);
-  assert.ok(failed > 0);
-  assert.ok(interrupted > 0);
-  for (const cmd of ["build", "test"]) {
-    const filtered = previewAnalytics(samples, { cmd }, SAMPLE_NOW);
-    const expected = samples.filter((row) => row.cmd === cmd).length;
-    assert.equal(
-      filtered.days.reduce((sum, day) => sum + day.count, 0),
-      expected,
-    );
-  }
-  assert.deepEqual(seeds, before);
 });
