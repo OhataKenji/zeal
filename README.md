@@ -62,7 +62,7 @@ Find the output directory or test logs without sifting through `bazel info`. Set
 
 Browse packages or press `⌘K` / `Ctrl+K` to find a target by name, then build, test, or run it. Inspect its rule attributes in **Definition**, resolved outputs and dependencies in **Configured**, or the commands Bazel will execute in **Actions**.
 
-![The Configured tab for //rates:rate_server shows its executable, direct dependencies, and configuration transitions](docs/screenshots/target-configured.png)
+![The Actions tab for //rates:rate_server with CcStrip expanded to show its command, output, and inputs](docs/screenshots/target-actions.png)
 
 ### Modules
 
@@ -86,7 +86,7 @@ Follow live runs across worktrees, or open a finished invocation to inspect logs
 
 Track daily outcomes and p50/p95 durations for builds and tests recorded locally. Filter by workspace, command, or target pattern, then rank patterns by total time to see where slower builds add up.
 
-![Daily p50 and p95 duration lines above target patterns ranked by cumulative duration](docs/screenshots/analytics-duration.png)
+![Daily invocation counts stacked by outcome, with workspace, command, and target pattern filters](docs/screenshots/analytics-invocations.png)
 
 ## Record terminal invocations
 
