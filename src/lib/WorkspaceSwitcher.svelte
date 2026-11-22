@@ -149,7 +149,6 @@
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    width: 100%;
     min-width: 0;
     height: 26px;
     padding: 0 8px 0 6px;
@@ -162,13 +161,12 @@
     text-align: left;
   }
 
-  .ws-trigger:hover {
+  .ws-trigger:hover:not(:disabled) {
     background: var(--accent);
   }
 
-  /* The return button sizes to its label; the dropdown trigger fills details. */
-  button.ws-trigger {
-    width: auto;
+  summary.ws-trigger {
+    width: 100%;
   }
 
   .zeal-logo {
