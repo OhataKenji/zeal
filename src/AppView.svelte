@@ -42,22 +42,17 @@
   const st = $derived(view.state);
   const core = $derived(view.core);
   const snap = $derived(view.snapshot);
-  const tree = $derived(snap ? buildTree(snap) : null);
+  const tree = $derived(snap ? buildTree(snap.targets) : null);
   const selection = $derived(view.selection);
   const selectedTarget = $derived(selection?.kind === "target" ? selection.label : null);
-  const selectedPkg = $derived(
-    selection?.kind === "package"
-      ? selection.path
-      : selection?.kind === "target"
-        ? (snap?.targets.find((t) => t.label === selection.label)?.pkg ?? "")
-        : "",
+  const selectedDir = $derived(
+    selection?.kind === "package" ? tree?.byPath.get(selection.path) : tree?.root,
   );
   const invocation = $derived(view.invocation);
 
   let opening = $state(false);
   let switchError = $state<string | null>(null);
   let historyFilter = $state<"all" | "failed" | "running">("all");
-  let treeRevealRequest = $state(0);
 
   // One surface owns the overlay layer at a time: the workspace prompt, the
   // command palette, or the run dialog. `opening` stays independent.
@@ -194,8 +189,7 @@
         openWorkspacePrompt("");
         break;
       case "target":
-        session.select({ kind: "target", label: action.label });
-        treeRevealRequest += 1;
+        selectTarget(action.label);
         break;
       case "invocation":
         if (!filteredInvocations.some((row) => row.record.id === action.id)) {
@@ -209,6 +203,10 @@
   function selectPage(page: Page) {
     surface = null;
     session.showPage(page);
+  }
+
+  function selectTarget(label: string) {
+    session.select({ kind: "target", label });
   }
 </script>
 
@@ -320,7 +318,12 @@
       {#if view.page === "targets"}
         <aside class="sidebar">
           <div class="sidebar-head">
-            <span>Packages</span>
+            <button
+              type="button"
+              class="sidebar-root"
+              title="Show root package"
+              onclick={() => session.select(null)}>Targets</button
+            >
             <button
               type="button"
               class="button button-ghost icon-button"
@@ -339,12 +342,7 @@
               </Notice>
             {/if}
             {#if snap && tree}
-              <Tree
-                root={tree}
-                activePkg={selectedPkg}
-                revealRequest={treeRevealRequest}
-                onselect={session.select}
-              />
+              <Tree root={tree.root} {selection} onselect={session.select} />
             {:else if view.snapshotLoading}
               <p class="dim">Loading targets…</p>
             {:else}
@@ -423,15 +421,52 @@
             </Notice>
           {/if}
           {#if snap}
-            <PackageView
-              index={snap}
-              pkg={selectedPkg}
-              selectedLabel={selectedTarget}
-              canRun={canSend(view, "//...")}
-              onselect={(label) => session.select({ kind: "target", label })}
-              onrun={(cmd, pattern) => session.start(cmd, pattern)}
-              onopenflags={openRunDialog}
-            />
+            <div class="page-center">
+              {#if selectedTarget !== null}
+                {#if view.targetDetail?.target.label === selectedTarget}
+                  {#if view.targetDetail.status === "partial"}
+                    <Notice tone="warning">Some target details could not be loaded.</Notice>
+                  {/if}
+                  {#key `${selectedTarget}:${snap.meta.fetchedAt}`}
+                    <TargetView
+                      index={snap}
+                      detail={view.targetDetail}
+                      phaseData={view.targetPhase}
+                      phaseError={view.targetPhaseError}
+                      tab={view.targetTab}
+                      flags={view.targetFlags}
+                      wsRoot={st.workspace}
+                      canRun={canSend(view, selectedTarget)}
+                      onselect={selectTarget}
+                      onrun={session.start}
+                      onopenflags={openRunDialog}
+                      ontab={session.setTargetTab}
+                      onapply={session.applyTargetFlags}
+                    />
+                  {/key}
+                {:else if view.targetDetailError}
+                  <Notice
+                    tone="error"
+                    onaction={() =>
+                      view.snapshotError ? session.refresh() : session.select(selection)}
+                  >
+                    Could not load target details: {view.targetDetailError}
+                  </Notice>
+                {:else}
+                  <p class="dim">Loading target details…</p>
+                {/if}
+              {:else if selectedDir}
+                {#key selectedDir.path}
+                  <PackageView
+                    node={selectedDir}
+                    canRun={canSend(view, "//...")}
+                    onselect={selectTarget}
+                    onrun={session.start}
+                    onopenflags={openRunDialog}
+                  />
+                {/key}
+              {/if}
+            </div>
           {:else if view.snapshotLoading}
             <p class="dim">Loading targets…</p>
           {:else if view.snapshotError}
@@ -458,7 +493,7 @@
                 reloadProfile={session.loadProfile}
                 onstop={session.stop}
                 onrerun={(cmd, pattern) => session.start(cmd, pattern)}
-                onselecttarget={(label) => session.select({ kind: "target", label })}
+                onselecttarget={selectTarget}
               />
             {/key}
           {:else}
@@ -499,44 +534,6 @@
         </main>
       {/if}
 
-      {#if view.page === "targets" && snap && selectedTarget}
-        <aside class="inspector" aria-label="Target details">
-          {#if view.targetDetail?.target.label === selectedTarget}
-            {#if view.targetDetail.status === "partial"}
-              <Notice tone="warning">Some target details could not be loaded.</Notice>
-            {/if}
-            {#key `${selectedTarget}:${snap.meta.fetchedAt}`}
-              <TargetView
-                index={snap}
-                detail={view.targetDetail}
-                phaseData={view.targetPhase}
-                phaseError={view.targetPhaseError}
-                tab={view.targetTab}
-                flags={view.targetFlags}
-                wsRoot={st.workspace}
-                canRun={canSend(view, selectedTarget)}
-                onselect={(label) => session.select({ kind: "target", label })}
-                onrun={(cmd, pattern) => session.start(cmd, pattern)}
-                onopenflags={openRunDialog}
-                onclose={() =>
-                  session.select(selectedPkg ? { kind: "package", path: selectedPkg } : null)}
-                ontab={session.setTargetTab}
-                onapply={session.applyTargetFlags}
-              />
-            {/key}
-          {:else if view.targetDetailError}
-            <Notice
-              tone="error"
-              onaction={() =>
-                view.snapshotError ? session.refresh() : session.select(selection)}
-            >
-              Could not load target details: {view.targetDetailError}
-            </Notice>
-          {:else}
-            <p class="dim">Loading target details…</p>
-          {/if}
-        </aside>
-      {/if}
     </div>
 
     <CommandPalette

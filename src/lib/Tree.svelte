@@ -1,18 +1,17 @@
 <script lang="ts">
   import { CaretDown, CaretRight } from "phosphor-svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { ancestorsOf, flatten, type DirNode } from "./model";
+  import { ancestorsOf, flatten, isTestRule, splitLabel, type DirNode } from "./model";
+  import type { ExplorerSelection } from "./types";
 
   let {
     root,
-    activePkg,
-    revealRequest = 0,
+    selection,
     onselect,
   }: {
     root: DirNode;
-    activePkg: string;
-    revealRequest?: number;
-    onselect: (selection: { kind: "package"; path: string }) => void;
+    selection: ExplorerSelection;
+    onselect: (selection: ExplorerSelection) => void;
   } = $props();
 
   const expanded = new SvelteSet<string>();
@@ -26,39 +25,80 @@
     }
   }
 
-  // A selection made anywhere reveals the package's ancestors in the tree,
-  // but never opens the package's own children.
+  function selectDir(dir: DirNode) {
+    // Clicking the already-selected package toggles it instead of re-selecting.
+    if (selection?.kind === "package" && selection.path === dir.path) {
+      toggle(dir.path);
+      return;
+    }
+    expanded.add(dir.path);
+    onselect({ kind: "package", path: dir.path });
+  }
+
+  // A selection made anywhere — palette, history, or returning to the page —
+  // restores the expanded ancestors: a target expands through its own
+  // package so its leaves show, while a package expands only its ancestors
+  // so a folder the user collapsed stays collapsed.
   $effect(() => {
-    // Re-picking the same package must reveal it after a manual collapse.
-    void revealRequest;
-    for (const p of ancestorsOf(activePkg).slice(0, -1)) {
-      expanded.add(p);
+    const paths =
+      selection?.kind === "target"
+        ? ancestorsOf(splitLabel(selection.label).pkg)
+        : selection?.kind === "package"
+          ? ancestorsOf(selection.path).slice(0, -1)
+          : [];
+    for (const path of paths) {
+      expanded.add(path);
     }
   });
 </script>
 
 <div class="tree">
-  {#each rows as r (r.path)}
-    {@const canToggle = r.path !== "" && r.hasChildren}
-    <button
-      class="row dir"
-      class:selected={r.path === activePkg}
-      aria-current={r.path === activePkg ? "true" : undefined}
-      aria-expanded={canToggle ? r.expanded : undefined}
-      title={r.path === "" ? "//..." : r.path}
-      style:padding-left="{8 + r.depth * 12}px"
-      onclick={() => {
-        onselect({ kind: "package", path: r.path });
-        if (canToggle) toggle(r.path);
-      }}
-    >
-      {#if canToggle}
-        {#if r.expanded}<CaretDown size={10} />{:else}<CaretRight size={10} />{/if}
-      {:else}
-        <span class="tree-caret-slot" aria-hidden="true"></span>
-      {/if}
-      <span>{r.name}</span>
-      <small>{r.count}</small>
-    </button>
+  {#each rows as row (row.kind === "dir" ? row.node.path : row.target.label)}
+    {#if row.kind === "dir"}
+      {@const dir = row.node}
+      {@const isPkg = selection?.kind === "package" && selection.path === dir.path}
+      <div
+        class="tree-row dir"
+        class:selected={isPkg}
+        class:grouping={dir.targets.length === 0}
+        style:padding-left="{8 + row.depth * 12}px"
+      >
+        <button
+          type="button"
+          class="tree-caret"
+          aria-label={row.expanded ? `Collapse //${dir.path}` : `Expand //${dir.path}`}
+          aria-expanded={row.expanded}
+          onclick={() => toggle(dir.path)}
+        >
+          {#if row.expanded}<CaretDown size={10} />{:else}<CaretRight size={10} />{/if}
+        </button>
+        <button
+          type="button"
+          class="tree-body"
+          aria-current={isPkg ? "true" : undefined}
+          title={`//${dir.path}`}
+          onclick={() => selectDir(dir)}
+        >
+          <span class="tree-name">{dir.name}/</span>
+          <small>{dir.count}</small>
+        </button>
+      </div>
+    {:else}
+      {@const target = row.target}
+      {@const isTarget = selection?.kind === "target" && selection.label === target.label}
+      {@const test = isTestRule(target.ruleClass)}
+      <button
+        type="button"
+        class="tree-row target"
+        class:selected={isTarget}
+        aria-current={isTarget ? "true" : undefined}
+        title={`${target.label} (${target.ruleClass})`}
+        style:padding-left="{8 + row.depth * 12}px"
+        onclick={() => onselect({ kind: "target", label: target.label })}
+      >
+        <span class="tree-dot" class:test aria-hidden="true">{test ? "◇" : "●"}</span>
+        <span class="tree-name"><span class="dim">:</span>{target.name}</span>
+      </button>
+    {/if}
   {/each}
 </div>

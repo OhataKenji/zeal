@@ -54,7 +54,9 @@ Open only trusted repositories.
 
 ### Find and Run Targets
 
-Find targets with fuzzy search. Run `build`, `test`, or `run`.
+Select a folder in the Targets sidebar to browse its package, or a `:target` to open its details. A package with direct targets opens at `//pkg:all`; if it also has subpackages, choose **Subtree** to browse or run `//pkg/...` instead. The **Targets** heading returns to the root package.
+
+Search `//:` for root targets or `//pkg:` for targets in one package. Type a name after the colon to narrow the list, or omit the package prefix to fuzzy-search across packages.
 
 ![Fuzzy search for Bazel targets](docs/screenshots/fuzzy-search.jpg)
 

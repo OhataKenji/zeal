@@ -54,7 +54,7 @@
   function actionMeta(action: TargetAction): { text: string; title: string } | null {
     const parts: string[] = [];
     // QueryView lists actions from many owners, so the owner stays visible
-    // there; in the inspector the owner is already the selected target.
+    // there; in the target view the owner is already the selected target.
     if (showOwner) parts.push(action.owner);
     const mnemonic = action.configuration?.mnemonic;
     if (mnemonic) parts.push(mnemonic);

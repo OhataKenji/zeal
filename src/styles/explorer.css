@@ -5,34 +5,100 @@
 }
 
 .tree {
-  font: 12px/1.7 var(--mono);
+  font: 12px/1.55 var(--mono);
 }
 
-.tree .row {
+.tree-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   width: 100%;
+  padding: 3px 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: none;
-  padding: 5px 8px;
   color: var(--foreground);
   font: inherit;
   text-align: left;
-  cursor: pointer;
   white-space: nowrap;
 }
 
-.tree .row:hover {
+.tree-row:hover {
   background: var(--accent);
 }
 
-.tree .row.selected {
-  font-weight: 600;
+.tree-row.selected {
   background: var(--accent);
-  color: var(--foreground);
   box-shadow: inset 2px 0 var(--primary);
+}
+
+.tree-row.dir {
+  padding-block: 0;
+  align-items: stretch;
+  font-weight: 650;
+}
+
+.tree-row.dir.grouping {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.tree-row.target:not(.selected) {
+  color: color-mix(in oklch, var(--foreground) 75%, var(--muted-foreground));
+}
+
+.tree-caret,
+.tree-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding-block: 3px;
+}
+
+.tree-caret {
+  width: 10px;
+  flex-shrink: 0;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+.tree-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-body small {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+
+.tree-dot {
+  width: 10px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--primary);
+}
+
+.tree-dot.test {
+  color: var(--test-color);
 }
 
 .target-head {
@@ -234,7 +300,7 @@ details[open] > .action-summary .action-mnemonic::before {
   text-overflow: ellipsis;
 }
 
-/* Configured inspector tab: shared flags bar, config summary, outputs, deps. */
+/* Configured target tab: shared flags bar, config summary, outputs, deps. */
 .flag-bar {
   display: flex;
   align-items: center;
@@ -460,39 +526,6 @@ details[open] > .action-summary .action-mnemonic::before {
 .ws-actions {
   display: flex;
   gap: 8px;
-}
-
-.tree .row svg {
-  flex-shrink: 0;
-  color: var(--muted-foreground);
-}
-
-.tree-caret-slot {
-  width: 10px;
-  flex-shrink: 0;
-}
-
-.tree .dir {
-  font-weight: 650;
-}
-
-.tree .dir svg {
-  color: var(--muted-foreground);
-}
-
-.tree .row span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tree .row small {
-  max-width: 72px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 10px;
-  color: var(--muted-foreground);
-  margin-left: auto;
-  padding-left: 4px;
 }
 
 .target-head h1 {

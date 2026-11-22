@@ -139,6 +139,17 @@
   color: var(--muted-foreground);
 }
 
+.sidebar-root {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.sidebar-root:hover {
+  color: var(--foreground);
+}
+
 .sidebar-filter {
   display: flex;
   align-items: center;
@@ -212,6 +223,10 @@
   margin-top: 3px;
   font-size: 11.5px;
   color: var(--muted-foreground);
+}
+
+.view-head .sub-switch {
+  margin-top: 8px;
 }
 
 .section {
@@ -350,7 +365,8 @@
 }
 
 .sub-switch button.active,
-.sub-switch button[aria-selected="true"] {
+.sub-switch button[aria-selected="true"],
+.sub-switch button[aria-pressed="true"] {
   background: rgba(255, 255, 255, 0.08);
   color: var(--foreground);
   font-weight: 500;
@@ -411,11 +427,6 @@ details.dd > summary::-webkit-details-marker {
   min-width: 176px;
 }
 
-.inspector .dd-menu-right {
-  left: 0;
-  right: auto;
-}
-
 .menu-item {
   width: 100%;
   display: flex;
@@ -442,14 +453,6 @@ details.dd > summary::-webkit-details-marker {
 }
 
 /* Target Detail Header */
-.target-head-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-}
-
 .target-head-meta {
   display: flex;
   align-items: center;
@@ -458,7 +461,7 @@ details.dd > summary::-webkit-details-marker {
 }
 
 .target-head-actions {
-  margin-top: 8px;
+  margin: 8px 0 0 auto;
 }
 
 /* BEP Spawn Cache Summary */

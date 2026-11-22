@@ -8,13 +8,19 @@ export interface Match {
   indices: ReadonlyArray<readonly [number, number]>;
 }
 
+/** The searchable targets plus their label snapshot, built once per index. */
+export interface SearchIndex {
+  targets: readonly Target[];
+  labels: SnapshotKey<Target>;
+}
+
 /**
  * Builds the index over `targets`. The session swaps the snapshot in on each
  * accepted refresh, so the component derives a fresh index once per fetch;
  * typing then only searches the index it holds.
  */
-export function createIndex(targets: Target[]): SnapshotKey<Target> {
-  return fuzzysort.snapshot(targets, { key: "label" });
+export function createIndex(targets: readonly Target[]): SearchIndex {
+  return { targets, labels: fuzzysort.snapshot(targets, { key: "label" }) };
 }
 
 /** A label-only candidate, for indexes over strings that are not targets. */
@@ -23,15 +29,65 @@ export function labelTarget(label: string, ruleClass: string): Target {
 }
 
 /**
- * fuzzysort decides matching, scoring and matched positions. Queries match
- * subsequences and space-separated terms; the matches drive the highlight.
+ * Structured `//pkg:needle` matching: `prefix` is the literal `//pkg:` scope
+ * (root `//:` means labels with no package), `needle` a case-insensitive
+ * name substring. Candidates sort by name; an empty needle lists the scope.
  */
-export function search(index: SnapshotKey<Target>, query: string, limit = 20): Match[] {
-  if (query.trim() === "" || limit <= 0) return [];
-  return fuzzysort.go(query, index, { limit, threshold: 0 }).map((result) => ({
-    target: result.obj,
-    indices: result.indexes.map((position): readonly [number, number] => [position, position]),
-  }));
+function packageMatches(
+  targets: readonly Target[],
+  prefix: string,
+  needle: string,
+  limit: number,
+): Match[] {
+  return targets
+    .filter(
+      (target) =>
+        // labelTarget candidates carry no name; keep them out of label queries.
+        target.name !== "" &&
+        target.label.startsWith(prefix) &&
+        target.name.toLowerCase().includes(needle),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((target) => {
+      const start =
+        target.label.length - target.name.length + target.name.toLowerCase().indexOf(needle);
+      return { target, indices: needle ? [[start, start + needle.length - 1] as const] : [] };
+    });
+}
+
+/**
+ * Searches `index` for `query`: `//pkg:fragment` matches names inside one
+ * package, anything else fuzzy-matches whole labels. Root-package name
+ * matches get a score tier so `//:format` outranks `//app:format`.
+ */
+export function search(index: SearchIndex, query: string, limit = 20): Match[] {
+  const trimmed = query.trim();
+  if (trimmed === "" || limit <= 0) return [];
+  const colon = trimmed.indexOf(":");
+  if (trimmed.startsWith("//") && colon >= 0) {
+    return packageMatches(
+      index.targets,
+      trimmed.slice(0, colon + 1),
+      trimmed.slice(colon + 1).toLowerCase(),
+      limit,
+    );
+  }
+  const needle = trimmed.toLowerCase();
+  return fuzzysort
+    .go(trimmed, index.labels, {
+      limit,
+      threshold: 0,
+      scoreFn: (result) => {
+        const name = result.obj.label.startsWith("//:") ? result.obj.name.toLowerCase() : "";
+        const tier = name === needle ? 2 : name.startsWith(needle) ? 1 : 0;
+        return (tier + result.score) / 3;
+      },
+    })
+    .map((result) => ({
+      target: result.obj,
+      indices: result.indexes.map((position): readonly [number, number] => [position, position]),
+    }));
 }
 
 /** Merges sorted ranges, combining overlapping or adjacent ones. */

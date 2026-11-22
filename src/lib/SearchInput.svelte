@@ -1,8 +1,6 @@
 <script lang="ts">
-  import type { SnapshotKey } from "fuzzysort";
   import SearchDropdown from "./SearchDropdown.svelte";
-  import { keyAction, moveIndex, optionId, search } from "./search";
-  import type { Target } from "./types";
+  import { keyAction, moveIndex, optionId, search, type SearchIndex } from "./search";
 
   /**
    * The fuzzy combobox used by the command composer and every query input that
@@ -18,7 +16,7 @@
     onpick,
     ...rest
   }: {
-    index: SnapshotKey<Target> | null;
+    index: SearchIndex | null;
     value: string;
     oninput?: (value: string) => void;
     onpick?: (value: string) => void;

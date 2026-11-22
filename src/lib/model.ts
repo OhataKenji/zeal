@@ -1,4 +1,4 @@
-import type { FileEntry, Target, TargetDetail, TargetIndex } from "./types";
+import type { FileEntry, Target, TargetDetail } from "./types";
 
 /** Splits a Bazel label into package and target name. */
 export function splitLabel(label: string): { pkg: string; name: string } {
@@ -35,11 +35,6 @@ export function commandLine(action: { arguments: string[] }): string {
     .join(" ");
 }
 
-/** Returns the final slash-delimited segment of a path. */
-export function basename(path: string): string {
-  return path.split("/").pop() ?? path;
-}
-
 /** Drops the `bazel-out/<config>/bin/` prefix so output paths read short. */
 export function shortOutputPath(path: string): string {
   return path.replace(/^bazel-out\/[^/]+\/bin\//, "");
@@ -48,80 +43,107 @@ export function shortOutputPath(path: string): string {
 // ---------------------------------------------------------------------------
 // Tree
 //
-// The directory hierarchy of packages is the skeleton. Targets are listed by
-// PackageView; each node only carries the total target count of its subtree.
-// Files belong in the selected target's attributes, not in this tree.
+// The directory hierarchy of packages is the skeleton; each package node also
+// lists its direct targets as leaves, like files in a file tree. `count` is
+// the total number of targets in the subtree. Files belong in the selected
+// target's attributes, not in this tree.
 
 /** Directory node used to group packages by Bazel package path. */
 export interface DirNode {
   path: string;
   name: string;
   dirs: DirNode[];
+  /** Targets declared in this package, sorted by name. */
+  targets: Target[];
   /** Total targets in this subtree, local targets plus all descendants. */
   count: number;
 }
 
-/** Builds the package tree from target package paths. */
-export function buildTree(index: TargetIndex): DirNode {
-  const nodes = new Map<string, DirNode>();
-  const mk = (path: string): DirNode => ({
-    path,
-    name: path === "" ? "" : basename(path),
-    dirs: [],
-    count: 0,
-  });
-  const root = mk("");
-  nodes.set("", root);
-  const ensure = (path: string): DirNode => {
-    let n = nodes.get(path);
-    if (n) return n;
-    n = mk(path);
-    nodes.set(path, n);
-    const parent = ensure(path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
-    parent.dirs.push(n);
-    return n;
-  };
+function compare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
-  for (const target of index.targets) {
-    ensure(target.pkg).count += 1;
+/**
+ * Builds the package tree from target package paths; `byPath` resolves a
+ * package selection without another scan. Shared by the sidebar tree and
+ * the package view.
+ */
+export function buildTree(targets: readonly Target[]) {
+  const byPath = new Map<string, DirNode>();
+  function ensure(path: string): DirNode {
+    const existing = byPath.get(path);
+    if (existing) return existing;
+    const slash = path.lastIndexOf("/");
+    const node: DirNode = {
+      path,
+      name: path.slice(slash + 1),
+      dirs: [],
+      targets: [],
+      count: 0,
+    };
+    byPath.set(path, node);
+    if (path) ensure(slash < 0 ? "" : path.slice(0, slash)).dirs.push(node);
+    return node;
   }
+  const root = ensure("");
+  for (const target of targets) ensure(target.pkg).targets.push(target);
   // One bottom-up pass sorts each level and rolls child counts upward.
   const finish = (n: DirNode): number => {
     n.dirs.sort((a, b) => a.name.localeCompare(b.name));
+    n.targets.sort((a, b) => compare(a.name, b.name));
+    n.count = n.targets.length;
     for (const child of n.dirs) n.count += finish(child);
     return n.count;
   };
   finish(root);
-  return root;
+  return { root, byPath };
 }
 
-/** A visible package row in the tree; the root row stands for `//...`. */
-export interface Row {
-  readonly path: string;
-  readonly name: string;
-  readonly depth: number;
-  readonly count: number;
-  readonly hasChildren: boolean;
-  readonly expanded: boolean;
+/**
+ * Every target in the node's subtree: the node's own targets first, then
+ * descendant targets sorted by label.
+ */
+export function subtreeTargets(node: DirNode): Target[] {
+  const descendants: Target[] = [];
+  const collect = (parent: DirNode): void => {
+    for (const child of parent.dirs) {
+      for (const target of child.targets) descendants.push(target);
+      collect(child);
+    }
+  };
+  collect(node);
+  descendants.sort((a, b) => compare(a.label, b.label));
+  return node.targets.concat(descendants);
 }
 
-/** Flattens expanded directories into package rows in display order. */
+/** One visible tree row: a directory with its expansion state, or a target leaf. */
+export type Row =
+  | { kind: "dir"; node: DirNode; depth: number; expanded: boolean }
+  | { kind: "target"; target: Target; depth: number };
+
+/**
+ * Flattens the tree into display rows. Each level lists child directories
+ * first — recursing into the expanded ones — then the node's own targets.
+ */
 export function flatten(root: DirNode, expanded: Set<string>): Row[] {
   const rows: Row[] = [];
   const visit = (node: DirNode, depth: number) => {
-    const open = depth === 0 || expanded.has(node.path);
-    rows.push({
-      path: node.path,
-      name: depth === 0 ? "//..." : `${node.name}/`,
-      depth,
-      count: node.count,
-      hasChildren: node.dirs.length > 0,
-      expanded: open,
-    });
-    if (open) for (const child of node.dirs) visit(child, depth + 1);
+    for (const dir of node.dirs) {
+      const open = expanded.has(dir.path);
+      rows.push({ kind: "dir", node: dir, depth, expanded: open });
+      if (open) visit(dir, depth + 1);
+    }
+    for (const target of node.targets) {
+      rows.push({ kind: "target", target, depth });
+    }
   };
   visit(root, 0);
   return rows;
+}
+
+/** Whether a rule class marks a test: `*_test` rules and `test_suite`s. */
+export function isTestRule(ruleClass: string): boolean {
+  return ruleClass.endsWith("_test") || ruleClass === "test_suite";
 }
 
 /** Returns package ancestors from the root through the selected package. */
