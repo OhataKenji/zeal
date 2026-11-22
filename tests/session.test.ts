@@ -11,6 +11,7 @@ import type {
   ModulesSnapshot,
   OpenWorkspaceResult,
   OwnedInvocation,
+  ProcessDiagnostic,
   Profile,
   Section,
   TargetActions,
@@ -59,6 +60,7 @@ function coreState(over: Partial<AppState> = {}): AppState {
     lastWorkspace: WS,
     workspaces: [wsEntry(WS)],
     invocations: [],
+    diagnostics: [],
     ...over,
   };
 }
@@ -91,6 +93,17 @@ const COMPLETED: InvocationDetail = {
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
+
+function diagnostic(id: string, workspace = WS): ProcessDiagnostic {
+  return {
+    id,
+    workspace,
+    cmd: "build",
+    pattern: "//:app",
+    startedAt: 2,
+    processExitCode: 9,
+  };
+}
 const MODULES_SNAPSHOT: ModulesSnapshot = {
   rootKey: "<root>",
   rootLabel: "<root>",
@@ -647,6 +660,139 @@ test("a live console shows until release, then the BEP record takes over", async
   assert.equal(h.view.invocation?.execution, undefined);
   assert.equal(h.view.page, "history");
   assert.equal(h.view.selectedInvocationId, "a-run");
+});
+
+test("a diagnostic row fills the gap until saved history supersedes it", async () => {
+  const liveA = owned("a-run", WS);
+  const liveB = owned("b-run", WS);
+  const state = coreState({
+    revision: 1,
+    workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    invocations: [liveA, liveB],
+  });
+  const h = harness(Promise.resolve(state), "history");
+  await initReady(h);
+  await loadHistory(h, []);
+  assert.equal(h.view.invocationRows.length, 2);
+
+  // B finishes without a readable record: it becomes a diagnostic while A
+  // stays live, and C's diagnostic belongs to another workspace.
+  const diagB = diagnostic("b-run");
+  const diagC = diagnostic("c-run", OTHER);
+  h.emit("app-state", {
+    ...state,
+    revision: 2,
+    invocations: [liveA],
+    diagnostics: [diagB, diagC],
+  });
+  await settle();
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  const rowB = h.view.invocationRows[1];
+  assert.equal(rowB?.diagnostic, diagB);
+  assert.equal(rowB?.execution, undefined);
+  assert.deepEqual(rowB?.record, {
+    id: "b-run",
+    workspace: WS,
+    cmd: "build",
+    pattern: "//:app",
+    startedAt: 2,
+  });
+  // Diagnostics never enter the saved-history projection used by analytics.
+  assert.deepEqual(h.view.invocations, []);
+
+  // Selecting B shows its diagnostic; no saved readers start for it.
+  h.session.selectInvocation("b-run");
+  await settle();
+  assert.equal(h.view.invocation?.diagnostic, diagB);
+  assert.equal(h.view.invocation?.execution, undefined);
+  assert.equal(h.view.invocation?.record.exitCode, undefined);
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  // The selection probe re-reads history for a late record; it is still absent.
+  await loadHistory(h, []);
+  assert.equal(h.view.invocation?.diagnostic, diagB);
+
+  // A matching BEP record lands later: the diagnostic is suppressed and the
+  // saved readers take over with the BEP exit code, not the process exit.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }]);
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  assert.equal(h.view.invocationRows[1]?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.equal(h.view.invocation?.execution, undefined);
+  const detail = pendingRequest(h, "get_invocation");
+  const profile = pendingRequest(h, "get_invocation_profile");
+  assert.equal(detail.args?.workspace, WS);
+  assert.equal(detail.args?.id, "b-run");
+  assert.equal(profile.args?.workspace, WS);
+  assert.equal(profile.args?.id, "b-run");
+  assert.deepEqual(h.view.invocations, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }]);
+});
+
+test("an unselected history page claims a diagnostic only without live or saved rows", async () => {
+  const h = harness(
+    Promise.resolve(
+      coreState({
+        revision: 1,
+        workspaces: [wsEntry(WS), wsEntry(OTHER)],
+        diagnostics: [diagnostic("c-run", OTHER), diagnostic("b-run")],
+      }),
+    ),
+    "history",
+  );
+  await initReady(h);
+  await loadHistory(h, []);
+  assert.equal(h.view.selectedInvocationId, "b-run");
+  assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
+});
+
+test("a same-id record owned elsewhere cannot displace a local diagnostic", async () => {
+  const liveA = owned("a-run", WS);
+  const state = coreState({
+    revision: 1,
+    workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    invocations: [liveA],
+    diagnostics: [diagnostic("b-run")],
+  });
+  const h = harness(Promise.resolve(state), "history");
+  await initReady(h);
+  // Shared history reports a same-id record owned by OTHER: it is not this
+  // workspace's build event, so the diagnostic keeps the row. The first
+  // reply predates the claimed selection, so history retries once pinned.
+  const foreign = { ...OTHER_RECORD, finishedAt: 3, exitCode: 0 };
+  await loadHistory(h, [foreign]);
+  await loadHistory(h, [foreign]);
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  const rowB = h.view.invocationRows[1];
+  assert.equal(rowB?.diagnostic?.id, "b-run");
+  assert.equal(rowB?.record.workspace, WS);
+  // The foreign record still feeds saved-history analytics unchanged.
+  assert.deepEqual(h.view.invocations, [foreign]);
+  h.session.selectInvocation("b-run");
+  await settle();
+  assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  // Once a record owned by this workspace lands, it supersedes the
+  // diagnostic and the saved readers take over.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }]);
+  assert.equal(h.view.invocationRows[1]?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.deepEqual(pendingRequest(h, "get_invocation").args, { workspace: WS, id: "b-run" });
 });
 
 test("scope change invalidates stale target results and readers name the workspace", async () => {

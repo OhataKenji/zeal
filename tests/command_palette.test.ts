@@ -17,6 +17,7 @@ const CORE: AppState = {
   lastWorkspace: "/workspace",
   workspaces: [WS],
   invocations: [],
+  diagnostics: [],
 };
 
 const SNAPSHOT = {

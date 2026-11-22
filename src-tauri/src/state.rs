@@ -8,7 +8,7 @@
 //! are never inserted here.
 
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
@@ -32,6 +32,10 @@ pub struct AppStateDto {
     pub last_workspace: Option<String>,
     pub workspaces: Vec<WorkspaceDto>,
     pub invocations: Vec<OwnedInvocationDto>,
+    /// Released terminal completions that may lack a readable build-event
+    /// record, newest first. Metadata only; output is fetched separately via
+    /// read_console.
+    pub diagnostics: Vec<ProcessDiagnostic>,
 }
 
 #[derive(Clone, Serialize)]
@@ -59,6 +63,32 @@ pub struct OwnedInvocationDto {
     pub stopping: bool,
     /// Captured terminal output exists for this invocation.
     pub console: bool,
+}
+
+/// The local facts of one released terminal invocation whose build-event
+/// record is missing or unreadable. It describes the Bazel process only and
+/// is never persisted; a later saved record supersedes it.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessDiagnostic {
+    pub id: String,
+    pub workspace: String,
+    pub cmd: String,
+    pub pattern: String,
+    /// Milliseconds since the Unix epoch, the store's timestamp convention.
+    pub started_at: i64,
+    /// The owned process's own exit; `None` when it was never confirmed. This
+    /// is not a BEP exit code and must not be presented as one.
+    pub process_exit_code: Option<i32>,
+}
+
+/// The retained tail of a released invocation's console output. `start` is
+/// the byte offset in the original stream where `data` begins, so console
+/// reads keep their absolute-offset semantics after release.
+#[derive(Clone)]
+pub struct DiagnosticTail {
+    pub start: u64,
+    pub data: Vec<u8>,
 }
 
 /// Result of registering a workspace: its canonical path plus the new state.
@@ -125,6 +155,9 @@ pub struct CoreState {
     /// Workspaces with a `bazel mod` operation in flight; the modules page
     /// fails fast per workspace rather than queueing.
     pub modules_running: BTreeSet<PathBuf>,
+    /// Terminal completions retained for their metadata and bounded output
+    /// tail, newest first. Saved history supersedes them in the projection.
+    pub diagnostics: VecDeque<(ProcessDiagnostic, DiagnosticTail)>,
     /// The one shutdown fact: set at app exit, cloned into modules
     /// operations so their bounded Bazel runs cancel, and read under the
     /// same lock to reject new starts.
@@ -182,6 +215,7 @@ impl Core {
                 workspaces: BTreeMap::new(),
                 invocations: BTreeMap::new(),
                 modules_running: BTreeSet::new(),
+                diagnostics: VecDeque::new(),
                 shutting_down: Arc::new(AtomicBool::new(false)),
                 revision: 0,
             }),
@@ -217,6 +251,11 @@ impl Core {
                 .invocations
                 .iter()
                 .map(|(id, invocation)| owned_dto(id, invocation))
+                .collect(),
+            diagnostics: st
+                .diagnostics
+                .iter()
+                .map(|(diagnostic, _)| diagnostic.clone())
                 .collect(),
         }
     }

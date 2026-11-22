@@ -208,6 +208,7 @@ const state: AppState = {
     },
   ],
   invocations: [],
+  diagnostics: [],
 };
 
 function emitState() {

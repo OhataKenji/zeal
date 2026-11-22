@@ -10,6 +10,7 @@ import type {
   InvocationRecord,
   OpenWorkspaceResult,
   OwnedInvocation,
+  ProcessDiagnostic,
   Profile,
   Section,
   ConfigSummary,
@@ -142,6 +143,9 @@ function savedEligible(state: SessionState): boolean {
     state.core !== null &&
     state.workspace !== null &&
     !visibleExecution(state, id)?.console &&
+    // A diagnostic keeps its row even when shared history reports a same-id
+    // record owned elsewhere; saved readers wait for the owner to match.
+    !diagnosticInvocations(state).some((diagnostic) => diagnostic.id === id) &&
     state.workspace.history.some((record) => record.id === id)
   );
 }
@@ -165,6 +169,25 @@ function pinnedInvocations(state: SessionState): OwnedInvocation[] {
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
+/** Released terminal completions of the current workspace that no live
+ * execution or saved record already represents, newest first. Only a record
+ * this workspace could own suppresses one: shared history can report a
+ * same-id record owned by a sibling workspace, which is not its build event. */
+function diagnosticInvocations(state: SessionState): ProcessDiagnostic[] {
+  const ws = state.workspace;
+  if (!ws) return [];
+  const live = new Set((state.core?.invocations ?? []).map((entry) => entry.id));
+  const saved = new Set(
+    ws.history
+      .filter((record) => record.workspace === undefined || record.workspace === ws.path)
+      .map((record) => record.id),
+  );
+  return (state.core?.diagnostics ?? []).filter(
+    (diagnostic) =>
+      diagnostic.workspace === ws.path && !live.has(diagnostic.id) && !saved.has(diagnostic.id),
+  );
+}
+
 /** Flat projection of session state consumed by the Svelte views. */
 export type SessionView = ReturnType<typeof sessionView>;
 
@@ -176,17 +199,39 @@ function sessionView(state: SessionState) {
   const executions = core?.invocations ?? [];
   const pinned = pinnedInvocations(state);
   const pinnedIds = new Set(pinned.map((entry) => entry.id));
-  const invocationRows: Array<{ record: InvocationRecord; execution?: OwnedInvocation }> = [
+  const diagnostics = diagnosticInvocations(state);
+  const diagnosticIds = new Set(diagnostics.map((diagnostic) => diagnostic.id));
+  const invocationRows: Array<{
+    record: InvocationRecord;
+    execution?: OwnedInvocation;
+    diagnostic?: ProcessDiagnostic;
+  }> = [
     ...pinned.map((execution) => ({
       record: history.find((record) => matchesOwner(record, execution)) ?? execution,
       execution,
     })),
     ...history
-      .filter((record) => !pinnedIds.has(record.id))
+      .filter(
+        (record) =>
+          !pinnedIds.has(record.id) &&
+          // A same-id record owned elsewhere must not take a local
+          // diagnostic's row; it stays visible in its own workspace.
+          !(diagnosticIds.has(record.id) && record.workspace !== ws?.path),
+      )
       .map((record) => ({
         record,
         execution: executions.find((entry) => matchesOwner(record, entry)),
       })),
+    ...diagnostics.map((diagnostic) => ({
+      record: {
+        id: diagnostic.id,
+        workspace: diagnostic.workspace,
+        cmd: diagnostic.cmd,
+        pattern: diagnostic.pattern,
+        startedAt: diagnostic.startedAt,
+      },
+      diagnostic,
+    })),
   ];
   const selected = invocationRows.find((row) => row.record.id === state.selectedInvocationId);
   const target = ws?.target ?? null;
@@ -428,7 +473,10 @@ export function createSession(
   function claimFirstInvocation() {
     if (state.page !== "history" || state.selectedInvocationId !== null) return;
     state.selectedInvocationId =
-      pinnedInvocations(state)[0]?.id ?? state.workspace?.history[0]?.id ?? null;
+      pinnedInvocations(state)[0]?.id ??
+      state.workspace?.history[0]?.id ??
+      diagnosticInvocations(state)[0]?.id ??
+      null;
   }
 
   function acceptHistory(ws: Workspace, records: InvocationRecord[], selectedId: string | null) {

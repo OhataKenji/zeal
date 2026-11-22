@@ -184,6 +184,18 @@ export interface OwnedInvocation {
   console: boolean;
 }
 
+/** The local facts of one released terminal invocation whose build-event
+ * record is missing or unreadable. `processExitCode` is the Bazel process's
+ * own exit, never a BEP exit code, and the entry is never persisted. */
+export interface ProcessDiagnostic {
+  id: string;
+  workspace: string;
+  cmd: string;
+  pattern: string;
+  startedAt: number;
+  processExitCode: number | null;
+}
+
 /** The aggregate core snapshot pushed on every change; `revision` grows
  * monotonically so stale pushes cannot overwrite newer state. */
 export interface AppState {
@@ -195,6 +207,7 @@ export interface AppState {
   lastWorkspace: string | null;
   workspaces: WorkspaceState[];
   invocations: OwnedInvocation[];
+  diagnostics: ProcessDiagnostic[];
 }
 
 /** `open_workspace` reply: the canonical id plus the fresh aggregate state. */

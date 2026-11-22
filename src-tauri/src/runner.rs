@@ -8,12 +8,16 @@
 //! supervised.
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
-use crate::state::{ActiveInvocation, Core, CoreState, OwnedInvocation, now_millis};
+use crate::state::{
+    ActiveInvocation, Core, CoreState, DiagnosticTail, OwnedInvocation, ProcessDiagnostic,
+    now_millis,
+};
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
 use std::fs;
 use std::fs::File;
 use std::io;
+use std::os::unix::fs::FileExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -21,13 +25,18 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /// Time SIGINT gets to end the invocation before its group is killed.
 const STOP_GRACE: Duration = Duration::from_secs(3);
 /// Time SIGKILL gets to end the invocation before its exit is called unknown
 /// and its process slot is released.
 const STOP_CONFIRM: Duration = Duration::from_secs(2);
+/// Only the tail of a released invocation's output is retained for its
+/// diagnostic, bounded well under the console read chunk.
+const DIAGNOSTIC_TAIL: u64 = 16 * 1024;
+/// The diagnostic cache bound: the newest completions win.
+const DIAGNOSTICS_MAX: usize = 32;
 /// App exit gives live children at most `EXIT_GRACE` of polling before
 /// SIGKILL, shared across every owned invocation. A reaped child's in-progress
 /// save is joined separately.
@@ -158,14 +167,86 @@ pub fn start(
         // Drop capture before the guard on unwind, so Console completion can
         // never precede the capture worker's final drain.
         let mut capture = capture;
-        if let Err(error) = wait(&core, &id, || poll_capture(&mut child, &capture)) {
+        let waited = wait(&core, &id, || poll_capture(&mut child, &capture));
+        if let Err(error) = &waited {
             log::warn!("Could not confirm invocation exit: {error}");
         }
         if let Err(error) = capture.finish() {
             log::warn!("Failed to capture terminal output: {error}");
         }
+        let data = app.path().app_data_dir().ok();
+        if let Err(error) =
+            remember_diagnostic(&core, data.as_deref(), &id, retain_wait_result(&waited))
+        {
+            log::warn!("Failed to retain invocation diagnostics: {error}");
+        }
     });
     Ok(result)
+}
+
+/// The process exit recorded for a diagnostic: `None` when the wait failed
+/// or returned the unknown sentinel rather than a real exit code.
+fn retain_wait_result(result: &io::Result<i32>) -> Option<i32> {
+    result.as_ref().ok().copied().filter(|code| *code >= 0)
+}
+
+/// Retain a finished terminal invocation's metadata and output tail when no
+/// readable build-event record exists for it. Saved history supersedes the
+/// diagnostic, so a matching record skips retention; a store failure never
+/// loses the terminal facts. The entry's metadata and output handle are
+/// cloned under one lock hold; all I/O runs after it is dropped.
+fn remember_diagnostic(
+    core: &Core,
+    data: Option<&Path>,
+    id: &str,
+    process_exit_code: Option<i32>,
+) -> io::Result<()> {
+    let (diagnostic, file) = {
+        let st = core.state.lock().expect("application state lock poisoned");
+        let Some(invocation) = st.invocations.get(id) else {
+            return Ok(());
+        };
+        let Some(console) = invocation.console.as_ref() else {
+            return Ok(());
+        };
+        (
+            ProcessDiagnostic {
+                id: id.to_string(),
+                workspace: invocation.workspace.to_string_lossy().into_owned(),
+                cmd: invocation.cmd.clone(),
+                pattern: invocation.pattern.clone(),
+                started_at: invocation.started_at,
+                process_exit_code,
+            },
+            console.try_clone()?,
+        )
+    };
+    if let Some(data) = data {
+        match crate::store::read_record(data, Path::new(&diagnostic.workspace), id) {
+            // Only this workspace's own record supersedes the diagnostic; the
+            // repo-scoped read can surface a sibling workspace's record.
+            Ok(record) if record.workspace.as_deref() == Some(diagnostic.workspace.as_str()) => {
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind == crate::store::ErrorKind::Missing => {}
+            Err(error) => log::warn!("Could not check invocation history: {error}"),
+        }
+    }
+    let length = file.metadata()?.len();
+    let start = length.saturating_sub(DIAGNOSTIC_TAIL);
+    let mut output = vec![0; (length - start) as usize];
+    file.read_exact_at(&mut output, start)?;
+    let mut st = core.state.lock().expect("application state lock poisoned");
+    st.diagnostics.push_front((
+        diagnostic,
+        DiagnosticTail {
+            start,
+            data: output,
+        },
+    ));
+    st.diagnostics.truncate(DIAGNOSTICS_MAX);
+    Ok(())
 }
 
 /// A capture failure must stop the still-owned child before its output blocks.
@@ -685,37 +766,93 @@ mod tests {
         );
     }
 
+    /// A terminal completion without a readable build-event record keeps a
+    /// bounded diagnostic: its metadata reaches app-state and its captured
+    /// tail stays readable after release, while another invocation stays
+    /// owned and foreign reads stay rejected.
     #[test]
-    fn failed_process_releases_entry_after_capturing_stderr() {
+    fn failed_process_releases_entry_and_retains_a_readable_diagnostic() {
         let temp = LogDir::new();
         let ws = temp.0.join("workspace");
         fs::create_dir(&ws).unwrap();
         let ws = ws.canonicalize().unwrap();
+        let data = temp.0.join("data");
+        fs::create_dir(&data).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
-        let log = crate::terminal::session_log().unwrap();
-        let read_log = log.try_clone().unwrap();
-        let (mut child, terminal, mut capture) = crate::terminal::spawn(
-            Command::new("sh").args(["-c", "printf 'startup failed\\n' >&2; exit 7"]),
-            &log,
-        )
-        .unwrap();
-        let core = Core::new();
-        hold_invocation(&core, &ws, &id, terminal, child.id() as i32, log);
-        assert_eq!(wait_child(&core, &id, &mut child), 7);
-        capture.finish().unwrap();
-        {
-            let mut st = core.state.lock().unwrap();
-            assert!(held_pgid(&st, &id).is_none());
-            assert!(!is_stopping(&st, &id));
-            assert!(begin_stop(&mut st, &ws, &id).is_ok());
-            assert!(!is_stopping(&st, &id));
-        }
-        release_process(&core, &id);
-        // The entry is gone, so its console can no longer be read; the
-        // fixture-owned log handle still holds the captured bytes.
-        assert!(crate::console::read(&core, ws.to_str().unwrap(), &id, 0).is_err());
-        let bytes = log_bytes(&read_log);
-        assert_eq!(String::from_utf8(bytes).unwrap(), "startup failed\r\n");
+        let core = Arc::new(Core::new());
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf 'Another command is running. Exiting immediately.\\n' >&2; exit 9",
+        ]);
+        let (child, capture, _log) = spawn_gui_child(
+            &core,
+            &mut command,
+            InvocationMeta {
+                workspace: &ws,
+                cmd: "build",
+                pattern: "//:b",
+                id: &id,
+            },
+        );
+        hold_process(&core, &ws, "other", Some(i32::MAX));
+        let code = complete_gui_run(
+            child,
+            capture,
+            core.clone(),
+            &ws,
+            id.clone(),
+            None,
+            Some(data.clone()),
+        );
+        assert_eq!(code, 9);
+        assert_released_diagnostic(&core, &data, &ws, &id);
+    }
+
+    /// A released failure without a readable record: nothing was saved, the
+    /// entry left the map while another invocation stayed owned, app-state
+    /// reports metadata only, and the retained tail answers console reads.
+    fn assert_released_diagnostic(core: &Core, data: &Path, ws: &Path, id: &str) {
+        assert_eq!(
+            store::read_record(data, ws, id).unwrap_err().kind,
+            store::ErrorKind::Missing
+        );
+        let dto = serde_json::to_value(core.dto()).unwrap();
+        assert_other_invocation_owned(&dto, id);
+        assert_diagnostic_reported(&dto, ws, id);
+        let text = console_text(core, ws, id);
+        assert!(text.contains("Another command is running. Exiting immediately."));
+    }
+
+    /// The failed run left the live list while the other invocation stayed
+    /// owned.
+    fn assert_other_invocation_owned(dto: &serde_json::Value, id: &str) {
+        let active: Vec<&str> = dto["invocations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|invocation| invocation["id"].as_str().unwrap())
+            .collect();
+        assert!(!active.contains(&id));
+        assert!(active.contains(&"other"));
+    }
+
+    /// App-state reports the diagnostic's metadata and no output bytes.
+    fn assert_diagnostic_reported(dto: &serde_json::Value, ws: &Path, id: &str) {
+        let reported = dto["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["id"] == id)
+            .expect("app-state must report the diagnostic");
+        assert_eq!(
+            reported["workspace"].as_str().unwrap(),
+            ws.to_string_lossy()
+        );
+        assert_eq!(reported["cmd"], "build");
+        assert_eq!(reported["pattern"], "//:b");
+        assert_eq!(reported["processExitCode"], 9);
+        assert!(reported.get("data").is_none() && reported.get("output").is_none());
     }
 
     /// A stale worker can never affect another invocation: release removes
@@ -858,6 +995,7 @@ mod tests {
         let owner_core = core.clone();
         let owner_id = id.clone();
         let owner_ws = fixture.ws.clone();
+        let owner_data = fixture.data.clone();
         let process = tokio::task::spawn_blocking(move || {
             complete_gui_run(
                 child,
@@ -866,6 +1004,7 @@ mod tests {
                 &owner_ws,
                 owner_id,
                 (cmd == "run").then_some(input),
+                Some(owner_data),
             )
         });
         // A `run` child blocks on stdin: feed it only once the build's BEP
@@ -947,6 +1086,7 @@ mod tests {
         let owner_core = core.clone();
         let owner_id = id.clone();
         let owner_ws = ws.to_path_buf();
+        let owner_data = fixture.data.clone();
         let process = tokio::task::spawn_blocking(move || {
             complete_gui_run(
                 child,
@@ -955,6 +1095,7 @@ mod tests {
                 &owner_ws,
                 owner_id,
                 gated.then_some(released),
+                Some(owner_data),
             )
         });
         GuiRun {
@@ -1067,6 +1208,161 @@ mod tests {
         assert_drained(&core, &ids);
     }
 
+    /// Spawn one `build` through the production path and run its completion
+    /// in the background exactly as the GUI worker does.
+    fn start_gui_build(
+        fixture: &GuiBazelFixture,
+        core: &Arc<Core>,
+        pattern: &str,
+    ) -> (String, tokio::task::JoinHandle<i32>) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut command = fixture.command("build", pattern, &id);
+        let (child, capture, _log) = spawn_gui_child(
+            core,
+            &mut command,
+            InvocationMeta {
+                workspace: &fixture.ws,
+                cmd: "build",
+                pattern,
+                id: &id,
+            },
+        );
+        let finish_core = core.clone();
+        let finish_ws = fixture.ws.clone();
+        let finish_data = fixture.data.clone();
+        let finish_id = id.clone();
+        let process = tokio::task::spawn_blocking(move || {
+            complete_gui_run(
+                child,
+                capture,
+                finish_core,
+                &finish_ws,
+                finish_id,
+                None,
+                Some(finish_data),
+            )
+        });
+        (id, process)
+    }
+
+    /// Wait until the blocking action reports its start, failing fast when
+    /// the owner build already ended or the deadline passes.
+    async fn wait_for_action_marker(
+        core: &Core,
+        ws: &Path,
+        owner: &tokio::task::JoinHandle<i32>,
+        owner_id: &str,
+        marker: &Path,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while !marker.exists() {
+            assert_owner_progress(core, ws, owner, owner_id, deadline);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn assert_owner_progress(
+        core: &Core,
+        ws: &Path,
+        owner: &tokio::task::JoinHandle<i32>,
+        owner_id: &str,
+        deadline: Instant,
+    ) {
+        assert!(
+            !owner.is_finished(),
+            "owner build finished before its action started"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "blocking action never started: {}",
+            console_text(core, ws, owner_id)
+        );
+    }
+
+    /// The lock contender left the invocation map while the owner kept its
+    /// entry, and only the contender gained a diagnostic.
+    fn assert_contender_diagnostic(core: &Core, owner_id: &str, contender_id: &str) {
+        let st = core.state.lock().unwrap();
+        assert!(
+            st.invocations.contains_key(owner_id),
+            "owner lost its entry"
+        );
+        assert!(!st.invocations.contains_key(contender_id));
+        let (diagnostic, _) = st
+            .diagnostics
+            .iter()
+            .find(|(diagnostic, _)| diagnostic.id == contender_id)
+            .expect("rejected contender must retain a diagnostic");
+        assert_eq!(diagnostic.process_exit_code, Some(9));
+    }
+
+    /// A contender rejected by the output-base lock exits without a build
+    /// event record: its terminal facts stay readable as a diagnostic while
+    /// the lock owner keeps running and finishes with its own record.
+    #[tokio::test]
+    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    async fn real_bazel_same_output_base_lock_contention_keeps_a_diagnostic() {
+        let fixture = GuiBazelFixture::new().await;
+        // A genrule that reports its start, then blocks on a gate file with a
+        // bounded wait so a stuck test cannot hold the output base forever.
+        let marker = fixture.temp.0.join("action-started");
+        let gate = fixture.temp.0.join("release-gate");
+        let mut build = fs::read_to_string(fixture.ws.join("BUILD")).unwrap();
+        build.push_str(&format!(
+            "genrule(\n    name='blocker',\n    outs=['blocker.txt'],\n    cmd=\"touch '{}' ; i=0; while [ ! -f '{}' ] && [ $$i -lt 900 ]; do sleep 0.2; i=$$((i+1)); done; [ -f '{}' ] && echo done > $@ || exit 1\",\n)\n",
+            marker.display(),
+            gate.display(),
+            gate.display(),
+        ));
+        fs::write(fixture.ws.join("BUILD"), build).unwrap();
+        let core = Arc::new(Core::new());
+        let (owner_id, owner) = start_gui_build(&fixture, &core, "//:blocker");
+        // The contender may start only once the owner holds the output base.
+        wait_for_action_marker(&core, &fixture.ws, &owner, &owner_id, &marker).await;
+        let (contender_id, contender) = start_gui_build(&fixture, &core, "//:double");
+        let contender_code = tokio::time::timeout(Duration::from_secs(90), contender)
+            .await
+            .expect("contender must be rejected promptly")
+            .unwrap();
+        assert_eq!(
+            contender_code,
+            9,
+            "{}",
+            console_text(&core, &fixture.ws, &contender_id)
+        );
+        // The rejection left no record; its tail stays readable after release.
+        assert_eq!(
+            store::read_record(&fixture.data, &fixture.ws, &contender_id)
+                .unwrap_err()
+                .kind,
+            store::ErrorKind::Missing
+        );
+        assert_contender_diagnostic(&core, &owner_id, &contender_id);
+        let text = console_text(&core, &fixture.ws, &contender_id);
+        assert!(
+            text.contains("Another command"),
+            "diagnostic must keep the lock rejection: {text}"
+        );
+        // Releasing the gate lets the owner finish with its own record; the
+        // owner's matching record means it never gains a diagnostic.
+        fs::write(&gate, "").unwrap();
+        let owner_code = tokio::time::timeout(Duration::from_secs(120), owner)
+            .await
+            .expect("owner must finish after the gate opens")
+            .unwrap();
+        assert_eq!(owner_code, 0);
+        assert_gui_record(&fixture, "build", "//:blocker", &owner_id);
+        let st = core.state.lock().unwrap();
+        assert!(
+            !st.diagnostics
+                .iter()
+                .any(|(diagnostic, _)| diagnostic.id == owner_id),
+            "a recorded invocation must not keep a diagnostic"
+        );
+        drop(st);
+        assert_drained(&core, &[owner_id.as_str(), contender_id.as_str()]);
+    }
+
     /// A released invocation's console is gone with its entry: reads and
     /// writes fail, while the fixture-owned log handle keeps the bytes.
     fn assert_console_unavailable(core: &Core, ws: &Path, id: &str) {
@@ -1084,6 +1380,7 @@ mod tests {
         ws: &Path,
         id: String,
         input: Option<mpsc::Receiver<()>>,
+        data: Option<PathBuf>,
     ) -> i32 {
         let _group = GroupGuard(child.id() as i32);
         if let Some(input) = input {
@@ -1096,7 +1393,7 @@ mod tests {
             );
             crate::terminal::write(&core, ws.to_str().unwrap(), &id, b"21\n").unwrap();
         }
-        let exit = observe_process(
+        let waited = observe_process(
             &core,
             &id,
             || Ok(child.try_wait()?.map(|status| status.code().unwrap_or(-1))),
@@ -1104,8 +1401,10 @@ mod tests {
             STOP_CONFIRM,
         );
         capture.finish().unwrap();
+        remember_diagnostic(&core, data.as_deref(), &id, retain_wait_result(&waited))
+            .expect("diagnostic retention");
         release_process(&core, &id);
-        exit.unwrap()
+        waited.unwrap()
     }
 
     async fn wait_for_gui_build(
@@ -1422,7 +1721,7 @@ mod tests {
         let owner_ws = ws.to_path_buf();
         let owner_id = id.to_string();
         thread::spawn(move || {
-            complete_gui_run(child, capture, owner_core, &owner_ws, owner_id, None)
+            complete_gui_run(child, capture, owner_core, &owner_ws, owner_id, None, None)
         })
     }
 
