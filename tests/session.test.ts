@@ -89,7 +89,7 @@ const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHE
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
 const MODULES_SNAPSHOT: ModulesSnapshot = {
   rootKey: "<root>",
-  rootName: "",
+  rootLabel: "<root>",
   warning: null,
   modules: [],
 };

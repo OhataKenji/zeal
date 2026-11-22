@@ -75,6 +75,7 @@ test("module page and browser preview", async (t) => {
     assert.match(main, /role="status"[^>]*>[\s\S]*Bazel returned a partial module graph/);
     assert.match(main, /<details[^>]*>[\s\S]*Show Bazel output[\s\S]*Graph extension failed/);
     assert.match(main, /<th[^>]*>Module<\/th>/);
+    assert.ok(main.includes(`>${module.key}</button>`));
     assert.match(aside, /role="status"[^>]*>[\s\S]*Bazel returned a partial explanation/);
     assert.match(aside, /<details[^>]*>[\s\S]*Show Bazel output[\s\S]*Explain extension failed/);
     assert.match(aside, /<pre[^>]*>&lt;root> -> dependency@1<\/pre>/);
@@ -86,7 +87,7 @@ test("module page and browser preview", async (t) => {
       const cyclic = {
         ...snapshot,
         rootKey: "workspace@1",
-        rootName: "my_project",
+        rootLabel: "workspace@1 (my_project@1.2.3)",
         modules: snapshot.modules.map((node) =>
           node.key === module.key
             ? {
@@ -104,7 +105,10 @@ test("module page and browser preview", async (t) => {
       });
       const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];
       assert.ok(aside);
-      assert.equal(aside.match(/<li[^>]*>\s*workspace@1 \(my_project\)\s*<\/li>/g)?.length, 2);
+      assert.equal(
+        aside.match(/<li[^>]*>\s*workspace@1 \(my_project@1\.2\.3\)\s*<\/li>/g)?.length,
+        2,
+      );
       assert.ok(aside.includes(`${module.dependencies[0]}</button>`));
       assert.match(aside, /<pre[^>]*>&lt;script/);
     },
@@ -112,7 +116,7 @@ test("module page and browser preview", async (t) => {
 
   await t.test("an unnamed root shows just its graph key", () => {
     const html = output({
-      snapshot: { ...snapshot, rootName: "" },
+      snapshot: { ...snapshot, rootLabel: "<root>" },
       selectedKey: module.key,
     });
     const aside = html.match(/<\/main>\s*(<aside[\s\S]*?<\/aside>)/)?.[1];

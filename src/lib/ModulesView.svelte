@@ -41,7 +41,7 @@
       {#each keys as key (key)}
         <li>
           {#if key === snapshot?.rootKey}
-            {snapshot.rootName ? `${key} (${snapshot.rootName})` : key}
+            {snapshot.rootLabel}
           {:else}
             <button type="button" class="table-link" onclick={() => onselect(key)}>{key}</button>
           {/if}
@@ -111,7 +111,7 @@
         </select>
       </div>
       <table class="lens-table">
-        <thead><tr><th>Module</th><th>Version</th><th>Depth</th><th>Required by</th></tr></thead>
+        <thead><tr><th>Module</th><th>Depth</th><th>Required by</th></tr></thead>
         <tbody>
           {#each filterModules(snapshot.modules, query, depth) as node (node.key)}
             <tr
@@ -127,14 +127,13 @@
                   class="table-link mono"
                   aria-pressed={node.key === view.selectedKey}
                   onclick={() => onselect(node.key)}
-                >{node.name}</button>
+                >{node.key}</button>
               </td>
-              <td class="mono">{node.version || "—"}</td>
               <td>{node.direct ? "direct" : "transitive"}</td>
               <td>{node.requiredBy.length}</td>
             </tr>
           {:else}
-            <tr><td colspan="4" class="dim">No modules to display.</td></tr>
+            <tr><td colspan="3" class="dim">No modules to display.</td></tr>
           {/each}
         </tbody>
       </table>

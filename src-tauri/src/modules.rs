@@ -57,7 +57,7 @@ pub struct ModuleNode {
 #[serde(rename_all = "camelCase")]
 pub struct ModulesSnapshot {
     pub root_key: String,
-    pub root_name: String,
+    pub root_label: String,
     pub modules: Vec<ModuleNode>,
     pub warning: Option<String>,
 }
@@ -274,7 +274,7 @@ fn project(
     mut nodes: BTreeMap<&str, ModuleNode>,
     mut edges: Vec<(&str, &str)>,
     root_key: &str,
-    root_name: &str,
+    root_label: String,
 ) -> ModulesSnapshot {
     nodes.remove(root_key);
     edges.sort_unstable();
@@ -298,7 +298,7 @@ fn project(
     });
     ModulesSnapshot {
         root_key: root_key.to_string(),
-        root_name: root_name.to_owned(),
+        root_label,
         modules,
         warning: None,
     }
@@ -340,12 +340,18 @@ fn parse_mod_graph(stdout: &[u8]) -> Result<ModulesSnapshot, String> {
             pending.push((child, depth + 1, true));
         }
     }
-    Ok(project(
-        nodes,
-        edges,
-        &root.key,
-        root.name.as_deref().unwrap_or_default(),
-    ))
+    let root_label = match root.name.as_deref() {
+        Some(name) if !name.is_empty() => {
+            let version = root
+                .version
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .unwrap_or("_");
+            format!("{} ({name}@{version})", root.key)
+        }
+        _ => root.key.clone(),
+    };
+    Ok(project(nodes, edges, &root.key, root_label))
 }
 
 /// Module keys travel to `bazel mod explain` as a single argv element after
@@ -399,7 +405,7 @@ mod tests {
     fn parse_mod_graph_folds_captured_bazel_output() {
         let snap = fixture();
         assert_eq!(snap.root_key, "<root>");
-        assert_eq!(snap.root_name, "zeal_bzlmod_fixture");
+        assert_eq!(snap.root_label, "<root> (zeal_bzlmod_fixture@0.0.1)");
         // Direct dependencies first, then name order.
         let keys: Vec<&str> = snap.modules.iter().map(|m| m.key.as_str()).collect();
         assert_eq!(keys, ["mod_a@_", "mod_b@_", "mod_c@3.0.0", "mod_e@2.0.0"]);
@@ -437,7 +443,7 @@ mod tests {
             {"key":"under@_","name":"under","version":"_","dependencies":[]}
         ]}"#;
         let snap = parse_mod_graph(json.as_bytes()).unwrap();
-        assert_eq!(snap.root_name, "");
+        assert_eq!(snap.root_label, "<root>");
         let modules = snap.modules;
         assert_eq!(modules.len(), 2);
         let odd = modules.iter().find(|m| m.key == "odd@9.9").unwrap();
@@ -445,6 +451,18 @@ mod tests {
         assert_eq!(odd.version, "9.9");
         let under = modules.iter().find(|m| m.key == "under@_").unwrap();
         assert_eq!(under.version, "");
+    }
+
+    #[test]
+    fn parse_mod_graph_labels_root_with_fallback_version() {
+        // A named root without a usable version keeps Bazel's `name@_` shape.
+        for json in [
+            r#"{"key":"<root>","name":"demo","dependencies":[]}"#,
+            r#"{"key":"<root>","name":"demo","version":"","dependencies":[]}"#,
+        ] {
+            let snap = parse_mod_graph(json.as_bytes()).unwrap();
+            assert_eq!(snap.root_label, "<root> (demo@_)");
+        }
     }
 
     #[test]
