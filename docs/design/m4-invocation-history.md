@@ -70,7 +70,7 @@ indexは `invocation(workspace_id, started_at_ms DESC, id)` とする。
 
 ### event fileと受信
 
-保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.gz` とする。
+保存先は `<app data dir>/invocations/<invocation_id>/attempt/<number>/bep.binpb.zst` とする。
 BuildEventをlength-delimited protobufで順に書き、Progressのstdout/stderrもそのまま残す。
 ログはevent内に一度だけ保存し、`log.txt` や `bep.json` は作らない。
 任意の `profile.json.gz` も同じattemptに保存し、DBが選ぶ現在のattemptの受信完了後だけ読む。

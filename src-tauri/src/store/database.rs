@@ -323,7 +323,7 @@ pub(crate) fn event_artifact(
     ws: &Path,
     invocation_id: &str,
 ) -> Result<(File, bool), StoreError> {
-    attempt_artifact(data, ws, invocation_id, "bep.binpb.gz")
+    attempt_artifact(data, ws, invocation_id, "bep.binpb.zst")
 }
 
 /// Snapshot the current receipt and its checked FD before doing any parsing.
@@ -333,7 +333,7 @@ fn attempt_artifact(
     invocation_id: &str,
     name: &str,
 ) -> Result<(File, bool), StoreError> {
-    if !matches!(name, "bep.binpb.gz" | "profile.json.gz") {
+    if !matches!(name, "bep.binpb.zst" | "profile.json.gz") {
         return Err(fail(ErrorKind::Invalid));
     }
     read_record(data, ws, invocation_id)?;
@@ -512,7 +512,7 @@ mod tests {
                 .kind,
             ErrorKind::Missing
         );
-        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb.gz").is_err());
+        assert!(artifact(&f.data, &other, invocation_id, "bep.binpb.zst").is_err());
     }
     #[test]
     fn workspace_aliases_list_the_same_invocations() {
@@ -530,13 +530,13 @@ mod tests {
         let f = Fixture::new();
         f.complete();
         let invocation_id = &f.stream.invocation_id;
-        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb.gz").is_err());
+        assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb.zst").is_err());
         assert!(artifact(&f.data, &f.ws, invocation_id, "../zeal.db").is_err());
-        let path = f.dir().join("attempt/1/bep.binpb.gz");
+        let path = f.dir().join("attempt/1/bep.binpb.zst");
         fs::remove_file(&path).unwrap();
         symlink(f.data.join("zeal.db"), &path).unwrap();
         assert_eq!(
-            artifact(&f.data, &f.ws, invocation_id, "bep.binpb.gz")
+            artifact(&f.data, &f.ws, invocation_id, "bep.binpb.zst")
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied
@@ -654,7 +654,7 @@ mod tests {
 
         let record = read_record(&f.data, &f.ws, &sibling_id).unwrap();
         assert_eq!(record.workspace.as_deref(), Some(sibling_path.as_str()));
-        assert!(artifact(&f.data, &f.ws, &sibling_id, "bep.binpb.gz").is_ok());
+        assert!(artifact(&f.data, &f.ws, &sibling_id, "bep.binpb.zst").is_ok());
 
         let detail = crate::detail::invocation_detail(&f.data, &f.ws, &sibling_id).unwrap();
         assert!(matches!(detail.bep, crate::detail::Section::Ok { .. }));
@@ -679,7 +679,7 @@ mod tests {
             read_record(&f.data, &f.ws, &other_id).unwrap_err().kind,
             ErrorKind::Missing
         );
-        assert!(artifact(&f.data, &f.ws, &other_id, "bep.binpb.gz").is_err());
+        assert!(artifact(&f.data, &f.ws, &other_id, "bep.binpb.zst").is_err());
         assert!(crate::detail::invocation_detail(&f.data, &f.ws, &other_id).is_err());
         assert!(crate::detail::invocation_profile(&f.data, &f.ws, &other_id).is_err());
     }

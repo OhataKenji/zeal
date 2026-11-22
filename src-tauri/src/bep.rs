@@ -11,12 +11,13 @@ use crate::protocol::generated::command_line::command_line_section::SectionType;
 use crate::protocol::generated::command_line::{
     CommandLine, CommandLineSection, Option as CommandLineOption,
 };
-use flate2::read::MultiGzDecoder;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
+// Bound decompression memory: the decoder may reference 8 MiB of history.
+const MAX_WINDOW_LOG: u32 = 23;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,14 +149,28 @@ pub struct Parsed {
 }
 
 /// Decode only the saved snapshot into the bounded BEP display.
-pub fn parse_gzip<R: Read>(input: R, length: u64) -> Parsed {
+pub fn parse_zstd<R: Read>(input: R, length: u64) -> Parsed {
     let mut compressed = CountingRead {
         inner: input.take(length),
         count: 0,
         failed: false,
     };
-    let mut parsed = parse_detail(MultiGzDecoder::new(&mut compressed), u64::MAX);
-    // A gzip checksum/header failure is invalid data, not a disk read failure.
+    let decoder = zstd::stream::read::Decoder::new(&mut compressed).and_then(|mut decoder| {
+        decoder.window_log_max(MAX_WINDOW_LOG)?;
+        Ok(decoder)
+    });
+    let mut parsed = match decoder {
+        Ok(decoder) => parse_detail(decoder, u64::MAX),
+        Err(_) => Parsed {
+            bep: Bep {
+                truncated: true,
+                ..Bep::default()
+            },
+            invalid: true,
+            ..Parsed::default()
+        },
+    };
+    // A zstd checksum/frame failure is invalid data, not a disk read failure.
     parsed.read_error &= compressed.failed;
     parsed
 }
@@ -1023,10 +1038,8 @@ mod tests {
 }
 
 #[cfg(test)]
-mod gzip_tests {
+mod zstd_tests {
     use super::*;
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
     use std::io::Write;
 
     struct FailingRead;
@@ -1048,16 +1061,18 @@ mod gzip_tests {
         .encode_length_delimited_to_vec()
     }
 
-    fn gzip(bytes: &[u8]) -> Vec<u8> {
-        let mut writer = GzEncoder::new(Vec::new(), Compression::default());
-        writer.write_all(bytes).unwrap();
-        writer.finish().unwrap()
+    /// A complete checksummed frame, matching what the receiver writes.
+    fn zstd(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
+        encoder.include_checksum(true).unwrap();
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
     }
 
     #[test]
-    fn gzip_progress_is_decoded() {
-        let encoded = gzip(&frame());
-        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+    fn zstd_progress_is_decoded() {
+        let encoded = zstd(&frame());
+        let parsed = parse_zstd(encoded.as_slice(), encoded.len() as u64);
         assert_eq!(parsed.log, "output");
         assert_eq!(parsed.events, 1);
         assert!(!parsed.invalid);
@@ -1065,38 +1080,38 @@ mod gzip_tests {
 
     #[test]
     fn snapshot_excludes_later_appends() {
-        let mut encoded = gzip(&frame());
+        let mut encoded = zstd(&frame());
         let length = encoded.len() as u64;
-        encoded.extend(b"later invalid gzip");
-        let parsed = parse_gzip(encoded.as_slice(), length);
+        encoded.extend(b"later invalid zstd");
+        let parsed = parse_zstd(encoded.as_slice(), length);
         assert_eq!(parsed.log, "output");
         assert!(!parsed.invalid);
     }
 
     #[test]
-    fn truncated_trailer_preserves_prefix_as_invalid() {
+    fn truncated_checksum_preserves_prefix_as_invalid() {
         let frame = frame();
-        let mut encoded = gzip(&frame);
+        let mut encoded = zstd(&frame);
         encoded.truncate(encoded.len() - 1);
-        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        let parsed = parse_zstd(encoded.as_slice(), encoded.len() as u64);
         assert_eq!(parsed.log, "output");
         assert!(parsed.invalid);
     }
 
     #[test]
-    fn corrupt_crc_preserves_prefix_as_invalid() {
+    fn corrupt_checksum_preserves_prefix_as_invalid() {
         let frame = frame();
-        let mut encoded = gzip(&frame);
-        let crc = encoded.len() - 8;
-        encoded[crc] ^= 1;
-        let parsed = parse_gzip(encoded.as_slice(), encoded.len() as u64);
+        let mut encoded = zstd(&frame);
+        let last = encoded.len() - 1;
+        encoded[last] ^= 1;
+        let parsed = parse_zstd(encoded.as_slice(), encoded.len() as u64);
         assert_eq!(parsed.log, "output");
         assert!(parsed.invalid);
     }
 
     #[test]
     fn physical_input_failure_is_a_read_error() {
-        let parsed = parse_gzip(FailingRead, 1);
+        let parsed = parse_zstd(FailingRead, 1);
         assert!(parsed.invalid);
         assert!(parsed.read_error);
     }

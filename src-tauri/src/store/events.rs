@@ -6,8 +6,6 @@ use crate::profile::COMPRESSED_LIMIT;
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use prost::Message;
 use rusqlite::params;
 use rustix::fs::{Mode, OFlags};
@@ -17,6 +15,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use url::Url;
+use zstd::stream::write::Encoder;
 
 pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -41,7 +40,7 @@ pub struct Receipt {
     data: PathBuf,
     stream: bes::StreamId,
     attempt: Option<i64>,
-    writer: Option<(Dir, GzEncoder<BufWriter<File>>)>,
+    writer: Option<(Dir, Encoder<'static, BufWriter<File>>)>,
     first: Option<i64>,
     last: i64,
     last_message: bool,
@@ -68,10 +67,11 @@ impl Receipt {
                 .child(&invocation_id, true)?
                 .child("attempt", true)?
                 .create_child(&attempt.to_string())?;
-            let writer = GzEncoder::new(
-                BufWriter::with_capacity(64 * 1024, dir.file("bep.binpb.gz", true)?),
-                Compression::default(),
-            );
+            let mut writer = Encoder::new(
+                BufWriter::with_capacity(64 * 1024, dir.file("bep.binpb.zst", true)?),
+                0,
+            )?;
+            writer.include_checksum(true)?;
             Some((dir, writer))
         } else {
             None
@@ -621,9 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn gzip_preserves_every_length_delimited_event_byte() {
-        use std::io::Read;
-
+    fn zstd_preserves_every_length_delimited_event_byte() {
         let f = Fixture::new();
         let expected = [
             f.started().encode_length_delimited_to_vec(),
@@ -631,12 +629,8 @@ mod tests {
         ]
         .concat();
         f.complete();
-        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.gz").unwrap();
-        let mut decoded = Vec::new();
-        flate2::read::MultiGzDecoder::new(file)
-            .read_to_end(&mut decoded)
-            .unwrap();
-        assert_eq!(decoded, expected);
+        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.zst").unwrap();
+        assert_eq!(zstd::stream::decode_all(file).unwrap(), expected);
     }
 
     #[test]
@@ -662,9 +656,9 @@ mod tests {
             (record.started_at, record.finished_at, record.exit_code),
             (Some(1000), Some(2000), Some(0))
         );
-        let file = artifact(&f.data, &f.ws, &record.id, "bep.binpb.gz").unwrap();
+        let file = artifact(&f.data, &f.ws, &record.id, "bep.binpb.zst").unwrap();
         let len = file.metadata().unwrap().len();
-        let parsed = crate::bep::parse_gzip(file, len);
+        let parsed = crate::bep::parse_zstd(file, len);
         assert_eq!(parsed.log, "errout");
         assert!(!f.dir().join("log.txt").exists());
         assert!(!f.dir().join("bep.json").exists());
@@ -673,7 +667,7 @@ mod tests {
     fn completed_retry_is_noop_and_accepts_contiguous_suffix_without_rewriting_files() {
         let f = Fixture::new();
         f.complete();
-        let path = f.dir().join("attempt/1/bep.binpb.gz");
+        let path = f.dir().join("attempt/1/bep.binpb.zst");
         let bytes = std::fs::read(&path).unwrap();
         let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
         retry.append(&f.ordered(2, f.finished())).unwrap();
@@ -854,12 +848,10 @@ mod tests {
     fn flush_failure_and_database_failure_never_return_ack_or_mark_complete() {
         let f = Fixture::new();
         let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        let path = f.dir().join("attempt/1/bep.binpb.gz");
+        let path = f.dir().join("attempt/1/bep.binpb.zst");
         // A read-only FD deterministically fails when the buffer is flushed.
-        receipt.writer.as_mut().unwrap().1 = GzEncoder::new(
-            BufWriter::new(File::open(path).unwrap()),
-            Compression::default(),
-        );
+        receipt.writer.as_mut().unwrap().1 =
+            Encoder::new(BufWriter::new(File::open(path).unwrap()), 0).unwrap();
         receipt.append(&f.ordered(1, f.started())).unwrap();
         receipt.append(&f.ordered(2, f.finished())).unwrap();
         assert!(receipt.finish().is_err());
@@ -880,7 +872,7 @@ mod tests {
             .unwrap();
         assert_eq!(retry.finish().unwrap_err().kind, ErrorKind::NewerSchema);
         assert!(
-            !std::fs::read(f.dir().join("attempt/2/bep.binpb.gz"))
+            !std::fs::read(f.dir().join("attempt/2/bep.binpb.zst"))
                 .unwrap()
                 .is_empty()
         );
@@ -913,10 +905,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(receipt.finish().unwrap().last, 4);
-        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.gz").unwrap();
+        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.zst").unwrap();
         let length = file.metadata().unwrap().len();
         assert!(length < crate::bep::DISPLAY_LIMIT as u64);
-        let parsed = crate::bep::parse_gzip(file, length);
+        let parsed = crate::bep::parse_zstd(file, length);
         assert!(parsed.bep.truncated);
         assert!(parsed.bep.options.is_none());
         assert!(!parsed.invalid);
