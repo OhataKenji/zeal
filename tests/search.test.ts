@@ -110,12 +110,14 @@ test("structured queries require the exact package and never leak into children"
   assert.deepEqual(labels(ROOT_INDEX, "//:for"), ["//:format"]);
 });
 
-test("structured queries exclude label-only and external-root candidates", () => {
+test("structured queries exclude label-only and external candidates", () => {
   const candidates = createIndex([
     labelTarget("//:fake", "alias"),
     labelTarget("//app:fake", "alias"),
     // An external label whose package parses as root still is not //:.
     target("@ext//:tool"),
+    target("@ext//app:tool"),
+    target("@@ext//app:tool"),
   ]);
   assert.deepEqual(labels(candidates, "//:"), []);
   assert.deepEqual(labels(candidates, "//app:"), []);
@@ -155,8 +157,11 @@ test("root-package name matches outrank other packages under a tight limit", () 
   const prefixIndex = createIndex([
     target("//:formatter", "sh_binary"),
     target("//app:format", "sh_binary"),
+    target("@ext//:format", "sh_binary"),
   ]);
   assert.deepEqual(labels(prefixIndex, "format", 1), ["//:formatter"]);
+  // External labels stay searchable through ordinary fuzzy matching.
+  assert.ok(labels(prefixIndex, "format").includes("@ext//:format"));
 });
 
 test("later searches do not change earlier results", () => {

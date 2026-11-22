@@ -29,13 +29,13 @@ export function labelTarget(label: string, ruleClass: string): Target {
 }
 
 /**
- * Structured `//pkg:needle` matching: exact package scope (root `//:` means
- * labels with no package), `needle` a case-insensitive name substring.
- * Candidates sort by name; an empty needle lists the whole package.
+ * Structured `//pkg:needle` matching: `prefix` is the literal `//pkg:` scope
+ * (root `//:` means labels with no package), `needle` a case-insensitive
+ * name substring. Candidates sort by name; an empty needle lists the scope.
  */
 function packageMatches(
   targets: readonly Target[],
-  pkg: string,
+  prefix: string,
   needle: string,
   limit: number,
 ): Match[] {
@@ -44,8 +44,7 @@ function packageMatches(
       (target) =>
         // labelTarget candidates carry no name; keep them out of label queries.
         target.name !== "" &&
-        target.pkg === pkg &&
-        (pkg !== "" || target.label.startsWith("//:")) &&
+        target.label.startsWith(prefix) &&
         target.name.toLowerCase().includes(needle),
     )
     .sort((a, b) => a.name.localeCompare(b.name))
@@ -69,7 +68,7 @@ export function search(index: SearchIndex, query: string, limit = 20): Match[] {
   if (trimmed.startsWith("//") && colon >= 0) {
     return packageMatches(
       index.targets,
-      trimmed.slice(2, colon),
+      trimmed.slice(0, colon + 1),
       trimmed.slice(colon + 1).toLowerCase(),
       limit,
     );
@@ -80,7 +79,7 @@ export function search(index: SearchIndex, query: string, limit = 20): Match[] {
       limit,
       threshold: 0,
       scoreFn: (result) => {
-        const name = result.obj.pkg === "" ? result.obj.name.toLowerCase() : "";
+        const name = result.obj.label.startsWith("//:") ? result.obj.name.toLowerCase() : "";
         const tier = name === needle ? 2 : name.startsWith(needle) ? 1 : 0;
         return (tier + result.score) / 3;
       },

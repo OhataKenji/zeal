@@ -322,7 +322,6 @@
               type="button"
               class="sidebar-root"
               title="Show root package"
-              aria-label="Show root package"
               onclick={() => session.select(null)}>Targets</button
             >
             <button

@@ -43,7 +43,7 @@
   font-weight: 400;
 }
 
-.tree-row.target {
+.tree-row.target:not(.selected) {
   color: color-mix(in oklch, var(--foreground) 75%, var(--muted-foreground));
 }
 
