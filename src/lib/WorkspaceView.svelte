@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { ArrowClockwise } from "phosphor-svelte";
   import BesSetup from "./BesSetup.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope, WorkspaceInfo } from "./types";
@@ -39,18 +40,6 @@
     }
   });
 
-  const rows = $derived.by(() => {
-    const list: Array<{ key: string; path: string | null }> = [
-      { key: "workspace", path: info?.workspace ?? workspace },
-      { key: "output_base", path: info?.outputBase ?? null },
-      { key: "execution_root", path: info?.executionRoot ?? null },
-      { key: "bazel-bin", path: info?.bazelBin ?? null },
-      { key: "bazel-testlogs", path: info?.bazelTestlogs ?? null },
-      { key: "repository_cache", path: info?.repositoryCache ?? null },
-    ];
-    return list;
-  });
-
   async function copyPath(key: string, value: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -82,41 +71,43 @@
   <div>
     <h1 class="view-title mono">{name}</h1>
     <div class="view-meta mono">
-      {workspace}{#if info?.release} · {info.release}{/if}
+      {workspace}{#if info?.version}{" · "}Bazel {info.version}{/if}
     </div>
   </div>
-  <button type="button" class="button" disabled={loading} onclick={onretry}>
-    {loading ? "Loading…" : "Refresh info"}
-  </button>
 </div>
 
 <section class="section">
   <div class="section-head">
-    <h2 class="section-title">Directories &amp; Caches (bazel info)</h2>
+    <h2 class="section-title bazel-info-title">Bazel Info</h2>
+    <button
+      type="button"
+      class="button button-ghost icon-button"
+      aria-label="Reload Bazel info"
+      title="Reload Bazel info"
+      disabled={loading}
+      onclick={onretry}
+    >
+      <ArrowClockwise size={14} />
+    </button>
   </div>
   {#if error}
     <Notice tone="warning" onaction={onretry}>Could not read bazel info: {error}</Notice>
   {/if}
+  {#if loading && !info}
+    <p class="dim">Loading bazel info…</p>
+  {/if}
   <table class="lens-table">
-    <thead>
-      <tr><th>Key</th><th>Path</th></tr>
-    </thead>
     <tbody>
-      {#each rows as row (row.key)}
+      {#each info?.paths ?? [] as row (row.key)}
         <tr
-          class:clickable={!!row.path}
-          onclick={() => row.path && void copyPath(row.key, row.path)}
-          title={row.path ? "Click to copy path" : undefined}
+          class="clickable"
+          onclick={() => void copyPath(row.key, row.path)}
+          title="Click to copy path"
         >
           <td class="mono">{row.key}</td>
           <td class="mono path-cell">
-            {#if row.path}
-              {row.path}{#if copiedKey === row.key} <span class="copied-tag">Copied</span>{/if}
-            {:else if loading}
-              <span class="dim">Loading…</span>
-            {:else}
-              <span class="dim">—</span>
-            {/if}
+            {row.path}{#if copiedKey === row.key}{" "}
+              <span class="copied-tag">Copied</span>{/if}
           </td>
         </tr>
       {/each}
@@ -154,3 +145,9 @@
     <BesSetup endpoint={besEndpoint} />
   </section>
 {/if}
+
+<style>
+  .bazel-info-title {
+    text-transform: none;
+  }
+</style>

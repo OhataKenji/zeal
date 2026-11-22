@@ -11,44 +11,43 @@ const INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const INFO_STDOUT_CAP: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
-    pub workspace: String,
-    pub release: Option<String>,
-    pub output_base: Option<String>,
-    pub execution_root: Option<String>,
-    pub bazel_bin: Option<String>,
-    pub bazel_testlogs: Option<String>,
-    pub repository_cache: Option<String>,
+    pub version: Option<String>,
+    pub paths: Vec<WorkspacePath>,
 }
 
-/// Pure parser for `bazel info` `key: value` output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WorkspacePath {
+    pub key: String,
+    pub path: String,
+}
+
 #[must_use]
-pub fn parse_bazel_info(stdout: &str, workspace: &Path) -> WorkspaceInfo {
+fn parse_bazel_info(stdout: &str) -> WorkspaceInfo {
     let mut info = WorkspaceInfo {
-        workspace: workspace.to_string_lossy().into_owned(),
-        release: None,
-        output_base: None,
-        execution_root: None,
-        bazel_bin: None,
-        bazel_testlogs: None,
-        repository_cache: None,
+        version: None,
+        paths: Vec::new(),
     };
     for line in stdout.lines() {
         let Some((key, val)) = line.split_once(':') else {
             continue;
         };
+        let key = key.trim();
         let val = val.trim();
         if val.is_empty() {
             continue;
         }
-        match key.trim() {
-            "release" => info.release = Some(val.to_owned()),
-            "output_base" => info.output_base = Some(val.to_owned()),
-            "execution_root" => info.execution_root = Some(val.to_owned()),
-            "bazel-bin" => info.bazel_bin = Some(val.to_owned()),
-            "bazel-testlogs" => info.bazel_testlogs = Some(val.to_owned()),
-            "repository_cache" => info.repository_cache = Some(val.to_owned()),
+        match key {
+            "release" => {
+                info.version = Some(val.strip_prefix("release ").unwrap_or(val).to_owned());
+            }
+            "workspace" | "output_base" | "execution_root" | "repository_cache" | "bazel-bin"
+            | "bazel-testlogs" => {
+                info.paths.push(WorkspacePath {
+                    key: key.to_owned(),
+                    path: val.to_owned(),
+                });
+            }
             _ => {}
         }
     }
@@ -75,7 +74,7 @@ fn fetch_info_with_timeout(
         &AtomicBool::new(false),
     )?
     .require_success()?;
-    Ok(parse_bazel_info(&String::from_utf8_lossy(&out.stdout), ws))
+    Ok(parse_bazel_info(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// A directory is a Bazel workspace root if it has MODULE.bazel or
@@ -353,30 +352,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_bazel_info_keys_and_ignores_unknown() {
-        let out = "\
-release: release 8.7.0
-output_base: /private/var/tmp/_bazel_dev/a9f3e12c
-execution_root: /private/var/tmp/_bazel_dev/a9f3e12c/execroot/_main
-bazel-bin: /private/var/tmp/_bazel_dev/a9f3e12c/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin
-bazel-testlogs: /private/var/tmp/_bazel_dev/a9f3e12c/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs
-repository_cache: /Users/dev/Library/Caches/bazel:repo_cache
-unknown_key: ignored
-empty_val:
-";
-        let info = parse_bazel_info(out, Path::new("/demo/ws"));
-        assert_eq!(info.workspace, "/demo/ws");
-        assert_eq!(info.release.as_deref(), Some("release 8.7.0"));
-        assert_eq!(
-            info.output_base.as_deref(),
-            Some("/private/var/tmp/_bazel_dev/a9f3e12c")
+    fn parses_bazel_info_version_and_allowlisted_paths() {
+        let info = parse_bazel_info(
+            "release: release 8.7.0\nworkspace: /ws\nbazel-bin: /reported/bin\nbazel-testlogs: /reported/logs\nrepository_cache: /cache:repos\noutput_base:\nunknown: ignored",
         );
+        assert_eq!(info.version.as_deref(), Some("8.7.0"));
+        let paths: Vec<_> = info
+            .paths
+            .iter()
+            .map(|p| (p.key.as_str(), p.path.as_str()))
+            .collect();
         assert_eq!(
-            info.repository_cache.as_deref(),
-            Some("/Users/dev/Library/Caches/bazel:repo_cache")
+            paths,
+            [
+                ("workspace", "/ws"),
+                ("bazel-bin", "/reported/bin"),
+                ("bazel-testlogs", "/reported/logs"),
+                ("repository_cache", "/cache:repos"),
+            ]
         );
-        assert!(info.bazel_bin.is_some());
-        assert!(info.bazel_testlogs.is_some());
-        assert!(info.execution_root.is_some());
     }
 }

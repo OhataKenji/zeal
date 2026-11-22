@@ -184,15 +184,10 @@ export type Section<T> =
   | { status: "missing" }
   | { status: "parse_error" | "read_error" | "not_available"; note: string };
 
-/** Paths reported by `bazel info` for one workspace. */
+/** Release version and paths reported by `bazel info` for one workspace. */
 export interface WorkspaceInfo {
-  workspace: string;
-  release: string | null;
-  outputBase: string | null;
-  executionRoot: string | null;
-  bazelBin: string | null;
-  bazelTestlogs: string | null;
-  repositoryCache: string | null;
+  version: string | null;
+  paths: { key: string; path: string }[];
 }
 
 /** Per-runner action execution counts from BEP `BuildMetrics.action_summary`. */

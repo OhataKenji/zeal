@@ -15,6 +15,7 @@ import type {
   TargetDetail,
   TargetIndex,
   TargetOutputs,
+  WorkspaceInfo,
   WorkspaceState,
 } from "./lib/types";
 import type { QueryOutput, QueryRequest } from "./lib/query.ts";
@@ -599,17 +600,25 @@ export function installPreview() {
         key,
       ].join(" -> ");
     },
-    get_workspace_info: (payload) => {
+    get_workspace_info: (payload): WorkspaceInfo => {
       const entry = wsEntry(payload?.workspace);
       const ob = `/private/var/tmp/_bazel_dev/preview`;
       return {
-        workspace: entry.workspace,
-        release: "release 8.7.0",
-        outputBase: ob,
-        executionRoot: `${ob}/execroot/_main`,
-        bazelBin: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
-        bazelTestlogs: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
-        repositoryCache: "/Users/dev/Library/Caches/bazel/repo_cache",
+        version: "8.7.0",
+        paths: [
+          { key: "workspace", path: entry.workspace },
+          { key: "output_base", path: ob },
+          { key: "execution_root", path: `${ob}/execroot/_main` },
+          {
+            key: "bazel-bin",
+            path: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/bin`,
+          },
+          {
+            key: "bazel-testlogs",
+            path: `${ob}/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs`,
+          },
+          { key: "repository_cache", path: "/Users/dev/Library/Caches/bazel/repo_cache" },
+        ],
       };
     },
     get_target_detail: (payload): TargetDetail => {
