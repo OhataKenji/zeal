@@ -87,7 +87,12 @@ const COMPLETED: InvocationDetail = {
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
-const MODULES_SNAPSHOT: ModulesSnapshot = { rootKey: "<root>", warning: null, modules: [] };
+const MODULES_SNAPSHOT: ModulesSnapshot = {
+  rootKey: "<root>",
+  rootName: "",
+  warning: null,
+  modules: [],
+};
 const THIRD = "/third";
 const OFF_WINDOW_ID = "123e4567-e89b-42d3-a456-426614174000";
 
