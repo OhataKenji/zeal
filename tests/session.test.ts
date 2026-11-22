@@ -339,6 +339,123 @@ test("late app-state with an older revision is ignored", async () => {
   assert.equal(h.view.core?.besError, null);
 });
 
+test("an immediate build waits for every same-workspace discovery, including a later reload", async () => {
+  const h = harness();
+  await initReady(h);
+  const first = pendingRequest(h, "refresh");
+  h.session.start("build", "//app:first", "--config=dev");
+  assert.equal(h.view.starting, true);
+  assert.equal(requestCount(h, "start_invocation"), 0);
+
+  h.session.refresh();
+  const second = lastPendingRequest(h, "refresh");
+  h.session.refresh();
+  const third = lastPendingRequest(h, "refresh");
+  third.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(h.view.snapshotLoading, false);
+  assert.equal(requestCount(h, "start_invocation"), 0);
+  first.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 0);
+  second.reply.reject(new Error("query failed"));
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.deepEqual(pendingRequest(h, "start_invocation").args, {
+    workspace: WS,
+    cmd: "build",
+    pattern: "//app:first",
+    arguments: "--config=dev",
+  });
+});
+
+test("a workspace switch cancels an unsent build without blocking the new workspace", async () => {
+  const h = harness();
+  await initReady(h);
+  const original = pendingRequest(h, "refresh");
+  h.session.start("build", "//app:first");
+  const opened = h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await opened;
+  h.session.start("test", "//app:second");
+  await loadSnapshot(h);
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.equal(pendingRequest(h, "start_invocation").args?.workspace, OTHER);
+  original.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+});
+
+test("returning to A waits for its abandoned discovery but not B's", async () => {
+  const h = harness();
+  await initReady(h);
+  const original = pendingRequest(h, "refresh");
+  for (const [index, path] of [OTHER, WS].entries()) {
+    const opened = h.session.openWorkspace(path, { include: ["//app/..."] });
+    lastPendingRequest(h, "open_workspace").reply.resolve({
+      workspace: path,
+      state: coreState({ revision: index + 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+    });
+    await opened;
+  }
+  await loadSnapshot(h);
+  h.session.start("build", "//app:first");
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 0);
+  original.reply.resolve({ snapshot: null, error: null });
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.equal(pendingRequest(h, "start_invocation").args?.workspace, WS);
+});
+
+test("navigation and disposal cancel starts that have not reached Bazel", async () => {
+  const h = harness();
+  await initReady(h);
+  h.session.start("build", "//app:first");
+  h.session.showPage("analytics");
+  await loadSnapshot(h);
+  assert.equal(h.view.starting, false);
+  assert.equal(requestCount(h, "start_invocation"), 0);
+  h.session.refresh();
+  h.session.start("build", "//app:second");
+  h.session.dispose();
+  await loadSnapshot(h);
+  assert.equal(requestCount(h, "start_invocation"), 0);
+});
+
+test("starts wait for workspace info but not an existing user build in that workspace", async () => {
+  const running = owned("a-run", WS);
+  const h = harness(Promise.resolve(coreState({ invocations: [running] })), "workspace");
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.start("build", "//app:second");
+  assert.equal(requestCount(h, "start_invocation"), 0);
+  pendingRequest(h, "get_workspace_info").reply.reject(new Error("info failed"));
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.deepEqual(h.view.core?.invocations, [running]);
+});
+
+test("a reload's follow-up target read finishes before the queued start", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  pendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
+  await settle();
+  h.session.refresh();
+  h.session.start("build", "//app:first");
+  await loadSnapshot(h);
+  assert.equal(requestCount(h, "get_target_detail"), 2);
+  assert.equal(requestCount(h, "start_invocation"), 0);
+  lastPendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+});
+
 test("opening B succeeds while A runs; B requests name B and A stays in core", async () => {
   const running = owned("a-run", WS);
   const h = harness(
@@ -383,6 +500,7 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   // A remains owned in the aggregate.
   assert.equal(h.view.core?.invocations[0]?.id, "a-run");
   // B's own start names B.
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   assert.equal(lastPendingRequest(h, "start_invocation").args?.workspace, OTHER);
@@ -399,6 +517,7 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
 test("a delayed A start reply cannot route to A's console or error in B", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   const aStart = pendingRequest(h, "start_invocation");
@@ -421,6 +540,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
   // No fresh get_state follows the start; app-state events carry the entry.
   assert.equal(h.stateReads(), 1);
   // B can start independently while A's reply already landed.
+  await loadSnapshot(h);
   h.session.start("test", "//app:second");
   await settle();
   assert.equal(lastPendingRequest(h, "start_invocation").args?.workspace, OTHER);
@@ -429,6 +549,7 @@ test("a delayed A start reply cannot route to A's console or error in B", async 
 test("same-workspace navigation after start is not overridden by the reply", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   const start = pendingRequest(h, "start_invocation");
@@ -450,6 +571,7 @@ test("same-workspace navigation after start is not overridden by the reply", asy
 test("a start reply after browsing away and back does not navigate", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   const start = pendingRequest(h, "start_invocation");
@@ -464,6 +586,7 @@ test("a start reply after browsing away and back does not navigate", async () =>
 test("a start reply after a rejected workspace open does not navigate or error", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   const start = pendingRequest(h, "start_invocation");
@@ -483,6 +606,7 @@ test("a start reply after reselecting targets does not navigate", async () => {
   await initReady(h);
   await loadSnapshot(h);
   h.session.select({ kind: "target", label: "//app:first" });
+  pendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
   await settle();
   h.session.start("build", "//app:first");
   await settle();
@@ -501,6 +625,7 @@ test("a start reply after reselecting targets does not navigate", async () => {
 test("the start reply navigates; the app-state event supplies the owned entry", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start(
     "run",
     "//:app",
@@ -1155,6 +1280,7 @@ test("an accepted refresh re-reads the selected target even when fetchedAt is un
 test("a failed foreground start shows the error and restores send readiness", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   pendingRequest(h, "start_invocation").reply.reject(new Error("spawn failed"));
@@ -1170,6 +1296,7 @@ test("a failed A start cannot clear B's pending start", async () => {
     Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
   );
   await initReady(h);
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   const aStart = pendingRequest(h, "start_invocation");
@@ -1183,6 +1310,7 @@ test("a failed A start cannot clear B's pending start", async () => {
     }),
   });
   await settle();
+  await loadSnapshot(h);
   h.session.start("build", "//app:first");
   await settle();
   const bStart = lastPendingRequest(h, "start_invocation");
@@ -1200,6 +1328,7 @@ test("a failed A start cannot clear B's pending start", async () => {
 test("a start reply after release renders the saved result and reads for the same id", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   await loadHistory(h, []);
   h.session.start("build", "//app:first");
   await settle();
@@ -2062,6 +2191,7 @@ test("a failed off-window lookup surfaces the history error", async () => {
 test("a start reply selects its invocation without an extra history read", async () => {
   const h = harness();
   await initReady(h);
+  await loadSnapshot(h);
   await loadHistory(h, []);
   const reads = requestCount(h, "list_invocations");
   h.session.start("build", "//app:first");

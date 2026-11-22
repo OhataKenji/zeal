@@ -12,9 +12,12 @@ keep their state in their views.
   later matching BEP record supersedes.
 - Async responses must match their captured owner and a live session, including
   A→B→A navigation. Core snapshots must have a newer revision.
-- Starts capture content and workspace-open identity. A target/package change
-  invalidates the captured content; explicit-open intent blocks saved-workspace
-  restoration even after failure.
+- A build, test, or run waits for Zeal's outstanding target and workspace-info
+  reads in that canonical workspace, including superseded reloads. Navigation,
+  a new open request, or disposal cancels an unsent start. User invocations do
+  not wait for other user invocations: Bazel still rejects output-base lock
+  contention immediately. An explicit open blocks saved-workspace restoration
+  even after failure.
 - The target explorer builds one package tree per snapshot: the sidebar tree
   and the package table read the same nodes. Selection and target reads live
   in the session; expansion and direct/subtree scope stay local to the views.
