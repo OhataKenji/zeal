@@ -29,6 +29,7 @@
   const selected = $derived(view.invocation);
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
   const execution = $derived(selected?.execution);
+  const diagnostic = $derived(selected?.diagnostic ?? null);
   const profile = $derived(sectionData(view.profile ?? undefined));
   const bep = $derived(sectionData(view.detail?.bep));
   // Target links navigate only when the shown record belongs to the
@@ -57,7 +58,16 @@
   });
 </script>
 
-{#if shown}
+{#if diagnostic && shown}
+  <div class="invocation-page">
+    <InvocationHeader record={shown} {status} {canRerun} {onstop} {onrerun} />
+    <Notice tone="neutral">
+      No build event record. Bazel process exit code: {diagnostic.processExitCode ??
+        "unknown"}.
+    </Notice>
+    <LogPanel section={{ status: "ok", data: diagnostic.output }} loading={false} />
+  </div>
+{:else if shown}
   <div class="invocation-page">
     <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
       <div class="tabs" role="tablist" aria-label="Invocation views">

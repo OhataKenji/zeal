@@ -253,6 +253,52 @@ test("AppView shows lookup states without invocation tabs when the record is una
   });
 });
 
+test("AppView renders a diagnostic invocation's notice and process exit", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
+
+  function output(processExitCode: number | null): string {
+    const diagnostic = {
+      id: "diag-1",
+      workspace: "/workspace",
+      cmd: "build",
+      pattern: "//app:app",
+      startedAt: 1_700_000_000_000,
+      processExitCode,
+      output: "Another command is running. Exiting immediately.\n",
+    };
+    const record = {
+      id: diagnostic.id,
+      workspace: diagnostic.workspace,
+      cmd: diagnostic.cmd,
+      pattern: diagnostic.pattern,
+      startedAt: diagnostic.startedAt,
+    };
+    const view = Object.assign(emptyView("history"), {
+      core: CORE,
+      state: WS,
+      selectedInvocationId: diagnostic.id,
+      invocations: [],
+      invocationRows: [{ record, diagnostic }],
+      invocation: { record, diagnostic },
+      detail: null,
+      detailLoading: false,
+      detailError: null,
+    });
+    return render(AppView, { props: { view, session } }).body.replace(/<!--[\s\S]*?-->/g, "");
+  }
+
+  const exited = output(9);
+  assert.match(exited, /No build event record\. Bazel process exit code: 9\./);
+  assert.match(exited, /\? outcome unknown/);
+  assert.match(exited, /Another command is running\. Exiting immediately\./);
+  assert.doesNotMatch(exited, /role="tablist" aria-label="Invocation views"/);
+
+  const unknown = output(null);
+  assert.match(unknown, /Bazel process exit code: unknown\./);
+});
+
 test("AppView links history target labels into the target explorer", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: AppView } = await load("/src/AppView.svelte");

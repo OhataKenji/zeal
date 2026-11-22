@@ -318,7 +318,21 @@ async fn read_console(
     .map_err(|_| "terminal read worker failed".to_string())?
 }
 
-/// Recent history plus live and selected records within the workspace's scope.
+/// The saved build-event history for one workspace plus the workspace's
+/// bounded in-memory diagnostics for terminal completions that never
+/// produced a readable record. A store failure stays visible in `saved`
+/// without hiding the local diagnostics.
+#[derive(serde::Serialize)]
+struct InvocationHistory {
+    saved: Result<Vec<InvocationRecord>, String>,
+    diagnostics: Vec<state::ProcessDiagnostic>,
+}
+
+/// Recent history plus live and selected records within the workspace's
+/// scope, and its local diagnostics — returned even while a live entry
+/// still owns the process, since a history read may precede the release
+/// event; the projection alone resolves precedence — all validated
+/// against the registered workspace.
 #[tauri::command]
 #[tracing::instrument(target = "zeal::operations", name = "invocations.list", skip_all)]
 async fn list_invocations(
@@ -326,21 +340,87 @@ async fn list_invocations(
     core: State<'_, Arc<Core>>,
     workspace: String,
     selected_id: Option<String>,
-) -> Result<Vec<InvocationRecord>, String> {
-    let (ws, mut pinned_ids) = {
-        let state = core.state.lock().expect("application state lock poisoned");
-        (
-            state.workspace_path(&workspace)?,
-            state.invocations.keys().cloned().collect::<Vec<_>>(),
-        )
-    };
-    pinned_ids.extend(selected_id);
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+) -> Result<InvocationHistory, String> {
+    let ws = registered_workspace(&core, &workspace)?;
+    let core = core.inner().clone();
+    let data = app.path().app_data_dir().map_err(|error| error.to_string());
     tauri::async_runtime::spawn_blocking(move || {
-        store::list(&data, &ws, &pinned_ids).map_err(|error| error.to_string())
+        load_invocation_history(&core, &ws, selected_id, data)
     })
     .await
-    .map_err(|_| "history list worker failed".to_string())?
+    .map_err(|_| "history list worker failed".to_string())
+}
+
+/// The synchronous history read run inside the worker: snapshot the live
+/// and selected pins plus this workspace's diagnostic ids under the state
+/// lock, read the store without it, then lock again to retire diagnostics
+/// whose record was fetched and scope the reply. Diagnostic ids are
+/// lookup-only pins — they can pull an off-window record back for the
+/// retirement check but are never exposed as history rows themselves.
+fn load_invocation_history(
+    core: &Core,
+    ws: &Path,
+    selected_id: Option<String>,
+    data: Result<PathBuf, String>,
+) -> InvocationHistory {
+    let (visible_pins, lookup_pins) = {
+        let state = core.state.lock().expect("application state lock poisoned");
+        let mut visible_pins = state.invocations.keys().cloned().collect::<Vec<_>>();
+        visible_pins.extend(selected_id);
+        let mut lookup_pins = visible_pins.clone();
+        lookup_pins.extend(
+            state
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| Path::new(&diagnostic.workspace) == ws)
+                .map(|diagnostic| diagnostic.id.clone()),
+        );
+        (visible_pins, lookup_pins)
+    };
+    let mut saved =
+        data.and_then(|dir| store::list(&dir, ws, &lookup_pins).map_err(|error| error.to_string()));
+    let mut state = core.state.lock().expect("application state lock poisoned");
+    settle_invocation_history(&mut state, &mut saved, &visible_pins);
+    InvocationHistory {
+        saved,
+        diagnostics: state.diagnostics_for(ws),
+    }
+}
+
+/// Whether the fetched records hold this workspace's own record for the
+/// diagnostic's invocation id.
+fn owns_diagnostic_record(
+    records: &[InvocationRecord],
+    diagnostic: &state::ProcessDiagnostic,
+) -> bool {
+    records.iter().any(|record| {
+        record.id == diagnostic.id
+            && record.workspace.as_deref() == Some(diagnostic.workspace.as_str())
+    })
+}
+
+/// With the store read done: a fetched record owned by this workspace
+/// retires its diagnostic — only on success — and records beyond the
+/// recent window stay in the reply only for visible live or selected pins.
+fn settle_invocation_history(
+    state: &mut state::CoreState,
+    saved: &mut Result<Vec<InvocationRecord>, String>,
+    visible_pins: &[String],
+) {
+    let Ok(records) = saved else {
+        return;
+    };
+    state
+        .diagnostics
+        .retain(|diagnostic| !owns_diagnostic_record(records, diagnostic));
+    if records.len() > store::LIST_LIMIT {
+        let extras = records.split_off(store::LIST_LIMIT);
+        records.extend(
+            extras
+                .into_iter()
+                .filter(|record| visible_pins.contains(&record.id)),
+        );
+    }
 }
 
 /// Aggregate only a registered workspace; caller cannot name a DB or root.

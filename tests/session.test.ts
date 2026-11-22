@@ -7,10 +7,12 @@ import type {
   AppState,
   ConfiguredTarget,
   InvocationDetail,
+  InvocationHistory,
   InvocationRecord,
   ModulesSnapshot,
   OpenWorkspaceResult,
   OwnedInvocation,
+  ProcessDiagnostic,
   Profile,
   Section,
   TargetActions,
@@ -91,6 +93,26 @@ const COMPLETED: InvocationDetail = {
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
+
+function diagnostic(id: string, workspace = WS): ProcessDiagnostic {
+  return {
+    id,
+    workspace,
+    cmd: "build",
+    pattern: "//:app",
+    startedAt: 2,
+    processExitCode: 9,
+    output: "Another command is running. Exiting immediately.\n",
+  };
+}
+
+/** The workspace-scoped history reply: saved records plus local diagnostics. */
+function history(
+  records: InvocationRecord[],
+  diagnostics: ProcessDiagnostic[] = [],
+): InvocationHistory {
+  return { saved: { Ok: records }, diagnostics };
+}
 const MODULES_SNAPSHOT: ModulesSnapshot = {
   rootKey: "<root>",
   rootLabel: "<root>",
@@ -277,8 +299,12 @@ async function loadSnapshot(h: ReturnType<typeof harness>) {
   await settle();
 }
 
-async function loadHistory(h: ReturnType<typeof harness>, records: InvocationRecord[]) {
-  lastPendingRequest(h, "list_invocations").reply.resolve(records);
+async function loadHistory(
+  h: ReturnType<typeof harness>,
+  records: InvocationRecord[],
+  diagnostics: ProcessDiagnostic[] = [],
+) {
+  lastPendingRequest(h, "list_invocations").reply.resolve(history(records, diagnostics));
   await settle();
 }
 
@@ -347,10 +373,10 @@ test("opening B succeeds while A runs; B requests name B and A stays in core", a
   assert.ok(
     h.pending.some((call) => call.command === "list_invocations" && call.args?.workspace === OTHER),
   );
-  pendingRequest(h, "list_invocations").reply.resolve([{ ...RECORD, id: "a-done" }]);
+  pendingRequest(h, "list_invocations").reply.resolve(history([{ ...RECORD, id: "a-done" }]));
   await settle();
   assert.deepEqual(h.view.invocations, []);
-  lastPendingRequest(h, "list_invocations").reply.resolve([OTHER_RECORD]);
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([OTHER_RECORD]));
   await settle();
   assert.deepEqual(h.view.invocations, [OTHER_RECORD]);
   assert.equal(lastPendingRequest(h, "refresh").args?.workspace, OTHER);
@@ -639,14 +665,207 @@ test("a live console shows until release, then the BEP record takes over", async
   assert.equal(released.invocation, null);
   h.session.loadInvocations();
   await settle();
-  pendingRequest(h, "list_invocations").reply.resolve([
-    { ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 },
-  ]);
+  pendingRequest(h, "list_invocations").reply.resolve(
+    history([{ ...RECORD, id: "a-run", finishedAt: 2, exitCode: 0 }]),
+  );
   await settle();
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
   assert.equal(h.view.page, "history");
   assert.equal(h.view.selectedInvocationId, "a-run");
+});
+
+test("a diagnostic row fills the gap until saved history supersedes it", async () => {
+  const liveA = owned("a-run", WS);
+  const liveB = owned("b-run", WS);
+  const state = coreState({
+    revision: 1,
+    workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    invocations: [liveA, liveB],
+  });
+  const h = harness(Promise.resolve(state), "history");
+  await initReady(h);
+  const diagB = diagnostic("b-run");
+  const diagC = diagnostic("c-run", OTHER);
+  // A history read can sample B's diagnostic before its release event; the
+  // live row still wins and no diagnostic row appears. The first reply
+  // predates the claimed selection, so history retries once pinned.
+  await loadHistory(h, [], [diagB, diagC]);
+  await loadHistory(h, [], [diagB, diagC]);
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  const liveRow = h.view.invocationRows[1];
+  assert.equal(liveRow?.execution, liveB);
+  assert.equal(liveRow?.diagnostic, undefined);
+
+  // B exits without a readable record: the released app-state alone swaps
+  // its live row for the already-known diagnostic — no history refresh is
+  // guaranteed in between. A diagnostic owned by another workspace never
+  // joins this workspace's rows.
+  h.emit("app-state", { ...state, revision: 2, invocations: [liveA] });
+  await settle();
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  const rowB = h.view.invocationRows[1];
+  assert.equal(rowB?.diagnostic, diagB);
+  assert.equal(rowB?.execution, undefined);
+  assert.equal(rowB?.record, diagB);
+  // Diagnostics never enter the saved-history projection used by analytics.
+  assert.deepEqual(h.view.invocations, []);
+
+  // Selecting B shows its diagnostic; no saved readers start for it.
+  h.session.selectInvocation("b-run");
+  await settle();
+  assert.equal(h.view.invocation?.diagnostic, diagB);
+  assert.equal(h.view.invocation?.execution, undefined);
+  assert.equal(h.view.invocation?.record.exitCode, undefined);
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  // The selection probe re-reads history for a late record; it is still absent.
+  await loadHistory(h, [], [diagB]);
+  assert.equal(h.view.invocation?.diagnostic, diagB);
+
+  // A matching BEP record lands later: the diagnostic is suppressed and the
+  // saved readers take over with the BEP exit code, not the process exit.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }], [diagB]);
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  assert.equal(h.view.invocationRows[1]?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.equal(h.view.invocation?.execution, undefined);
+  const detail = pendingRequest(h, "get_invocation");
+  const profile = pendingRequest(h, "get_invocation_profile");
+  assert.equal(detail.args?.workspace, WS);
+  assert.equal(detail.args?.id, "b-run");
+  assert.equal(profile.args?.workspace, WS);
+  assert.equal(profile.args?.id, "b-run");
+  assert.deepEqual(h.view.invocations, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }]);
+});
+
+test("an unselected history page claims the newest row; live pins stay first", async () => {
+  const h = harness(Promise.resolve(coreState({ revision: 1 })), "history");
+  await initReady(h);
+  const diag = { ...diagnostic("b-run"), startedAt: 30 };
+  const newest = { ...RECORD, id: "s-new", startedAt: 20, finishedAt: 21, exitCode: 0 };
+  const older = { ...RECORD, id: "s-old", startedAt: 10, finishedAt: 11, exitCode: 0 };
+  const undatedA: InvocationRecord = { id: "s-none-a", workspace: WS };
+  const undatedB: InvocationRecord = { id: "s-none-b", workspace: WS };
+  // A foreign-workspace diagnostic is filtered out; among the rest the
+  // newest startedAt claims the first row and undated rows sort last in
+  // reply order.
+  await loadHistory(h, [newest, older, undatedA, undatedB], [diagnostic("c-run", OTHER), diag]);
+  assert.equal(h.view.selectedInvocationId, "b-run");
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["b-run", "s-new", "s-old", "s-none-a", "s-none-b"],
+  );
+  assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
+  // An older live execution still pins the head without disturbing the
+  // claimed selection.
+  const live = owned("live-old", WS, { startedAt: 5 });
+  h.emit("app-state", coreState({ revision: 2, invocations: [live] }));
+  await settle();
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["live-old", "b-run", "s-new", "s-old", "s-none-a", "s-none-b"],
+  );
+  assert.equal(h.view.invocationRows[0]?.execution, live);
+  assert.equal(h.view.selectedInvocationId, "b-run");
+  assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
+});
+
+test("a same-id record owned elsewhere cannot displace a local diagnostic", async () => {
+  const liveA = owned("a-run", WS);
+  const state = coreState({
+    revision: 1,
+    workspaces: [wsEntry(WS), wsEntry(OTHER)],
+    invocations: [liveA],
+  });
+  const h = harness(Promise.resolve(state), "history");
+  await initReady(h);
+  const diagB = diagnostic("b-run");
+  // Shared history reports a same-id record owned by OTHER: it is not this
+  // workspace's build event, so the diagnostic keeps the row. The first
+  // reply predates the claimed selection, so history retries once pinned.
+  const foreign = { ...OTHER_RECORD, finishedAt: 3, exitCode: 0 };
+  await loadHistory(h, [foreign], [diagB]);
+  await loadHistory(h, [foreign], [diagB]);
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.record.id),
+    ["a-run", "b-run"],
+  );
+  const rowB = h.view.invocationRows[1];
+  assert.equal(rowB?.diagnostic?.id, "b-run");
+  assert.equal(rowB?.record.workspace, WS);
+  // The foreign record still feeds saved-history analytics unchanged.
+  assert.deepEqual(h.view.invocations, [foreign]);
+  h.session.selectInvocation("b-run");
+  await settle();
+  assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
+  assert.equal(requestCount(h, "get_invocation"), 0);
+  assert.equal(requestCount(h, "get_invocation_profile"), 0);
+  // Once a record owned by this workspace lands, it supersedes the
+  // diagnostic and the saved readers take over.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }], [diagB]);
+  assert.equal(h.view.invocationRows[1]?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.diagnostic, undefined);
+  assert.equal(h.view.invocation?.record.exitCode, 0);
+  assert.deepEqual(pendingRequest(h, "get_invocation").args, { workspace: WS, id: "b-run" });
+});
+
+test("a store failure keeps saved history and still shows diagnostics", async () => {
+  const h = harness(Promise.resolve(coreState({ revision: 1 })), "history");
+  await initReady(h);
+  await loadHistory(h, [COMPLETED_RECORD]);
+  h.session.loadInvocations();
+  await settle();
+  const diagB = diagnostic("b-run");
+  lastPendingRequest(h, "list_invocations").reply.resolve({
+    saved: { Err: "database is locked" },
+    diagnostics: [diagB],
+  });
+  await settle();
+  // The last good saved history stays; the store error surfaces; the local
+  // diagnostic still claims its row.
+  assert.deepEqual(h.view.invocations, [COMPLETED_RECORD]);
+  assert.match(h.view.invocationsError ?? "", /database is locked/);
+  const rowB = h.view.invocationRows.find((row) => row.record.id === "b-run");
+  assert.equal(rowB?.diagnostic, diagB);
+  assert.equal(rowB?.record.exitCode, undefined);
+});
+
+test("a stale history reply cannot leak one workspace's diagnostics into another", async () => {
+  const h = harness();
+  await initReady(h);
+  // WS's history read is in flight carrying its diagnostic.
+  h.session.loadInvocations();
+  await settle();
+  const stale = lastPendingRequest(h, "list_invocations");
+  assert.equal(stale.args?.workspace, WS);
+  // The user switches to OTHER before it lands; OTHER issues its own read.
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await settle();
+  stale.reply.resolve(history([], [diagnostic("a-run")]));
+  await settle();
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([], []));
+  await settle();
+  assert.deepEqual(h.view.invocationRows, []);
+  assert.equal(h.view.invocationsError, null);
 });
 
 test("scope change invalidates stale target results and readers name the workspace", async () => {
@@ -703,7 +922,7 @@ test("scope change invalidates stale target results and readers name the workspa
 test("late history/detail/profile replies cannot populate another workspace", async () => {
   const h = harness();
   await initReady(h);
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+  pendingRequest(h, "list_invocations").reply.resolve(history([RECORD]));
   await settle();
   h.session.selectInvocation(RECORD.id);
   await settle();
@@ -779,10 +998,12 @@ test("canSend requires readiness, a workspace, bazel, BES, and a valid target", 
 test("dispose removes listeners and ignores late reads", async () => {
   const h = harness();
   await initReady(h);
-  pendingRequest(h, "list_invocations").reply.resolve([
-    { ...RECORD, id: "run-a" },
-    { ...RECORD, id: "run-b" },
-  ]);
+  pendingRequest(h, "list_invocations").reply.resolve(
+    history([
+      { ...RECORD, id: "run-a" },
+      { ...RECORD, id: "run-b" },
+    ]),
+  );
   await settle();
   h.session.selectInvocation("run-a");
   await settle();
@@ -1458,10 +1679,10 @@ test("history notifications coalesce and owned-state pushes do not refetch", asy
   h.emit("invocations-changed", null);
   await settle();
   assert.equal(requestCount(h, "list_invocations"), base + 1);
-  lastPendingRequest(h, "list_invocations").reply.resolve([]);
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([]));
   await settle();
   assert.equal(requestCount(h, "list_invocations"), base + 2);
-  lastPendingRequest(h, "list_invocations").reply.resolve([]);
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([]));
   await settle();
   assert.equal(requestCount(h, "list_invocations"), base + 2);
   // An owned-state-only app-state push touches neither history nor targets.
@@ -1577,7 +1798,7 @@ test("a failed history read surfaces an error and loadInvocations retries", asyn
   assert.deepEqual(h.view.invocations, []);
   h.session.loadInvocations();
   await settle();
-  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED_RECORD]);
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([COMPLETED_RECORD]));
   await settle();
   assert.deepEqual(h.view.invocations, [COMPLETED_RECORD]);
   assert.equal(h.view.invocationsError, null);
@@ -1738,7 +1959,7 @@ test("a stop failure surfaces only while its invocation is displayed", async () 
 test("returning to history reloads detail when the selected record changed off-page", async () => {
   const h = harness();
   await initReady(h);
-  pendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+  pendingRequest(h, "list_invocations").reply.resolve(history([RECORD]));
   await settle();
   h.session.selectInvocation(RECORD.id);
   await settle();
@@ -1751,7 +1972,7 @@ test("returning to history reloads detail when the selected record changed off-p
   await settle();
   h.emit("invocations-changed", { workspace: WS });
   await settle();
-  lastPendingRequest(h, "list_invocations").reply.resolve([COMPLETED_RECORD]);
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([COMPLETED_RECORD]));
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 1);
   assert.equal(requestCount(h, "get_invocation_profile"), 1);
@@ -1776,7 +1997,7 @@ test("selecting an off-window id pins it through a selected-id history read", as
   assert.equal(h.view.selectedInvocationId, OFF_WINDOW_ID);
   const pinned = lastPendingRequest(h, "list_invocations");
   assert.deepEqual(pinned.args, { workspace: WS, selectedId: OFF_WINDOW_ID });
-  pinned.reply.resolve([RECORD, offWindowRecord()]);
+  pinned.reply.resolve(history([RECORD, offWindowRecord()]));
   await settle();
   assert.equal(h.view.historyLoading, false);
   assert.equal(h.view.invocation?.record.id, OFF_WINDOW_ID);
@@ -1795,7 +2016,7 @@ test("an unknown off-window id converges without saved reads or extra fetches", 
   h.session.selectInvocation(OFF_WINDOW_ID);
   await settle();
   assert.equal(h.view.historyLoading, true);
-  lastPendingRequest(h, "list_invocations").reply.resolve([RECORD]);
+  lastPendingRequest(h, "list_invocations").reply.resolve(history([RECORD]));
   await settle();
   assert.equal(h.view.historyLoading, false);
   assert.equal(h.view.invocation, null);
@@ -1818,7 +2039,7 @@ test("selecting off-window while history is busy pins it on the follow-up read",
   const pinned = lastPendingRequest(h, "list_invocations");
   assert.equal(requestCount(h, "list_invocations"), 2);
   assert.deepEqual(pinned.args, { workspace: WS, selectedId: OFF_WINDOW_ID });
-  pinned.reply.resolve([RECORD, offWindowRecord()]);
+  pinned.reply.resolve(history([RECORD, offWindowRecord()]));
   await settle();
   assert.equal(h.view.invocation?.record.id, OFF_WINDOW_ID);
   assert.equal(pendingRequest(h, "get_invocation").args?.id, OFF_WINDOW_ID);

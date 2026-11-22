@@ -184,6 +184,28 @@ export interface OwnedInvocation {
   console: boolean;
 }
 
+/** The local facts of one released terminal invocation whose build-event
+ * record is missing or unreadable. `processExitCode` is the Bazel process's
+ * own exit, never a BEP exit code, `output` is its bounded terminal tail,
+ * and the entry is never persisted. */
+export interface ProcessDiagnostic {
+  id: string;
+  workspace: string;
+  cmd: string;
+  pattern: string;
+  startedAt: number;
+  processExitCode: number | null;
+  output: string;
+}
+
+/** The workspace-scoped history reply: saved build-event records, or the
+ * store failure that kept them from loading, plus the workspace's local
+ * diagnostics for terminal completions without a readable record. */
+export type InvocationHistory = {
+  saved: { Ok: InvocationRecord[] } | { Err: string };
+  diagnostics: ProcessDiagnostic[];
+};
+
 /** The aggregate core snapshot pushed on every change; `revision` grows
  * monotonically so stale pushes cannot overwrite newer state. */
 export interface AppState {
