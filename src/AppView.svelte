@@ -481,9 +481,15 @@
         {/if}
       {/snippet}
 
-      {#if view.page === "modules"}
+      {#if view.page === "modules" && view.modules}
         {#key st.workspace}
-          <ModulesView workspace={st.workspace} bazelAvailable={core.bazel !== null} />
+          <ModulesView
+            view={view.modules}
+            bazelAvailable={core.bazel !== null}
+            onload={session.loadModules}
+            onselect={session.selectModule}
+            onexplain={session.explainModule}
+          />
         {/key}
       {:else}
         <main class="content" class:invocation-content={view.page === "history"}>
