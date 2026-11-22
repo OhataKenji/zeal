@@ -9,13 +9,12 @@ const FORBIDDEN_CHARACTERS = /[\p{White_Space}\p{Cc}]/u;
 /** Explains Explorer's package wildcards without implying discovery limits Bazel. */
 export function packageScopeNote(pattern: string): string | null {
   if (!pattern.startsWith("//")) return null;
-  if (pattern.endsWith(":all")) {
-    return "Bazel matches rules in this package, not just the targets listed in Explorer.";
-  }
-  if (pattern.endsWith("/...") && !pattern.includes(":")) {
-    return "Bazel matches rules recursively across packages, not just the targets listed in Explorer.";
-  }
-  return null;
+  const [pkg, target] = pattern.split(":");
+  const recursive = pkg.endsWith("/...");
+  const wildcard = target === "all" || target === "*" || target === "all-targets";
+  if (!wildcard && !(recursive && target === undefined)) return null;
+  const scope = recursive ? "recursively across packages" : "in this package";
+  return `Bazel can match targets ${scope}, not just the targets listed in Explorer.`;
 }
 
 /** Validates a single target token without trimming or splitting it. */

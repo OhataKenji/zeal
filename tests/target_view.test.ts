@@ -419,16 +419,25 @@ test("Run with flags explains package patterns but not individual labels", async
       },
     }).body;
   }
-  for (const pattern of ["//:all", "//app:all"]) {
+  for (const pattern of ["//:all", "//app:all", "//app:*", "//app:all-targets"]) {
     assert.match(dialog(pattern), /in this package, not just the targets listed in Explorer/);
   }
-  for (const pattern of ["//...", "//app/..."]) {
+  for (const pattern of [
+    "//...",
+    "//app/...",
+    "//...:all",
+    "//app/...:all",
+    "//app/...:*",
+    "//app/...:all-targets",
+  ]) {
     assert.match(
       dialog(pattern),
       /recursively across packages, not just the targets listed in Explorer/,
     );
   }
-  assert.doesNotMatch(dialog("//app:parser"), /not just the targets listed/);
+  for (const pattern of ["//app:parser", "//app:individual/..."]) {
+    assert.doesNotMatch(dialog(pattern), /not just the targets listed/);
+  }
 });
 
 test("PackageView direct and subtree scopes, the scope switch, and the row cap", async (t) => {
