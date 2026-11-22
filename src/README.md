@@ -16,7 +16,8 @@ keep their state in their views.
   phase reader for the active inspector tab (configured or actions) under the
   workspace's applied build flags; Definition issues no phase read. The UI
   stages the Configured tab's three `read_target` steps — configuration,
-  transitions (keyed by the reported checksum), outputs — so a tab, flag, or
+  transitions, outputs — each a `config(label, target)` cquery scoped to the
+  selected target's own configuration, so a tab, flag, or
   selection change can stop between them; each step is one Bazel process and
   `--noblock_for_lock` applies per process, never across them. Applied
   flags persist verbatim; `read_target` rejects malformed or reserved

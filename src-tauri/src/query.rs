@@ -46,7 +46,7 @@ pub enum QueryKind {
 }
 
 impl QueryKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Query => "query",
             Self::Cquery => "cquery",
@@ -409,6 +409,8 @@ mod tests {
             "--noinclude_artifacts",
             "--transitions=x",
             "--notransitions",
+            "--proto:include_configurations=x",
+            "--noproto:include_configurations=x",
             "--config=a residue",
             "--config=\0",
             "--config=a\n",

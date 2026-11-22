@@ -17,6 +17,7 @@ import type {
   TargetDetail,
   TargetIndex,
   TargetPhaseData,
+  TargetReadStep,
   WorkspaceState,
 } from "../src/lib/types.ts";
 
@@ -216,19 +217,17 @@ function readRequests(h: ReturnType<typeof harness>) {
   return h.pending.filter((call) => call.command === "read_target");
 }
 
-function pendingRead(h: ReturnType<typeof harness>, step: unknown) {
-  const request = readRequests(h).find(
-    (call) => JSON.stringify(call.args?.step) === JSON.stringify(step),
-  );
-  assert.ok(request, `No read_target(${JSON.stringify(step)}) request is pending.`);
+function pendingRead(h: ReturnType<typeof harness>, step: TargetReadStep) {
+  const request = readRequests(h).find((call) => call.args?.step === step);
+  assert.ok(request, `No read_target(${step}) request is pending.`);
   return request;
 }
 
-function lastRead(h: ReturnType<typeof harness>, step: unknown) {
+function lastRead(h: ReturnType<typeof harness>, step: TargetReadStep) {
   const request = readRequests(h)
-    .filter((call) => JSON.stringify(call.args?.step) === JSON.stringify(step))
+    .filter((call) => call.args?.step === step)
     .at(-1);
-  assert.ok(request, `No read_target(${JSON.stringify(step)}) request is pending.`);
+  assert.ok(request, `No read_target(${step}) request is pending.`);
   return request;
 }
 
@@ -242,9 +241,7 @@ async function resolveActions(h: ReturnType<typeof harness>) {
 async function resolveConfigured(h: ReturnType<typeof harness>) {
   lastRead(h, "configuration").reply.resolve(CONFIGURED.configuration);
   await settle();
-  lastRead(h, {
-    transitions: { checksum: CONFIGURED.configuration?.checksum ?? null },
-  }).reply.resolve({
+  lastRead(h, "transitions").reply.resolve({
     deps: CONFIGURED.deps,
     depsTruncated: CONFIGURED.depsTruncated,
   });
@@ -1346,7 +1343,7 @@ test("a failed detail read blocks phase reads; reselecting retries it", async ()
   assert.deepEqual(h.view.targetPhase, CONFIGURED_DATA);
 });
 
-test("configured steps link the reported checksum and stop on reselection", async () => {
+test("configured steps carry flags and label and stop on reselection", async () => {
   const h = harness();
   await initReady(h);
   await loadSnapshot(h);
@@ -1356,12 +1353,10 @@ test("configured steps link the reported checksum and stop on reselection", asyn
   await settle();
   h.session.setTargetTab("configured");
   await settle();
-  // configuration -> transitions(checksum) -> outputs, each under flags.
+  // configuration -> transitions -> outputs, each under flags.
   pendingRead(h, "configuration").reply.resolve(CONFIGURED.configuration);
   await settle();
-  const transitions = pendingRead(h, {
-    transitions: { checksum: CONFIGURED.configuration?.checksum ?? null },
-  });
+  const transitions = pendingRead(h, "transitions");
   assert.equal(transitions.args?.flags, "");
   assert.equal(transitions.args?.label, "//app:first");
   // Reselecting another target orphans the staged read before outputs.
@@ -1389,18 +1384,12 @@ test("leaving the targets page mid-read aborts before the next step and resumes"
   await settle();
   pendingRead(h, "configuration").reply.resolve(CONFIGURED.configuration);
   await settle();
-  const transitions = pendingRead(h, {
-    transitions: { checksum: CONFIGURED.configuration?.checksum ?? null },
-  });
+  const transitions = pendingRead(h, "transitions");
   // Leaving the page aborts the staged read at the next step boundary.
   h.session.showPage("query");
   transitions.reply.resolve({ deps: [], depsTruncated: false });
   await settle();
-  assert.equal(
-    readRequests(h).filter((call) => JSON.stringify(call.args?.step) === JSON.stringify("outputs"))
-      .length,
-    0,
-  );
+  assert.equal(readRequests(h).filter((call) => call.args?.step === "outputs").length, 0);
   assert.equal(h.view.targetPhase, null);
   // Returning restarts the phase read from the first step.
   h.session.showPage("targets");
@@ -1437,7 +1426,7 @@ test("a managed flag fails the first read; reset recovers with default flags", a
   // transitions and outputs reads were never issued.
   const flagged = readRequests(h).filter((call) => call.args?.flags === "--output=files");
   assert.equal(flagged.length, 1);
-  assert.equal(JSON.stringify(flagged[0].args?.step), JSON.stringify("configuration"));
+  assert.equal(flagged[0].args?.step, "configuration");
 
   // Reset issues a fresh configuration read under default flags, and the
   // recovered aggregate clears the error.

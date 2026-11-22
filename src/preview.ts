@@ -691,9 +691,7 @@ export function installPreview() {
       if (step === "actions") return previewActions(label, flags);
       if (step === "outputs") return previewOutputs(label, flags);
       if (step === "configuration") return previewConfiguration(flags);
-      if (typeof step === "object" && step !== null && "transitions" in step) {
-        return previewTransitions(label);
-      }
+      if (step === "transitions") return previewTransitions(label);
       throw new Error("Unknown target read step");
     },
     list_invocations: (payload) =>

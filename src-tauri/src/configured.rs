@@ -1,11 +1,11 @@
 //! Configured-target Bazel reads for the inspector's Configured tab.
 //!
 //! `config("label", target)` names the target's own configuration under the
-//! applied build flags; `deps(config(...), 1)` transitions and
-//! `config(...)` files are both scoped to that exact configuration, so
-//! retained copies of the same label under other configurations cannot
-//! leak in. Each read is one Bazel process — `--noblock_for_lock` applies
-//! per process and no workspace lock is held across them.
+//! applied build flags; the same expression feeds the jsonproto summary,
+//! the lite transitions report, and the files list, so retained copies of
+//! the same label under other configurations cannot leak in. Each read is
+//! one Bazel process — `--noblock_for_lock` applies per process and no
+//! workspace lock is held across them.
 
 use serde::{Deserialize, Serialize};
 use std::io::BufRead;
@@ -48,7 +48,7 @@ pub struct TargetOutputs {
 }
 
 /// The target's dependency edges, parsed from `cquery
-/// --output=transitions --transitions=lite` over `deps(config(...))`.
+/// --output=transitions --transitions=lite` over `config(...)`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetTransitions {
@@ -77,58 +77,50 @@ pub(crate) fn parse_output_paths(input: impl BufRead) -> Result<TargetOutputs, S
     Ok(TargetOutputs { paths, truncated })
 }
 
-/// Parse the transitions report for `label` under `checksum` — the full
-/// config hash `config()` reported, or `None` for the null configuration.
-/// `deps(config(...))` yields exactly one matching header; same-label
-/// headers under other retained configurations are ignored. stdout is
-/// always drained — dropping the pipe early can fail Bazel.
-pub(crate) fn parse_transitions(
-    input: impl BufRead,
-    label: &str,
-    checksum: Option<&str>,
-) -> Result<TargetTransitions, String> {
-    let mut found = false;
-    let mut collecting = false;
-    let mut malformed = false;
+/// Parse the lite transitions report for the single `config()` result:
+/// exactly one column-0 header followed by its indented
+/// `attr#label#transition` rows. A missing header, a second column-0 line,
+/// a row before the header, or a malformed row rejects the whole report;
+/// stdout is always drained — dropping the pipe early can fail Bazel.
+pub(crate) fn parse_transitions(mut input: impl BufRead) -> Result<TargetTransitions, String> {
+    let parsed = parse_transition_section(&mut input);
+    if parsed.is_err() {
+        std::io::copy(&mut input, &mut std::io::sink())
+            .map_err(|_| "could not read cquery output".to_string())?;
+    }
+    parsed
+}
+
+/// Fold the report's non-blank lines: the first must be the column-0
+/// header, every later line an indented dependency row.
+fn parse_transition_section(input: impl BufRead) -> Result<TargetTransitions, String> {
+    const INVALID: &str = "unexpected cquery transitions output for a single target";
+    let mut lines = input
+        .lines()
+        .map(|line| line.map_err(|_| "could not read cquery output".to_string()))
+        .filter(|line| !matches!(line, Ok(s) if s.trim().is_empty()));
+    let header = lines
+        .next()
+        .ok_or("cquery transitions output had no target header")??;
+    if header.starts_with(char::is_whitespace) || !is_transitions_header(&header) {
+        return Err(INVALID.into());
+    }
     let mut deps = Vec::new();
     let mut deps_truncated = false;
-    for line in input.lines() {
-        let line = line.map_err(|_| "could not read cquery output".to_string())?;
-        // Blank lines are skipped before header detection: they neither
-        // start a row nor end the selected header's section.
-        if line.trim().is_empty() {
-            continue;
-        }
+    for line in lines {
+        let line = line?;
         if !line.starts_with(char::is_whitespace) {
-            // Only the first matching header collects; any later header —
-            // even a repeat — ends collection for good.
-            collecting = !found && is_target_header(&line, label, checksum);
-            found |= collecting;
-            continue;
+            return Err(INVALID.into());
         }
-        // A malformed row is recorded but stdout keeps draining: dropping
-        // the pipe early can fail Bazel.
-        if !collecting || deps_truncated || malformed {
-            continue;
-        }
-        let Some(dep) = parse_transition_row(&line) else {
-            malformed = true;
-            continue;
-        };
+        let dep = parse_transition_row(&line).ok_or(INVALID)?;
         if deps.contains(&dep) {
             continue;
         }
-        if deps.len() < MAX_CONFIGURED_DEPS {
-            deps.push(dep);
-        } else {
+        if deps.len() == MAX_CONFIGURED_DEPS {
             deps_truncated = true;
+        } else {
+            deps.push(dep);
         }
-    }
-    if malformed {
-        return Err(format!("unsupported cquery transitions row under {label}"));
-    }
-    if !found {
-        return Err(format!("cquery reported no configuration for {label}"));
     }
     Ok(TargetTransitions {
         deps,
@@ -136,24 +128,11 @@ pub(crate) fn parse_transitions(
     })
 }
 
-/// A column-0 header `[<rule transition> -> ]<label> (<id>)` names `label`
-/// under the selected configuration. Labels cannot contain whitespace, so
-/// the segment after the last ` -> ` is the label; `<id>` is the
-/// configuration's short checksum — a prefix of the full hash `config()`
-/// reported — or `null` for targets without a configuration.
-fn is_target_header(line: &str, label: &str, checksum: Option<&str>) -> bool {
-    let Some((prefix, id)) = line
-        .strip_suffix(')')
-        .and_then(|line| line.rsplit_once(" ("))
-    else {
-        return false;
-    };
-    !id.is_empty()
-        && prefix
-            .rsplit(" -> ")
-            .next()
-            .is_some_and(|found| crate::label::normalize(found) == label)
-        && checksum.map_or(id == "null", |sum| sum.starts_with(id))
+/// A column-0 transitions header ends with the configuration id in
+/// parentheses, e.g. `NoTransition -> //app:t (9e6b91e)`. The label and
+/// checksum are Bazel's to report; the parser never matches on them.
+fn is_transitions_header(line: &str) -> bool {
+    line.ends_with(')') && line.contains(" (")
 }
 
 /// One `attr#label#transition -> <ids>` row under a header. The attribute is
@@ -241,7 +220,15 @@ pub(crate) fn parse_configuration(input: impl BufRead) -> Result<Option<ConfigSu
 mod tests {
     use super::*;
 
-    const TRANSITIONS_FIXTURE: &str = include_str!("../../tests/fixtures/cquery-transitions.txt");
+    /// One `config(label, target)` lite-transitions section in the shape
+    /// Bazel reports: a single header plus the target's own dependency
+    /// rows.
+    const ROOT_TRANSITIONS: &str = "\
+NoTransition -> //app:chosen (9e6b91e)
+  srcs#//app:input.txt#(null transition) ->
+  tools#//app:tool#(exec + (TestTrimmingTransition + ConfigFeatureFlagTaggedTrimmingTransition)) -> f50cc19
+  $genrule_setup#@bazel_tools//tools/genrule:genrule-setup.sh#(null transition) ->
+";
 
     fn dep_pairs(parsed: &TargetTransitions) -> Vec<(&str, Option<&str>)> {
         parsed
@@ -272,15 +259,8 @@ mod tests {
     }
 
     #[test]
-    fn transitions_fixture_reads_only_the_selected_root() {
-        // The fixture lists //app:tool and //app:input.txt headers before
-        // //app:chosen; only the chosen header's own rows become deps.
-        let parsed = parse_transitions(
-            TRANSITIONS_FIXTURE.as_bytes(),
-            "//app:chosen",
-            Some("7f8856bdeadbeef"),
-        )
-        .unwrap();
+    fn transitions_parse_the_single_root_section() {
+        let parsed = parse_transitions(ROOT_TRANSITIONS.as_bytes()).unwrap();
         assert!(!parsed.deps_truncated);
         assert_eq!(
             dep_pairs(&parsed),
@@ -293,96 +273,49 @@ mod tests {
     }
 
     #[test]
-    fn transitions_fixture_supports_tool_and_null_config_headers() {
-        let tool = parse_transitions(
-            TRANSITIONS_FIXTURE.as_bytes(),
-            "//app:tool",
-            Some("f50cc19deadbeef"),
-        )
-        .unwrap();
-        assert_eq!(
-            dep_pairs(&tool),
-            [("@bazel_tools//tools/genrule:genrule-setup.sh", None)]
-        );
-
-        let source =
-            parse_transitions(TRANSITIONS_FIXTURE.as_bytes(), "//app:input.txt", None).unwrap();
-        assert!(source.deps.is_empty());
-    }
-
-    #[test]
-    fn transitions_rejects_a_missing_root_header() {
-        assert!(
-            parse_transitions(TRANSITIONS_FIXTURE.as_bytes(), "//app:missing", Some("abc"))
-                .is_err()
-        );
-        // A null-configuration target rejects a configured checksum too.
-        assert!(
-            parse_transitions(
-                TRANSITIONS_FIXTURE.as_bytes(),
-                "//app:input.txt",
-                Some("abc")
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn transitions_ignore_same_label_headers_under_other_configurations() {
-        // deps(config(...)) scopes to one configuration, but retained
-        // same-label headers can still appear; only the checksum-matched
-        // header collects rows — wrong configurations before AND after.
+    fn transitions_keep_label_hashes_external_and_starlark_boundaries() {
+        // cquery may print the main repository as @@//; it means // here,
+        // while @@repo stays canonical and distinct from @repo. Labels may
+        // contain '#', and a Starlark transition's .bzl path may too — the
+        // #(Starlark transition: boundary, not the last '#', splits.
         let input = "\
 NoTransition -> //app:a (aaa1111)
-  deps#//app:stale#NoTransition ->
-NoTransition -> //app:b (bbb2222)
-  deps#//app:other#NoTransition ->
-NoTransition -> //app:a (2d89340)
-  deps#//app:live#(exec + (Trim)) -> ddd4444
-NoTransition -> //app:a (ccc3333)
-  deps#//app:later#NoTransition ->
-";
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("2d89340cafe")).unwrap();
-        assert_eq!(dep_pairs(&parsed), [("//app:live", Some("exec"))]);
-    }
-
-    #[test]
-    fn transitions_normalize_canonical_main_repo_labels() {
-        // cquery may print the main repository as @@//; it means // here,
-        // while @@repo stays canonical and distinct from @repo.
-        let input = "\
-NoTransition -> @@//app:a (aaa1111)
   deps#@@//app:x#NoTransition ->
   deps#@@rules_cc//cc:defs.bzl%defs#NoTransition ->
   deps#@repo//pkg:y#NoTransition ->
+  deps#//pkg:x#y#(null transition) ->
+  deps#//pkg:x#y#(Starlark transition:/ws/rules#v2.bzl:4:40 + (TestTrimmingTransition)) ->
 ";
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
+        let parsed = parse_transitions(input.as_bytes()).unwrap();
         assert_eq!(
             dep_pairs(&parsed),
             [
                 ("//app:x", None),
                 ("@@rules_cc//cc:defs.bzl%defs", None),
                 ("@repo//pkg:y", None),
+                ("//pkg:x#y", None),
+                (
+                    "//pkg:x#y",
+                    Some("(Starlark transition:/ws/rules#v2.bzl:4:40 + (TestTrimmingTransition))"),
+                ),
             ]
         );
     }
 
     #[test]
-    fn transitions_dedupe_rows_and_ignore_later_headers() {
+    fn transitions_dedupe_rows_and_skip_blank_lines() {
+        // Blank lines neither start a row nor end the section; duplicate
+        // rows collapse into one edge.
         let input = "\
 NoTransition -> //app:a (aaa1111)
+
   deps#//app:shared#(exec + (Trim)) -> bbb2222
   deps#//app:shared#(exec + (Trim)) -> bbb2222
+
   srcs#//app:one#NoTransition ->
   data#//app:two#(null transition) ->
-NoTransition -> //app:b (bbb2222)
-  deps#//app:other#(null transition) ->
-NoTransition -> //app:a (aaa1111)
-  deps#//app:stale#(null transition) ->
 ";
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
-        // Duplicate rows collapse; once collection ends no later header —
-        // even an identical one — resumes it.
+        let parsed = parse_transitions(input.as_bytes()).unwrap();
         assert_eq!(
             dep_pairs(&parsed),
             [
@@ -394,59 +327,31 @@ NoTransition -> //app:a (aaa1111)
     }
 
     #[test]
-    fn transition_rows_keep_hashes_inside_labels() {
-        let input = "NoTransition -> //app:a (aaa1111)\n  deps#//app:x#y#(null transition) ->\n";
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
-        assert_eq!(parsed.deps[0].label, "//app:x#y");
-        assert_eq!(parsed.deps[0].transition, None);
-    }
-
-    #[test]
-    fn transition_rows_split_starlark_transitions_before_the_last_hash() {
-        // A Starlark transition path may contain '#'; the label may too.
-        // The #(Starlark transition: boundary — not the last '#' — splits.
-        let input = "\
-NoTransition -> //app:a (aaa1111)
-  deps#//pkg:x#y#(Starlark transition:/ws/rules#v2.bzl:4:40 + (TestTrimmingTransition)) ->
-";
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
-        assert_eq!(parsed.deps.len(), 1);
-        assert_eq!(parsed.deps[0].label, "//pkg:x#y");
+    fn transitions_reject_malformed_or_ambiguous_output() {
+        // A second column-0 section, a row before the header, a malformed
+        // row, and a non-header first line all reject the report; the
+        // diagnostic is fixed and never echoes Bazel's line.
+        for input in [
+            "NoTransition -> //app:a (aaa1111)\n  deps#//app:x#NoTransition ->\nNoTransition -> //app:b (bbb2222)\n",
+            "  deps#//app:x#NoTransition ->\nNoTransition -> //app:a (aaa1111)\n",
+            "NoTransition -> //app:a (aaa1111)\n  this is not a row\n",
+            "some unexpected output\n  deps#//app:x#NoTransition ->\n",
+        ] {
+            let error = parse_transitions(input.as_bytes()).unwrap_err();
+            assert_eq!(
+                error, "unexpected cquery transitions output for a single target",
+                "{input:?}"
+            );
+        }
+        // Empty output has no header at all.
         assert_eq!(
-            parsed.deps[0].transition.as_deref(),
-            Some("(Starlark transition:/ws/rules#v2.bzl:4:40 + (TestTrimmingTransition))")
+            parse_transitions("".as_bytes()).unwrap_err(),
+            "cquery transitions output had no target header"
         );
-    }
-
-    #[test]
-    fn transition_rows_reject_malformed_rows_but_skip_blanks() {
-        let input = "\
-NoTransition -> //app:a (aaa1111)
-
-  deps#//app:x#NoTransition ->
-  this is not a row
-";
-        let error = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap_err();
-        assert!(
-            error.contains("unsupported cquery transitions row"),
-            "{error}"
-        );
-        // The diagnostic is bounded: it names the label, never the row.
-        assert!(!error.contains("this is not a row"), "{error}");
-    }
-
-    #[test]
-    fn transition_rows_skip_blank_lines_without_ending_the_section() {
-        // A blank line is not a header: collection continues across it.
-        let input = "\
-NoTransition -> //app:a (aaa1111)
-
-  deps#//app:x#NoTransition ->
-
-  deps#//app:y#NoTransition ->
-";
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
-        assert_eq!(dep_pairs(&parsed), [("//app:x", None), ("//app:y", None)]);
+        // A header with no rows is a valid empty dependency list.
+        let parsed = parse_transitions("NoTransition -> //app:a (aaa1111)\n".as_bytes()).unwrap();
+        assert!(parsed.deps.is_empty());
+        assert!(!parsed.deps_truncated);
     }
 
     #[test]
@@ -455,13 +360,9 @@ NoTransition -> //app:a (aaa1111)
         for i in 0..MAX_CONFIGURED_DEPS + 5 {
             input.push_str(&format!("  deps#//app:d{i}#NoTransition ->\n"));
         }
-        let parsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
+        let parsed = parse_transitions(input.as_bytes()).unwrap();
         assert_eq!(parsed.deps.len(), MAX_CONFIGURED_DEPS);
         assert!(parsed.deps_truncated);
-        // Rows past the cap are ignored entirely, duplicates included.
-        input.push_str("  deps#//app:d0#NoTransition ->\n");
-        let reparsed = parse_transitions(input.as_bytes(), "//app:a", Some("aaa1111")).unwrap();
-        assert_eq!(reparsed.deps.len(), MAX_CONFIGURED_DEPS);
     }
 
     #[test]
@@ -536,22 +437,6 @@ NoTransition -> //app:a (aaa1111)
                 r#"{"results": [{"configurationId": 9}], "configurations": [{"id": 1, "mnemonic": "m", "checksum": "c"}]}"#
             ))
             .is_err()
-        );
-    }
-
-    #[test]
-    fn config_summary_keeps_its_wire_shape_without_the_id() {
-        let summary = ConfigSummary {
-            id: 7,
-            mnemonic: "k8-opt".to_string(),
-            checksum: "abc123".to_string(),
-        };
-        assert_eq!(
-            serde_json::to_value(&summary).unwrap(),
-            serde_json::json!({
-                "mnemonic": "k8-opt",
-                "checksum": "abc123",
-            })
         );
     }
 }

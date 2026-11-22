@@ -126,21 +126,79 @@ pub fn target_detail(
 /// Which single inspector read a `read_target` call performs. Each variant
 /// is one Bazel process; the frontend stages the Configured tab's three
 /// reads so a tab, flag, or selection change can stop between them.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TargetRead {
     /// `cquery --output=jsonproto` `config(label, target)` summary.
     Configuration,
-    /// `cquery --output=transitions` `deps(config(label, target), 1)` rows,
-    /// matched against the caller-reported full configuration checksum.
-    Transitions {
-        #[serde(default)]
-        checksum: Option<String>,
-    },
+    /// `cquery --output=transitions` `config(label, target)` dependency rows.
+    Transitions,
     /// `cquery --output=files` `config(label, target)` outputs.
     Outputs,
     /// `aquery` action list for the quoted label.
     Actions,
+}
+
+impl TargetRead {
+    /// The Bazel argv for this step: `--noblock_for_lock`, the query kind,
+    /// the validated user flags, the fixed managed options, `--`, and the
+    /// expression. Every cquery format asks only about the selected
+    /// target's own `config()`; actions quotes the label for aquery.
+    fn command(
+        self,
+        bazel: &Path,
+        ws: &Path,
+        label: &str,
+        flags: &str,
+    ) -> Result<(Command, &'static str, String), String> {
+        let (kind, managed): (crate::query::QueryKind, &[&str]) = match self {
+            Self::Actions => (
+                crate::query::QueryKind::Aquery,
+                &[
+                    "--output=jsonproto",
+                    "--include_commandline",
+                    "--include_artifacts",
+                ],
+            ),
+            Self::Configuration => (
+                crate::query::QueryKind::Cquery,
+                &["--output=jsonproto", "--proto:include_configurations"],
+            ),
+            Self::Transitions => (
+                crate::query::QueryKind::Cquery,
+                &["--output=transitions", "--transitions=lite"],
+            ),
+            Self::Outputs => (crate::query::QueryKind::Cquery, &["--output=files"]),
+        };
+        let label = crate::scope::cquery_target(label)?;
+        let expr = if matches!(self, Self::Actions) {
+            format!("\"{label}\"")
+        } else {
+            format!("config(\"{label}\", target)")
+        };
+        let mut cmd = Command::new(bazel);
+        cmd.current_dir(ws)
+            .args(["--noblock_for_lock", kind.as_str()])
+            .args(crate::query::build_flags(kind, flags)?)
+            .args(managed)
+            .arg("--")
+            .arg(&expr);
+        Ok((cmd, kind.as_str(), expr))
+    }
+
+    /// Parse this step's stdout into its bare payload.
+    fn parse(self, input: BufReader<ChildStdout>) -> Result<TargetReadData, String> {
+        match self {
+            Self::Configuration => {
+                configured::parse_configuration(input).map(TargetReadData::Configuration)
+            }
+            Self::Transitions => {
+                configured::parse_transitions(input).map(TargetReadData::Transitions)
+            }
+            Self::Outputs => configured::parse_output_paths(input).map(TargetReadData::Outputs),
+            Self::Actions => actions::parse(input).map(TargetReadData::Actions),
+        }
+    }
 }
 
 /// One inspector read's untagged result: the bare payload of the requested
@@ -167,56 +225,24 @@ pub fn read_target(
     flags: &str,
     step: TargetRead,
 ) -> Result<TargetReadData, String> {
-    let pattern = crate::scope::cquery_target(label)?;
-    let kind = match step {
-        TargetRead::Actions => crate::query::QueryKind::Aquery,
-        _ => crate::query::QueryKind::Cquery,
-    };
-    let flags = crate::query::build_flags(kind, flags)?;
-    let reader = TargetReader::new(&core, &app, ws)?;
-    // `config(label, target)` resolves the target's own configuration; the
-    // same expression scopes the transitions and files reads to it.
-    let root = format!("config(\"{pattern}\", target)");
-    match step {
-        TargetRead::Configuration => reader
-            .read(
-                "cquery",
-                &flags,
-                &["--output=jsonproto", "--proto:include_configurations"],
-                &root,
-                configured::parse_configuration,
-            )
-            .map(TargetReadData::Configuration),
-        TargetRead::Transitions { checksum } => {
-            let label = pattern.to_string();
-            reader
-                .read(
-                    "cquery",
-                    &flags,
-                    &["--output=transitions", "--transitions=lite"],
-                    &format!("deps({root}, 1)"),
-                    move |input| configured::parse_transitions(input, &label, checksum.as_deref()),
-                )
-                .map(TargetReadData::Transitions)
-        }
-        TargetRead::Outputs => reader
-            .read(
-                "cquery",
-                &flags,
-                &["--output=files"],
-                &root,
-                configured::parse_output_paths,
-            )
-            .map(TargetReadData::Outputs),
-        TargetRead::Actions => reader
-            .read(
-                "aquery",
-                &flags,
-                &ACTION_MANAGED,
-                &format!("\"{pattern}\""),
-                actions::parse,
-            )
-            .map(TargetReadData::Actions),
+    let (ws_path, bazel) = acquire_target(&core, ws)?;
+    let (mut command, cmd, expr) = step.command(&bazel, &ws_path, label, flags)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    match fetch(
+        &core,
+        runner::InvocationMeta {
+            workspace: &ws_path,
+            cmd,
+            pattern: &expr,
+            id: &id,
+        },
+        &mut command,
+        || core.emit(&app),
+        move |input| step.parse(input),
+        |_| false,
+    ) {
+        Outcome::Ok(data) | Outcome::Partial(data, _) => Ok(data),
+        Outcome::Failed(error) => Err(error.summary),
     }
 }
 
@@ -240,80 +266,6 @@ fn command(ws: &Path, bazel: &Path, query: &str, output: &str) -> Command {
         .current_dir(ws);
     command
 }
-
-/// One IPC's worth of inspector reads against a single workspace: the
-/// resolved path and bazel executable plus the app handle for progress
-/// events. Each `read` spawns its own Bazel process; `--noblock_for_lock`
-/// applies per process and no lock is held across reads.
-struct TargetReader<'a> {
-    core: &'a Core,
-    app: &'a AppHandle,
-    ws: PathBuf,
-    bazel: PathBuf,
-}
-
-impl<'a> TargetReader<'a> {
-    fn new(core: &'a Core, app: &'a AppHandle, ws: &str) -> Result<Self, String> {
-        let (ws, bazel) = acquire_target(core, ws)?;
-        Ok(Self {
-            core,
-            app,
-            ws,
-            bazel,
-        })
-    }
-
-    /// Run one `bazel <cmd>` read and parse stdout. Inspector reads treat any
-    /// nonzero exit as an error — a partial parse would mislead.
-    fn read<T: Send + 'static>(
-        &self,
-        cmd: &str,
-        flags: &[String],
-        managed: &[&str],
-        expr: &str,
-        parse: impl FnOnce(BufReader<ChildStdout>) -> Result<T, String> + Send + 'static,
-    ) -> Result<T, String> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let args = target_args(cmd, flags, managed, expr);
-        let mut command = Command::new(&self.bazel);
-        command.args(&args).current_dir(&self.ws);
-        match fetch(
-            self.core,
-            runner::InvocationMeta {
-                workspace: &self.ws,
-                cmd,
-                pattern: expr,
-                id: &id,
-            },
-            &mut command,
-            || self.core.emit(self.app),
-            parse,
-            |_| false,
-        ) {
-            Outcome::Ok(value) | Outcome::Partial(value, _) => Ok(value),
-            Outcome::Failed(error) => Err(error.summary),
-        }
-    }
-}
-
-/// `bazel <cmd>` argv shared by the inspector reads: user flags, then the
-/// managed options, then `--` and the expression.
-fn target_args(cmd: &str, flags: &[String], managed: &[&str], expr: &str) -> Vec<String> {
-    let mut args = vec!["--noblock_for_lock".to_string(), cmd.to_string()];
-    args.extend(flags.iter().cloned());
-    args.extend(managed.iter().map(|arg| arg.to_string()));
-    args.push("--".to_string());
-    args.push(expr.to_string());
-    args
-}
-
-/// Managed aquery options for the Actions read: the output shape is fixed,
-/// so user flags must not be able to override it.
-const ACTION_MANAGED: [&str; 3] = [
-    "--output=jsonproto",
-    "--include_commandline",
-    "--include_artifacts",
-];
 
 /// Run one scoped query and parse stdout.
 #[tracing::instrument(target = "zeal::operations", name = "bazel.query", skip_all)]
@@ -694,77 +646,52 @@ exit "$code"
         assert_eq!(error.summary, "final diagnostic marker");
     }
 
+    fn argv(cmd: &Command) -> Vec<&str> {
+        cmd.get_args().map(|arg| arg.to_str().unwrap()).collect()
+    }
+
     #[test]
-    fn configured_phases_reject_output_flag_overrides_before_launching() {
-        // build_flags runs before any fetch inside read_target, so an
-        // --output or managed-option override can never reach a phase.
-        for (kind, flags) in [
-            (crate::query::QueryKind::Cquery, "--output=files"),
-            (crate::query::QueryKind::Cquery, "--output files"),
-            (crate::query::QueryKind::Cquery, "--output_file=x"),
-            (crate::query::QueryKind::Aquery, "--output=files"),
-            (crate::query::QueryKind::Aquery, "--output files"),
-            (crate::query::QueryKind::Aquery, "--output_file=x"),
+    fn read_command_scopes_every_cquery_step_to_the_target_configuration() {
+        let bazel = Path::new("/bin/bazel");
+        let ws = Path::new("/ws");
+        let managed = [
             (
-                crate::query::QueryKind::Cquery,
-                "--proto:include_configurations",
+                TargetRead::Configuration,
+                &["--output=jsonproto", "--proto:include_configurations"][..],
             ),
             (
-                crate::query::QueryKind::Cquery,
-                "--noproto:include_configurations",
+                TargetRead::Transitions,
+                &["--output=transitions", "--transitions=lite"][..],
             ),
-            (
-                crate::query::QueryKind::Aquery,
-                "--proto:include_configurations",
-            ),
-            (
-                crate::query::QueryKind::Aquery,
-                "--noproto:include_configurations",
-            ),
-        ] {
-            assert!(crate::query::build_flags(kind, flags).is_err(), "{flags:?}");
+            (TargetRead::Outputs, &["--output=files"][..]),
+        ];
+        for (step, options) in managed {
+            let (cmd, kind, expr) = step.command(bazel, ws, "//app:t", "--config=opt").unwrap();
+            assert_eq!(kind, "cquery");
+            assert_eq!(expr, "config(\"//app:t\", target)");
+            assert_eq!(cmd.get_program(), bazel);
+            let mut expected = vec!["--noblock_for_lock", "cquery", "--config=opt"];
+            expected.extend(options.iter().copied());
+            expected.extend(["--", "config(\"//app:t\", target)"]);
+            assert_eq!(argv(&cmd), expected);
         }
     }
 
-    fn strings(args: &[&str]) -> Vec<String> {
-        args.iter().map(|arg| arg.to_string()).collect()
-    }
-
     #[test]
-    fn target_args_order_user_flags_managed_options_and_expression() {
-        let flags = strings(&["--config=opt", "--keep_going"]);
-        assert_eq!(
-            target_args(
-                "cquery",
-                &flags,
-                &["--output=transitions", "--transitions=lite"],
-                "deps(\"//app:t\", 1)"
-            ),
-            strings(&[
-                "--noblock_for_lock",
-                "cquery",
+    fn read_command_quotes_the_label_for_aquery() {
+        let (cmd, kind, expr) = TargetRead::Actions
+            .command(
+                Path::new("/bin/bazel"),
+                Path::new("/ws"),
+                "//app:t",
                 "--config=opt",
-                "--keep_going",
-                "--output=transitions",
-                "--transitions=lite",
-                "--",
-                "deps(\"//app:t\", 1)",
-            ])
-        );
-    }
-
-    #[test]
-    fn action_read_quotes_the_label_and_keeps_managed_options() {
-        // The same arguments read_target hands to TargetReader::read.
-        let args = target_args(
-            "aquery",
-            &strings(&["--config=opt"]),
-            &ACTION_MANAGED,
-            "\"//app:t\"",
-        );
+            )
+            .unwrap();
+        assert_eq!(kind, "aquery");
+        assert_eq!(expr, "\"//app:t\"");
         assert_eq!(
-            args,
-            strings(&[
+            argv(&cmd),
+            [
                 "--noblock_for_lock",
                 "aquery",
                 "--config=opt",
@@ -773,8 +700,30 @@ exit "$code"
                 "--include_artifacts",
                 "--",
                 "\"//app:t\"",
-            ])
+            ]
         );
+    }
+
+    #[test]
+    fn read_command_rejects_managed_flag_overrides_before_launching() {
+        // build_flags runs inside command(), so an --output or managed
+        // option override can never reach a phase.
+        for step in [
+            TargetRead::Configuration,
+            TargetRead::Transitions,
+            TargetRead::Outputs,
+            TargetRead::Actions,
+        ] {
+            assert!(
+                step.command(
+                    Path::new("/bin/bazel"),
+                    Path::new("/ws"),
+                    "//app:t",
+                    "--output=files"
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -820,31 +769,14 @@ exit "$code"
     }
 
     #[test]
-    fn target_read_deserializes_unit_variants() {
-        assert!(matches!(
-            serde_json::from_str::<TargetRead>("\"configuration\"").unwrap(),
-            TargetRead::Configuration
-        ));
-        assert!(matches!(
-            serde_json::from_str::<TargetRead>("\"outputs\"").unwrap(),
-            TargetRead::Outputs
-        ));
-        assert!(matches!(
-            serde_json::from_str::<TargetRead>("\"actions\"").unwrap(),
-            TargetRead::Actions
-        ));
-    }
-
-    #[test]
-    fn target_read_deserializes_transitions_checksum() {
-        assert!(matches!(
-            serde_json::from_str::<TargetRead>("{\"transitions\":{\"checksum\":\"abc123\"}}")
-                .unwrap(),
-            TargetRead::Transitions { .. }
-        ));
-        assert!(matches!(
-            serde_json::from_str::<TargetRead>("{\"transitions\":{\"checksum\":null}}").unwrap(),
-            TargetRead::Transitions { checksum: None }
-        ));
+    fn target_read_deserializes_lowercase_steps() {
+        for json in [
+            "\"configuration\"",
+            "\"transitions\"",
+            "\"outputs\"",
+            "\"actions\"",
+        ] {
+            serde_json::from_str::<TargetRead>(json).unwrap();
+        }
     }
 }

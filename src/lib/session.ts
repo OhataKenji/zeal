@@ -296,8 +296,10 @@ export function createSession(
     if (slot.value !== null || slot.error !== null) return;
     const active = () => current() && state.page === "targets";
     const flags = ws.targetFlags;
-    const load = <T>(step: TargetReadStep) =>
-      transport.invoke<T>(COMMANDS.readTarget, { ...args, flags, step });
+    const load = <T>(step: TargetReadStep) => {
+      if (!active()) throw new Error("Target selection changed");
+      return transport.invoke<T>(COMMANDS.readTarget, { ...args, flags, step });
+    };
     await read(
       slot,
       async (): Promise<TargetPhaseData> => {
@@ -305,11 +307,7 @@ export function createSession(
           return { actions: await load<TargetActions>("actions") };
         }
         const configuration = await load<ConfigSummary | null>("configuration");
-        if (!active()) throw new Error("Target selection changed");
-        const edges = await load<Pick<ConfiguredTarget, "deps" | "depsTruncated">>({
-          transitions: { checksum: configuration?.checksum ?? null },
-        });
-        if (!active()) throw new Error("Target selection changed");
+        const edges = await load<Pick<ConfiguredTarget, "deps" | "depsTruncated">>("transitions");
         const outputs = await load<TargetOutputs>("outputs");
         return { configured: { configuration, outputs, ...edges } };
       },

@@ -143,13 +143,8 @@ export interface ConfiguredTarget {
  * phase that produced it. */
 export type TargetPhaseData = { configured: ConfiguredTarget } | { actions: TargetActions };
 
-/** One `read_target` step: a string for the single-shot reads, or the
- * transitions object carrying the configuration checksum to match. */
-export type TargetReadStep =
-  | "configuration"
-  | "outputs"
-  | "actions"
-  | { transitions: { checksum: string | null } };
+/** One inspector read; each step runs one Bazel command. */
+export type TargetReadStep = "configuration" | "transitions" | "outputs" | "actions";
 
 /** A user-facing summary for a failed core operation. */
 export interface IngestError {
