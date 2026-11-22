@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Check } from "phosphor-svelte";
+  import { ArrowUUpLeft, Check } from "phosphor-svelte";
   import { COMMANDS } from "./commands";
   import Notice from "./Notice.svelte";
 
@@ -9,15 +9,17 @@
     opening,
     onswitch,
     onopennew,
+    onreturn,
   }: {
     workspace: string | null;
     opening: boolean;
     onswitch: (path: string) => void;
     onopennew: () => void;
+    onreturn?: () => void;
   } = $props();
 
-  let details: HTMLDetailsElement | undefined;
-  let summary: HTMLElement | undefined;
+  let details = $state<HTMLDetailsElement | undefined>(undefined);
+  let summary = $state<HTMLElement | undefined>(undefined);
   let entries = $state.raw<Promise<string[]> | null>(null);
 
   const displayName = $derived(
@@ -59,64 +61,82 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={onKeydown} />
 
-<details bind:this={details} class="dd ws-switch" ontoggle={onToggle}>
-  <summary
-    bind:this={summary}
-    class="ws-trigger"
-    aria-label="Switch workspace"
-    title={workspace ?? "Switch workspace"}
+{#snippet identity()}
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="76 76 360 360"
+    width="18"
+    height="18"
+    class="zeal-logo"
+    aria-hidden="true"
   >
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="76 76 360 360"
-      width="18"
-      height="18"
-      class="zeal-logo"
-      aria-hidden="true"
+    <polygon points="84,104 428,104 428,216 276,216 164,304 84,304" fill="#34d399" />
+    <polygon points="428,208 348,208 236,296 84,296 84,408 428,408" fill="#0891b2" />
+  </svg>
+  <span class="ws-name">{displayName}</span>
+{/snippet}
+
+{#if onreturn}
+  <button
+    type="button"
+    class="ws-switch ws-trigger"
+    aria-label="Return to workspace"
+    title="Return to workspace"
+    disabled={opening}
+    onclick={onreturn}
+  >
+    {@render identity()}
+    <ArrowUUpLeft size={12} class="ws-caret" aria-hidden="true" />
+  </button>
+{:else}
+  <details bind:this={details} class="dd ws-switch" ontoggle={onToggle}>
+    <summary
+      bind:this={summary}
+      class="ws-trigger"
+      aria-label="Switch workspace"
+      title={workspace ?? "Switch workspace"}
     >
-      <polygon points="84,104 428,104 428,216 276,216 164,304 84,304" fill="#34d399" />
-      <polygon points="428,208 348,208 236,296 84,296 84,408 428,408" fill="#0891b2" />
-    </svg>
-    <span class="ws-name">{displayName}</span>
-    <span class="ws-caret" aria-hidden="true">▾</span>
-  </summary>
-  <div class="dd-menu ws-menu">
-    {#if entries}
-      {#await entries}
-        <p class="dim ws-note">Loading workspaces…</p>
-      {:then paths}
-        {#each paths as path (path)}
-          <button
-            type="button"
-            class="menu-item ws-entry"
-            disabled={opening || path === workspace}
-            aria-current={path === workspace ? "true" : undefined}
-            title={path}
-            onclick={() => navigate(() => onswitch(path))}
-          >
-            <span class="ws-entry-path">{path}</span>
-            {#if path === workspace}<Check size={12} />{/if}
-          </button>
-        {/each}
-        {#if paths.length === 0}
-          <p class="dim ws-note">No recent workspaces.</p>
-        {/if}
-      {:catch error}
-        <Notice tone="error" onaction={load}>{String(error)}</Notice>
-      {/await}
-    {/if}
-    <div class="ws-footer">
-      <button
-        type="button"
-        class="button button-ghost ws-open"
-        onclick={() => navigate(onopennew)}
-        disabled={opening}
-      >
-        Open workspace…
-      </button>
+      {@render identity()}
+      <span class="ws-caret" aria-hidden="true">▾</span>
+    </summary>
+    <div class="dd-menu ws-menu">
+      {#if entries}
+        {#await entries}
+          <p class="dim ws-note">Loading workspaces…</p>
+        {:then paths}
+          {#each paths as path (path)}
+            <button
+              type="button"
+              class="menu-item ws-entry"
+              disabled={opening || path === workspace}
+              aria-current={path === workspace ? "true" : undefined}
+              title={path}
+              onclick={() => navigate(() => onswitch(path))}
+            >
+              <span class="ws-entry-path">{path}</span>
+              {#if path === workspace}<Check size={12} />{/if}
+            </button>
+          {/each}
+          {#if paths.length === 0}
+            <p class="dim ws-note">No recent workspaces.</p>
+          {/if}
+        {:catch error}
+          <Notice tone="error" onaction={load}>{String(error)}</Notice>
+        {/await}
+      {/if}
+      <div class="ws-footer">
+        <button
+          type="button"
+          class="button button-ghost ws-open"
+          onclick={() => navigate(onopennew)}
+          disabled={opening}
+        >
+          Open workspace…
+        </button>
+      </div>
     </div>
-  </div>
-</details>
+  </details>
+{/if}
 
 <style>
   .ws-switch {
@@ -144,6 +164,11 @@
 
   .ws-trigger:hover {
     background: var(--accent);
+  }
+
+  /* The return button sizes to its label; the dropdown trigger fills details. */
+  button.ws-trigger {
+    width: auto;
   }
 
   .zeal-logo {
