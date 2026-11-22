@@ -2,7 +2,6 @@
 //! current receiving attempt; acknowledgements follow EOF, flush and SQL.
 use super::securefs::Dir;
 use super::{ErrorKind, Store, StoreError, database, fail, id};
-use crate::profile::COMPRESSED_LIMIT;
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
@@ -18,6 +17,7 @@ use url::Url;
 use zstd::stream::write::Encoder;
 
 pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
+const PROFILE_STORAGE_LIMIT: usize = 512 * 1024 * 1024;
 
 #[derive(Default)]
 struct Facts {
@@ -326,8 +326,11 @@ fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
         return Err(io::Error::other("profile must be an owned regular file"));
     }
     let mut copy = dir.file("profile.json.gz", true)?;
-    let size = io::copy(&mut source.take(COMPRESSED_LIMIT as u64 + 1), &mut copy)?;
-    if size > COMPRESSED_LIMIT as u64 {
+    let size = io::copy(
+        &mut source.take(PROFILE_STORAGE_LIMIT as u64 + 1),
+        &mut copy,
+    )?;
+    if size > PROFILE_STORAGE_LIMIT as u64 {
         return Err(io::Error::other("profile exceeds byte limit"));
     }
     Ok(())
@@ -536,7 +539,7 @@ mod tests {
         let source = fixture.root.join("source");
         File::create(&source)
             .unwrap()
-            .set_len(COMPRESSED_LIMIT as u64 + 2)
+            .set_len(PROFILE_STORAGE_LIMIT as u64 + 2)
             .unwrap();
         let dir = Dir::root(&fixture.root.join("attempt")).unwrap();
         assert!(copy_profile(Url::from_file_path(source).unwrap().as_str(), &dir).is_err());
@@ -546,7 +549,7 @@ mod tests {
                 .metadata()
                 .unwrap()
                 .len(),
-            COMPRESSED_LIMIT as u64 + 1
+            PROFILE_STORAGE_LIMIT as u64 + 1
         );
     }
 
