@@ -260,10 +260,25 @@ export interface WorkspaceInfo {
   entries: BazelInfoEntry[];
 }
 
-/** Per-runner action execution counts from BEP `BuildMetrics.action_summary`. */
-export interface RunnerCount {
+/** One named count inside a BEP cache breakdown. */
+export interface Count {
   name: string;
   count: number;
+}
+
+/** Local action-cache counters from BEP `action_cache_statistics`. */
+export interface LocalActionCache {
+  hits: number;
+  misses: number;
+  missReasons: Count[];
+}
+
+/** Cache counters Bazel reports in `BuildMetrics.action_summary`. Remote AC,
+ * CAS, and transfer statistics are not part of BEP. */
+export interface CacheStats {
+  localActionCache?: LocalActionCache;
+  actionTypes: Count[];
+  runnerTypes: Count[];
 }
 
 /** Parsed build-event data retained for inspection in the invocation view. */
@@ -278,7 +293,7 @@ export interface Bep {
     cmdLine: string[];
     explicitCmdLine: string[];
   };
-  runnerCounts?: RunnerCount[];
+  cacheStats?: CacheStats;
   truncated: boolean;
 }
 

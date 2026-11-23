@@ -464,58 +464,6 @@ details.dd > summary::-webkit-details-marker {
   margin: 8px 0 0 auto;
 }
 
-/* BEP Spawn Cache Summary */
-.cache-summary {
-  margin-bottom: 18px;
-}
-
-.cache-summary-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-}
-
-.cache-bar {
-  display: flex;
-  height: 6px;
-  border-radius: 3px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
-  margin: 6px 0 8px;
-}
-
-.cache-bar-hit {
-  background: var(--success);
-  opacity: 0.8;
-}
-
-.cache-bar-exec {
-  background: var(--accent);
-}
-
-.cache-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
-
-.cache-sw {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  margin-right: 5px;
-  background: var(--accent);
-}
-
-.cache-sw.hit {
-  background: var(--success);
-}
-
 /* Native <dialog> Modal */
 dialog.modal {
   width: min(520px, 92vw);

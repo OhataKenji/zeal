@@ -7,8 +7,8 @@
     sectionData,
     sectionMessage,
     sectionNoticeTone,
-    summarizeRunners,
   } from "./invocation";
+  import CachePanel from "./invocation/CachePanel.svelte";
   import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
   import Notice from "./Notice.svelte";
@@ -39,7 +39,6 @@
       ? view.snapshot
       : null,
   );
-  const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
   const rerunCandidate = $derived(rerunArgs(shown));
   const canRerun = $derived(
     rerunCandidate !== null &&
@@ -47,7 +46,7 @@
       canSend(view, rerunCandidate.pattern),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
-  const sections = ["Targets", "Details", "Logs", "Timing"] as const;
+  const sections = ["Targets", "Cache", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections, "Compare"] as const;
   let active = $state<(typeof tabs)[number]>("All");
   let panel = $state<HTMLDivElement>();
@@ -119,28 +118,11 @@
             {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
             {#if section === "Targets"}
               <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
+            {:else if section === "Cache"}
+              <CachePanel section={view.detail?.bep} loading={view.detailLoading} />
             {:else if section === "Logs"}
               <LogPanel section={view.detail?.log} loading={view.detailLoading} />
             {:else if section === "Details"}
-              {#if runnerSummary}
-                <div class="cache-summary">
-                  <div class="cache-summary-head">
-                    <h3 class="panel-subheading">Spawn Cache Hits (BEP)</h3>
-                    <span class="mono">{runnerSummary.cached} / {runnerSummary.total} cached ({runnerSummary.hitPct}%)</span>
-                  </div>
-                  <div class="cache-bar" aria-hidden="true">
-                    <div class="cache-bar-hit" style:width={`${runnerSummary.hitPct}%`}></div>
-                    <div class="cache-bar-exec" style:width={`${100 - runnerSummary.hitPct}%`}></div>
-                  </div>
-                  <div class="cache-legend">
-                    {#each runnerSummary.runners as r (r.name)}
-                      <span class="mono">
-                        <i class="cache-sw" class:hit={r.cached}></i>{r.name}: {r.count}
-                      </span>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
               <dl class="invocation-details">
                 <dt>Command</dt>
                 <dd>{#if shown.cmd}<code>{shown.cmd}</code>{:else}Not recorded{/if}</dd>
