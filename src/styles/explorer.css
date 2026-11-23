@@ -35,12 +35,10 @@
 .tree-row.dir {
   padding-block: 0;
   align-items: stretch;
-  font-weight: 650;
 }
 
 .tree-row.dir.grouping {
   color: var(--muted-foreground);
-  font-weight: 400;
 }
 
 .tree-row.target:not(.selected) {
