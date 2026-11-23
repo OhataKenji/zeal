@@ -1,0 +1,21 @@
+name: Set up Tauri
+description: Install the native build dependencies and restore the Rust cache.
+runs:
+  using: composite
+  steps:
+    # https://v2.tauri.app/start/prerequisites/#linux
+    - name: Install Tauri system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+    - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+
+    # After the toolchain install: the cache key includes the rustc version.
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        workspaces: src-tauri
+        # PRs restore main's cache without uploading a PR-scoped copy.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
