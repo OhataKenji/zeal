@@ -1,4 +1,4 @@
-# Zeal 設計: M4 実行履歴の保存と再表示
+# Zelith 設計: M4 実行履歴の保存と再表示
 
 _OhataKenji_
 _Last update: 2026/10/31_
@@ -21,7 +21,7 @@ _Status: 過去の仕様。現行の設計は [overview](./overview.md) を参�
 ## Overview
 
 Bazelは入力、時刻、結果をBuild Event Protocol(**BEP**)のイベントとして報告する。
-アプリや端末が起動したBazelは、Zeal内のBuild Event Service(**BES**) receiverへ送る。
+アプリや端末が起動したBazelは、Zelith内のBuild Event Service(**BES**) receiverへ送る。
 保存と表示は同じinvocation IDを使い、起動元を分類しない。
 receiverはBEPの入力、時刻、build exitをDBへ保存し、ログを含むイベントをfileへ書く。
 一覧、結果表示、所要時間、集計用データはapplicationがDBの事実から組み立てる。
@@ -39,7 +39,7 @@ flowchart LR
 
 ### 保存する事実
 
-DBはアプリ全体で一つの `<app data dir>/zeal.db` とする。
+DBはアプリ全体で一つの `<app data dir>/zelith.db` とする。
 WAL、`synchronous=FULL`、foreign keyを有効にし、`PRAGMA user_version=3` で管理する。
 表は次の2つだけとする。
 

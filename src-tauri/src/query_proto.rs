@@ -35,7 +35,7 @@ pub struct ParsedQuery {
     pub source_files: Vec<String>,
 }
 
-#[tracing::instrument(target = "zeal::operations", name = "query.proto_parse", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "query.proto_parse", skip_all)]
 pub fn parse_query(mut input: impl Read) -> Result<ParsedQuery, String> {
     let mut bytes = Vec::new();
     input

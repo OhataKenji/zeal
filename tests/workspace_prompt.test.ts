@@ -73,7 +73,7 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     assert.match(input, /value="\/workspace"/);
     assert.doesNotMatch(input, /\bdisabled\b|\breadonly\b/);
     assert.doesNotMatch(submitButton(html), /\bdisabled\b/);
-    assert.doesNotMatch(html, /restart Zeal/);
+    assert.doesNotMatch(html, /restart Zelith/);
   });
 
   await t.test("a whitespace-only path disables open but stays editable", () => {
@@ -157,7 +157,7 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
 
   await t.test("missing bazel keeps path input and picker usable", () => {
     const html = output("/workspace", SCOPE.include, false);
-    assert.match(html, /Please install either tool and add it to your PATH, then restart Zeal/);
+    assert.match(html, /Please install either tool and add it to your PATH, then restart Zelith/);
     const input = workspaceField(html);
     assert.doesNotMatch(input, /\bdisabled\b|\breadonly\b/);
     assert.match(input, /\bvalue="\/workspace"/);

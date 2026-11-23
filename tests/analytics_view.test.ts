@@ -8,7 +8,7 @@ import { createServer, type ViteDevServer } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 test("AnalyticsView offers a workspace selector defaulting to all workspaces", async (t) => {
-  const cacheDir = await mkdtemp(join(tmpdir(), "zeal-analytics-view-"));
+  const cacheDir = await mkdtemp(join(tmpdir(), "zelith-analytics-view-"));
   let server: ViteDevServer | undefined;
   try {
     server = await createServer({

@@ -190,7 +190,8 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("zeal-securefs-{}", uuid::Uuid::new_v4()));
+            let root =
+                std::env::temp_dir().join(format!("zelith-securefs-{}", uuid::Uuid::new_v4()));
             let dir = Dir::root(&root).unwrap();
             Self { root, dir }
         }

@@ -1,4 +1,4 @@
-# Zeal 設計 M1: target と周辺の関係
+# Zelith 設計 M1: target と周辺の関係
 
 _OhataKenji_
 _Last update: 2026/10/17_

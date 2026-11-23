@@ -349,7 +349,7 @@ mod tests {
     fn run_bazel_bounded_fails_when_bazel_cannot_start() {
         let dir = TempDir::new();
         let err = run(
-            std::path::Path::new("/nonexistent/zeal-bazel"),
+            std::path::Path::new("/nonexistent/zelith-bazel"),
             dir.path(),
             &["info"],
             1024,

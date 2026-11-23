@@ -87,7 +87,7 @@ impl Stream {
         Ok(self)
     }
 
-    #[tracing::instrument(target = "zeal::operations", name = "bes.save", skip_all)]
+    #[tracing::instrument(target = "zelith::operations", name = "bes.save", skip_all)]
     async fn finish(mut self) -> Result<(Self, AckRange), Status> {
         let span = Span::current();
         tokio::task::spawn_blocking(move || {
@@ -107,7 +107,7 @@ impl Stream {
         let _ = tokio::task::spawn_blocking(move || span.in_scope(|| self.save_partial())).await;
     }
 
-    #[tracing::instrument(target = "zeal::operations", name = "bes.save.partial", skip_all)]
+    #[tracing::instrument(target = "zelith::operations", name = "bes.save.partial", skip_all)]
     fn save_partial(self) {
         let _permit = self._permit;
         if let Some(receipt) = self.receipt
@@ -135,7 +135,7 @@ async fn send_error(
 }
 
 #[tracing::instrument(
-    target = "zeal::operations", name = "bes.receive", skip_all,
+    target = "zelith::operations", name = "bes.receive", skip_all,
     fields(events = field::Empty, append_ms = field::Empty, outcome = field::Empty)
 )]
 async fn receive_events(
@@ -186,7 +186,7 @@ async fn receive_events(
 // This measures handing ACKs to tonic, including backpressure from the
 // response stream. It cannot measure when the remote client reads them.
 #[tracing::instrument(
-    target = "zeal::operations", name = "bes.ack", skip_all,
+    target = "zelith::operations", name = "bes.ack", skip_all,
     fields(queued = field::Empty, outcome = field::Empty)
 )]
 async fn send_acks(
@@ -266,7 +266,7 @@ impl PublishBuildEvent for Receiver {
                 };
                 send_acks(&send, stream_id, range).await;
             }
-            .instrument(tracing::info_span!(target: "zeal::operations", "bes.stream")),
+            .instrument(tracing::info_span!(target: "zelith::operations", "bes.stream")),
         );
         Ok(Response::new(Box::pin(ReceiverStream::new(receive))))
     }
@@ -360,7 +360,7 @@ mod tests {
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("zeal-bes-{}", uuid::Uuid::new_v4()));
+            let path = std::env::temp_dir().join(format!("zelith-bes-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path.canonicalize().unwrap())
         }

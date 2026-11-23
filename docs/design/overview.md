@@ -1,33 +1,33 @@
-# Zeal の全体構成
+# Zelith の全体構成
 
 _OhataKenji_
 _Last update: 2026/11/18_
 
-Zeal は Bazel の対象を探し、実行し、結果を調べるローカルの GUI です。
-Bazel がコマンドと排他を扱い、Zeal が起動したプロセスと観測した記録を管理します。
+Zelith は Bazel の対象を探し、実行し、結果を調べるローカルの GUI です。
+Bazel がコマンドと排他を扱い、Zelith が起動したプロセスと観測した記録を管理します。
 機能の目的は [PRD](../prd.md) に定めます。
 
 ## Background
 
-**workspace** は Zeal が開く Bazel リポジトリのルートです。
+**workspace** は Zelith が開く Bazel リポジトリのルートです。
 **invocation** は一回の Bazel コマンドです。
 **snapshot** は Bazel から取得した対象一覧です。
-**BEP** は Bazel が送るビルドイベントで、Zeal 内の **BES** が受信します。
+**BEP** は Bazel が送るビルドイベントで、Zelith 内の **BES** が受信します。
 **profile** は Bazel が出力するタイミングの記録です。
 
 ## Overview
 
 ### システムコンテキスト
 
-開発者は Zeal または端末から Bazel を使います。
-端末から起動した Bazel も、送信先を設定すれば Zeal に BEP を送れます。
+開発者は Zelith または端末から Bazel を使います。
+端末から起動した Bazel も、送信先を設定すれば Zelith に BEP を送れます。
 
 ```mermaid
 flowchart LR
-    DEV["開発者"] -->|"対象を選び実行結果を見る"| ZEAL["Zeal"]
+    DEV["開発者"] -->|"対象を選び実行結果を見る"| ZELITH["Zelith"]
     DEV -->|"端末から起動"| BAZEL["Bazel CLI"]
-    ZEAL -->|"info / mod / query / build / test / run"| BAZEL
-    BAZEL -->|"BEP を送信"| ZEAL
+    ZELITH -->|"info / mod / query / build / test / run"| BAZEL
+    BAZEL -->|"BEP を送信"| ZELITH
 ```
 
 ### コンテナ
@@ -38,7 +38,7 @@ Tauri の単一ウィンドウで、Svelte の UI と Rust コアが IPC で通�
 
 ```mermaid
 flowchart LR
-    subgraph ZEAL["Zeal"]
+    subgraph ZELITH["Zelith"]
         UI["Svelte / WebView"] <-->|"Tauri IPC"| CORE["Rust コア"]
         CORE <-->|"保存と読取"| STORE[("SQLite / BEP・profile ファイル")]
     end
@@ -51,17 +51,17 @@ flowchart LR
 | コンポーネント                              | 責務                                                                                |
 | ------------------------------------------- | ----------------------------------------------------------------------------------- |
 | [UI セッション](../../src/README.md)        | 選択と読取の状態を持ち、コアの実行状態と保存済みの履歴を ID と workspace で照合する |
-| [実行の所有](../../src-tauri/src/runner.rs) | Zeal が起動したプロセスを管理し、端末入出力と停止を操作する                         |
+| [実行の所有](../../src-tauri/src/runner.rs) | Zelith が起動したプロセスを管理し、端末入出力と停止を操作する                       |
 | [Bazel への問い合わせ](./target-loading.md) | 対象一覧、対象の詳細、利用者が指定した query を Bazel から取得する                  |
 | [履歴](../../src-tauri/src/store.rs)        | BES に届いた事実を保存し、履歴・詳細・比較・Analytics の読み取りに使う              |
 
 ## 実行と観測
 
-コアは canonical path で workspace を登録し、Zeal が起動した実行を ID で保持します。
+コアは canonical path で workspace を登録し、Zelith が起動した実行を ID で保持します。
 Bazel の起動には PATH 上の `bazelisk` を優先し、なければ `bazel` を使います。
 対応の目安は Bazel 8.7 以上です。
 Bazel が `--noblock_for_lock` で同じ output base の競合を拒否します。
-Zeal は workspace の切り替えでプロセスを変更せず、待ち行列や自動再実行を持ちません。
+Zelith は workspace の切り替えでプロセスを変更せず、待ち行列や自動再実行を持ちません。
 snapshot は表示中の workspace についてメモリに持ち、対象一覧は workspace を開いたときと手動操作で取得します。
 
 Modules は画面を開いただけでは Bazel を起動しません。
@@ -101,11 +101,11 @@ DB は WAL と `PRAGMA user_version` を使い、未対応の schema や破損�
 
 コアは Bazel を引数配列で起動します。
 repository が実行するコードの信頼は利用者が判断します。
-Zeal の成果物はアプリデータ領域に保存します。
+Zelith の成果物はアプリデータ領域に保存します。
 
 ## Privacy Concerns
 
 履歴と成果物はローカルに保存します。
-Zeal が起動する Bazel には自身の BES、空の BES proxy、`wait_for_upload_complete` を指定します。
+Zelith が起動する Bazel には自身の BES、空の BES proxy、`wait_for_upload_complete` を指定します。
 remote cache や RBE の通信は Bazel の既存設定に従います。
 開発版の OTLP は明示設定がある場合にだけ操作と処理時間を送ります。 [開発時のトレース](../development.md#development-traces)

@@ -167,7 +167,7 @@ pub(crate) mod test_support {
     impl TempDir {
         pub fn new() -> Self {
             let path =
-                std::env::temp_dir().join(format!("zeal-workspace-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("zelith-workspace-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -205,9 +205,9 @@ pub(crate) mod test_support {
             dir,
             &[
                 "-c",
-                "user.email=zeal@example.com",
+                "user.email=zelith@example.com",
                 "-c",
-                "user.name=zeal",
+                "user.name=zelith",
                 "commit",
                 "--quiet",
                 "--allow-empty",
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn repo_url_is_none_when_git_cannot_run() {
-        let mut command = std::process::Command::new("/nonexistent/zeal-git");
+        let mut command = std::process::Command::new("/nonexistent/zelith-git");
         command
             .arg("-C")
             .arg("/")

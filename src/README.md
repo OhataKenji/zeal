@@ -13,7 +13,7 @@ keep their state in their views.
   failures without implying a BEP result. A matching BEP record supersedes it.
 - Async responses must match their captured owner and a live session, including
   A→B→A navigation. Core snapshots must have a newer revision.
-- A build, test, or run waits for Zeal's outstanding target and workspace-info
+- A build, test, or run waits for Zelith's outstanding target and workspace-info
   reads in that canonical workspace, including superseded reloads. Navigation
   or opening another workspace drops the automatic Console transition, not
   the submitted command. A rejected launch is reported with its original

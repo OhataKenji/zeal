@@ -1,4 +1,4 @@
-# Zeal 設計 M2: 一回の invocation の説明
+# Zelith 設計 M2: 一回の invocation の説明
 
 _OhataKenji_
 _Last update: 2026/10/31_
@@ -22,7 +22,7 @@ phase の区切りとスレッド上の event を示し、観測できる範囲�
 
 invocation、snapshot、BEP などの共通用語は [overview](./overview.md#background) に従う。
 **BEP**(Build Event Protocol)は、Bazelが報告するイベント列である。
-targetとtestの結果を含み、Zeal内のBuild Event Service(**BES**) receiverが受信する。
+targetとtestの結果を含み、Zelith内のBuild Event Service(**BES**) receiverが受信する。
 **profile** は Bazel の JSON trace 形式の計測記録で、phase の marker とスレッドごとの event を持つ。
 invocationの終了結果にはBEPのBuildFinishedのexit codeを使う。
 
@@ -38,7 +38,7 @@ Bazel server、解析済みの情報、既存出力の維持も速度に関わ�
 ## Overview
 
 SendでBazelを起動し、共通BES receiverがログを含むBEPをinvocation IDのディレクトリに残す。
-Zeal実行もCLI実行も、receiverがBEPの参照するprofileを任意の計時fileとして取り込む。
+Zelith実行もCLI実行も、receiverがBEPの参照するprofileを任意の計時fileとして取り込む。
 
 入力と結果はSQLiteの元事実から表示し、詳細を開くたびに保存したfileをparseする。
 計算済みの表示データを永続化しないことで、取り込み結果と生 file の整合を管理する状態を増やさない。
@@ -69,8 +69,8 @@ M2 では snapshot の query 中か invocation 中なら Send を disabled に�
 - `--bes_upload_mode=wait_for_upload_complete`
 - `--bes_proxy=`
 
-toolの識別には `--tool_tag=zeal` を付ける。
-profileの保存先と補助flagは上書きせず、Zeal実行もCLI実行もBazelの設定に従う。
+toolの識別には `--tool_tag=zelith` を付ける。
+profileの保存先と補助flagは上書きせず、Zelith実行もCLI実行もBazelの設定に従う。
 
 receiverは `BuildToolLogs` の `command.profile.gz` が参照するローカルfileを32 MiBまでコピーし、表示時にparseする。
 コピー失敗でもBEPの保存とACKは続ける。
@@ -161,7 +161,7 @@ profile や BEP の文字列は HTML や実行コードとして解釈しない�
 ## Privacy Concerns
 
 生の BEP、profile、log にはパス、引数、環境に由来する情報が含まれ得る。
-保存と表示は local に限り、Zeal から自動送信しない。
+保存と表示は local に限り、Zelith から自動送信しない。
 生 file に秘密値がないとは保証せず、公開リポジトリの fixture には検査したサンプルだけを置く。
 共通方針は [overview](./overview.md#privacy-concerns) に従う。
 

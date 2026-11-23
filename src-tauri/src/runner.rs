@@ -327,7 +327,7 @@ pub(crate) fn wait_query(core: &Core, id: &str, child: &mut Child) -> Result<i32
 
 /// Poll and signal under the same lock. Once try_wait reaps the child, its PID
 /// is revoked immediately, before saving or waking an app-exit waiter.
-#[tracing::instrument(target = "zeal::operations", name = "bazel.wait", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "bazel.wait", skip_all)]
 fn observe_process(
     core: &Core,
     id: &str,
@@ -678,8 +678,8 @@ mod tests {
 
     impl LogDir {
         fn new() -> Self {
-            let path =
-                std::env::temp_dir().join(format!("zeal-invocation-log-{}", uuid::Uuid::new_v4()));
+            let path = std::env::temp_dir()
+                .join(format!("zelith-invocation-log-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }
@@ -760,7 +760,7 @@ mod tests {
                     "--bes_backend=grpc://127.0.0.1:12345",
                     "--bes_proxy=",
                     "--bes_upload_mode=wait_for_upload_complete",
-                    "--tool_tag=zeal",
+                    "--tool_tag=zelith",
                     "--color=yes",
                     "--curses=no",
                     "--invocation_id=abc",
@@ -958,7 +958,7 @@ mod tests {
     /// Uses only a temporary workspace, rc file, data directory and Bazel root.
     /// The rc deliberately points at another backend and an invalid Unix proxy.
     #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    #[ignore = "set ZELITH_TEST_BAZEL to an installed Bazel 8.x binary"]
     async fn real_bazel_gui_flags_build_test_and_run_with_input() {
         let fixture = GuiBazelFixture::new().await;
         check_gui_run(&fixture, "build", "//:double").await;
@@ -985,14 +985,14 @@ mod tests {
     }
     impl GuiBazelFixture {
         async fn new() -> Self {
-            let bazel = std::env::var("ZEAL_TEST_BAZEL").expect("ZEAL_TEST_BAZEL");
+            let bazel = std::env::var("ZELITH_TEST_BAZEL").expect("ZELITH_TEST_BAZEL");
             let temp = LogDir::new();
             let ws = temp.0.join("workspace");
             let data = temp.0.join("data");
             fs::create_dir(&ws).unwrap();
             let ws = ws.canonicalize().unwrap();
-            fs::write(ws.join("WORKSPACE"), "workspace(name='zeal_gui_test')\n").unwrap();
-            fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zeal-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
+            fs::write(ws.join("WORKSPACE"), "workspace(name='zelith_gui_test')\n").unwrap();
+            fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zelith-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
             fs::write(ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
             fs::write(ws.join("binary.bzl"), "def _binary(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.py')\n    ctx.actions.write(out,'#!/usr/bin/env python3\\nprint(int(input())*2)\\nraise SystemExit(23)\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary=rule(implementation=_binary,executable=True)\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1219,7 +1219,7 @@ mod tests {
     /// Two workspaces run interactive programs at once on one Core and one
     /// BES: stopping A leaves B's process, console and record untouched.
     #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    #[ignore = "set ZELITH_TEST_BAZEL to an installed Bazel 8.x binary"]
     async fn real_bazel_two_workspaces_run_and_stop_independently() {
         let fixture = GuiBazelFixture::new().await;
         let ws_b = second_workspace(&fixture);
@@ -1360,7 +1360,7 @@ mod tests {
     /// event record: its terminal facts stay readable as a diagnostic while
     /// the lock owner keeps running and finishes with its own record.
     #[tokio::test]
-    #[ignore = "set ZEAL_TEST_BAZEL to an installed Bazel 8.x binary"]
+    #[ignore = "set ZELITH_TEST_BAZEL to an installed Bazel 8.x binary"]
     async fn real_bazel_same_output_base_lock_contention_keeps_a_diagnostic() {
         let fixture = GuiBazelFixture::new().await;
         // A genrule that reports its start, then blocks on a gate file with a

@@ -7,7 +7,7 @@ import { createServer, type ViteDevServer } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 export async function createSvelteHarness(t: TestContext) {
-  const cacheDir = await mkdtemp(join(tmpdir(), "zeal-svelte-"));
+  const cacheDir = await mkdtemp(join(tmpdir(), "zelith-svelte-"));
   let server: ViteDevServer | undefined;
   t.after(async () => {
     try {

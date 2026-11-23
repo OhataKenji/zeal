@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
-use zeal_lib::{build_event_protocol as bep, build_event_service_protocol as wire};
+use zelith_lib::{build_event_protocol as bep, build_event_service_protocol as wire};
 
 fn ordered(id: &str, sequence: i64, event: bep::BuildEvent) -> wire::OrderedBuildEvent {
     wire::OrderedBuildEvent {
@@ -42,7 +42,7 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
     let data = temp.0.join("data");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(zeal_lib::serve_build_events(listener, data.clone()));
+    let server = tokio::spawn(zelith_lib::serve_build_events(listener, data.clone()));
     let mut client = wire::publish_build_event_client::PublishBuildEventClient::connect(format!(
         "http://{address}"
     ))
@@ -79,7 +79,7 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
         response.message().await.unwrap().unwrap().sequence_number,
         1
     );
-    let record = zeal_lib::read_invocation_record(&data, &temp.0, &id).unwrap();
+    let record = zelith_lib::read_invocation_record(&data, &temp.0, &id).unwrap();
     assert_eq!(record.cmd.as_deref(), Some("build"));
     assert_eq!(record.exit_code, None);
     assert_eq!(
@@ -87,10 +87,10 @@ async fn grpc_ack_waits_for_eof_and_saved_events() {
         2
     );
     assert!(response.message().await.unwrap().is_none());
-    let file = zeal_lib::open_invocation_artifact(&data, &temp.0, &id, "bep.binpb.zst").unwrap();
+    let file = zelith_lib::open_invocation_artifact(&data, &temp.0, &id, "bep.binpb.zst").unwrap();
     assert!(file.metadata().unwrap().len() > 0);
     assert_eq!(
-        zeal_lib::list_invocation_records(&data, &temp.0, &[])
+        zelith_lib::list_invocation_records(&data, &temp.0, &[])
             .unwrap()
             .len(),
         1
@@ -127,7 +127,7 @@ async fn grpc_stream_capacity_rejects_excess_and_readmits_after_close() {
     let data = temp.0.join("data");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(zeal_lib::serve_build_events(listener, data.clone()));
+    let server = tokio::spawn(zelith_lib::serve_build_events(listener, data.clone()));
     let mut client = wire::publish_build_event_client::PublishBuildEventClient::connect(format!(
         "http://{address}"
     ))
@@ -169,7 +169,7 @@ struct Temp(PathBuf);
 
 impl Temp {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("zeal-bes-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("zelith-bes-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }

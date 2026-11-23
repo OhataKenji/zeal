@@ -1,8 +1,8 @@
-# Zeal PRD
+# Zelith PRD
 
 ## Context
 
-Zealは、Bazelを使うSWE向けのLocal first GUIです。
+Zelithは、Bazelを使うSWE向けのLocal first GUIです。
 Lensやk9sでKubernetesの見方を学べたように、日常の操作を通じてBazelに詳しい人の見方を身につけ、チームで共有できる体験を作ります。
 Bazelに詳しい人が捉えている対象と関係を、GUIの構成と操作に反映します。
 
@@ -10,7 +10,7 @@ Bazelに詳しい人が捉えている対象と関係を、GUIの構成と操作
 
 市場の見立ては、monorepoの価値が浸透する中で、Bazelが有力な選択肢になることです。
 [BuildBuddy](https://www.buildbuddy.io/docs/quickstart/)など、手元のbuildを可視化できる製品もあります。
-Zealは記録用サーバーの準備や送信を求めず、手元のtarget探索、実行、振り返りをつなぎます。
+Zelithは記録用サーバーの準備や送信を求めず、手元のtarget探索、実行、振り返りをつなぎます。
 日常の操作を通じてBazelの見方を身につけられることを、製品の価値として検証します。
 
 ## Usage scenarios

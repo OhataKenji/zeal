@@ -7,5 +7,5 @@ fn main() {
     if fix_path_env::fix().is_err() {
         eprintln!("Could not load shell PATH");
     }
-    zeal_lib::run();
+    zelith_lib::run();
 }

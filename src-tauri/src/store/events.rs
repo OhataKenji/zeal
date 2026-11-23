@@ -48,7 +48,7 @@ pub struct Receipt {
 }
 
 impl Receipt {
-    #[tracing::instrument(target = "zeal::operations", name = "bes.save.begin", skip_all)]
+    #[tracing::instrument(target = "zelith::operations", name = "bes.save.begin", skip_all)]
     pub fn begin(data: &Path, stream: &bes::StreamId) -> Result<Self, StoreError> {
         if stream.build_id.is_empty()
             || stream.build_id.len() > 256
@@ -157,7 +157,7 @@ impl Receipt {
             Some(Payload::Started(started)) => self.observe_started(started, &event.children)?,
             Some(Payload::Finished(finished)) => {
                 let _span =
-                    tracing::info_span!(target: "zeal::operations", "bes.receive.build_finished")
+                    tracing::info_span!(target: "zelith::operations", "bes.receive.build_finished")
                         .entered();
                 self.facts.finished =
                     millis(finished.finish_time.as_ref(), finished.finish_time_millis);
@@ -198,7 +198,7 @@ impl Receipt {
         Ok(())
     }
 
-    #[tracing::instrument(target = "zeal::operations", name = "bes.save.database", skip(self))]
+    #[tracing::instrument(target = "zelith::operations", name = "bes.save.database", skip(self))]
     fn save(&self, complete: bool) -> Result<(), StoreError> {
         struct StoredFacts {
             workspace: Option<Vec<u8>>,
@@ -297,7 +297,7 @@ impl Receipt {
         self.save(false)
     }
 
-    #[tracing::instrument(target = "zeal::operations", name = "bes.save.flush", skip_all)]
+    #[tracing::instrument(target = "zelith::operations", name = "bes.save.flush", skip_all)]
     fn finish_writer(&mut self) -> Result<(), StoreError> {
         if let Some((_, writer)) = self.writer.take() {
             writer.finish()?.flush()?;
@@ -307,7 +307,7 @@ impl Receipt {
 }
 
 /// Copy the local gzip referenced by BEP; readers wait for receipt completion.
-#[tracing::instrument(target = "zeal::operations", name = "bes.save.profile", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "bes.save.profile", skip_all)]
 fn copy_profile(uri: &str, dir: &Dir) -> io::Result<()> {
     let path = Url::parse(uri)
         .ok()
@@ -414,7 +414,8 @@ pub(crate) mod test_support {
     }
     impl Fixture {
         pub fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("zeal-receipt-{}", uuid::Uuid::new_v4()));
+            let root =
+                std::env::temp_dir().join(format!("zelith-receipt-{}", uuid::Uuid::new_v4()));
             let ws = root.join("workspace");
             std::fs::create_dir_all(&ws).unwrap();
             let id = uuid::Uuid::new_v4().to_string();

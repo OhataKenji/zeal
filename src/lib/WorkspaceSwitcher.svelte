@@ -23,7 +23,7 @@
   let entries = $state.raw<Promise<string[]> | null>(null);
 
   const displayName = $derived(
-    workspace?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Zeal",
+    workspace?.split(/[\\/]/).filter(Boolean).at(-1) ?? "Zelith",
   );
 
   function load() {
@@ -67,7 +67,7 @@
     viewBox="76 76 360 360"
     width="18"
     height="18"
-    class="zeal-logo"
+    class="zelith-logo"
     aria-hidden="true"
   >
     <polygon points="84,104 428,104 428,216 276,216 164,304 84,304" fill="#34d399" />
@@ -169,7 +169,7 @@
     width: 100%;
   }
 
-  .zeal-logo {
+  .zelith-logo {
     flex-shrink: 0;
   }
 

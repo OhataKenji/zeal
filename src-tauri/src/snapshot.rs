@@ -90,7 +90,11 @@ pub struct TargetDetail {
 }
 
 /// Parse Bazel's `<rule class> rule <label>` lines.
-#[tracing::instrument(target = "zeal::operations", name = "query.label_kind_parse", skip_all)]
+#[tracing::instrument(
+    target = "zelith::operations",
+    name = "query.label_kind_parse",
+    skip_all
+)]
 pub fn parse_label_kind(input: impl BufRead) -> Result<Vec<Target>, String> {
     let mut targets = Vec::new();
     for line in input.lines() {
@@ -115,7 +119,7 @@ pub fn parse_label_kind(input: impl BufRead) -> Result<Vec<Target>, String> {
 }
 
 /// Build the list generation held by the core until refresh.
-#[tracing::instrument(target = "zeal::operations", name = "snapshot.index_build", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "snapshot.index_build", skip_all)]
 #[must_use]
 pub fn build_index(mut targets: Vec<Target>, status: Status) -> TargetIndex {
     targets.sort_by(|a, b| a.label.cmp(&b.label));
@@ -162,7 +166,7 @@ fn fetched_at() -> u64 {
 /// Build a snapshot from parsed rules. Labels are normalized before being
 /// classified: only explicit source-file metadata identifies input files.
 /// Other references remain edges, including targets outside the selected scope.
-#[tracing::instrument(target = "zeal::operations", name = "snapshot.build", skip_all)]
+#[tracing::instrument(target = "zelith::operations", name = "snapshot.build", skip_all)]
 #[must_use]
 pub fn build(query: &ParsedQuery, status: Status) -> Snapshot {
     let sources: HashSet<String> = query

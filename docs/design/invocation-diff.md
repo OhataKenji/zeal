@@ -1,4 +1,4 @@
-# Zeal 設計: 二回の invocation の diff
+# Zelith 設計: 二回の invocation の diff
 
 _Devin_
 _Last update: 2026/11/07_
@@ -67,7 +67,7 @@ flowchart LR
 | Full startup options     | `bep.options.startupOptions`                                     |
 
 `originalCommandLine` と `canonicalCommandLine` は explicit/full の options 配列とは別の文字列で、対応する facet がないため行に出さない。
-Host、Git、cache、remote execution、metrics など BuildBuddy にある項目は Zeal の現在の projection にないため対象外とし、target/test の件数も Non Goals のままとする。
+Host、Git、cache、remote execution、metrics など BuildBuddy にある項目は Zelith の現在の projection にないため対象外とし、target/test の件数も Non Goals のままとする。
 
 ### 表示と欠損
 

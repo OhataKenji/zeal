@@ -1,5 +1,5 @@
 [package]
-name = "zeal"
+name = "zelith"
 version = "0.2.0"
 description = "A local first Bazel GUI Client"
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ too_many_lines = "warn"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "zeal_lib"
+name = "zelith_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

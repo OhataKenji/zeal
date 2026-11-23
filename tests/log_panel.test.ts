@@ -10,7 +10,7 @@ import type { Section } from "../src/lib/types.ts";
 import { LOG_LINE_HEIGHT } from "../src/lib/terminal_style.ts";
 
 test("LogPanel displays the available log and its section status", async (t) => {
-  const cacheDir = await mkdtemp(join(tmpdir(), "zeal-log-panel-"));
+  const cacheDir = await mkdtemp(join(tmpdir(), "zelith-log-panel-"));
   let server: ViteDevServer | undefined;
   try {
     server = await createServer({

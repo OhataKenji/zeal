@@ -4,11 +4,11 @@ _Last update: 2026/11/02_
 
 ## 取得の流れ
 
-Zeal は workspace を開いたとき、Scope 内の rule を `bazel query --output=label_kind` で取得する。
+Zelith は workspace を開いたとき、Scope 内の rule を `bazel query --output=label_kind` で取得する。
 この結果にはツリーと検索に必要な label と rule class が入る。
 取得した一覧は GUI が表示中の workspace の分だけ保持し、refresh が成功したときに一括で置き換える。workspace を切り替えると破棄し、戻ったときは再取得する。
 
-利用者が target を選ぶと、Zeal はその rule と直接依存する source file だけを proto 形式で取得する。
+利用者が target を選ぶと、Zelith はその rule と直接依存する source file だけを proto 形式で取得する。
 Bazel の query schema から生成した型で decode し、選択 target の属性、入出力ファイル、定義位置を求める。
 壊れた byte 列は error とし、`--keep_going` の正常な部分結果はこれまでどおり受理する。
 既定の出力では `select()` の scalar 属性が値なしで届くことがあり、その場合は関係を作らない。
@@ -29,12 +29,12 @@ Configured は configuration → transitions → outputs の 3 段階で、各 c
 grpc/grpc `7088419`、Bazel 8.7.0、Scope `//...` の warm query を OpenTelemetry SDK で計測した。
 8 組の交互実行では、旧実装の Scope 全体の XML は中央値 1,326 ms、ツリー用 `label_kind` は 194 ms だった。
 両方とも 11,398 件の label が一致し、出力はそれぞれ 67.5 MB と 0.91 MB だった。
-この計測は Bazel の query 実行だけを含み、Zeal の画面表示や詳細クリック後の待ち時間は含まない。
+この計測は Bazel の query 実行だけを含み、Zelith の画面表示や詳細クリック後の待ち時間は含まない。
 
 使用側の表示要件を取り下げたため、選択時に Scope 全体を再取得する必要がなくなった。
 選択した rule の属性に加え、直接の source file を取得して入力ファイルを正しく分類する。
 
-変更前は Zeal `e304207`、変更後は同じ revision に本変更を適用した debug build を使った。
+変更前は Zelith `e304207`、変更後は同じ revision に本変更を適用した debug build を使った。
 両方とも grpc/grpc `7088419`、Bazel 8.7.0、Scope `//...`、一覧取得後の warm cache で、`//:add_port` と `//:alts_util` を各版で計 8 回選択した。
 旧版の順序は alts / add / add / alts / add / alts / add / alts、新版は add / alts の交互だった。
 OTEL は各選択の `target.detail.request` span の終了時刻と開始時刻の差を取った。

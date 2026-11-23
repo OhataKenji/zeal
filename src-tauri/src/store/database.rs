@@ -32,7 +32,7 @@ impl fmt::Display for StoreError {
             ErrorKind::Permission => "history storage permission or file safety error",
             ErrorKind::DiskFull => "history storage is full",
             ErrorKind::Capacity => "history capacity limit reached",
-            ErrorKind::NewerSchema => "history database requires a newer Zeal version",
+            ErrorKind::NewerSchema => "history database requires a newer Zelith version",
             ErrorKind::Missing => "history record or artifact is missing",
             ErrorKind::Conflict => "history record or directory already exists",
             ErrorKind::Invalid => "invalid history input",
@@ -135,14 +135,14 @@ impl Store {
         static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let access = ACCESS.lock().expect("store access lock poisoned");
         let root = Dir::root(data)?;
-        let exists = root.exists("zeal.db")?;
+        let exists = root.exists("zelith.db")?;
         validate_sidecars(&root, exists)?;
-        let db = root.file("zeal.db", !exists)?;
+        let db = root.file("zelith.db", !exists)?;
         if exists && db.metadata()?.len() == 0 {
             return Err(fail(ErrorKind::Corrupt));
         }
         let mut conn = Connection::open_with_flags(
-            root.path().join("zeal.db"),
+            root.path().join("zelith.db"),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         conn.busy_timeout(Duration::from_secs(2))?;
@@ -192,7 +192,7 @@ impl Store {
 
 /// Check every existing sidecar before opening or creating the database.
 fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
-    for name in ["zeal.db-wal", "zeal.db-shm", "zeal.db-journal"] {
+    for name in ["zelith.db-wal", "zelith.db-shm", "zelith.db-journal"] {
         if !root.exists(name)? {
             continue;
         }
@@ -473,7 +473,7 @@ mod tests {
                 .unwrap();
             store.conn.pragma_update(None, "user_version", 2).unwrap();
         }
-        let path = f.data.join("zeal.db");
+        let path = f.data.join("zelith.db");
         let bytes = fs::read(&path).unwrap();
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);
         assert_eq!(fs::read(path).unwrap(), bytes);
@@ -482,14 +482,14 @@ mod tests {
     fn corrupt_newer_and_orphan_sidecars_are_not_reset() {
         let f = Fixture::new();
         let root = Dir::root(&f.data).unwrap();
-        root.file("zeal.db-wal", true).unwrap();
+        root.file("zelith.db-wal", true).unwrap();
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);
-        assert!(!f.data.join("zeal.db").exists());
-        fs::remove_file(f.data.join("zeal.db-wal")).unwrap();
-        fs::write(f.data.join("zeal.db"), b"invalid").unwrap();
-        fs::set_permissions(f.data.join("zeal.db"), fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!f.data.join("zelith.db").exists());
+        fs::remove_file(f.data.join("zelith.db-wal")).unwrap();
+        fs::write(f.data.join("zelith.db"), b"invalid").unwrap();
+        fs::set_permissions(f.data.join("zelith.db"), fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);
-        fs::remove_file(f.data.join("zeal.db")).unwrap();
+        fs::remove_file(f.data.join("zelith.db")).unwrap();
         let store = Store::open(&f.data).unwrap();
         store.conn.pragma_update(None, "user_version", 4).unwrap();
         drop(store);
@@ -531,10 +531,10 @@ mod tests {
         f.complete();
         let invocation_id = &f.stream.invocation_id;
         assert!(artifact(&f.data, &f.ws, "../../escape", "bep.binpb.zst").is_err());
-        assert!(artifact(&f.data, &f.ws, invocation_id, "../zeal.db").is_err());
+        assert!(artifact(&f.data, &f.ws, invocation_id, "../zelith.db").is_err());
         let path = f.dir().join("attempt/1/bep.binpb.zst");
         fs::remove_file(&path).unwrap();
-        symlink(f.data.join("zeal.db"), &path).unwrap();
+        symlink(f.data.join("zelith.db"), &path).unwrap();
         assert_eq!(
             artifact(&f.data, &f.ws, invocation_id, "bep.binpb.zst")
                 .unwrap_err()
@@ -820,12 +820,12 @@ mod tests {
     fn linked_database_sidecars_and_missing_schema_tables_are_rejected() {
         let f = Fixture::new();
         drop(Store::open(&f.data).unwrap());
-        symlink(f.data.join("zeal.db"), f.data.join("zeal.db-wal")).unwrap();
+        symlink(f.data.join("zelith.db"), f.data.join("zelith.db-wal")).unwrap();
         assert_eq!(
             Store::open(&f.data).err().unwrap().kind,
             ErrorKind::Permission
         );
-        fs::remove_file(f.data.join("zeal.db-wal")).unwrap();
+        fs::remove_file(f.data.join("zelith.db-wal")).unwrap();
         let store = Store::open(&f.data).unwrap();
         store.conn.execute_batch("DROP TABLE workspace").unwrap();
         drop(store);

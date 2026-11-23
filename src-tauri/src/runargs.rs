@@ -1,4 +1,4 @@
-//! The bazel command line Zeal assembles for one invocation: which commands
+//! The bazel command line Zelith assembles for one invocation: which commands
 //! the composer may send, which target strings are safe to pass verbatim, and
 //! the observation flags every invocation carries.
 //!
@@ -19,7 +19,7 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
 
 /// Keep app defaults and the selected target before user arguments. A trailing
 /// value-taking option cannot consume them, and `run --` reaches the program
-/// without any Zeal flags appended to it. User options retain Bazel precedence.
+/// without any Zelith flags appended to it. User options retain Bazel precedence.
 pub fn argv(
     cmd: &str,
     pattern: &str,
@@ -33,7 +33,7 @@ pub fn argv(
         format!("--bes_backend={endpoint}"),
         "--bes_proxy=".to_string(),
         "--bes_upload_mode=wait_for_upload_complete".to_string(),
-        "--tool_tag=zeal".to_string(),
+        "--tool_tag=zelith".to_string(),
         "--color=yes".to_string(),
         "--curses=no".to_string(),
         format!("--invocation_id={id}"),

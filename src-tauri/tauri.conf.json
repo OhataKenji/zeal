@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Zeal",
+  "productName": "Zelith",
   "version": "0.2.0",
-  "identifier": "io.github.ohatakenji.zeal",
+  "identifier": "io.github.ohatakenji.zelith",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Zeal",
+        "title": "Zelith",
         "width": 1220,
         "height": 780,
         "resizable": true,

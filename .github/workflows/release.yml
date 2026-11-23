@@ -54,7 +54,7 @@ jobs:
         with:
           args: --target aarch64-apple-darwin --bundles dmg -- --locked
           tagName: v__VERSION__
-          releaseName: Zeal v__VERSION__
+          releaseName: Zelith v__VERSION__
           releaseCommitish: ${{ github.sha }}
           releaseDraft: true
           prerelease: false

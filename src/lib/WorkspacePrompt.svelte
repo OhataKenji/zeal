@@ -70,7 +70,7 @@
 {#if !bazelAvailable}
   <Notice tone="error"
     >Bazel or Bazelisk was not found on your PATH. Please install either tool
-    and add it to your PATH, then restart Zeal.</Notice
+    and add it to your PATH, then restart Zelith.</Notice
   >
 {/if}
 <form
