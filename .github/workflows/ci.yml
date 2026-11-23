@@ -149,12 +149,24 @@ jobs:
         run: cargo test --locked
         working-directory: src-tauri
 
+  actions-lint:
+    name: Lint GitHub Actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          install: false
+
+      - run: mise run check:actions
+
   # Branch protection requires a stable check name, but a skipped job can
   # report a name that does not match (e.g. an unexpanded matrix name).
   # This always-run gate aggregates every job under one required check.
   ci:
     name: ci
-    needs: [changes, frontend, gitleaks, rust]
+    needs: [changes, frontend, gitleaks, rust, actions-lint]
     if: always()
     runs-on: ubuntu-latest
     steps:
