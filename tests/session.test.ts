@@ -452,6 +452,35 @@ test("navigation keeps an accepted start but drops its reply's routing", async (
   assert.equal(h.view.error, null);
 });
 
+test("tab navigation keeps an accepted start but drops its reply's routing", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  h.session.select({ kind: "target", label: "//app:first" });
+  await settle();
+  pendingRequest(h, "get_target_detail").reply.resolve(targetDetail("//app:first"));
+  await settle();
+  h.session.setTargetTab("configured");
+  await settle();
+  h.session.start("build", "//app:first");
+  h.session.setTargetTab("definition");
+  pendingRead(h, "configuration").reply.resolve(CONFIGURED.configuration);
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.deepEqual(pendingRequest(h, "start_invocation").args, {
+    workspace: WS,
+    cmd: "build",
+    pattern: "//app:first",
+    arguments: "",
+  });
+  pendingRequest(h, "start_invocation").reply.resolve("tab-inv");
+  await settle();
+  assert.equal(h.view.page, "targets");
+  assert.equal(h.view.targetTab, "definition");
+  assert.equal(h.view.selectedInvocationId, null);
+  assert.equal(h.view.error, null);
+});
+
 test("disposal prevents a start that has not reached Bazel", async () => {
   const h = harness();
   await initReady(h);

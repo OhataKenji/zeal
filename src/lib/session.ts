@@ -785,6 +785,7 @@ export function createSession(
     if (disposed) return;
     const ws = state.workspace;
     if (!ws || ws.targetTab === tab) return;
+    state.startFeedback = null;
     ws.targetTab = tab;
     reloadTargetPhase(ws);
   }
