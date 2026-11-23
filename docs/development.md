@@ -26,7 +26,7 @@ Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.
 mise run check           # all checks (frontend, rust, then actions)
 mise run check:frontend  # type check, tests, format check, lint, build
 mise run check:rust      # cargo fmt --check, clippy, test (src-tauri/)
-mise run check:actions   # actionlint + local action validation
+mise run check:actions   # lint GitHub Actions workflows
 mise run fmt             # auto-format (oxfmt + cargo fmt)
 ```
 
