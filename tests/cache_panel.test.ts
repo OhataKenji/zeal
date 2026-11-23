@@ -12,9 +12,10 @@ function visibleText(html: string): string {
     .trim();
 }
 
-function rowTexts(html: string): string[] {
-  return Array.from(html.matchAll(/<li class="cache-row">([\s\S]*?)<\/li>/g), ([, content]) =>
-    visibleText(content),
+function legendItems(html: string): string[] {
+  return Array.from(
+    html.matchAll(/<li class="cache-legend-item">([\s\S]*?)<\/li>/g),
+    ([, content]) => visibleText(content),
   );
 }
 
@@ -29,19 +30,19 @@ test("CachePanel renders BEP cache stats", async (t) => {
     return output({ status: "ok", data: { ...EMPTY, cacheStats } });
   }
 
-  await t.test("local hit rate leads with measured counts", () => {
+  await t.test("local hits and misses keep fixed order with shares", () => {
     const html = ok({
       localActionCache: { hits: 3, misses: 1, missReasons: [] },
       actionTypes: [],
       runnerTypes: [],
     });
     const text = visibleText(html);
+    assert.match(html, />Cache stats<\/h3>/);
     assert.match(html, />Local action cache<\/h3>/);
-    assert.match(text, /75% hit rate/);
-    assert.match(text, /Hits 3 · Misses 1/);
+    assert.match(text, /Lookups in Bazel’s local action cache/);
+    assert.deepEqual(legendItems(html), ["3 hits (75%)", "1 miss (25%)"]);
     // The remote-limitation note is a footnote below the data.
     assert.ok(text.indexOf("Local action cache") < text.indexOf("Remote AC, CAS"));
-    assert.doesNotMatch(text, /Cache stats/);
 
     const dominated = visibleText(
       ok({
@@ -50,11 +51,16 @@ test("CachePanel renders BEP cache stats", async (t) => {
         runnerTypes: [],
       }),
     );
-    assert.match(dominated, /25% hit rate/);
-    assert.match(dominated, /Hits 1 · Misses 3/);
+    assert.match(dominated, /1 hit \(25%\) 3 misses \(75%\)/);
+    const dominatedHtml = ok({
+      localActionCache: { hits: 1, misses: 3, missReasons: [] },
+      actionTypes: [],
+      runnerTypes: [],
+    });
+    assert.deepEqual(legendItems(dominatedHtml), ["1 hit (25%)", "3 misses (75%)"]);
   });
 
-  await t.test("zero lookups show no rate", () => {
+  await t.test("zero lookups show a neutral chart with real zeros", () => {
     const html = ok({
       localActionCache: { hits: 0, misses: 0, missReasons: [] },
       actionTypes: [],
@@ -63,8 +69,7 @@ test("CachePanel renders BEP cache stats", async (t) => {
     const text = visibleText(html);
     assert.match(html, />Local action cache<\/h3>/);
     assert.match(text, /No lookups/);
-    assert.match(text, /Hits 0 · Misses 0/);
-    assert.ok(!text.includes("hit rate"));
+    assert.deepEqual(legendItems(html), ["0 hits", "0 misses"]);
     assert.ok(!text.includes("%"));
   });
 
@@ -72,8 +77,8 @@ test("CachePanel renders BEP cache stats", async (t) => {
     const html = ok({
       actionTypes: [{ name: "CppCompile", count: 4 }],
       runnerTypes: [
-        { name: "internal", count: 3 },
-        { name: "darwin-sandbox", count: 2 },
+        { name: "internal", count: 8 },
+        { name: "darwin-sandbox", count: 10 },
       ],
     });
     const text = visibleText(html);
@@ -82,16 +87,20 @@ test("CachePanel renders BEP cache stats", async (t) => {
     const runner = html.indexOf(">Runner types</h3>");
     const action = html.indexOf(">Action types</h3>");
     assert.ok(runner !== -1 && action !== -1 && runner < action);
-    assert.deepEqual(rowTexts(html), ["internal 3", "darwin-sandbox 2", "CppCompile 4"]);
+    // Descending counts: the larger runner leads the legend.
+    assert.deepEqual(legendItems(html), [
+      "10 darwin-sandbox (56%)",
+      "8 internal (44%)",
+      "4 CppCompile (100%)",
+    ]);
     assert.match(
       text,
       /Local action cache was not recorded\. Remote AC, CAS, and transfer statistics are not recorded in Bazel build events\./,
     );
-    // Recorded data renders before the footnote.
     assert.ok(text.indexOf("darwin-sandbox") < text.indexOf("Remote AC, CAS"));
   });
 
-  await t.test("breakdowns keep invalidation reasons and bound long lists", () => {
+  await t.test("breakdowns keep invalidation reasons and fold long tails", () => {
     const html = ok({
       localActionCache: {
         hits: 2,
@@ -107,13 +116,16 @@ test("CachePanel renders BEP cache stats", async (t) => {
     for (const title of ["Runner types", "Action types", "Local invalidation reasons"]) {
       assert.ok(html.includes(title), `missing breakdown ${title}`);
     }
-    assert.deepEqual(rowTexts(html), [
-      "internal 3",
-      "CppCompile 4",
-      "CppLink 1",
-      "digest mismatch 2",
+    assert.deepEqual(legendItems(html), [
+      "2 hits (50%)",
+      "2 misses (50%)",
+      "3 internal (100%)",
+      "4 CppCompile (80%)",
+      "1 CppLink (20%)",
+      "2 digest mismatch (100%)",
     ]);
 
+    // Twelve categories collapse to the five largest plus a summed Other.
     const many = ok({
       actionTypes: Array.from({ length: 12 }, (_, index) => ({
         name: `Action${index}`,
@@ -121,9 +133,17 @@ test("CachePanel renders BEP cache stats", async (t) => {
       })),
       runnerTypes: [],
     });
-    assert.match(many, /Showing 10 of 12/);
-    assert.ok(many.includes("Action9"));
-    assert.ok(!many.includes("Action10"));
+    const items = legendItems(many);
+    assert.equal(items.length, 6);
+    assert.deepEqual(items.slice(0, 5), [
+      "12 Action11 (15%)",
+      "11 Action10 (14%)",
+      "10 Action9 (13%)",
+      "9 Action8 (12%)",
+      "8 Action7 (10%)",
+    ]);
+    assert.equal(items[5], "28 Other (36%)");
+    assert.ok(!many.includes("Action6"));
   });
 
   await t.test("missing stats render an empty note", () => {
@@ -149,7 +169,6 @@ test("CachePanel renders BEP cache stats", async (t) => {
       note: "saved prefix missing",
     });
     assert.match(partial, /incomplete — saved prefix missing/);
-    assert.match(partial, />100%</);
-    assert.match(partial, /hit rate/);
+    assert.match(visibleText(partial), /1 hit \(100%\)/);
   });
 });

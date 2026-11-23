@@ -11,45 +11,125 @@
   const bep = $derived(sectionData(section));
   const stats = $derived(bep?.cacheStats);
   const local = $derived(stats?.localActionCache);
-  const total = $derived(local ? local.hits + local.misses : 0);
-  const pct = $derived(total > 0 && local ? Math.round((local.hits / total) * 100) : 0);
-  const VISIBLE_ROWS = 10;
+
+  type DonutRow = Count & { color?: string };
+  interface DonutSlice {
+    name: string;
+    count: number;
+    color: string;
+    start: number;
+    end: number;
+    pct: number;
+  }
+
+  // Theme tokens only; the folded tail stays inside the percentage total.
+  const PALETTE = [
+    "var(--info)",
+    "var(--brand-teal)",
+    "var(--success)",
+    "var(--warning)",
+    "var(--test-color)",
+  ];
+  const OTHER_COLOR = "var(--muted-foreground)";
+  const NEUTRAL = "var(--accent)";
+
+  function donutSlices(rows: DonutRow[], fixedOrder: boolean): DonutSlice[] {
+    const sorted = fixedOrder ? rows : [...rows].sort((a, b) => b.count - a.count);
+    const head = sorted.slice(0, 5);
+    const tail = sorted.slice(5);
+    const entries =
+      tail.length > 0
+        ? [
+            ...head,
+            { name: "Other", count: tail.reduce((sum, row) => sum + row.count, 0) },
+          ]
+        : head;
+    const total = entries.reduce((sum, row) => sum + row.count, 0);
+    let start = 0;
+    return entries.map((row, index) => {
+      const end = total > 0 ? start + (row.count / total) * 100 : start;
+      const slice: DonutSlice = {
+        name: row.name,
+        count: row.count,
+        color:
+          row.color ??
+          (tail.length > 0 && index === entries.length - 1
+            ? OTHER_COLOR
+            : PALETTE[index % PALETTE.length]),
+        start,
+        end,
+        pct: total > 0 ? Math.round((row.count / total) * 100) : 0,
+      };
+      start = end;
+      return slice;
+    });
+  }
+
+  function donutBackground(slices: DonutSlice[]): string {
+    return slices.some((slice) => slice.end > slice.start)
+      ? `conic-gradient(${slices
+          .map((slice) => `${slice.color} ${slice.start}% ${slice.end}%`)
+          .join(", ")})`
+      : NEUTRAL;
+  }
+
+  const localRows = $derived<DonutRow[]>(
+    local
+      ? [
+          {
+            name: local.hits === 1 ? "hit" : "hits",
+            count: local.hits,
+            color: "var(--success)",
+          },
+          {
+            name: local.misses === 1 ? "miss" : "misses",
+            count: local.misses,
+            color: "var(--destructive)",
+          },
+        ]
+      : [],
+  );
 </script>
 
 <div class="cache-report">
+  <h3 class="panel-subheading">Cache stats</h3>
   {#if section && section.status !== "ok"}
     <Notice tone={sectionNoticeTone(section)}>{sectionMessage(section)}</Notice>
   {/if}
   {#if bep}
     {#if stats}
-      {#if local}
-        <section class="cache-section">
-          <h3 class="panel-subheading">Local action cache</h3>
-          <div class="cache-local-figures">
-            {#if total > 0}
-              <p class="cache-rate">
-                <span class="cache-rate-value mono">{pct}%</span>
-                <span class="cache-rate-label">hit rate</span>
-              </p>
-            {:else}
-              <p class="cache-rate-empty">No lookups</p>
-            {/if}
-            <p class="cache-local-counts">
-              Hits <span class="mono">{local.hits}</span> · Misses
-              <span class="mono">{local.misses}</span>
-            </p>
-          </div>
-        </section>
-      {/if}
-      {#if stats.runnerTypes.length}
-        {@render breakdown("Runner types", stats.runnerTypes)}
-      {/if}
-      {#if stats.actionTypes.length}
-        {@render breakdown("Action types", stats.actionTypes)}
-      {/if}
-      {#if local?.missReasons.length}
-        {@render breakdown("Local invalidation reasons", local.missReasons)}
-      {/if}
+      <div class="cache-sections">
+        {#if local}
+          {@render chart(
+            "Local action cache",
+            "Lookups in Bazel’s local action cache",
+            localRows,
+            true,
+            "No lookups",
+          )}
+        {/if}
+        {#if stats.runnerTypes.length}
+          {@render chart(
+            "Runner types",
+            "Number of actions with each runner type",
+            stats.runnerTypes,
+          )}
+        {/if}
+        {#if stats.actionTypes.length}
+          {@render chart(
+            "Action types",
+            "Number of recorded actions by mnemonic",
+            stats.actionTypes,
+          )}
+        {/if}
+        {#if local?.missReasons.length}
+          {@render chart(
+            "Local invalidation reasons",
+            "Reasons for missing Bazel’s local action cache",
+            local.missReasons,
+          )}
+        {/if}
+      </div>
       <p class="cache-footnote">
         {#if !local}Local action cache was not recorded.{" "}{/if}Remote AC, CAS, and transfer
         statistics are not recorded in Bazel build events.
@@ -62,24 +142,39 @@
   {/if}
 </div>
 
-{#snippet breakdown(title: string, rows: Count[])}
-  {@const visible = rows.slice(0, VISIBLE_ROWS)}
-  {@const max = Math.max(1, ...visible.map((row) => row.count))}
+{#snippet chart(
+  title: string,
+  subtitle: string,
+  rows: DonutRow[],
+  fixedOrder = false,
+  emptyNote = "",
+)}
+  {@const slices = donutSlices(rows, fixedOrder)}
+  {@const total = rows.reduce((sum, row) => sum + row.count, 0)}
   <section class="cache-section">
-    <h3 class="panel-subheading">{title}</h3>
-    <ul class="cache-rows">
-      {#each visible as row}
-        <li class="cache-row">
-          <span class="cache-row-name">{row.name}</span>
-          <span class="cache-row-track" aria-hidden="true"
-            ><span class="cache-row-fill" style:width="{(row.count / max) * 100}%"></span
-            ></span>
-          <span class="cache-row-count mono">{row.count}</span>
-        </li>
-      {/each}
-    </ul>
-    {#if rows.length > VISIBLE_ROWS}
-      <p class="cache-note">Showing {VISIBLE_ROWS} of {rows.length}</p>
+    <h3 class="cache-title">{title}</h3>
+    <p class="cache-subtitle">{subtitle}</p>
+    <div class="cache-chart">
+      <div
+        class="cache-donut"
+        style:background={donutBackground(slices)}
+        aria-hidden="true"
+      ></div>
+      <ul class="cache-legend">
+        {#each slices as slice}
+          <li class="cache-legend-item">
+            <span class="cache-swatch" style:background={slice.color} aria-hidden="true"></span
+            ><span class="cache-legend-text"
+              ><strong>{slice.count}</strong> {slice.name}{total > 0
+                ? ` (${slice.pct}%)`
+                : ""}</span
+            >
+          </li>
+        {/each}
+      </ul>
+    </div>
+    {#if total === 0 && emptyNote}
+      <p class="cache-note">{emptyNote}</p>
     {/if}
   </section>
 {/snippet}

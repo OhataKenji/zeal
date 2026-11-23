@@ -220,82 +220,81 @@
 
 .cache-report {
   max-width: 60rem;
+  padding: 20px 24px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+}
+
+.cache-report > .panel-subheading {
+  margin-top: 0;
+}
+
+.cache-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+  gap: 24px 32px;
 }
 
 .cache-section {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--hairline);
+  min-width: 0;
 }
 
-.cache-section > .panel-subheading {
-  margin: 0 0 8px;
-}
-
-.cache-local-figures {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 18px;
-}
-
-.cache-rate {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+.cache-title {
   margin: 0;
+  font-size: 17px;
+  font-weight: 700;
 }
 
-.cache-rate-value {
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.cache-rate-label,
-.cache-rate-empty,
-.cache-local-counts {
-  margin: 0;
+.cache-subtitle {
+  margin: 2px 0 12px;
+  font-size: 14px;
   color: var(--muted-foreground);
-  font-size: 12px;
 }
 
-.cache-rows {
-  list-style: none;
+.cache-chart {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.cache-donut {
+  flex: 0 0 auto;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 20px), #000 calc(100% - 19px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 20px), #000 calc(100% - 19px));
+}
+
+.cache-legend {
+  flex: 1;
+  min-width: 0;
   margin: 0;
   padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
 }
 
-.cache-row {
-  display: grid;
-  grid-template-columns: minmax(6rem, 1fr) minmax(2rem, 2fr) max-content;
+.cache-legend-item {
+  display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 34px;
-  font-size: 12px;
+  gap: 8px;
+  min-width: 0;
 }
 
-.cache-row-name {
+.cache-swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.cache-legend-text {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.cache-row-track {
-  display: block;
-  height: 4px;
-  background: var(--hairline);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.cache-row-fill {
-  display: block;
-  height: 100%;
-  background: var(--brand-teal);
-  border-radius: 2px;
-}
-
-.cache-row-count {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 .cache-note,
