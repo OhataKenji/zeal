@@ -15,10 +15,11 @@ keep their state in their views.
 - A build, test, or run waits for Zeal's outstanding target and workspace-info
   reads in that canonical workspace, including superseded reloads. Navigation
   or opening another workspace drops the automatic Console transition, not
-  the submitted command. Disposing the session cancels unsent starts. User invocations do
-  not wait for other user invocations: Bazel still rejects output-base lock
-  contention immediately. An explicit open blocks saved-workspace restoration
-  even after failure.
+  the submitted command. A rejected launch is reported with its original
+  workspace, not as an invocation. Disposing the session cancels unsent
+  starts. User invocations do not wait for other user invocations: Bazel
+  still rejects output-base lock contention immediately. An explicit open
+  blocks saved-workspace restoration even after failure.
 - The target explorer builds one package tree per snapshot: the sidebar tree
   and the package table read the same nodes. Selection and target reads live
   in the session; expansion and direct/subtree scope stay local to the views.

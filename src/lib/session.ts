@@ -82,7 +82,7 @@ interface SessionState {
   workspace: Workspace | null;
   page: Page;
   selectedInvocationId: string | null;
-  /** The pending start whose reply may still update the current view. */
+  /** The pending start that may still open its Console in the current view. */
   startFeedback: object | null;
   error: string | null;
   saved: Saved;
@@ -313,6 +313,23 @@ export function createSession(
       if (discovery.get(path) === idle) discovery.delete(path);
     });
     discovery.set(path, idle);
+  }
+
+  async function dispatchStart(
+    workspace: string,
+    cmd: BazelCommand,
+    pattern: string,
+    args: string,
+  ) {
+    // Recheck after each wait: a reload may have started in the meantime.
+    while (discovery.has(workspace)) await discovery.get(workspace);
+    if (disposed) return;
+    return transport.invoke<string>(COMMANDS.startInvocation, {
+      workspace,
+      cmd,
+      pattern,
+      arguments: args,
+    });
   }
 
   function publish() {
@@ -706,7 +723,6 @@ export function createSession(
     };
     state.selectedInvocationId = null;
     state.startFeedback = null;
-    state.error = null;
     state.saved = savedReaders();
     publish();
     requestHistory();
@@ -874,23 +890,12 @@ export function createSession(
     state.error = null;
     publish();
     try {
-      // Recheck after each wait: a reload may have started in the meantime.
-      while (discovery.has(ws.path)) {
-        await discovery.get(ws.path);
-        if (disposed) return;
-      }
-      const id = await transport.invoke<string>(COMMANDS.startInvocation, {
-        workspace: ws.path,
-        cmd,
-        pattern,
-        arguments: argumentsText,
-      });
-      if (disposed || state.startFeedback !== token) return;
-      openInvocation(id, false);
+      const id = await dispatchStart(ws.path, cmd, pattern, argumentsText);
+      if (id !== undefined && state.startFeedback === token) openInvocation(id, false);
     } catch (error) {
-      if (disposed || state.startFeedback !== token) return;
-      state.startFeedback = null;
-      state.error = String(error);
+      if (disposed) return;
+      if (state.startFeedback === token) state.startFeedback = null;
+      state.error = `Could not start bazel ${cmd} ${pattern} in ${ws.path}: ${String(error)}`;
       publish();
     }
   }
@@ -923,8 +928,9 @@ export function createSession(
     if (disposed) return false;
     const request = {};
     workspaceRequest = request;
-    if (state.startFeedback !== null) {
+    if (state.startFeedback !== null || state.error !== null) {
       state.startFeedback = null;
+      state.error = null;
       publish();
     }
     try {
