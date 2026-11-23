@@ -1085,6 +1085,44 @@
       ]
     },
     "bep": {
+      "localActionCache": {
+        "hits": 6892,
+        "misses": 9,
+        "missReasons": [
+          {
+            "name": "DIFFERENT_ACTION_KEY",
+            "count": 2
+          },
+          {
+            "name": "DIFFERENT_DEPS",
+            "count": 1
+          },
+          {
+            "name": "DIFFERENT_ENVIRONMENT",
+            "count": 0
+          },
+          {
+            "name": "DIFFERENT_FILES",
+            "count": 0
+          },
+          {
+            "name": "CORRUPTED_CACHE_ENTRY",
+            "count": 0
+          },
+          {
+            "name": "NOT_CACHED",
+            "count": 5
+          },
+          {
+            "name": "UNCONDITIONAL_EXECUTION",
+            "count": 1
+          }
+        ]
+      },
+      "outputArtifactsFromActionCache": {
+        "count": 10822,
+        "sizeInBytes": "1182513380"
+      },
       "runnerCounts": [
         {
           "count": 8,
@@ -1760,6 +1798,44 @@
       ]
     },
     "bep": {
+      "localActionCache": {
+        "hits": 82,
+        "misses": 9,
+        "missReasons": [
+          {
+            "name": "DIFFERENT_ACTION_KEY",
+            "count": 0
+          },
+          {
+            "name": "DIFFERENT_DEPS",
+            "count": 1
+          },
+          {
+            "name": "DIFFERENT_ENVIRONMENT",
+            "count": 0
+          },
+          {
+            "name": "DIFFERENT_FILES",
+            "count": 0
+          },
+          {
+            "name": "CORRUPTED_CACHE_ENTRY",
+            "count": 0
+          },
+          {
+            "name": "NOT_CACHED",
+            "count": 6
+          },
+          {
+            "name": "UNCONDITIONAL_EXECUTION",
+            "count": 2
+          }
+        ]
+      },
+      "outputArtifactsFromActionCache": {
+        "count": 110,
+        "sizeInBytes": "111103866"
+      },
       "runnerCounts": [
         {
           "count": 8,
@@ -1800,7 +1876,9 @@
       "tests": [
         {
           "label": "//dispatch:quote_contract_test",
-          "status": "PASSED"
+          "status": "PASSED",
+          "totalNumCached": 0,
+          "totalRunCount": 1
         }
       ],
       "truncated": false
@@ -9824,6 +9902,44 @@
       ]
     },
     "bep": {
+      "localActionCache": {
+        "hits": 6787,
+        "misses": 19,
+        "missReasons": [
+          {
+            "name": "DIFFERENT_ACTION_KEY",
+            "count": 0
+          },
+          {
+            "name": "DIFFERENT_DEPS",
+            "count": 1
+          },
+          {
+            "name": "DIFFERENT_ENVIRONMENT",
+            "count": 0
+          },
+          {
+            "name": "DIFFERENT_FILES",
+            "count": 0
+          },
+          {
+            "name": "CORRUPTED_CACHE_ENTRY",
+            "count": 0
+          },
+          {
+            "name": "NOT_CACHED",
+            "count": 17
+          },
+          {
+            "name": "UNCONDITIONAL_EXECUTION",
+            "count": 1
+          }
+        ]
+      },
+      "outputArtifactsFromActionCache": {
+        "count": 10685,
+        "sizeInBytes": "1002254157"
+      },
       "runnerCounts": [
         {
           "count": 18,
