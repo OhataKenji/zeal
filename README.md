@@ -39,14 +39,12 @@ Follow the [Development guide](docs/development.md#getting-started).
 
 **Requires:** Bazelisk or Bazel on your `PATH`.
 
-On macOS and Linux, Zeal loads your login shell's `PATH`.
+1. Click **Choose folder…** and select the root of a Bazel workspace you trust.
+2. Click **Open workspace**.
 
-Open only trusted repositories.
+You're ready when your targets appear under **Targets**.
 
-1. Select **Choose folder…** and pick the root of your Bazel workspace, or enter its path in **Workspace**.
-2. Under **Target patterns**, keep `//...` to include all packages in the main repository. For a large workspace, try a smaller scope such as `//app/...`.
-3. Select **Open workspace**.
-4. Open **Targets**, select a target, and build, test, or run it.
+For large workspaces, set **Target patterns** to a smaller scope such as `//app/...` before opening.
 
 ![Open a workspace form with a workspace path, the default //... target pattern, and the Open workspace button](docs/screenshots/open-workspace.jpg)
 
