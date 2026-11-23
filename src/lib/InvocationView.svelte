@@ -46,7 +46,7 @@
       shown?.workspace === view.state?.workspace &&
       canSend(view, rerunCandidate.pattern),
   );
-  const status = $derived(invocationStatus(shown, execution));
+  const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections, "Compare"] as const;
   let active = $state<(typeof tabs)[number]>("All");

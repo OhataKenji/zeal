@@ -6,10 +6,11 @@ fetched data and calls IPC. Forms, Query, Analytics, comparison, and Console
 keep their state in their views.
 
 - Rust owns processes by workspace and invocation ID.
-- Console serves live terminal output; History is workspace-scoped and shows a
-  saved BEP record or, for a terminal completion without one, a bounded
-  in-memory process diagnostic (process exit code and output tail) that a
-  later matching BEP record supersedes.
+- History shows saved records and live executions across workspaces with the
+  same Git origin. Console and Stop use the individual execution's owner.
+  Without a BEP record, the owning workspace can show a bounded in-memory
+  diagnostic (process exit code and output tail). Failed includes known process
+  failures without implying a BEP result. A matching BEP record supersedes it.
 - Async responses must match their captured owner and a live session, including
   A→B→A navigation. Core snapshots must have a newer revision.
 - A build, test, or run waits for Zeal's outstanding target and workspace-info

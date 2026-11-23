@@ -840,6 +840,48 @@ test("a live run in shared history opens the owner's console and stops at its ow
   assert.deepEqual(pendingRequest(h, "stop_invocation").args, { workspace: OTHER, id: record.id });
 });
 
+test("Running shows same-origin owners before BEP and reconciles their records by id", async () => {
+  const sibling = owned("b-run", OTHER, { startedAt: 5 });
+  const local = owned("a-run", WS);
+  const unrelated = owned("c-run", THIRD);
+  const state = coreState({
+    workspaces: [
+      wsEntry(WS, { repositoryGroup: 0 }),
+      wsEntry(OTHER, { repositoryGroup: 0 }),
+      wsEntry(THIRD, { repositoryGroup: 1 }),
+    ],
+    invocations: [local, sibling, unrelated],
+  });
+  const h = harness(Promise.resolve(state));
+  await initReady(h);
+  await loadHistory(h, []);
+  assert.deepEqual(
+    h.view.invocationRows.map((row) => row.execution),
+    [sibling, local],
+  );
+  h.session.selectInvocation(sibling.id);
+  assert.deepEqual(h.view.invocation, { record: sibling, execution: sibling });
+  await h.session.stop(unrelated.id);
+  assert.equal(requestCount(h, "stop_invocation"), 0);
+  const stopped = h.session.stop(sibling.id);
+  const request = pendingRequest(h, "stop_invocation");
+  assert.deepEqual(request.args, { workspace: OTHER, id: sibling.id });
+  request.reply.resolve(undefined);
+  await stopped;
+
+  h.session.loadInvocations();
+  const record = { ...OTHER_RECORD, exitCode: 0 };
+  await loadHistory(h, [record]);
+  assert.deepEqual(h.view.invocationRows, [
+    { record, execution: sibling },
+    { record: local, execution: local },
+  ]);
+  h.emit("app-state", { ...state, revision: 2, invocations: [local, unrelated] });
+  assert.equal(h.view.invocation?.record, record);
+  assert.equal(h.view.invocation?.execution, undefined);
+  assert.equal(requestCount(h, "get_invocation"), 1);
+});
+
 test("history refresh preserves a newly selected shared run through release", async () => {
   const execution = owned("b-run", OTHER, { cmd: "run" });
   const state = coreState({ workspaces: [wsEntry(WS), wsEntry(OTHER)], invocations: [execution] });
@@ -867,6 +909,28 @@ test("history refresh preserves a newly selected shared run through release", as
     workspace: WS,
     id: record.id,
   });
+});
+
+test("a sibling console with a reused id cannot take over a local record or diagnostic", async () => {
+  const h = harness(
+    Promise.resolve(
+      coreState({
+        workspaces: [wsEntry(WS, { repositoryGroup: 0 }), wsEntry(OTHER, { repositoryGroup: 0 })],
+        invocations: [owned(RECORD.id, OTHER), owned("no-bep", OTHER)],
+      }),
+    ),
+  );
+  await initReady(h);
+  const diag = diagnostic("no-bep");
+  await loadHistory(h, [RECORD], [diag]);
+  assert.deepEqual(h.view.invocationRows, [
+    { record: diag, diagnostic: diag },
+    { record: RECORD, execution: undefined },
+  ]);
+  for (const { record } of h.view.invocationRows) {
+    await h.session.stop(record.id);
+  }
+  assert.equal(requestCount(h, "stop_invocation"), 0);
 });
 
 test("history must match both the ID and workspace to expose a foreign live execution", async () => {
