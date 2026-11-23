@@ -116,31 +116,6 @@ export function subtreeTargets(node: DirNode): Target[] {
   return node.targets.concat(descendants);
 }
 
-/** One visible tree row: a directory with its expansion state, or a target leaf. */
-export type Row =
-  | { kind: "dir"; node: DirNode; depth: number; expanded: boolean }
-  | { kind: "target"; target: Target; depth: number };
-
-/**
- * Flattens the tree into display rows. Each level lists child directories
- * first — recursing into the expanded ones — then the node's own targets.
- */
-export function flatten(root: DirNode, expanded: Set<string>): Row[] {
-  const rows: Row[] = [];
-  const visit = (node: DirNode, depth: number) => {
-    for (const dir of node.dirs) {
-      const open = expanded.has(dir.path);
-      rows.push({ kind: "dir", node: dir, depth, expanded: open });
-      if (open) visit(dir, depth + 1);
-    }
-    for (const target of node.targets) {
-      rows.push({ kind: "target", target, depth });
-    }
-  };
-  visit(root, 0);
-  return rows;
-}
-
 /** Whether a rule class marks a test: `*_test` rules and `test_suite`s. */
 export function isTestRule(ruleClass: string): boolean {
   return ruleClass.endsWith("_test") || ruleClass === "test_suite";

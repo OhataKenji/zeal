@@ -35,12 +35,10 @@
 .tree-row.dir {
   padding-block: 0;
   align-items: stretch;
-  font-weight: 650;
 }
 
 .tree-row.dir.grouping {
   color: var(--muted-foreground);
-  font-weight: 400;
 }
 
 .tree-row.target:not(.selected) {
@@ -85,20 +83,6 @@
   flex-shrink: 0;
   font-size: 10px;
   color: var(--muted-foreground);
-}
-
-.tree-dot {
-  width: 10px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  color: var(--primary);
-}
-
-.tree-dot.test {
-  color: var(--test-color);
 }
 
 .target-head {

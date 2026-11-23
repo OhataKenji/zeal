@@ -4,7 +4,6 @@ import {
   ancestorsOf,
   buildTree,
   commandLine,
-  flatten,
   isTestRule,
   relations,
   shellQuote,
@@ -27,12 +26,6 @@ function treeFixture(): Target[] {
     target("//:root_tool"),
     target("//app/api:handler"),
   ];
-}
-
-function rowKey(row: ReturnType<typeof flatten>[number]): string {
-  return row.kind === "dir"
-    ? `dir:${row.node.path}@${row.depth}`
-    : `tgt:${row.target.label}@${row.depth}`;
 }
 
 test("package tree sorts directories and targets and counts subtree totals", () => {
@@ -94,49 +87,7 @@ test("subtreeTargets puts direct targets first, then descendants by label", () =
   );
 });
 
-test("flatten lists directories before target leaves at every level", () => {
-  const { root: tree } = buildTree(treeFixture());
-
-  // Collapsed: only depth-0 rows — directories first, then the root leaves.
-  assert.deepEqual(flatten(tree, new Set()).map(rowKey), [
-    "dir:app@0",
-    "dir:zeta@0",
-    "tgt://:root_tool@0",
-  ]);
-
-  // Expanded app and app/lib: each level still leads with its directories.
-  const rows = flatten(tree, new Set(["app", "app/lib"]));
-  assert.deepEqual(rows.map(rowKey), [
-    "dir:app@0",
-    "dir:app/api@1",
-    "dir:app/lib@1",
-    "tgt://app/lib:parser@2",
-    "tgt://app:alpha@1",
-    "tgt://app:server@1",
-    "dir:zeta@0",
-    "tgt://:root_tool@0",
-  ]);
-  assert.equal(rows[0].kind === "dir" && rows[0].expanded, true);
-  assert.equal(rows[1].kind === "dir" && rows[1].expanded, false);
-  assert.equal(rows[2].kind === "dir" && rows[2].expanded, true);
-
-  // There is no synthetic //... row: the root only contributes its own leaves.
-  assert.ok(rows.every((row) => row.kind !== "dir" || row.node.path !== ""));
-});
-
-test("revealing a target expands its package ancestors including the package itself", () => {
-  const { root: tree } = buildTree(treeFixture());
-  const expanded = new Set<string>();
-  for (const path of ancestorsOf(splitLabel("//app/lib:parser").pkg)) {
-    expanded.add(path);
-  }
-  // ancestorsOf is inclusive: "app/lib" opens so its :parser leaf shows.
-  assert.deepEqual([...expanded].sort(), ["app", "app/lib"]);
-  const leaf = flatten(tree, expanded).find(
-    (row) => row.kind === "target" && row.target.label === "//app/lib:parser",
-  );
-  assert.ok(leaf);
-  assert.equal(leaf.depth, 2);
+test("ancestorsOf includes the package but not the root", () => {
   assert.deepEqual(ancestorsOf("app/lib"), ["app", "app/lib"]);
   assert.deepEqual(ancestorsOf(""), []);
 });
@@ -210,20 +161,4 @@ test("commandLine joins quoted arguments with spaces", () => {
   assert.equal(commandLine({ arguments: ["FOO=bar", "sh"] }), "'FOO=bar' sh");
   assert.equal(commandLine({ arguments: ["if", "x"] }), "'if' x");
   assert.equal(commandLine({ arguments: ["it's", "x"] }), `'it'\\''s' x`);
-});
-
-test("directories and target leaves are distinct rows with no synthetic root", () => {
-  const rows = flatten(
-    buildTree(["//app/lib:parser", "//apple:server", "//:root"].map((label) => target(label))).root,
-    new Set(["app", "app/lib"]),
-  );
-  // Intermediate directories without their own targets still appear as rows.
-  assert.deepEqual(
-    rows.map((row) => rowKey(row)),
-    ["dir:app@0", "dir:app/lib@1", "tgt://app/lib:parser@2", "dir:apple@0", "tgt://:root@0"],
-  );
-  const app = rows.find((row) => row.kind === "dir" && row.node.path === "app");
-  assert.equal(app?.kind === "dir" && app.node.count, 1);
-  const leaf = rows.find((row) => row.kind === "target" && row.target.label === "//:root");
-  assert.equal(leaf?.kind === "target" && leaf.depth, 0);
 });

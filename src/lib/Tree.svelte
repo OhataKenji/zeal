@@ -1,7 +1,7 @@
 <script lang="ts">
   import { CaretDown, CaretRight } from "phosphor-svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { ancestorsOf, flatten, isTestRule, splitLabel, type DirNode } from "./model";
+  import { ancestorsOf, splitLabel, type DirNode } from "./model";
   import type { ExplorerSelection } from "./types";
 
   let {
@@ -15,7 +15,6 @@
   } = $props();
 
   const expanded = new SvelteSet<string>();
-  const rows = $derived(flatten(root, expanded));
 
   function toggle(dirPath: string) {
     if (expanded.has(dirPath)) {
@@ -52,53 +51,54 @@
   });
 </script>
 
-<div class="tree">
-  {#each rows as row (row.kind === "dir" ? row.node.path : row.target.label)}
-    {#if row.kind === "dir"}
-      {@const dir = row.node}
-      {@const isPkg = selection?.kind === "package" && selection.path === dir.path}
-      <div
-        class="tree-row dir"
-        class:selected={isPkg}
-        class:grouping={dir.targets.length === 0}
-        style:padding-left="{8 + row.depth * 12}px"
-      >
-        <button
-          type="button"
-          class="tree-caret"
-          aria-label={row.expanded ? `Collapse //${dir.path}` : `Expand //${dir.path}`}
-          aria-expanded={row.expanded}
-          onclick={() => toggle(dir.path)}
-        >
-          {#if row.expanded}<CaretDown size={10} />{:else}<CaretRight size={10} />{/if}
-        </button>
-        <button
-          type="button"
-          class="tree-body"
-          aria-current={isPkg ? "true" : undefined}
-          title={`//${dir.path}`}
-          onclick={() => selectDir(dir)}
-        >
-          <span class="tree-name">{dir.name}/</span>
-          <small>{dir.count}</small>
-        </button>
-      </div>
-    {:else}
-      {@const target = row.target}
-      {@const isTarget = selection?.kind === "target" && selection.label === target.label}
-      {@const test = isTestRule(target.ruleClass)}
+{#snippet children(node: DirNode, depth: number)}
+  {#each node.dirs as dir (dir.path)}
+    {@const open = expanded.has(dir.path)}
+    {@const isPkg = selection?.kind === "package" && selection.path === dir.path}
+    <div
+      class="tree-row dir"
+      class:selected={isPkg}
+      class:grouping={dir.targets.length === 0}
+      style:padding-left="{8 + depth * 12}px"
+    >
       <button
         type="button"
-        class="tree-row target"
-        class:selected={isTarget}
-        aria-current={isTarget ? "true" : undefined}
-        title={`${target.label} (${target.ruleClass})`}
-        style:padding-left="{8 + row.depth * 12}px"
-        onclick={() => onselect({ kind: "target", label: target.label })}
+        class="tree-caret"
+        aria-label={open ? `Collapse //${dir.path}` : `Expand //${dir.path}`}
+        aria-expanded={open}
+        onclick={() => toggle(dir.path)}
       >
-        <span class="tree-dot" class:test aria-hidden="true">{test ? "◇" : "●"}</span>
-        <span class="tree-name"><span class="dim">:</span>{target.name}</span>
+        {#if open}<CaretDown size={10} />{:else}<CaretRight size={10} />{/if}
       </button>
-    {/if}
+      <button
+        type="button"
+        class="tree-body"
+        aria-current={isPkg ? "true" : undefined}
+        title={`//${dir.path}`}
+        onclick={() => selectDir(dir)}
+      >
+        <span class="tree-name">{dir.name}/</span>
+        <small>{dir.count}</small>
+      </button>
+    </div>
+    {#if open}{@render children(dir, depth + 1)}{/if}
   {/each}
+  {#each node.targets as target (target.label)}
+    {@const isTarget = selection?.kind === "target" && selection.label === target.label}
+    <button
+      type="button"
+      class="tree-row target"
+      class:selected={isTarget}
+      aria-current={isTarget ? "true" : undefined}
+      title={`${target.label} (${target.ruleClass})`}
+      style:padding-left="{8 + depth * 12}px"
+      onclick={() => onselect({ kind: "target", label: target.label })}
+    >
+      <span class="tree-name"><span class="dim">:</span>{target.name}</span>
+    </button>
+  {/each}
+{/snippet}
+
+<div class="tree">
+  {@render children(root, 0)}
 </div>
