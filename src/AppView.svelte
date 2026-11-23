@@ -468,7 +468,7 @@
                   <p class="dim">Loading target details…</p>
                 {/if}
               {:else if pkg}
-                {#key pkg.pattern}
+                {#key pkg.name}
                   <PackageView
                     {pkg}
                     canRun={canSend(view, pkg.pattern)}

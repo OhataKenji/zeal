@@ -23,9 +23,9 @@ keep their state in their views.
   blocks saved-workspace restoration even after failure.
 - The target explorer builds one package tree per snapshot: the sidebar tree
   walks the nodes while `packageContents` projects a selection into the
-  package table's direct targets, `//path:all` pattern, and primary command —
-  the same values the package actions and the run shortcut execute. Selection
-  and target reads live in the session; expansion stays local to the views.
+  package table's direct targets and its `//path` heading. Package actions
+  and the run shortcut pass `//path:all` to Bazel. Selection and target reads
+  live in the session; expansion stays local to the views.
   Run, Query, and the command palette share the target search index derived
   once per snapshot.
 - Target reads have two lifetimes: static detail once per selection, then one

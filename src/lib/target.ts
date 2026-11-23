@@ -10,12 +10,9 @@ const FORBIDDEN_CHARACTERS = /[\p{White_Space}\p{Cc}]/u;
 export function packageScopeNote(pattern: string): string | null {
   if (!pattern.startsWith("//")) return null;
   const [pkg, target] = pattern.split(":");
-  const recursive = pkg.endsWith("/...");
   const wildcard = target === "all" || target === "*" || target === "all-targets";
-  if (!wildcard && !(recursive && target === undefined)) return null;
-  return recursive
-    ? "Bazel can match targets recursively across packages, not just the targets listed in Explorer."
-    : `Bazel runs ${pattern}, not the Explorer list. It may include other targets in this package.`;
+  if (pkg.endsWith("/...") || !wildcard) return null;
+  return `Bazel runs ${pattern}, not the Explorer list. It may include other targets in this package.`;
 }
 
 /** Validates a single target token without trimming or splitting it. */
