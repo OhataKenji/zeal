@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import SearchInput from "./SearchInput.svelte";
+  import type { SearchIndex } from "./search";
   import { packageScopeNote, targetError } from "./target";
   import type { BazelCommand } from "./types";
 
@@ -7,6 +9,7 @@
     cmd,
     pattern,
     flags,
+    targetIndex,
     canRun,
     onrun,
     onclose,
@@ -14,6 +17,7 @@
     cmd: BazelCommand;
     pattern: string;
     flags: string;
+    targetIndex: SearchIndex | null;
     canRun: (target: string) => boolean;
     onrun: (cmd: BazelCommand, pattern: string, flags: string) => void;
     onclose: () => void;
@@ -67,15 +71,14 @@
         <option value="test">test</option>
         <option value="run">run</option>
       </select>
-      <input
+      <SearchInput
         class="input mono"
-        type="text"
         aria-label="Target pattern"
         aria-invalid={!!error}
-        placeholder="//..."
-        spellcheck={false}
-        autocomplete="off"
-        bind:value={pattern}
+        placeholder="Search targets or enter a pattern"
+        index={targetIndex}
+        value={pattern}
+        oninput={(value) => (pattern = value)}
       />
     </div>
     {#if error}

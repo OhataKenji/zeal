@@ -61,7 +61,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { createIndex } from "./search";
+  import { createIndex, type SearchIndex } from "./search";
   import CopyButton from "./CopyButton.svelte";
   import QueryExpr from "./QueryExpr.svelte";
   import TargetActions from "./TargetActions.svelte";
@@ -88,28 +88,24 @@
     type QueryKind,
     type ResultView,
   } from "./query";
-  import type { TargetIndex } from "./types";
 
   let {
-    snap,
+    targetIndex,
     workspace,
     bazelAvailable,
   }: {
-    snap: TargetIndex | null;
+    targetIndex: SearchIndex | null;
     workspace: string;
     bazelAvailable: boolean;
   } = $props();
 
-  const searchIndex = $derived(
-    snap ? createIndex(snap.targets) : null,
-  );
   // Attribute names come from a static hint list: the label_kind snapshot
   // carries no attributes, and completion only assists.
   const attrIndex = createIndex(attrCandidates());
   // kind()'s pattern arg searches a wildcard-test hint, the non-rule kinds,
   // and every rule class in the snapshot.
   const kindIndex = $derived(
-    snap ? createIndex(kindCandidates(snap.targets)) : null,
+    targetIndex ? createIndex(kindCandidates(targetIndex.targets)) : null,
   );
   let root = $state<Expr>(
     parseQuery(EXAMPLES.query.Dependencies[0].expr, "query"),
@@ -449,7 +445,7 @@
               bind:node={root}
               queryKind={kind}
               {errors}
-              {searchIndex}
+              searchIndex={targetIndex}
               {kindIndex}
               {attrIndex}
               context="Root"
