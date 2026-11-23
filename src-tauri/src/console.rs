@@ -80,10 +80,8 @@ mod tests {
             let mut state = core.state.lock().unwrap();
             state
                 .workspaces
-                .insert(workspace.clone(), crate::scope::Scope::default());
-            state
-                .workspaces
-                .insert(other.clone(), crate::scope::Scope::default());
+                .insert(workspace.clone(), Default::default());
+            state.workspaces.insert(other.clone(), Default::default());
             state.invocations.insert(
                 id.clone(),
                 OwnedInvocation {

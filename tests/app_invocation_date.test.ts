@@ -291,12 +291,13 @@ test("AppView renders a diagnostic invocation's notice and process exit", async 
 
   const exited = output(9);
   assert.match(exited, /No build event record\. Bazel process exit code: 9\./);
-  assert.match(exited, /\? outcome unknown/);
+  assert.match(exited, /✗ process failed \(exit 9\)/);
   assert.match(exited, /Another command is running\. Exiting immediately\./);
   assert.doesNotMatch(exited, /role="tablist" aria-label="Invocation views"/);
 
   const unknown = output(null);
   assert.match(unknown, /Bazel process exit code: unknown\./);
+  assert.match(unknown, /\? outcome unknown/);
 });
 
 test("AppView links history target labels into the target explorer", async (t) => {

@@ -889,8 +889,9 @@ mod tests {
         sibling.data = f.data.clone();
         crate::workspace::test_support::repo(&f.ws, "https://example.com/shared.git");
         crate::workspace::test_support::repo(&sibling.ws, "https://example.com/shared.git");
-        store::refresh_workspace(&f.data, &f.ws).unwrap();
-        store::refresh_workspace(&f.data, &sibling.ws).unwrap();
+        store::refresh_workspace(&f.data, &f.ws, Some("https://example.com/shared.git")).unwrap();
+        store::refresh_workspace(&f.data, &sibling.ws, Some("https://example.com/shared.git"))
+            .unwrap();
         f.complete();
         sibling.complete();
         let ws = f.ws.canonicalize().unwrap();

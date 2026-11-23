@@ -1,6 +1,7 @@
 <script lang="ts">
   import ActionPair from "./ActionPair.svelte";
   import { isTestRule, subtreeTargets, type DirNode } from "./model";
+  import { packageScopeNote } from "./target";
   import type { BazelCommand } from "./types";
 
   let {
@@ -27,13 +28,19 @@
     recursive ? (node.path ? `//${node.path}/...` : "//...") : `//${node.path}:all`,
   );
   const visible = $derived(targets.slice(0, ROW_CAP));
-  const hasTests = $derived(targets.some((t) => isTestRule(t.ruleClass)));
+  const primaryCmd = $derived(targets.some((t) => isTestRule(t.ruleClass)) ? "test" : "build");
+
+  export function openFlags() {
+    onopenflags(primaryCmd, pattern);
+  }
 </script>
 
 <div class="view-head">
   <div>
     <h1 class="view-title mono">{pattern}</h1>
-    <div class="view-meta">{targets.length} targets</div>
+    <div class="view-meta">
+      {targets.length} discovered {targets.length === 1 ? "target" : "targets"}
+    </div>
     {#if node.targets.length > 0 && node.dirs.length > 0}
       <div class="sub-switch" role="group" aria-label="Target scope">
         <button
@@ -48,14 +55,15 @@
         >
       </div>
     {/if}
+    <p class="view-meta">{packageScopeNote(pattern)}</p>
   </div>
   <ActionPair
-    primaryCmd={hasTests ? "test" : "build"}
-    primaryLabel={hasTests ? "Test" : "Build"}
+    {primaryCmd}
+    primaryLabel={primaryCmd === "test" ? "Test" : "Build"}
     target={pattern}
     disabled={!canRun}
     {onrun}
-    {onopenflags}
+    onopenflags={openFlags}
   />
 </div>
 

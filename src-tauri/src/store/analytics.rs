@@ -1347,8 +1347,8 @@ mod tests {
 
         crate::workspace::test_support::repo(&f.ws, SHARED_URL);
         crate::workspace::test_support::repo(&other, SHARED_URL);
-        crate::store::refresh_workspace(&f.data, &f.ws).unwrap();
-        crate::store::refresh_workspace(&f.data, &other).unwrap();
+        crate::store::refresh_workspace(&f.data, &f.ws, Some(SHARED_URL)).unwrap();
+        crate::store::refresh_workspace(&f.data, &other, Some(SHARED_URL)).unwrap();
 
         let result = f.query(f.filter());
         assert_eq!(total(&result), 2);

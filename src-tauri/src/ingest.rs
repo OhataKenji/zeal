@@ -611,10 +611,8 @@ exit "$code"
         let other = PathBuf::from("/other");
         {
             let mut st = core.state.lock().unwrap();
-            st.workspaces
-                .insert(ws.clone(), crate::scope::Scope::default());
-            st.workspaces
-                .insert(other.clone(), crate::scope::Scope::default());
+            st.workspaces.insert(ws.clone(), Default::default());
+            st.workspaces.insert(other.clone(), Default::default());
             st.bazel = Some(PathBuf::from("/bin/bazel"));
         }
         // An unregistered workspace and a missing bazel are both rejected.

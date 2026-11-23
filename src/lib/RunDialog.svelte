@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { targetError } from "./target";
+  import { packageScopeNote, targetError } from "./target";
   import type { BazelCommand } from "./types";
 
   let {
@@ -21,6 +21,7 @@
 
   let dialog: HTMLDialogElement;
   const error = $derived(pattern === "" ? null : targetError(pattern));
+  const scopeNote = $derived(packageScopeNote(pattern));
   const preview = $derived(
     `bazel ${cmd} ${pattern.trim() || "//..."}${flags.trim() ? ` ${flags.trim()}` : ""}`,
   );
@@ -79,6 +80,8 @@
     </div>
     {#if error}
       <p class="field-error" role="status">{error}</p>
+    {:else if scopeNote}
+      <div class="view-meta">{scopeNote}</div>
     {/if}
     <input
       class="input mono"

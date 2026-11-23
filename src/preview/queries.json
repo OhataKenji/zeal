@@ -89,12 +89,22 @@
   },
   {
     "kind": "aquery",
-    "expr": "inputs(\"\\.h$\", //...)",
-    "actionOutputs": []
+    "expr": "inputs(\".*\\.h$\", //...)",
+    "actionOutputs": [
+      "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote.zip",
+      "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote-runfiles",
+      "bazel-out/darwin_arm64-fastbuild/bin/dispatch/quote_contract_test.zip",
+      "bazel-out/darwin_arm64-fastbuild/internal/_middlemen/dispatch_Squote_Ucontract_Utest-runfiles"
+    ]
   },
   {
     "kind": "aquery",
-    "expr": "outputs(\"\\.o$\", //...)",
-    "actionOutputs": []
+    "expr": "outputs(\".*\\.o$\", //...)",
+    "actionOutputs": [
+      "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_cc_grpc/rates.grpc.pb.o",
+      "bazel-out/darwin_arm64-fastbuild/bin/api/_objs/rates_proto/rates.pb.o",
+      "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/rate_server/rate_server.o",
+      "bazel-out/darwin_arm64-fastbuild/bin/rates/_objs/tariff/tariff.o"
+    ]
   }
 ]

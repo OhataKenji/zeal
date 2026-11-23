@@ -290,14 +290,13 @@ pub fn artifact(data: &Path, ws: &Path, invocation_id: &str, name: &str) -> io::
         .map_err(Into::into)
 }
 
-pub fn refresh_workspace(data: &Path, ws: &Path) -> Result<(), StoreError> {
+pub fn refresh_workspace(data: &Path, ws: &Path, repo_url: Option<&str>) -> Result<(), StoreError> {
     let ws = workspace_path(ws)?;
-    let repo_url = crate::workspace::repo_url(&ws);
     let mut store = Store::open(data)?;
     let tx = store
         .conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    save_workspace(&tx, ws.as_os_str().as_bytes(), repo_url.as_deref())?;
+    save_workspace(&tx, ws.as_os_str().as_bytes(), repo_url)?;
     tx.commit()?;
     Ok(())
 }

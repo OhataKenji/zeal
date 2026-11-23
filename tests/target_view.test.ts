@@ -404,6 +404,42 @@ test("TargetView renders target details", async (t) => {
   });
 });
 
+test("Run with flags explains package patterns but not individual labels", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: RunDialog } = await load("/src/lib/RunDialog.svelte");
+  function dialog(pattern: string) {
+    return render(RunDialog, {
+      props: {
+        cmd: "build",
+        pattern,
+        flags: "",
+        canRun: () => true,
+        onrun: () => {},
+        onclose: () => {},
+      },
+    }).body;
+  }
+  for (const pattern of ["//:all", "//app:all", "//app:*", "//app:all-targets"]) {
+    assert.match(dialog(pattern), /in this package, not just the targets listed in Explorer/);
+  }
+  for (const pattern of [
+    "//...",
+    "//app/...",
+    "//...:all",
+    "//app/...:all",
+    "//app/...:*",
+    "//app/...:all-targets",
+  ]) {
+    assert.match(
+      dialog(pattern),
+      /recursively across packages, not just the targets listed in Explorer/,
+    );
+  }
+  for (const pattern of ["//app:parser", "//app:individual/..."]) {
+    assert.doesNotMatch(dialog(pattern), /not just the targets listed/);
+  }
+});
+
 test("PackageView direct and subtree scopes, the scope switch, and the row cap", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: PackageView } = await load("/src/lib/PackageView.svelte");
@@ -434,7 +470,8 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
   await t.test("the root scope defaults to direct targets with a subtree switch", () => {
     const html = output(MIXED);
     assert.match(html, /<h1[^>]*>\/\/:all<\/h1>/);
-    assert.match(html, />1 targets</);
+    assert.match(html, />\s*1 discovered target\s*</);
+    assert.match(html, /in this package, not just the targets listed in Explorer/);
     // Only the root package's own target shows; descendants wait for the switch.
     assert.ok(html.includes(">:root</button>"));
     assert.doesNotMatch(html, />:top</);
@@ -462,6 +499,7 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
   await t.test("a package with only descendants defaults to the subtree scope", () => {
     const html = output([indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")], "app");
     assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
+    assert.match(html, /recursively across packages, not just the targets listed in Explorer/);
     // Descendant rows keep their package prefix; there is no switch to show.
     assert.ok(html.includes(">//app/lib</span>:deep</button>"));
     assert.ok(html.includes(">//app/web</span>:ui</button>"));
@@ -481,7 +519,7 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
     const html = output([]);
     assert.match(html, /<h1[^>]*>\/\/\.\.\.<\/h1>/);
     assert.match(html, /No targets in this scope\./);
-    assert.match(html, />0 targets</);
+    assert.match(html, />\s*0 discovered targets\s*</);
   });
 
   await t.test("test_suite counts as a test for the primary action", () => {
