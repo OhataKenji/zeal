@@ -54,6 +54,7 @@
     selection?.kind === "package" ? tree?.byPath.get(selection.path) : tree?.root,
   );
   const invocation = $derived(view.invocation);
+  let packageView: ReturnType<typeof PackageView> | undefined = $state();
 
   let opening = $state(false);
   let switchError = $state<string | null>(null);
@@ -148,7 +149,9 @@
 
   // An open run form keeps its edits; the prompt owns the keyboard too.
   function openRunShortcut() {
-    if (canOpenPalette) openRunDialog("build", selectedTarget ?? "//...");
+    if (!canOpenPalette) return;
+    if (packageView) packageView.openFlags();
+    else openRunDialog("build", selectedTarget ?? "//...");
   }
 
   function onWindowKeydown(event: KeyboardEvent) {
@@ -180,7 +183,7 @@
         selectPage(action.page);
         break;
       case "run":
-        openRunDialog("build", selectedTarget ?? "//...");
+        openRunShortcut();
         break;
       case "refresh":
         session.refresh();
@@ -459,6 +462,7 @@
               {:else if selectedDir}
                 {#key selectedDir.path}
                   <PackageView
+                    bind:this={packageView}
                     node={selectedDir}
                     canRun={canSend(view, "//...")}
                     onselect={selectTarget}

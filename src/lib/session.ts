@@ -458,14 +458,20 @@ export function createSession(
 
   function acceptSnapshot(ws: Workspace, snapshot: TargetIndex | null) {
     const selection = ws.target.selection;
-    const validTarget =
-      selection?.kind === "target" &&
-      (snapshot?.targets.some((target) => target.label === selection.label) ?? false);
-    const selectionInvalid =
-      selection?.kind === "package" || (selection?.kind === "target" && !validTarget);
+    let present = false;
+    if (snapshot && selection?.kind === "target") {
+      present = snapshot.targets.some(({ label }) => label === selection.label);
+    } else if (snapshot && selection?.kind === "package") {
+      // The tree also contains directories whose only rules are in subpackages.
+      present =
+        selection.path === "" ||
+        snapshot.targets.some(
+          ({ pkg }) => pkg === selection.path || pkg.startsWith(`${selection.path}/`),
+        );
+    }
     ws.snapshot = snapshot;
     ws.snapshotError = null;
-    ws.target = targetSelection(selectionInvalid ? null : selection);
+    ws.target = targetSelection(present ? selection : null);
   }
 
   function refreshSnapshot() {
