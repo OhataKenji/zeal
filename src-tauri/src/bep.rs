@@ -7,7 +7,7 @@
 use crate::protocol::bep::BuildEvent;
 use crate::protocol::bep::build_event::Payload;
 use crate::protocol::bep::build_event_id::Id;
-use crate::protocol::bep::build_metrics::ActionSummary;
+use crate::protocol::bep::build_metrics::{self, ActionSummary};
 use crate::protocol::generated::blaze::ActionCacheStatistics;
 use crate::protocol::generated::blaze::action_cache_statistics::MissReason;
 use crate::protocol::generated::command_line::command_line_section::SectionType;
@@ -22,12 +22,12 @@ const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 // Bound decompression memory: the decoder may reference 8 MiB of history.
 const MAX_WINDOW_LOG: u32 = 23;
 
-/// One named count inside a cache breakdown.
+/// One named count Bazel reports, e.g. a runner type or miss reason.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Count {
     pub name: String,
-    pub count: u64,
+    pub count: i32,
 }
 
 /// Local action-cache counters from `action_cache_statistics`.
@@ -39,15 +39,21 @@ pub struct LocalActionCache {
     pub miss_reasons: Vec<Count>,
 }
 
-/// Cache counters Bazel reports in `BuildMetrics.action_summary`. Remote AC,
-/// CAS, and transfer statistics are not part of BEP and stay absent.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+/// Output artifacts already present on disk and reused via the local action
+/// cache. The byte size crosses JSON as a decimal string so i64 values stay exact.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CacheStats {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub local_action_cache: Option<LocalActionCache>,
-    pub action_types: Vec<Count>,
-    pub runner_types: Vec<Count>,
+pub struct ArtifactCounts {
+    pub count: i32,
+    pub size_in_bytes: String,
+}
+
+/// Remote analysis-cache counters, also decimal strings for exact i64 values.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisCacheCounts {
+    pub cache_hits: String,
+    pub cache_misses: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -62,7 +68,13 @@ pub struct Bep {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_command_line: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_stats: Option<CacheStats>,
+    pub local_action_cache: Option<LocalActionCache>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_artifacts_from_action_cache: Option<ArtifactCounts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner_counts: Option<Vec<Count>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_analysis_cache: Option<AnalysisCacheCounts>,
     pub truncated: bool,
 }
 
@@ -154,10 +166,17 @@ pub struct TargetResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TestSummary {
     pub label: String,
     /// `overall_status` as Bazel names it, e.g. `PASSED` or `FAILED`.
     pub status: String,
+    /// `total_num_cached`; proto3 reports 0 when the field is unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_num_cached: Option<i32>,
+    /// `total_run_count`; proto3 reports 0 when the field is unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_run_count: Option<i32>,
 }
 
 pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
@@ -374,7 +393,30 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
         24,
         size,
     );
-    bep.truncated |= !replace(&mut bep.cache_stats, delta.cache_stats, 14, size);
+    bep.truncated |= !replace(
+        &mut bep.local_action_cache,
+        delta.local_action_cache,
+        r#","localActionCache":"#.len(),
+        size,
+    );
+    bep.truncated |= !replace(
+        &mut bep.output_artifacts_from_action_cache,
+        delta.output_artifacts_from_action_cache,
+        r#","outputArtifactsFromActionCache":"#.len(),
+        size,
+    );
+    bep.truncated |= !replace(
+        &mut bep.runner_counts,
+        delta.runner_counts,
+        r#","runnerCounts":"#.len(),
+        size,
+    );
+    bep.truncated |= !replace(
+        &mut bep.remote_analysis_cache,
+        delta.remote_analysis_cache,
+        r#","remoteAnalysisCache":"#.len(),
+        size,
+    );
 }
 fn append_tail(log: &mut String, value: &str) {
     if value.len() >= LOG_LIMIT {
@@ -421,12 +463,12 @@ fn frame_length<R: Read>(input: &mut R, first: u8) -> Option<u64> {
     None
 }
 
-/// A breakdown count Bazel reported as a positive integer under a usable
-/// name. Negatives, zero, and empty names are dropped rather than mislabeled.
-fn named_count(name: &str, count: i64) -> Option<Count> {
-    (!name.is_empty() && count > 0).then(|| Count {
+/// A breakdown count Bazel reported under a usable name. Empty names and
+/// negative counts are dropped rather than mislabeled; a real zero stays.
+fn named_count(name: &str, count: i32) -> Option<Count> {
+    (!name.is_empty() && count >= 0).then(|| Count {
         name: name.to_owned(),
-        count: count as u64,
+        count,
     })
 }
 
@@ -434,7 +476,7 @@ fn named_count(name: &str, count: i64) -> Option<Count> {
 /// instead of borrowing a known reason's name.
 fn miss_reason_name(reason: i32) -> String {
     match MissReason::try_from(reason) {
-        Ok(reason) => reason.as_str_name().replace('_', " ").to_ascii_lowercase(),
+        Ok(reason) => reason.as_str_name().to_string(),
         Err(_) => format!("Unknown ({reason})"),
     }
 }
@@ -450,37 +492,47 @@ fn project_local_action_cache(stats: &ActionCacheStatistics) -> Option<LocalActi
         miss_reasons: stats
             .miss_details
             .iter()
-            .filter_map(|detail| {
-                named_count(&miss_reason_name(detail.reason), i64::from(detail.count))
-            })
+            .filter_map(|detail| named_count(&miss_reason_name(detail.reason), detail.count))
             .collect(),
     })
 }
 
-/// Project the cache counters `action_summary` reports. `None` when nothing
-/// was recorded so empty metrics do not create an empty `cacheStats`.
-fn project_cache_stats(summary: &ActionSummary) -> Option<CacheStats> {
-    let stats = CacheStats {
-        local_action_cache: summary
-            .action_cache_statistics
-            .as_ref()
-            .and_then(project_local_action_cache),
-        action_types: summary
-            .action_data
-            .iter()
-            .filter_map(|data| named_count(&data.mnemonic, data.actions_executed))
-            .collect(),
-        runner_types: summary
-            .runner_count
-            .iter()
-            .filter(|runner| runner.name != "total")
-            .filter_map(|runner| named_count(&runner.name, i64::from(runner.count)))
-            .collect(),
-    };
-    (stats.local_action_cache.is_some()
-        || !stats.action_types.is_empty()
-        || !stats.runner_types.is_empty())
-    .then_some(stats)
+/// Runner counts in the order Bazel reported them, `total` and `internal`
+/// included. `None` when no usable row was recorded.
+fn project_runner_counts(summary: &ActionSummary) -> Option<Vec<Count>> {
+    let counts: Vec<Count> = summary
+        .runner_count
+        .iter()
+        .filter_map(|runner| named_count(&runner.name, runner.count))
+        .collect();
+    (!counts.is_empty()).then_some(counts)
+}
+
+/// Output artifacts already present on disk and reused via the local action
+/// cache. Negative counters are malformed and drop the group; the byte size
+/// stays a decimal string.
+fn project_artifact_counts(
+    metric: &build_metrics::artifact_metrics::FilesMetric,
+) -> Option<ArtifactCounts> {
+    (metric.count >= 0 && metric.size_in_bytes >= 0).then(|| ArtifactCounts {
+        count: metric.count,
+        size_in_bytes: metric.size_in_bytes.to_string(),
+    })
+}
+
+/// Remote analysis-cache counters as decimal strings for exact i64 values.
+fn project_analysis_cache(
+    stats: &build_metrics::RemoteAnalysisCacheStatistics,
+) -> Option<AnalysisCacheCounts> {
+    (stats.cache_hits >= 0 && stats.cache_misses >= 0).then(|| AnalysisCacheCounts {
+        cache_hits: stats.cache_hits.to_string(),
+        cache_misses: stats.cache_misses.to_string(),
+    })
+}
+
+/// proto3 int32 counters report 0 when unset; a negative is malformed.
+fn nonnegative(value: i32) -> Option<i32> {
+    (value >= 0).then_some(value)
 }
 
 pub(crate) fn test_status(status: i32) -> &'static str {
@@ -509,11 +561,23 @@ fn project(event: BuildEvent, bep: &mut Bep) {
             explicit_cmd_line: options.explicit_cmd_line.clone(),
         });
     }
-    if let Some(Payload::BuildMetrics(metrics)) = &event.payload
-        && let Some(summary) = &metrics.action_summary
-        && let Some(stats) = project_cache_stats(summary)
-    {
-        bep.cache_stats = Some(stats);
+    if let Some(Payload::BuildMetrics(metrics)) = &event.payload {
+        if let Some(summary) = &metrics.action_summary {
+            bep.local_action_cache = summary
+                .action_cache_statistics
+                .as_ref()
+                .and_then(project_local_action_cache);
+            bep.runner_counts = project_runner_counts(summary);
+        }
+        bep.output_artifacts_from_action_cache = metrics
+            .artifact_metrics
+            .as_ref()
+            .and_then(|artifact| artifact.output_artifacts_from_action_cache.as_ref())
+            .and_then(project_artifact_counts);
+        bep.remote_analysis_cache = metrics
+            .remote_analysis_cache_statistics
+            .as_ref()
+            .and_then(project_analysis_cache);
     }
     let Some(id) = event.id.and_then(|id| id.id) else {
         return;
@@ -542,6 +606,8 @@ fn project(event: BuildEvent, bep: &mut Bep) {
             bep.tests.push(TestSummary {
                 label: id.label,
                 status: test_status(summary.overall_status).to_string(),
+                total_num_cached: nonnegative(summary.total_num_cached),
+                total_run_count: nonnegative(summary.total_run_count),
             });
         }
         _ => {}
@@ -694,7 +760,9 @@ mod tests {
             parsed.tests,
             [TestSummary {
                 label: "//pkg:test".into(),
-                status: "FAILED".into()
+                status: "FAILED".into(),
+                total_num_cached: Some(0),
+                total_run_count: Some(0),
             }]
         );
         assert!(!parsed.truncated);
@@ -750,6 +818,10 @@ mod tests {
         assert_eq!(parsed.options, None);
         assert_eq!(parsed.original_command_line, None);
         assert_eq!(parsed.canonical_command_line, None);
+        assert_eq!(parsed.local_action_cache, None);
+        assert_eq!(parsed.output_artifacts_from_action_cache, None);
+        assert_eq!(parsed.runner_counts, None);
+        assert_eq!(parsed.remote_analysis_cache, None);
     }
 
     fn command_line(label: &str, sections: Vec<CommandLineSection>) -> BuildEvent {
@@ -919,6 +991,8 @@ mod tests {
             [TestSummary {
                 label: "//pkg:t".into(),
                 status: "PASSED".into(),
+                total_num_cached: Some(0),
+                total_run_count: Some(0),
             }]
         );
         assert!(!parsed.truncated);
@@ -950,7 +1024,10 @@ mod tests {
     fn empty_and_cached_fixtures_are_complete() {
         assert_eq!(fixture("loading_failed"), Bep::default());
         let cached = fixture("disk_cache_hit");
-        assert_eq!(cached.cache_stats, None);
+        assert_eq!(cached.local_action_cache, None);
+        assert_eq!(cached.output_artifacts_from_action_cache, None);
+        assert_eq!(cached.runner_counts, None);
+        assert_eq!(cached.remote_analysis_cache, None);
         assert_eq!(
             cached.targets,
             [TargetResult {
@@ -1112,27 +1189,28 @@ mod tests {
         );
     }
 
-    fn metrics_event(summary: ActionSummary) -> Vec<u8> {
+    fn metrics_event(metrics: crate::protocol::bep::BuildMetrics) -> Vec<u8> {
         event(BuildEvent {
-            payload: Some(Payload::BuildMetrics(crate::protocol::bep::BuildMetrics {
-                action_summary: Some(summary),
-                ..Default::default()
-            })),
+            payload: Some(Payload::BuildMetrics(metrics)),
+            ..Default::default()
+        })
+    }
+
+    fn summary_event(summary: ActionSummary) -> Vec<u8> {
+        metrics_event(crate::protocol::bep::BuildMetrics {
+            action_summary: Some(summary),
             ..Default::default()
         })
     }
 
     #[test]
-    fn projects_build_metrics_cache_stats() {
-        use crate::protocol::bep::build_metrics::action_summary::{ActionData, RunnerCount};
+    fn projects_build_metrics_cache_groups() {
+        use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
+        use crate::protocol::bep::build_metrics::artifact_metrics::FilesMetric;
+        use crate::protocol::bep::build_metrics::{ArtifactMetrics, RemoteAnalysisCacheStatistics};
         use crate::protocol::generated::blaze::action_cache_statistics::MissDetail;
 
         let miss = |reason: i32, count: i32| MissDetail { reason, count };
-        let action = |mnemonic: &str, executed: i64| ActionData {
-            mnemonic: mnemonic.into(),
-            actions_executed: executed,
-            ..Default::default()
-        };
         let runner = |name: &str, count: i32| RunnerCount {
             name: name.into(),
             count,
@@ -1140,91 +1218,147 @@ mod tests {
         };
 
         let parsed = parse(
-            metrics_event(ActionSummary {
-                action_cache_statistics: Some(ActionCacheStatistics {
-                    hits: 3,
-                    misses: 1,
-                    miss_details: vec![
-                        miss(MissReason::DigestMismatch as i32, 1),
-                        miss(MissReason::NotCached as i32, 0),
-                        miss(MissReason::UnconditionalExecution as i32, -2),
-                        miss(99, 2),
+            metrics_event(crate::protocol::bep::BuildMetrics {
+                action_summary: Some(ActionSummary {
+                    action_cache_statistics: Some(ActionCacheStatistics {
+                        hits: 3,
+                        misses: 1,
+                        miss_details: vec![
+                            miss(MissReason::DigestMismatch as i32, 1),
+                            miss(MissReason::NotCached as i32, 0),
+                            miss(99, 2),
+                            miss(MissReason::NotCached as i32, -1),
+                        ],
+                        ..Default::default()
+                    }),
+                    runner_count: vec![
+                        runner("total", 9),
+                        runner("internal", 4),
+                        runner("darwin-sandbox", 0),
+                        runner("negative", -2),
+                        runner("", 5),
                     ],
                     ..Default::default()
                 }),
-                action_data: vec![
-                    action("CppCompile", 5),
-                    action("", 3),
-                    action("CppLink", -1),
-                ],
-                runner_count: vec![
-                    runner("total", 9),
-                    runner("internal", 4),
-                    runner("darwin-sandbox", 3),
-                    runner("negative", -2),
-                ],
+                artifact_metrics: Some(ArtifactMetrics {
+                    output_artifacts_from_action_cache: Some(FilesMetric {
+                        count: 7,
+                        size_in_bytes: 9_007_199_254_740_993,
+                    }),
+                    ..Default::default()
+                }),
+                remote_analysis_cache_statistics: Some(RemoteAnalysisCacheStatistics {
+                    cache_hits: 9_007_199_254_740_993,
+                    cache_misses: 0,
+                    ..Default::default()
+                }),
                 ..Default::default()
             })
             .as_slice(),
         );
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
+        // Producer order is kept, including `total`; unusable rows drop out.
+        // i64 counters cross JSON as decimal strings.
+        let groups = serde_json::json!({
+            "localActionCache": parsed.local_action_cache,
+            "outputArtifactsFromActionCache": parsed.output_artifacts_from_action_cache,
+            "runnerCounts": parsed.runner_counts,
+            "remoteAnalysisCache": parsed.remote_analysis_cache,
+        });
         assert_eq!(
-            parsed.cache_stats,
-            Some(CacheStats {
-                local_action_cache: Some(LocalActionCache {
-                    hits: 3,
-                    misses: 1,
-                    miss_reasons: vec![
-                        Count {
-                            name: "digest mismatch".into(),
-                            count: 1,
-                        },
-                        Count {
-                            name: "Unknown (99)".into(),
-                            count: 2,
-                        },
+            groups,
+            serde_json::json!({
+                "localActionCache": {
+                    "hits": 3,
+                    "misses": 1,
+                    "missReasons": [
+                        {"name": "DIGEST_MISMATCH", "count": 1},
+                        {"name": "NOT_CACHED", "count": 0},
+                        {"name": "Unknown (99)", "count": 2},
                     ],
-                }),
-                action_types: vec![Count {
-                    name: "CppCompile".into(),
-                    count: 5,
-                }],
-                runner_types: vec![
-                    Count {
-                        name: "internal".into(),
-                        count: 4,
-                    },
-                    Count {
-                        name: "darwin-sandbox".into(),
-                        count: 3,
-                    },
+                },
+                "outputArtifactsFromActionCache": {
+                    "count": 7,
+                    "sizeInBytes": "9007199254740993",
+                },
+                "runnerCounts": [
+                    {"name": "total", "count": 9},
+                    {"name": "internal", "count": 4},
+                    {"name": "darwin-sandbox", "count": 0},
                 ],
+                "remoteAnalysisCache": {
+                    "cacheHits": "9007199254740993",
+                    "cacheMisses": "0",
+                },
             })
         );
-        let json = serde_json::to_value(&parsed).unwrap();
-        assert_eq!(
-            json["cacheStats"]["localActionCache"]["missReasons"][0]["name"],
-            "digest mismatch"
-        );
-        assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
     }
 
     #[test]
-    fn cache_stats_distinguish_recorded_zeros_from_absent_data() {
-        // No metrics event, metrics without a summary, and an empty summary
-        // all leave cacheStats absent.
+    fn build_metrics_groups_stay_absent_without_records() {
+        // No metrics event, empty metrics, and an empty summary all leave
+        // every group absent.
         for bytes in [
             event(target("//pkg:x", true)),
             event(BuildEvent {
                 payload: Some(Payload::BuildMetrics(Default::default())),
                 ..Default::default()
             }),
-            metrics_event(ActionSummary::default()),
+            summary_event(ActionSummary::default()),
         ] {
-            assert_eq!(parse(bytes.as_slice()).cache_stats, None);
+            let parsed = parse(bytes.as_slice());
+            assert_eq!(parsed.local_action_cache, None);
+            assert_eq!(parsed.output_artifacts_from_action_cache, None);
+            assert_eq!(parsed.runner_counts, None);
+            assert_eq!(parsed.remote_analysis_cache, None);
         }
-        // Recorded zeros are real data, not absence.
+    }
+
+    #[test]
+    fn build_metrics_groups_keep_recorded_zeros() {
+        // Recorded zeros are real data, not absence. Artifact and remote
+        // counters do not depend on `action_summary`.
         let parsed = parse(
-            metrics_event(ActionSummary {
+            metrics_event(crate::protocol::bep::BuildMetrics {
+                artifact_metrics: Some(crate::protocol::bep::build_metrics::ArtifactMetrics {
+                    output_artifacts_from_action_cache: Some(
+                        crate::protocol::bep::build_metrics::artifact_metrics::FilesMetric {
+                            count: 0,
+                            size_in_bytes: 0,
+                        },
+                    ),
+                    ..Default::default()
+                }),
+                remote_analysis_cache_statistics: Some(
+                    crate::protocol::bep::build_metrics::RemoteAnalysisCacheStatistics {
+                        cache_hits: 0,
+                        cache_misses: 0,
+                        ..Default::default()
+                    },
+                ),
+                ..Default::default()
+            })
+            .as_slice(),
+        );
+        assert_eq!(parsed.local_action_cache, None);
+        assert_eq!(
+            parsed.output_artifacts_from_action_cache,
+            Some(ArtifactCounts {
+                count: 0,
+                size_in_bytes: "0".into(),
+            })
+        );
+        assert_eq!(parsed.runner_counts, None);
+        assert_eq!(
+            parsed.remote_analysis_cache,
+            Some(AnalysisCacheCounts {
+                cache_hits: "0".into(),
+                cache_misses: "0".into(),
+            })
+        );
+        let parsed = parse(
+            summary_event(ActionSummary {
                 action_cache_statistics: Some(ActionCacheStatistics {
                     hits: 0,
                     misses: 0,
@@ -1235,32 +1369,187 @@ mod tests {
             .as_slice(),
         );
         assert_eq!(
-            parsed.cache_stats,
-            Some(CacheStats {
-                local_action_cache: Some(LocalActionCache {
-                    hits: 0,
-                    misses: 0,
-                    miss_reasons: vec![],
-                }),
-                ..Default::default()
+            parsed.local_action_cache,
+            Some(LocalActionCache {
+                hits: 0,
+                misses: 0,
+                miss_reasons: vec![],
             })
         );
-        // A negative counter cannot convert, so local stats stay absent.
-        assert_eq!(
-            parse(
-                metrics_event(ActionSummary {
+    }
+
+    #[test]
+    fn build_metrics_groups_drop_negative_counters() {
+        // Negative counters are malformed and drop their group.
+        for metrics in [
+            crate::protocol::bep::BuildMetrics {
+                action_summary: Some(ActionSummary {
                     action_cache_statistics: Some(ActionCacheStatistics {
                         hits: -1,
                         misses: 0,
                         ..Default::default()
                     }),
                     ..Default::default()
-                })
-                .as_slice()
-            )
-            .cache_stats,
-            None
+                }),
+                ..Default::default()
+            },
+            crate::protocol::bep::BuildMetrics {
+                artifact_metrics: Some(crate::protocol::bep::build_metrics::ArtifactMetrics {
+                    output_artifacts_from_action_cache: Some(
+                        crate::protocol::bep::build_metrics::artifact_metrics::FilesMetric {
+                            count: 1,
+                            size_in_bytes: -1,
+                        },
+                    ),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            crate::protocol::bep::BuildMetrics {
+                remote_analysis_cache_statistics: Some(
+                    crate::protocol::bep::build_metrics::RemoteAnalysisCacheStatistics {
+                        cache_hits: -1,
+                        cache_misses: 0,
+                        ..Default::default()
+                    },
+                ),
+                ..Default::default()
+            },
+        ] {
+            let parsed = parse(metrics_event(metrics).as_slice());
+            assert_eq!(parsed.local_action_cache, None);
+            assert_eq!(parsed.output_artifacts_from_action_cache, None);
+            assert_eq!(parsed.remote_analysis_cache, None);
+        }
+    }
+
+    #[test]
+    fn build_metrics_groups_merge_across_frames() {
+        use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
+        use crate::protocol::generated::blaze::action_cache_statistics::MissDetail;
+
+        let mut stream = summary_event(ActionSummary {
+            action_cache_statistics: Some(ActionCacheStatistics {
+                hits: 1,
+                misses: 2,
+                miss_details: vec![MissDetail {
+                    reason: MissReason::DigestMismatch as i32,
+                    count: 2,
+                }],
+                ..Default::default()
+            }),
+            runner_count: vec![RunnerCount {
+                name: "internal".into(),
+                count: 3,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        stream.extend(metrics_event(crate::protocol::bep::BuildMetrics {
+            artifact_metrics: Some(crate::protocol::bep::build_metrics::ArtifactMetrics {
+                output_artifacts_from_action_cache: Some(
+                    crate::protocol::bep::build_metrics::artifact_metrics::FilesMetric {
+                        count: 4,
+                        size_in_bytes: 40,
+                    },
+                ),
+                ..Default::default()
+            }),
+            remote_analysis_cache_statistics: Some(
+                crate::protocol::bep::build_metrics::RemoteAnalysisCacheStatistics {
+                    cache_hits: 5,
+                    cache_misses: 6,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        }));
+        let parsed = parse(stream.as_slice());
+        assert_eq!(
+            parsed
+                .local_action_cache
+                .map(|local| (local.hits, local.misses)),
+            Some((1, 2))
         );
+        assert_eq!(
+            parsed
+                .runner_counts
+                .as_ref()
+                .map(|rows| rows[0].name.as_str()),
+            Some("internal")
+        );
+        assert_eq!(
+            parsed
+                .output_artifacts_from_action_cache
+                .as_ref()
+                .map(|counts| counts.count),
+            Some(4)
+        );
+        assert_eq!(
+            parsed
+                .remote_analysis_cache
+                .as_ref()
+                .map(|counts| counts.cache_hits.as_str()),
+            Some("5")
+        );
+    }
+
+    #[test]
+    fn test_summary_reports_cached_and_attempt_counts() {
+        fn summary_event_bytes(summary: ProtoTestSummary) -> Vec<u8> {
+            event(BuildEvent {
+                id: Some(BuildEventId {
+                    id: Some(Id::TestSummary(TestSummaryId {
+                        label: "//pkg:t".into(),
+                        ..Default::default()
+                    })),
+                }),
+                payload: Some(Payload::TestSummary(summary)),
+                ..Default::default()
+            })
+        }
+
+        let parsed = parse(
+            summary_event_bytes(ProtoTestSummary {
+                overall_status: 1,
+                total_num_cached: 2,
+                total_run_count: 24,
+                ..Default::default()
+            })
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.tests,
+            [TestSummary {
+                label: "//pkg:t".into(),
+                status: "PASSED".into(),
+                total_num_cached: Some(2),
+                total_run_count: Some(24),
+            }]
+        );
+        let json = serde_json::to_value(&parsed.tests[0]).unwrap();
+        assert_eq!(json["totalNumCached"], 2);
+        assert_eq!(json["totalRunCount"], 24);
+        // Unset proto3 counters are a recorded 0; a negative is malformed.
+        let parsed = parse(
+            summary_event_bytes(ProtoTestSummary {
+                overall_status: 1,
+                ..Default::default()
+            })
+            .as_slice(),
+        );
+        assert_eq!(parsed.tests[0].total_num_cached, Some(0));
+        assert_eq!(parsed.tests[0].total_run_count, Some(0));
+        let parsed = parse(
+            summary_event_bytes(ProtoTestSummary {
+                overall_status: 1,
+                total_num_cached: -3,
+                ..Default::default()
+            })
+            .as_slice(),
+        );
+        assert_eq!(parsed.tests[0].total_num_cached, None);
+        assert_eq!(parsed.tests[0].total_run_count, Some(0));
     }
 }
 

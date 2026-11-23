@@ -1085,19 +1085,20 @@
       ]
     },
     "bep": {
-      "cacheStats": {
-        "actionTypes": [],
-        "runnerTypes": [
-          {
-            "count": 5,
-            "name": "internal"
-          },
-          {
-            "count": 3,
-            "name": "darwin-sandbox"
-          }
-        ]
-      },
+      "runnerCounts": [
+        {
+          "count": 8,
+          "name": "total"
+        },
+        {
+          "count": 5,
+          "name": "internal"
+        },
+        {
+          "count": 3,
+          "name": "darwin-sandbox"
+        }
+      ],
       "options": {
         "cmdLine": [
           "--jobs=8",
@@ -1759,19 +1760,20 @@
       ]
     },
     "bep": {
-      "cacheStats": {
-        "actionTypes": [],
-        "runnerTypes": [
-          {
-            "count": 4,
-            "name": "internal"
-          },
-          {
-            "count": 4,
-            "name": "darwin-sandbox"
-          }
-        ]
-      },
+      "runnerCounts": [
+        {
+          "count": 8,
+          "name": "total"
+        },
+        {
+          "count": 4,
+          "name": "internal"
+        },
+        {
+          "count": 4,
+          "name": "darwin-sandbox"
+        }
+      ],
       "options": {
         "cmdLine": [
           "--jobs=8",
@@ -9822,19 +9824,20 @@
       ]
     },
     "bep": {
-      "cacheStats": {
-        "actionTypes": [],
-        "runnerTypes": [
-          {
-            "count": 8,
-            "name": "internal"
-          },
-          {
-            "count": 10,
-            "name": "darwin-sandbox"
-          }
-        ]
-      },
+      "runnerCounts": [
+        {
+          "count": 18,
+          "name": "total"
+        },
+        {
+          "count": 8,
+          "name": "internal"
+        },
+        {
+          "count": 10,
+          "name": "darwin-sandbox"
+        }
+      ],
       "options": {
         "cmdLine": [
           "--jobs=8",

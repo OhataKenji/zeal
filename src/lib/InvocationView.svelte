@@ -8,7 +8,7 @@
     sectionMessage,
     sectionNoticeTone,
   } from "./invocation";
-  import CachePanel from "./invocation/CachePanel.svelte";
+  import BuildMetricsDetails from "./invocation/BuildMetricsDetails.svelte";
   import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
   import Notice from "./Notice.svelte";
@@ -46,7 +46,7 @@
       canSend(view, rerunCandidate.pattern),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
-  const sections = ["Targets", "Cache", "Details", "Logs", "Timing"] as const;
+  const sections = ["Targets", "Details", "Logs", "Timing"] as const;
   const tabs = ["All", ...sections, "Compare"] as const;
   let active = $state<(typeof tabs)[number]>("All");
   let panel = $state<HTMLDivElement>();
@@ -118,8 +118,6 @@
             {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
             {#if section === "Targets"}
               <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
-            {:else if section === "Cache"}
-              <CachePanel section={view.detail?.bep} loading={view.detailLoading} />
             {:else if section === "Logs"}
               <LogPanel section={view.detail?.log} loading={view.detailLoading} />
             {:else if section === "Details"}
@@ -147,6 +145,7 @@
                     {((shown.finishedAt - shown.startedAt) / 1000).toFixed(3)}s
                   </dd>{/if}
               </dl>
+              <BuildMetricsDetails section={view.detail?.bep} loading={view.detailLoading} />
               <h3 class="panel-subheading">Options</h3>
               {#if bep?.options}
                 <section class="invocation-command-block">

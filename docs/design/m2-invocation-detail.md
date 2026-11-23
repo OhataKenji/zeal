@@ -33,7 +33,7 @@ Bazel 8 の既定の Skymeld では analysis と execution が重なり、profil
 再利用は profile から分類しない。
 Bazel 8.7.0 の spike では、hit と miss のどちらにも `check cache hit` event が現れた。
 内部の event 名や後続 event からの推定は、可視化には持ち込まない。
-Cache 欄は BEP の `action_summary` が記録した local action cache の hit/miss、miss 理由、action 種別、runner 種別をそのまま表示する。
+Details 欄は BEP が記録した cache 関連の値をそのまま表示する。local action cache の hit/miss と miss 理由、action cache から復元された output artifact の件数とサイズ、runner ごとの action 数、test ごとの cache 済み件数と shard 試行数、remote analysis cache の hit/miss である。
 remote AC/CAS/転送の統計は BEP に含まれないため表示せず、記録がないことだけを示す。Bazel server、解析済みの情報、既存出力の維持も速度に関わるが、それらの層の再利用率は表示しない([BuildBuddy Remote Runners](https://www.buildbuddy.io/docs/remote-runner-introduction/))。
 
 ## Overview
@@ -141,7 +141,7 @@ Skymeld で analysis と execution が重なることを注記する。
 ## Alternatives Considered
 
 - **exec log で action 一覧を出す**：action と target の対応を詳しく出せるが、mock に対応する画面がなく、flag と parser が増える。オーナーの判断により採用しない
-- **profile の event 名から再利用を推定する**：内部実装への依存になるため採用しない。BEP の `action_summary` が記録する cache 統計は Cache 欄へそのまま表示する
+- **profile の event 名から再利用を推定する**：内部実装への依存になるため採用しない。BEP が記録する cache 統計は Details 欄へそのまま表示する
 - **aquery で実行されなかった action を分類する**：設定の再現と別呼び出しの結果との照合が必要になる。今版では profile の可視化に絞る
 - **SQLite に parse 結果を保存する**：再表示を速くできるが、生 file と保存値の整合を管理する必要がある。今版は表示のたびに parse する
 

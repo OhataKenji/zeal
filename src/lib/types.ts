@@ -260,7 +260,7 @@ export interface WorkspaceInfo {
   entries: BazelInfoEntry[];
 }
 
-/** One named count inside a BEP cache breakdown. */
+/** One named count inside a BEP metrics breakdown. */
 export interface Count {
   name: string;
   count: number;
@@ -273,18 +273,28 @@ export interface LocalActionCache {
   missReasons: Count[];
 }
 
-/** Cache counters Bazel reports in `BuildMetrics.action_summary`. Remote AC,
- * CAS, and transfer statistics are not part of BEP. */
-export interface CacheStats {
-  localActionCache?: LocalActionCache;
-  actionTypes: Count[];
-  runnerTypes: Count[];
+/** Output artifacts already present on disk and reused via the local action
+ * cache. `sizeInBytes` is a decimal string so i64 values stay exact. */
+export interface ArtifactCounts {
+  count: number;
+  sizeInBytes: string;
+}
+
+/** Remote analysis-cache counters as decimal strings for exact i64 values. */
+export interface AnalysisCacheCounts {
+  cacheHits: string;
+  cacheMisses: string;
 }
 
 /** Parsed build-event data retained for inspection in the invocation view. */
 export interface Bep {
   targets: Array<{ label: string; ok: boolean; aspect?: string; configuration?: string }>;
-  tests: Array<{ label: string; status: string }>;
+  tests: Array<{
+    label: string;
+    status: string;
+    totalNumCached?: number;
+    totalRunCount?: number;
+  }>;
   originalCommandLine?: string;
   canonicalCommandLine?: string;
   options?: {
@@ -293,7 +303,10 @@ export interface Bep {
     cmdLine: string[];
     explicitCmdLine: string[];
   };
-  cacheStats?: CacheStats;
+  localActionCache?: LocalActionCache;
+  outputArtifactsFromActionCache?: ArtifactCounts;
+  runnerCounts?: Count[];
+  remoteAnalysisCache?: AnalysisCacheCounts;
   truncated: boolean;
 }
 

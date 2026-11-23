@@ -132,8 +132,9 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
       },
     }).body.replace(/<!--[\s\S]*?-->/g, "");
     assert.match(html, /id="invocation-tab-Compare"/);
+    assert.ok(!html.includes('id="invocation-tab-Cache"'));
     assert.ok(!html.includes("compare-invocation-id"));
-    for (const section of ["Targets", "Cache", "Details", "Logs", "Timing"]) {
+    for (const section of ["Targets", "Details", "Logs", "Timing"]) {
       assert.ok(
         html.includes(`id="invocation-heading-${section}"`),
         `missing section heading ${section}`,
