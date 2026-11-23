@@ -387,21 +387,27 @@ test("AppView shows pending or first-read All details without section flashes", 
   function expectNoSections(html: string) {
     assert.match(html, />build \/\/app:app<\/h1>/);
     assert.match(html, /role="tablist" aria-label="Invocation views"/);
-    assert.equal(html.match(/Build details aren't available yet\./g)?.length, 1);
     assert.doesNotMatch(html, /No build events available yet\./);
     assert.doesNotMatch(html, /invocation-heading-/);
     assert.doesNotMatch(html, /role="alert"/);
   }
 
   await t.test("a pending detail shows one neutral message", () => {
-    expectNoSections(
-      output({
-        detail: { record, log: { status: "pending" }, bep: { status: "pending" } },
-      }),
-    );
+    const html = output({
+      detail: {
+        record,
+        log: { status: "pending" },
+        bep: { status: "pending" },
+      },
+    });
+    expectNoSections(html);
+    assert.equal(html.match(/Build details aren't available yet\./g)?.length, 1);
   });
 
-  await t.test("the first detail read shows the same message", () => {
-    expectNoSections(output({ detail: null, detailLoading: true }));
+  await t.test("the first detail read announces loading without sections", () => {
+    const html = output({ detail: null, detailLoading: true });
+    expectNoSections(html);
+    assert.equal(html.match(/Loading invocation…/g)?.length, 1);
+    assert.doesNotMatch(html, /Build details aren't available yet\./);
   });
 });

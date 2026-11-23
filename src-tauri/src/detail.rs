@@ -194,6 +194,7 @@ mod tests {
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
         assert!(matches!(detail.log, Section::Incomplete { .. }));
         assert!(matches!(detail.bep, Section::Incomplete { .. }));
+        assert_eq!(detail.record.exit_code, None);
     }
     #[test]
     fn missing_event_artifact_still_yields_the_record() {
@@ -252,17 +253,5 @@ mod tests {
         fs::create_dir(&other).unwrap();
         assert!(invocation_detail(&f.data, &other, id).is_err());
         assert!(invocation_profile(&f.data, &other, id).is_err());
-    }
-
-    #[test]
-    fn valid_prefix_from_a_disconnected_receipt_is_shown_as_incomplete() {
-        let f = Fixture::new();
-        let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        receipt.partial().unwrap();
-        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
-        assert!(matches!(detail.log, Section::Incomplete { .. }));
-        assert!(matches!(detail.bep, Section::Incomplete { .. }));
-        assert_eq!(detail.record.exit_code, None);
     }
 }

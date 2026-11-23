@@ -112,10 +112,9 @@
             runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
           />
         {/key}
-      {:else if active === "All" &&
-        (view.detail?.bep.status === "pending" || (view.detailLoading && !view.detail))}
+      {:else if active === "All" && view.detail?.bep.status === "pending"}
         <p class="panel-empty">Build details aren't available yet.</p>
-      {:else}
+      {:else if active !== "All" || view.detail || !view.detailLoading}
         {#each sections as section}
           {#if active === "All" || active === section}
             <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
