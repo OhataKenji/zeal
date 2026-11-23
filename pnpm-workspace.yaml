@@ -2,3 +2,10 @@ allowBuilds:
   lefthook: true
 # Supply-chain guard: don't resolve versions published <7 days ago (minutes).
 minimumReleaseAge: 10080
+# svelte-check uses the TypeScript 6 JS API even with the native TypeScript 7 checker.
+packageExtensions:
+  svelte-check:
+    dependencies:
+      typescript: "~6.0.2"
+overrides:
+  "svelte-check>typescript:peer": "-"
