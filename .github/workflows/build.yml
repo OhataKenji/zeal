@@ -76,6 +76,8 @@ jobs:
 
       - name: Build Tauri bundles
         env:
+          # These CI bundles aren't published; favor faster AppImage compression.
+          LDAI_COMP: gzip
           # Match tauri-action's DMG packaging on macOS runners.
           TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         run: |
