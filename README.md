@@ -54,39 +54,39 @@ Open only trusted repositories.
 
 ### Workspace
 
-Find the output directory or test logs without sifting through `bazel info`. Set which packages Zeal explores and copy the `.bazelrc` settings to record terminal builds alongside runs started in Zeal.
+Find your build output and test logs. Choose which packages Zeal scans. To record terminal builds too, copy the settings shown here into your `.bazelrc`.
 
-![Bazel Info for parcel-desk, including the output base, execution root, and test log directory](docs/screenshots/workspace-info.png)
+![Bazel output and test log paths for parcel-desk](docs/screenshots/workspace-info.png)
 
 ### Targets
 
-Browse packages or press `⌘K` / `Ctrl+K` to find a target by name, then build, test, or run it. Inspect its rule attributes in **Definition**, resolved outputs and dependencies in **Configured**, or each action's command, inputs, and outputs in **Actions**.
+Browse packages or press `⌘K` / `Ctrl+K` to find a target. Build, test, or run it. Open **Definition** for rule attributes or **Configured** for resolved outputs and dependencies. **Actions** shows each action's command, inputs, and outputs.
 
-![The Actions tab for //rates:rate_server with CcStrip expanded to show its command, output, and inputs](docs/screenshots/target-actions.png)
+![The CcStrip action for //rates:rate_server shows its command, inputs, and output](docs/screenshots/target-actions.png)
 
 ### Modules
 
-Find out why a Bzlmod dependency is in your build. Follow **Required by** back to its parents, or choose **Explain** to see why Bazel selected that version.
+Select a Bzlmod module. Follow **Required by** to see what depends on it, or choose **Explain** to see why Bazel picked that version.
 
-![The module inspector traces c-ares back to the root module through gRPC](docs/screenshots/module-explain.png)
+![The root module depends on c-ares through gRPC](docs/screenshots/module-explain.png)
 
 ### Query
 
-Build a `deps` expression from blocks and see both the dependency graph and the Bazel command that produced it. Switch to **Code** to edit the expression directly, or use `cquery` and `aquery` to inspect configured targets and build actions.
+Build a `deps` query with blocks, or edit it in **Code**. See the dependency graph and the Bazel command that produced it. Use `cquery` for configured targets and `aquery` for build actions.
 
-![The visual query builder, its generated bazel query command, and the resulting graph of platform dependencies](docs/screenshots/query-graph.png)
+![A query built with blocks, its Bazel command, and the graph of platform dependencies](docs/screenshots/query-graph.png)
 
 ### History
 
-Follow live runs across worktrees and stop a build started in Zeal without switching back to its worktree. For finished runs, inspect logs and test results, select a span in **Timing** to see where the build spent its time, or use **Compare** to see which flags changed.
+Follow builds across worktrees. If you started a build in Zeal, you can stop it from any worktree. After a run, check its logs and test results. Use **Timing** to see what took time or **Compare** to see which flags changed between runs.
 
-![Timing trace for a rate_server build with the nine-second analysis and execution phase selected on the main thread](docs/screenshots/history-timing.png)
+![A rate_server build with a nine-second phase selected on the main thread](docs/screenshots/history-timing.png)
 
 ### Analytics
 
-Filter daily outcomes and p50/p95 durations for locally recorded builds and tests by workspace, command, or target pattern. The ranking shows which target patterns account for the most build time in total, regardless of the chart's target pattern filter.
+See daily results and run times (p50 and p95) for builds and tests recorded on your machine. Filter the charts by workspace, command, or target pattern. The ranking lists target patterns by total build time. The target pattern filter does not change this ranking.
 
-![Daily invocation counts stacked by outcome, with workspace, command, and target pattern filters](docs/screenshots/analytics-invocations.png)
+![Daily build and test counts, grouped by result](docs/screenshots/analytics-invocations.png)
 
 ## Record terminal invocations
 
