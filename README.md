@@ -72,9 +72,9 @@ Select a Bzlmod module. Follow **Required by** to see what depends on it, or cho
 
 ### Query
 
-Build Bazel queries with blocks without having to remember the syntax. For example, find what depends on a target and see the result as a graph. View the generated Bazel command or edit the query in **Code**. Use `cquery` for configured targets and `aquery` for build actions.
+Choose a query from the examples or pick a function from a menu and fill in its fields. You can see what a target depends on without writing a query by hand. View the dependency graph and the generated Bazel command, or edit the query in **Code**. Use `cquery` for configured targets and `aquery` for build actions.
 
-![A query built with blocks, its Bazel command, and the graph of platform dependencies](docs/screenshots/query-graph.png)
+![The Query editor shows the selected deps function, the generated Bazel command, and a graph of platform dependencies](docs/screenshots/query-graph.png)
 
 ### History
 
