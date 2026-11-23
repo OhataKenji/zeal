@@ -13,8 +13,9 @@ keep their state in their views.
 - Async responses must match their captured owner and a live session, including
   A→B→A navigation. Core snapshots must have a newer revision.
 - A build, test, or run waits for Zeal's outstanding target and workspace-info
-  reads in that canonical workspace, including superseded reloads. Navigation,
-  a new open request, or disposal cancels an unsent start. User invocations do
+  reads in that canonical workspace, including superseded reloads. Navigation
+  or opening another workspace drops the automatic Console transition, not
+  the submitted command. Disposing the session cancels unsent starts. User invocations do
   not wait for other user invocations: Bazel still rejects output-base lock
   contention immediately. An explicit open blocks saved-workspace restoration
   even after failure.

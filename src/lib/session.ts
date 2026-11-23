@@ -82,7 +82,8 @@ interface SessionState {
   workspace: Workspace | null;
   page: Page;
   selectedInvocationId: string | null;
-  start: object | null;
+  /** The pending start whose reply may still update the current view. */
+  startFeedback: object | null;
   error: string | null;
   saved: Saved;
 }
@@ -109,7 +110,7 @@ function initialState(page: Page): SessionState {
     workspace: null,
     page,
     selectedInvocationId: null,
-    start: null,
+    startFeedback: null,
     error: null,
     saved: savedReaders(),
   };
@@ -264,7 +265,7 @@ function sessionView(state: SessionState) {
     targetPhase: target?.phase.value ?? null,
     targetPhaseError: target?.phase.error ?? null,
     modules: ws?.modules.state ?? null,
-    starting: state.start !== null,
+    starting: state.startFeedback !== null,
     error: state.error,
     invocations: history,
     invocationsError: ws?.historyError ?? null,
@@ -704,7 +705,7 @@ export function createSession(
       diagnostics: [],
     };
     state.selectedInvocationId = null;
-    state.start = null;
+    state.startFeedback = null;
     state.error = null;
     state.saved = savedReaders();
     publish();
@@ -718,7 +719,7 @@ export function createSession(
     const previousId = selectedInvocationId(state);
     state.page = "history";
     state.selectedInvocationId = id;
-    state.start = null;
+    state.startFeedback = null;
     if (previousId !== id) {
       state.saved = savedReaders();
     }
@@ -758,9 +759,9 @@ export function createSession(
 
   function showPage(page: Page) {
     if (disposed) return;
-    const changed = state.page !== page || state.start !== null;
+    const changed = state.page !== page || state.startFeedback !== null;
     state.page = page;
-    state.start = null;
+    state.startFeedback = null;
     if (changed) {
       // Claim History's first row before the frame so it never flashes empty.
       claimFirstInvocation();
@@ -802,7 +803,7 @@ export function createSession(
   function select(selection: ExplorerSelection) {
     if (disposed) return;
     state.page = "targets";
-    state.start = null;
+    state.startFeedback = null;
     const ws = state.workspace;
     if (!ws) {
       publish();
@@ -868,14 +869,14 @@ export function createSession(
     const ws = state.workspace;
     if (disposed || !ws || !canSend(sessionView(state), pattern)) return;
     const token = {};
-    state.start = token;
+    state.startFeedback = token;
     state.error = null;
     publish();
     try {
       // Recheck after each wait: a reload may have started in the meantime.
       while (discovery.has(ws.path)) {
         await discovery.get(ws.path);
-        if (disposed || state.start !== token) return;
+        if (disposed) return;
       }
       const id = await transport.invoke<string>(COMMANDS.startInvocation, {
         workspace: ws.path,
@@ -883,11 +884,11 @@ export function createSession(
         pattern,
         arguments: argumentsText,
       });
-      if (disposed || state.start !== token) return;
+      if (disposed || state.startFeedback !== token) return;
       openInvocation(id, false);
     } catch (error) {
-      if (disposed || state.start !== token) return;
-      state.start = null;
+      if (disposed || state.startFeedback !== token) return;
+      state.startFeedback = null;
       state.error = String(error);
       publish();
     }
@@ -921,8 +922,8 @@ export function createSession(
     if (disposed) return false;
     const request = {};
     workspaceRequest = request;
-    if (state.start !== null) {
-      state.start = null;
+    if (state.startFeedback !== null) {
+      state.startFeedback = null;
       publish();
     }
     try {

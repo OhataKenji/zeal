@@ -369,24 +369,46 @@ test("an immediate build waits for every same-workspace discovery, including a l
   });
 });
 
-test("a workspace switch cancels an unsent build without blocking the new workspace", async () => {
+test("a workspace switch sends both starts and only the current reply routes", async () => {
   const h = harness();
   await initReady(h);
   const original = pendingRequest(h, "refresh");
-  h.session.start("build", "//app:first");
+  h.session.start("build", "//app:first", "--config=a-only");
   const opened = h.session.openWorkspace(OTHER, { include: ["//..."] });
   pendingRequest(h, "open_workspace").reply.resolve({
     workspace: OTHER,
     state: coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
   });
   await opened;
-  h.session.start("test", "//app:second");
-  await loadSnapshot(h);
-  assert.equal(requestCount(h, "start_invocation"), 1);
-  assert.equal(pendingRequest(h, "start_invocation").args?.workspace, OTHER);
+  h.session.start("test", "//app:second", "--config=b-only");
+  lastPendingRequest(h, "refresh").reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  pendingRequest(h, "start_invocation").reply.resolve("b-inv");
+  await settle();
   original.reply.resolve({ snapshot: SNAPSHOT, error: null });
   await settle();
-  assert.equal(requestCount(h, "start_invocation"), 1);
+  assert.deepEqual(
+    h.pending.filter((call) => call.command === "start_invocation").map((call) => call.args),
+    [
+      {
+        workspace: OTHER,
+        cmd: "test",
+        pattern: "//app:second",
+        arguments: "--config=b-only",
+      },
+      {
+        workspace: WS,
+        cmd: "build",
+        pattern: "//app:first",
+        arguments: "--config=a-only",
+      },
+    ],
+  );
+  lastPendingRequest(h, "start_invocation").reply.resolve("a-inv");
+  await settle();
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, "b-inv");
+  assert.equal(h.view.state?.workspace, OTHER);
 });
 
 test("returning to A waits for its abandoned discovery but not B's", async () => {
@@ -411,18 +433,33 @@ test("returning to A waits for its abandoned discovery but not B's", async () =>
   assert.equal(pendingRequest(h, "start_invocation").args?.workspace, WS);
 });
 
-test("navigation and disposal cancel starts that have not reached Bazel", async () => {
+test("navigation keeps an accepted start but drops its reply's routing", async () => {
   const h = harness();
   await initReady(h);
+  await loadHistory(h, [RECORD]);
+  const refresh = pendingRequest(h, "refresh");
   h.session.start("build", "//app:first");
-  h.session.showPage("analytics");
-  await loadSnapshot(h);
+  h.session.showPage("history");
+  h.session.selectInvocation(RECORD.id);
+  refresh.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
+  assert.equal(requestCount(h, "start_invocation"), 1);
+  pendingRequest(h, "start_invocation").reply.resolve("late-inv");
+  await settle();
+  assert.equal(h.view.page, "history");
+  assert.equal(h.view.selectedInvocationId, RECORD.id);
   assert.equal(h.view.starting, false);
-  assert.equal(requestCount(h, "start_invocation"), 0);
-  h.session.refresh();
-  h.session.start("build", "//app:second");
+  assert.equal(h.view.error, null);
+});
+
+test("disposal prevents a start that has not reached Bazel", async () => {
+  const h = harness();
+  await initReady(h);
+  const refresh = pendingRequest(h, "refresh");
+  h.session.start("build", "//app:first");
   h.session.dispose();
-  await loadSnapshot(h);
+  refresh.reply.resolve({ snapshot: SNAPSHOT, error: null });
+  await settle();
   assert.equal(requestCount(h, "start_invocation"), 0);
 });
 
