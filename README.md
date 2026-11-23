@@ -56,7 +56,7 @@ Open only trusted repositories.
 
 Find your build output and test logs. Choose which packages Zeal scans. To record terminal builds too, copy the settings shown here into your `.bazelrc`.
 
-![Bazel output and test log paths for parcel-desk](docs/screenshots/workspace-info.png)
+![The Workspace tab shows where Bazel stores build output and test logs](docs/screenshots/workspace-info.png)
 
 ### Targets
 
