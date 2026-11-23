@@ -188,12 +188,16 @@ mod tests {
         let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
         receipt.append(&f.ordered(1, f.started())).unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
-        assert!(matches!(detail.log, Section::Pending));
-        assert!(matches!(detail.bep, Section::Pending));
+        assert!(matches!(
+            (detail.log, detail.bep),
+            (Section::Pending, Section::Pending)
+        ));
         receipt.partial().unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
-        assert!(matches!(detail.log, Section::Incomplete { .. }));
-        assert!(matches!(detail.bep, Section::Incomplete { .. }));
+        assert!(matches!(
+            (detail.log, detail.bep),
+            (Section::Incomplete { .. }, Section::Incomplete { .. })
+        ));
         assert_eq!(detail.record.exit_code, None);
     }
     #[test]
