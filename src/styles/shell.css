@@ -225,10 +225,6 @@
   color: var(--muted-foreground);
 }
 
-.view-head .sub-switch {
-  margin-top: 8px;
-}
-
 .section {
   margin-bottom: 24px;
 }
@@ -365,8 +361,7 @@
 }
 
 .sub-switch button.active,
-.sub-switch button[aria-selected="true"],
-.sub-switch button[aria-pressed="true"] {
+.sub-switch button[aria-selected="true"] {
   background: rgba(255, 255, 255, 0.08);
   color: var(--foreground);
   font-weight: 500;

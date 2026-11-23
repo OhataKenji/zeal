@@ -9,7 +9,7 @@ import type {
   TargetPhaseData,
   TargetTab,
 } from "../src/lib/types.ts";
-import { buildTree, splitLabel } from "../src/lib/model.ts";
+import { buildTree, packageContents, splitLabel } from "../src/lib/model.ts";
 import { createSvelteHarness } from "./svelte.ts";
 
 const PARSER: Target = {
@@ -428,7 +428,9 @@ test("Run dialog completes targets freely and explains package pattern scope", a
   assert.doesNotMatch(html, /class="button button-primary"[^>]*disabled/);
 
   for (const pattern of ["//:all", "//app:all", "//app:*", "//app:all-targets"]) {
-    assert.match(dialog(pattern), /in this package, not just the targets listed in Explorer/);
+    const html = dialog(pattern);
+    assert.ok(html.includes(`Bazel runs ${pattern}, not the Explorer list.`));
+    assert.ok(html.includes("It may include other targets in this package."));
   }
   for (const pattern of [
     "//...",
@@ -444,11 +446,11 @@ test("Run dialog completes targets freely and explains package pattern scope", a
     );
   }
   for (const pattern of ["//app:parser", "//app:individual/..."]) {
-    assert.doesNotMatch(dialog(pattern), /not just the targets listed/);
+    assert.doesNotMatch(dialog(pattern), /Explorer list|targets listed/);
   }
 });
 
-test("PackageView direct and subtree scopes, the scope switch, and the row cap", async (t) => {
+test("PackageView lists direct package targets and hides actions for grouping folders", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: PackageView } = await load("/src/lib/PackageView.svelte");
 
@@ -456,100 +458,64 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
     return { label, ...splitLabel(label), ruleClass, location: null };
   }
 
-  // The view consumes the same nodes the tree builds; pkg "" is the root.
+  // The view renders the same projection AppView builds from a tree node.
   function output(targets: readonly Target[], pkg = ""): string {
-    const { root, byPath } = buildTree(targets);
-    const node = pkg === "" ? root : byPath.get(pkg);
+    const node = buildTree(targets).byPath.get(pkg);
     assert.ok(node, `no package node for //${pkg}`);
     return render(PackageView, {
-      props: { node, onselect: () => {}, onrun: () => {}, onopenflags: () => {} },
+      props: {
+        pkg: packageContents(node),
+        onselect: () => {},
+        onrun: () => {},
+        onopenflags: () => {},
+      },
     })
       .body.replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\s+/g, " ");
   }
 
   const MIXED: Target[] = [
-    indexedTarget("//app:top"),
+    indexedTarget("//app:all_tests", "test_suite"),
     indexedTarget("//app/lib:deep"),
-    indexedTarget("//other:solo"),
     indexedTarget("//:root"),
   ];
 
-  await t.test("the root scope defaults to direct targets with a subtree switch", () => {
+  await t.test("the root lists only its direct targets", () => {
     const html = output(MIXED);
     assert.match(html, /<h1[^>]*>\/\/:all<\/h1>/);
     assert.match(html, />\s*1 discovered target\s*</);
-    assert.match(html, /in this package, not just the targets listed in Explorer/);
-    // Only the root package's own target shows; descendants wait for the switch.
     assert.ok(html.includes(">:root</button>"));
-    assert.doesNotMatch(html, />:top</);
+    assert.doesNotMatch(html, />:all_tests</);
     assert.doesNotMatch(html, />:deep</);
-    assert.doesNotMatch(html, />:solo</);
-    assert.doesNotMatch(html, /\/\/app\/lib<\/span>/);
-    // Both scopes are non-empty, so the switch offers Direct and Subtree.
-    assert.ok(html.includes("Direct (:all) · 1"));
-    assert.ok(html.includes("Subtree (/...) · 4"));
-    assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 1);
-    assert.equal((html.match(/aria-pressed="false"/g) ?? []).length, 1);
+    assert.doesNotMatch(html, /sub-switch/);
+    assert.doesNotMatch(html, /aria-pressed/);
+    assert.match(html, />Build<\/button>/);
   });
 
-  await t.test("a package with direct targets and descendants shows the switch counts", () => {
+  await t.test("a package lists direct targets and picks Test for a test_suite", () => {
     const html = output(MIXED, "app");
     assert.match(html, /<h1[^>]*>\/\/app:all<\/h1>/);
-    assert.ok(html.includes(">:top</button>"));
+    assert.match(html, />\s*1 discovered target\s*</);
+    assert.ok(html.includes(">:all_tests</button>"));
+    // //app/lib:deep is a descendant, not a direct target.
     assert.doesNotMatch(html, />:deep</);
-    assert.doesNotMatch(html, />:solo</);
     assert.doesNotMatch(html, />:root</);
-    assert.ok(html.includes("Direct (:all) · 1"));
-    assert.ok(html.includes("Subtree (/...) · 2"));
-  });
-
-  await t.test("a package with only descendants defaults to the subtree scope", () => {
-    const html = output([indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")], "app");
-    assert.match(html, /<h1[^>]*>\/\/app\/\.\.\.<\/h1>/);
-    assert.match(html, /recursively across packages, not just the targets listed in Explorer/);
-    // Descendant rows keep their package prefix; there is no switch to show.
-    assert.ok(html.includes(">//app/lib</span>:deep</button>"));
-    assert.ok(html.includes(">//app/web</span>:ui</button>"));
     assert.doesNotMatch(html, /sub-switch/);
     assert.doesNotMatch(html, /aria-pressed/);
-  });
-
-  await t.test("a leaf package scopes to //pkg:all without a switch", () => {
-    const html = output(MIXED, "other");
-    assert.match(html, /<h1[^>]*>\/\/other:all<\/h1>/);
-    assert.ok(html.includes(">:solo</button>"));
-    assert.doesNotMatch(html, /sub-switch/);
-    assert.doesNotMatch(html, /aria-pressed/);
-  });
-
-  await t.test("an empty tree root reports no targets", () => {
-    const html = output([]);
-    assert.match(html, /<h1[^>]*>\/\/\.\.\.<\/h1>/);
-    assert.match(html, /No targets in this scope\./);
-    assert.match(html, />\s*0 discovered targets\s*</);
-  });
-
-  await t.test("test_suite counts as a test for the primary action", () => {
-    const html = output(
-      [indexedTarget("//app:all_tests", "test_suite"), indexedTarget("//app:lib")],
-      "app",
-    );
     assert.match(html, />Test<\/button>/);
   });
 
-  await t.test("sorting does not mutate the targets array", () => {
-    const targets = [indexedTarget("//z:-last"), indexedTarget("//a:first")];
-    const before = targets.map((t) => t.label);
-    output(targets);
-    assert.deepEqual(
-      targets.map((t) => t.label),
-      before,
-    );
-    const html = output(targets);
-    assert.ok(
-      html.indexOf(">//a</span>:first</button>") < html.indexOf(">//z</span>:-last</button>"),
-    );
+  await t.test("a grouping-only folder shows no rows or package actions", () => {
+    const html = output([indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")], "app");
+    // //app:all may not name a real Bazel package, so no actions are offered.
+    assert.match(html, /<h1[^>]*>\/\/app:all<\/h1>/);
+    assert.match(html, />\s*0 discovered targets\s*</);
+    assert.match(html, /No targets discovered directly at this path\./);
+    assert.doesNotMatch(html, /class="clickable"/);
+    assert.doesNotMatch(html, /action-pair/);
+    assert.doesNotMatch(html, />Build<\/button>|>Test<\/button>/);
+    assert.doesNotMatch(html, />:deep</);
+    assert.doesNotMatch(html, />:ui</);
   });
 
   await t.test("more than 500 rows truncate with a notice", () => {
@@ -558,10 +524,7 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
     );
     const html = output(targets, "app");
     assert.equal((html.match(/class="clickable"/g) ?? []).length, 500);
-    assert.match(
-      html,
-      /Showing first 500 of 501 targets — select a package or press ⌘K to narrow\./,
-    );
+    assert.match(html, /Showing first 500 of 501 targets — press ⌘K to find a target\./);
 
     const exactHtml = output(targets.slice(0, 500), "app");
     assert.equal((exactHtml.match(/class="clickable"/g) ?? []).length, 500);

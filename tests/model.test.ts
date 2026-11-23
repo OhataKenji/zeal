@@ -8,7 +8,6 @@ import {
   relations,
   shellQuote,
   splitLabel,
-  subtreeTargets,
 } from "../src/lib/model.ts";
 import type { Target, TargetDetail } from "../src/lib/types.ts";
 
@@ -57,34 +56,6 @@ test("package tree sorts directories and targets and counts subtree totals", () 
   assert.equal(tree.dirs[1].count, 1);
   // byPath hands out the same node objects the tree rows render.
   assert.equal(byPath.get("app/lib"), app.dirs[1]);
-});
-
-test("subtreeTargets puts direct targets first, then descendants by label", () => {
-  const generated = Array.from(
-    { length: 501 },
-    (_, i) => `//app/lib:t${String(i).padStart(4, "0")}`,
-  );
-  const { root, byPath } = buildTree([
-    target("//app:z"),
-    target("//app/deeper:x"),
-    target("//app2:sibling"),
-    target("//:root"),
-    ...generated.map((label) => target(label)),
-  ]);
-  const app = byPath.get("app");
-  assert.ok(app);
-  // The root's own target leads; descendants follow in label order.
-  assert.deepEqual(
-    subtreeTargets(root)
-      .map((t) => t.label)
-      .slice(0, 2),
-    ["//:root", "//app/deeper:x"],
-  );
-  // //app's direct target leads its descendants; //app2 stays out.
-  assert.deepEqual(
-    subtreeTargets(app).map((t) => t.label),
-    ["//app:z", "//app/deeper:x", ...generated],
-  );
 });
 
 test("ancestorsOf includes the package but not the root", () => {

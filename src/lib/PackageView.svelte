@@ -1,17 +1,17 @@
 <script lang="ts">
   import ActionPair from "./ActionPair.svelte";
-  import { isTestRule, subtreeTargets, type DirNode } from "./model";
+  import type { packageContents } from "./model";
   import { packageScopeNote } from "./target";
   import type { BazelCommand } from "./types";
 
   let {
-    node,
+    pkg,
     canRun = true,
     onselect,
     onrun,
     onopenflags,
   }: {
-    node: DirNode;
+    pkg: ReturnType<typeof packageContents>;
     canRun?: boolean;
     onselect: (label: string) => void;
     onrun: (cmd: BazelCommand, pattern: string) => void;
@@ -19,20 +19,7 @@
   } = $props();
 
   const ROW_CAP = 500;
-  let subtreeRequested = $state(false);
-  const recursive = $derived(
-    node.targets.length === 0 || (node.dirs.length > 0 && subtreeRequested),
-  );
-  const targets = $derived(recursive ? subtreeTargets(node) : node.targets);
-  const pattern = $derived(
-    recursive ? (node.path ? `//${node.path}/...` : "//...") : `//${node.path}:all`,
-  );
-  const visible = $derived(targets.slice(0, ROW_CAP));
-  const primaryCmd = $derived(targets.some((t) => isTestRule(t.ruleClass)) ? "test" : "build");
-
-  export function openFlags() {
-    onopenflags(primaryCmd, pattern);
-  }
+  const { targets, pattern, primaryCmd } = $derived(pkg);
 </script>
 
 <div class="view-head">
@@ -41,30 +28,20 @@
     <div class="view-meta">
       {targets.length} discovered {targets.length === 1 ? "target" : "targets"}
     </div>
-    {#if node.targets.length > 0 && node.dirs.length > 0}
-      <div class="sub-switch" role="group" aria-label="Target scope">
-        <button
-          type="button"
-          aria-pressed={!recursive}
-          onclick={() => (subtreeRequested = false)}>Direct (:all) · {node.targets.length}</button
-        >
-        <button
-          type="button"
-          aria-pressed={recursive}
-          onclick={() => (subtreeRequested = true)}>Subtree (/...) · {node.count}</button
-        >
-      </div>
+    {#if targets.length > 0}
+      <p class="view-meta">{packageScopeNote(pattern)}</p>
     {/if}
-    <p class="view-meta">{packageScopeNote(pattern)}</p>
   </div>
-  <ActionPair
-    {primaryCmd}
-    primaryLabel={primaryCmd === "test" ? "Test" : "Build"}
-    target={pattern}
-    disabled={!canRun}
-    {onrun}
-    onopenflags={openFlags}
-  />
+  {#if targets.length > 0}
+    <ActionPair
+      {primaryCmd}
+      primaryLabel={primaryCmd === "test" ? "Test" : "Build"}
+      target={pattern}
+      disabled={!canRun}
+      {onrun}
+      {onopenflags}
+    />
+  {/if}
 </div>
 
 <table class="lens-table">
@@ -72,7 +49,7 @@
     <tr><th>Target</th><th>Rule</th></tr>
   </thead>
   <tbody>
-    {#each visible as target (target.label)}
+    {#each targets.slice(0, ROW_CAP) as target (target.label)}
       <tr
         class="clickable"
         onclick={(e) => {
@@ -84,18 +61,18 @@
             type="button"
             class="table-link mono"
             onclick={() => onselect(target.label)}
-            >{#if target.pkg !== node.path}<span class="dim">//{target.pkg}</span>{/if}:{target.name}</button
+            >:{target.name}</button
           >
         </td>
         <td class="mono dim">{target.ruleClass}</td>
       </tr>
     {:else}
-      <tr><td colspan="2" class="dim">No targets in this scope.</td></tr>
+      <tr><td colspan="2" class="dim">No targets discovered directly at this path.</td></tr>
     {/each}
   </tbody>
 </table>
 {#if targets.length > ROW_CAP}
   <p class="dim package-cap-note">
-    Showing first {ROW_CAP} of {targets.length} targets — select a package or press ⌘K to narrow.
+    Showing first {ROW_CAP} of {targets.length} targets — press ⌘K to find a target.
   </p>
 {/if}

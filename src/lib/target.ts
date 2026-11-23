@@ -13,8 +13,9 @@ export function packageScopeNote(pattern: string): string | null {
   const recursive = pkg.endsWith("/...");
   const wildcard = target === "all" || target === "*" || target === "all-targets";
   if (!wildcard && !(recursive && target === undefined)) return null;
-  const scope = recursive ? "recursively across packages" : "in this package";
-  return `Bazel can match targets ${scope}, not just the targets listed in Explorer.`;
+  return recursive
+    ? "Bazel can match targets recursively across packages, not just the targets listed in Explorer."
+    : `Bazel runs ${pattern}, not the Explorer list. It may include other targets in this package.`;
 }
 
 /** Validates a single target token without trimming or splitting it. */
