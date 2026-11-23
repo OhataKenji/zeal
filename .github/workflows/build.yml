@@ -58,9 +58,6 @@ jobs:
       - uses: ./.github/actions/setup-tauri
 
       - name: cargo test
-        env:
-          # Keep line numbers in test backtraces without full debug symbols.
-          CARGO_PROFILE_TEST_DEBUG: line-tables-only
         run: cargo test --locked
         working-directory: src-tauri
 
@@ -77,13 +74,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-tauri
 
-      - name: Build Tauri bundles
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          args: -- --locked
         env:
-          # Match tauri-action's DMG packaging on macOS runners.
-          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm tauri build -- --locked
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Branch protection requires a stable check name. Docs-only changes skip
   # the matrices entirely, which is valid, so this always-run gate fails only
