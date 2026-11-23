@@ -29,6 +29,7 @@ pub enum Section<T> {
     Ok { data: T },
     Incomplete { data: T, note: String },
     Missing,
+    Pending,
     ParseError { note: String },
     ReadError { note: String },
 }
@@ -57,6 +58,10 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
 /// reports its own completeness.
 fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Section<Bep>)> {
     let length = file.metadata()?.len();
+    // Started can be visible in history before the writer flushes its first events.
+    if length == 0 && !complete {
+        return Ok((Section::Pending, Section::Pending));
+    }
     let parsed = bep::parse_zstd(file, length);
     if parsed.invalid && parsed.events == 0 {
         let note = "BEP contains an invalid or incomplete event".to_string();
@@ -68,7 +73,11 @@ fn event_sections(file: File, complete: bool) -> io::Result<(Section<String>, Se
         observation(
             parsed.log,
             log_incomplete,
-            "BEP ended with an invalid or incomplete event",
+            if parsed.invalid {
+                "BEP ended with an invalid or incomplete event"
+            } else {
+                "Build event stream is incomplete"
+            },
         ),
         observation(
             parsed.bep,
@@ -174,14 +183,22 @@ mod tests {
     }
 
     #[test]
-    fn live_zstd_never_reports_a_complete_observation() {
+    fn buffered_events_are_pending_until_the_receipt_is_flushed() {
         let f = Fixture::new();
         let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
         receipt.append(&f.ordered(1, f.started())).unwrap();
         let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
-        assert!(!matches!(detail.log, Section::Ok { .. }));
-        assert!(!matches!(detail.bep, Section::Ok { .. }));
+        assert!(matches!(
+            (detail.log, detail.bep),
+            (Section::Pending, Section::Pending)
+        ));
         receipt.partial().unwrap();
+        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        assert!(matches!(
+            (detail.log, detail.bep),
+            (Section::Incomplete { .. }, Section::Incomplete { .. })
+        ));
+        assert_eq!(detail.record.exit_code, None);
     }
     #[test]
     fn missing_event_artifact_still_yields_the_record() {
@@ -240,17 +257,5 @@ mod tests {
         fs::create_dir(&other).unwrap();
         assert!(invocation_detail(&f.data, &other, id).is_err());
         assert!(invocation_profile(&f.data, &other, id).is_err());
-    }
-
-    #[test]
-    fn valid_prefix_from_a_disconnected_receipt_is_shown_as_incomplete() {
-        let f = Fixture::new();
-        let mut receipt = store::events::Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        receipt.partial().unwrap();
-        let detail = invocation_detail(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
-        assert!(matches!(detail.log, Section::Incomplete { .. }));
-        assert!(matches!(detail.bep, Section::Incomplete { .. }));
-        assert_eq!(detail.record.exit_code, None);
     }
 }

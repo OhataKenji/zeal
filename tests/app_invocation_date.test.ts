@@ -358,3 +358,56 @@ test("AppView links history target labels into the target explorer", async (t) =
   assert.doesNotMatch(foreign, /table-link/);
   assert.match(foreign, /<code>@@\/\/app:x<\/code>/);
 });
+
+test("AppView shows pending or first-read All details without section flashes", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: AppView } = await load("/src/AppView.svelte");
+  const session = renderSession();
+  const record = {
+    id: "inv-1",
+    workspace: "/workspace",
+    cmd: "build",
+    pattern: "//app:app",
+    startedAt: 1_700_000_000_000,
+  };
+
+  function output(over: Record<string, unknown>): string {
+    const view = Object.assign(emptyView("history"), {
+      core: CORE,
+      state: WS,
+      selectedInvocationId: record.id,
+      invocations: [record],
+      invocationRows: [{ record }],
+      invocation: { record },
+      ...over,
+    });
+    return render(AppView, { props: { view, session } }).body.replace(/<!--[\s\S]*?-->/g, "");
+  }
+
+  function expectNoSections(html: string) {
+    assert.match(html, />build \/\/app:app<\/h1>/);
+    assert.match(html, /role="tablist" aria-label="Invocation views"/);
+    assert.doesNotMatch(html, /No build events available yet\./);
+    assert.doesNotMatch(html, /invocation-heading-/);
+    assert.doesNotMatch(html, /role="alert"/);
+  }
+
+  await t.test("a pending detail shows one neutral message", () => {
+    const html = output({
+      detail: {
+        record,
+        log: { status: "pending" },
+        bep: { status: "pending" },
+      },
+    });
+    expectNoSections(html);
+    assert.equal(html.match(/Build details aren't available yet\./g)?.length, 1);
+  });
+
+  await t.test("the first detail read announces loading without sections", () => {
+    const html = output({ detail: null, detailLoading: true });
+    expectNoSections(html);
+    assert.equal(html.match(/Loading invocation…/g)?.length, 1);
+    assert.doesNotMatch(html, /Build details aren't available yet\./);
+  });
+});

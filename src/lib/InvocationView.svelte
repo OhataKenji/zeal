@@ -112,130 +112,133 @@
             runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
           />
         {/key}
-      {/if}
-      {#each sections as section}
-        {#if active === "All" || active === section}
-          <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
-            {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
-            {#if section === "Targets"}
-              <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
-            {:else if section === "Logs"}
-              <LogPanel section={view.detail?.log} loading={view.detailLoading} />
-            {:else if section === "Details"}
-              {#if runnerSummary}
-                <div class="cache-summary">
-                  <div class="cache-summary-head">
-                    <h3 class="panel-subheading">Spawn Cache Hits (BEP)</h3>
-                    <span class="mono">{runnerSummary.cached} / {runnerSummary.total} cached ({runnerSummary.hitPct}%)</span>
+      {:else if active === "All" && view.detail?.bep.status === "pending"}
+        <p class="panel-empty">Build details aren't available yet.</p>
+      {:else if active !== "All" || view.detail || !view.detailLoading}
+        {#each sections as section}
+          {#if active === "All" || active === section}
+            <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
+              {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
+              {#if section === "Targets"}
+                <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
+              {:else if section === "Logs"}
+                <LogPanel section={view.detail?.log} loading={view.detailLoading} />
+              {:else if section === "Details"}
+                {#if runnerSummary}
+                  <div class="cache-summary">
+                    <div class="cache-summary-head">
+                      <h3 class="panel-subheading">Spawn Cache Hits (BEP)</h3>
+                      <span class="mono">{runnerSummary.cached} / {runnerSummary.total} cached ({runnerSummary.hitPct}%)</span>
+                    </div>
+                    <div class="cache-bar" aria-hidden="true">
+                      <div class="cache-bar-hit" style:width={`${runnerSummary.hitPct}%`}></div>
+                      <div class="cache-bar-exec" style:width={`${100 - runnerSummary.hitPct}%`}></div>
+                    </div>
+                    <div class="cache-legend">
+                      {#each runnerSummary.runners as r (r.name)}
+                        <span class="mono">
+                          <i class="cache-sw" class:hit={r.cached}></i>{r.name}: {r.count}
+                        </span>
+                      {/each}
+                    </div>
                   </div>
-                  <div class="cache-bar" aria-hidden="true">
-                    <div class="cache-bar-hit" style:width={`${runnerSummary.hitPct}%`}></div>
-                    <div class="cache-bar-exec" style:width={`${100 - runnerSummary.hitPct}%`}></div>
-                  </div>
-                  <div class="cache-legend">
-                    {#each runnerSummary.runners as r (r.name)}
-                      <span class="mono">
-                        <i class="cache-sw" class:hit={r.cached}></i>{r.name}: {r.count}
-                      </span>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-              <dl class="invocation-details">
-                <dt>Command</dt>
-                <dd>{#if shown.cmd}<code>{shown.cmd}</code>{:else}Not recorded{/if}</dd>
-                <dt>Pattern</dt>
-                <dd>{#if shown.pattern}<code>{shown.pattern}</code>{:else}Not recorded{/if}</dd>
-                <dt>Workspace</dt>
-                <dd><code>{shown.workspace ?? "Not recorded"}</code></dd>
-                <dt>Invocation ID</dt>
-                <dd><code>{shown.id}</code></dd>
-                <dt>Started</dt>
-                <dd>{shown.startedAt === undefined ? "Not recorded" : new Date(shown.startedAt).toLocaleString()}</dd>
-                <dt>Finished</dt>
-                <dd>
-                  {shown.finishedAt === undefined
-                    ? "Not recorded"
-                    : new Date(shown.finishedAt).toLocaleString()}
-                </dd>
-                <dt>Exit code</dt>
-                <dd>{shown.exitCode ?? "Unknown"}</dd>
-                {#if shown.startedAt !== undefined && shown.finishedAt !== undefined}<dt>Wall time</dt>
+                {/if}
+                <dl class="invocation-details">
+                  <dt>Command</dt>
+                  <dd>{#if shown.cmd}<code>{shown.cmd}</code>{:else}Not recorded{/if}</dd>
+                  <dt>Pattern</dt>
+                  <dd>{#if shown.pattern}<code>{shown.pattern}</code>{:else}Not recorded{/if}</dd>
+                  <dt>Workspace</dt>
+                  <dd><code>{shown.workspace ?? "Not recorded"}</code></dd>
+                  <dt>Invocation ID</dt>
+                  <dd><code>{shown.id}</code></dd>
+                  <dt>Started</dt>
+                  <dd>{shown.startedAt === undefined ? "Not recorded" : new Date(shown.startedAt).toLocaleString()}</dd>
+                  <dt>Finished</dt>
                   <dd>
-                    {((shown.finishedAt - shown.startedAt) / 1000).toFixed(3)}s
-                  </dd>{/if}
-              </dl>
-              <h3 class="panel-subheading">Options</h3>
-              {#if bep?.options}
-                <section class="invocation-command-block">
-                  <h4>Explicit command options</h4>
-                  <code class="invocation-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
-                </section>
-                <section class="invocation-command-block">
-                  <h4>Effective command options</h4>
-                  <code class="invocation-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
-                </section>
-              {:else if view.detailLoading}
-                <p class="panel-empty">Loading options…</p>
-              {:else if view.detail}
-                <Notice tone={sectionNoticeTone(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)} announce={active !== "All"}
-                  >{sectionMessage(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)}</Notice
-                >
-              {/if}
-              <h3 class="panel-subheading">Command lines</h3>
-              <details class="invocation-collapsible">
-                <summary>Canonical command line</summary>
-                {#if bep?.canonicalCommandLine !== undefined}
-                  <code class="invocation-command-code">{bep.canonicalCommandLine || "No command-line arguments."}</code>
-                {:else}
-                  <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
+                    {shown.finishedAt === undefined
+                      ? "Not recorded"
+                      : new Date(shown.finishedAt).toLocaleString()}
+                  </dd>
+                  <dt>Exit code</dt>
+                  <dd>{shown.exitCode ?? "Unknown"}</dd>
+                  {#if shown.startedAt !== undefined && shown.finishedAt !== undefined}<dt>Wall time</dt>
+                    <dd>
+                      {((shown.finishedAt - shown.startedAt) / 1000).toFixed(3)}s
+                    </dd>{/if}
+                </dl>
+                <h3 class="panel-subheading">Options</h3>
+                {#if bep?.options}
+                  <section class="invocation-command-block">
+                    <h4>Explicit command options</h4>
+                    <code class="invocation-command-code">{formatOptions(bep.options.explicitCmdLine) || "No command options."}</code>
+                  </section>
+                  <section class="invocation-command-block">
+                    <h4>Effective command options</h4>
+                    <code class="invocation-command-code">{formatOptions(bep.options.cmdLine) || "No command options."}</code>
+                  </section>
+                {:else if view.detailLoading}
+                  <p class="panel-empty">Loading options…</p>
+                {:else if view.detail}
+                  <Notice tone={sectionNoticeTone(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)} announce={active !== "All"}
+                    >{sectionMessage(view.detail.bep.status === "ok" ? { status: "missing" } : view.detail.bep)}</Notice
+                  >
                 {/if}
-              </details>
-              <details class="invocation-collapsible">
-                <summary>Original command line</summary>
-                {#if bep?.originalCommandLine !== undefined}
-                  <code class="invocation-command-code">{bep.originalCommandLine || "No command-line arguments."}</code>
-                {:else}
-                  <p class="panel-empty">Original command line was not recorded in the build events.</p>
-                {/if}
-              </details>
-              {#if bep?.options && (bep.options.explicitStartupOptions.length || bep.options.startupOptions.length)}
+                <h3 class="panel-subheading">Command lines</h3>
                 <details class="invocation-collapsible">
-                  <summary>Startup options</summary>
-                  {#if bep.options.explicitStartupOptions.length}
-                    <section class="invocation-command-block">
-                      <h4>Explicit startup options</h4>
-                      <code class="invocation-command-code">{formatOptions(bep.options.explicitStartupOptions)}</code>
-                    </section>
-                  {/if}
-                  {#if bep.options.startupOptions.length}
-                    <section class="invocation-command-block">
-                      <h4>Effective startup options</h4>
-                      <code class="invocation-command-code">{formatOptions(bep.options.startupOptions)}</code>
-                    </section>
+                  <summary>Canonical command line</summary>
+                  {#if bep?.canonicalCommandLine !== undefined}
+                    <code class="invocation-command-code">{bep.canonicalCommandLine || "No command-line arguments."}</code>
+                  {:else}
+                    <p class="panel-empty">Canonical command line was not recorded in the build events.</p>
                   {/if}
                 </details>
+                <details class="invocation-collapsible">
+                  <summary>Original command line</summary>
+                  {#if bep?.originalCommandLine !== undefined}
+                    <code class="invocation-command-code">{bep.originalCommandLine || "No command-line arguments."}</code>
+                  {:else}
+                    <p class="panel-empty">Original command line was not recorded in the build events.</p>
+                  {/if}
+                </details>
+                {#if bep?.options && (bep.options.explicitStartupOptions.length || bep.options.startupOptions.length)}
+                  <details class="invocation-collapsible">
+                    <summary>Startup options</summary>
+                    {#if bep.options.explicitStartupOptions.length}
+                      <section class="invocation-command-block">
+                        <h4>Explicit startup options</h4>
+                        <code class="invocation-command-code">{formatOptions(bep.options.explicitStartupOptions)}</code>
+                      </section>
+                    {/if}
+                    {#if bep.options.startupOptions.length}
+                      <section class="invocation-command-block">
+                        <h4>Effective startup options</h4>
+                        <code class="invocation-command-code">{formatOptions(bep.options.startupOptions)}</code>
+                      </section>
+                    {/if}
+                  </details>
+                {/if}
+              {:else}
+                {#if execution}<p class="panel-empty">
+                    Timing is available after the invocation finishes.
+                  </p>
+                {:else if view.profileLoading}<p class="panel-empty" role="status">
+                    Loading profile…
+                  </p>
+                {:else if view.profileError}<Notice tone="error" onaction={reloadProfile}
+                    >Could not load timing data: {view.profileError}</Notice
+                  >
+                {:else if view.profile}
+                  {#if view.profile.status !== "ok"}<Notice tone={sectionNoticeTone(view.profile)}
+                      >{sectionMessage(view.profile)}</Notice
+                    >{/if}
+                  {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
+                {/if}
               {/if}
-            {:else}
-              {#if execution}<p class="panel-empty">
-                  Timing is available after the invocation finishes.
-                </p>
-              {:else if view.profileLoading}<p class="panel-empty" role="status">
-                  Loading profile…
-                </p>
-              {:else if view.profileError}<Notice tone="error" onaction={reloadProfile}
-                  >Could not load timing data: {view.profileError}</Notice
-                >
-              {:else if view.profile}
-                {#if view.profile.status !== "ok"}<Notice tone={sectionNoticeTone(view.profile)}
-                    >{sectionMessage(view.profile)}</Notice
-                  >{/if}
-                {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
-              {/if}
-            {/if}
-          </section>
-        {/if}
-      {/each}
+            </section>
+          {/if}
+        {/each}
+      {/if}
     </div>
   </div>
 {:else if view.historyLoading}

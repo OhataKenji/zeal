@@ -93,6 +93,20 @@ const COMPLETED: InvocationDetail = {
 const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
+const PENDING_DETAIL: InvocationDetail = {
+  record: RECORD,
+  log: { status: "pending" },
+  bep: { status: "pending" },
+};
+const PARTIAL_DETAIL: InvocationDetail = {
+  record: RECORD,
+  log: { status: "incomplete", data: "partial output\n", note: "stream ended early" },
+  bep: {
+    status: "incomplete",
+    data: { targets: [], tests: [], truncated: false },
+    note: "stream ended early",
+  },
+};
 
 function diagnostic(id: string, workspace = WS): ProcessDiagnostic {
   return {
@@ -2118,6 +2132,78 @@ test("a history record change refreshes saved readers; retries stay per-reader",
   assert.equal(h.view.profileError, null);
 });
 
+test("an identical history row refreshes details as events arrive", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [COMPLETED_RECORD]);
+  h.session.selectInvocation(COMPLETED_RECORD.id);
+  await settle();
+  const pendingDetail = { ...PENDING_DETAIL, record: COMPLETED_RECORD };
+  const partialDetail = { ...PARTIAL_DETAIL, record: COMPLETED_RECORD };
+  const completeDetail = { ...COMPLETED, record: COMPLETED_RECORD };
+  pendingRequest(h, "get_invocation").reply.resolve(pendingDetail);
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.view.detail?.log.status, "pending");
+
+  // The receipt keeps flushing without touching the row — even though it
+  // already carries a result: pending, then incomplete, then ok.
+  for (const [detail, status] of [
+    [partialDetail, "incomplete"],
+    [completeDetail, "ok"],
+  ] as const) {
+    const reads = requestCount(h, "get_invocation");
+    h.emit("invocations-changed", null);
+    await settle();
+    await loadHistory(h, [COMPLETED_RECORD]);
+    await settle();
+    assert.equal(requestCount(h, "get_invocation"), reads + 1);
+    lastPendingRequest(h, "get_invocation").reply.resolve(detail);
+    lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+    await settle();
+    assert.equal(h.view.detail?.log.status, status);
+  }
+
+  // A settled ok detail does not refetch on the next identical row.
+  const settled = requestCount(h, "get_invocation");
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [COMPLETED_RECORD]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), settled);
+});
+
+test("a history note orphans an in-flight detail read for a recorded result", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadHistory(h, [COMPLETED_RECORD]);
+  h.session.selectInvocation(COMPLETED_RECORD.id);
+  await settle();
+  // The first detail read is still in flight when the flush notification lands.
+  h.emit("invocations-changed", null);
+  await settle();
+  await loadHistory(h, [COMPLETED_RECORD]);
+  await settle();
+  assert.equal(requestCount(h, "get_invocation"), 2);
+  assert.equal(requestCount(h, "get_invocation_profile"), 2);
+
+  // The superseded read's late reply is discarded; the fresh read wins.
+  pendingRequest(h, "get_invocation").reply.resolve({
+    ...PENDING_DETAIL,
+    record: COMPLETED_RECORD,
+  });
+  await settle();
+  const landed = h.view.detail;
+  assert.equal(landed, null);
+  lastPendingRequest(h, "get_invocation").reply.resolve({
+    ...PARTIAL_DETAIL,
+    record: COMPLETED_RECORD,
+  });
+  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
+  assert.equal(h.view.detail?.log.status, "incomplete");
+});
+
 test("a failed refresh retains the snapshot and selection and exposes the error", async () => {
   const h = harness();
   await initReady(h);
@@ -2476,6 +2562,12 @@ test("history updates on the history page claim the first row once", async () =>
 
   assert.equal(h.view.selectedInvocationId, RECORD.id);
   assert.equal(requestCount(h, "get_invocation"), 1);
+
+  // A settled reader keeps the cached detail; only an in-flight or pending
+  // read would be orphaned by the identical row below.
+  pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
+  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
+  await settle();
 
   // A refreshed list keeps the existing selection and does not refetch.
   h.emit("invocations-changed", undefined);

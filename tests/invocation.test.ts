@@ -136,6 +136,12 @@ test("section notices distinguish broken reads, partial data, and absent records
   assert.equal(sectionNoticeTone({ status: "ok", data: "complete" }), "neutral");
 });
 
+test("pending observations carry no data and read as neutral", () => {
+  assert.equal(sectionData({ status: "pending" }), null);
+  assert.equal(sectionMessage({ status: "pending" }), "No build events available yet.");
+  assert.equal(sectionNoticeTone({ status: "pending" }), "neutral");
+});
+
 test("build exit determines outcome even when its finish time was not recorded", () => {
   assert.equal(invocationStatus({ ...RECORD, exitCode: 0 }).kind, "succeeded");
   assert.equal(invocationStatus({ ...RECORD, exitCode: 3 }).kind, "failed");

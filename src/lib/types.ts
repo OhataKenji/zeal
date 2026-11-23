@@ -245,7 +245,7 @@ export interface InvocationRecord {
 export type Section<T> =
   | { status: "ok"; data: T }
   | { status: "incomplete"; data: T; note: string }
-  | { status: "missing" }
+  | { status: "missing" | "pending" }
   | { status: "parse_error" | "read_error" | "not_available"; note: string };
 
 /** One `bazel info` key/value pair reported for a workspace. */
