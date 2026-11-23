@@ -394,8 +394,7 @@ mod tests {
     fn core_with(ws: &Path, bazel: &Path) -> Arc<Core> {
         let core = Arc::new(Core::new());
         let mut st = core.state.lock().unwrap();
-        st.workspaces
-            .insert(ws.to_path_buf(), crate::scope::Scope::default());
+        st.workspaces.insert(ws.to_path_buf(), Default::default());
         st.bazel = Some(bazel.to_path_buf());
         drop(st);
         core
@@ -810,8 +809,7 @@ mod tests {
             let core = core_with(&ws, &bazel);
             let other = PathBuf::from("/ws/other");
             let mut st = core.state.lock().unwrap();
-            st.workspaces
-                .insert(other.clone(), crate::scope::Scope::default());
+            st.workspaces.insert(other.clone(), Default::default());
             drop(st);
             let op = ModulesOperation::acquire(&core, ws.to_str().unwrap()).unwrap();
             assert_eq!(op.workspace, ws);

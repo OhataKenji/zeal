@@ -11,7 +11,12 @@
   } from "phosphor-svelte";
   import { canSend } from "./lib/session";
   import type { createSession, SessionView } from "./lib/session";
-  import { invocationStatus } from "./lib/invocation";
+  import {
+    matchesHistoryFilter,
+    rowStatus,
+    type HistoryFilter,
+    type InvocationRow,
+  } from "./lib/invocation";
   import { buildTree } from "./lib/model";
   import type { PaletteAction } from "./lib/palette";
   import { pages, type Page } from "./lib/pages";
@@ -29,7 +34,7 @@
   import ModulesView from "./lib/ModulesView.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import RunDialog from "./lib/RunDialog.svelte";
-  import type { BazelCommand, InvocationRecord, OwnedInvocation } from "./lib/types";
+  import type { BazelCommand } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
   function loadConsole() {
@@ -53,7 +58,7 @@
 
   let opening = $state(false);
   let switchError = $state<string | null>(null);
-  let historyFilter = $state<"all" | "failed" | "running">("all");
+  let historyFilter = $state<HistoryFilter>("all");
 
   // One surface owns the overlay layer at a time: the workspace prompt, the
   // command palette, or the run dialog. `opening` stays independent.
@@ -84,12 +89,7 @@
   } satisfies Record<Page, typeof Folders>;
 
   const filteredInvocations = $derived(
-    view.invocationRows.filter((row) => {
-      if (historyFilter === "all") return true;
-      const status = invocationStatus(row.record, row.execution);
-      if (historyFilter === "running") return status.kind === "running" || status.kind === "stopping";
-      return status.kind === "failed";
-    }),
+    view.invocationRows.filter((row) => matchesHistoryFilter(row, historyFilter)),
   );
 
   function openRunDialog(cmd: BazelCommand, pattern: string, flags = "") {
@@ -215,9 +215,10 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
-{#snippet invocationRow(record: InvocationRecord, execution?: OwnedInvocation)}
+{#snippet invocationRow(row: InvocationRow)}
+  {@const { record, execution } = row}
   {@const startedAt = new Date(record.startedAt ?? NaN)}
-  {@const status = invocationStatus(record, execution)}
+  {@const status = rowStatus(row)}
   {@const active = view.page === "history" && view.selectedInvocationId === record.id}
   {@const owner = execution?.workspace}
   {@const workspace = owner ?? record.workspace}
@@ -381,7 +382,7 @@
           <div class="sidebar-body">
             <ul class="list">
               {#each filteredInvocations as row (row.record.id)}
-                {@render invocationRow(row.record, row.execution)}
+                {@render invocationRow(row)}
               {:else}
                 <li class="dim empty-row">No invocations.</li>
               {/each}

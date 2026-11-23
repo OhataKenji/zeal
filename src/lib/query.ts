@@ -597,10 +597,10 @@ function integerError(value: unknown, arg: ArgSpec): string | null {
   return null;
 }
 
-function callError(fn: string, kind: QueryKind, parentFn?: string): string | null {
+function callError(fn: string, kind: QueryKind, expectsTargets?: string): string | null {
   if (!supportsFunction(fn, kind)) return `${fn} is not available in ${kind}.`;
-  if (FUNCTIONS[fn].filtersActions && parentFn && !FUNCTIONS[parentFn].filtersActions)
-    return `${fn} returns actions. ${parentFn} expects targets.`;
+  if (FUNCTIONS[fn].filtersActions && expectsTargets)
+    return `${fn} returns actions. ${expectsTargets} expects targets.`;
   return null;
 }
 
@@ -611,7 +611,7 @@ function callError(fn: string, kind: QueryKind, parentFn?: string): string | nul
  */
 export function validate(root: Expr, kind: QueryKind): Map<string, string> {
   const errors: { id: number; arg: string | number; msg: string }[] = [];
-  function walk(n: Expr, parentFn?: string) {
+  function walk(n: Expr, expectsTargets?: string) {
     switch (n.kind) {
       case "target": {
         const t = n.text;
@@ -640,17 +640,17 @@ export function validate(root: Expr, kind: QueryKind): Map<string, string> {
         break;
       }
       case "binary":
-        walk(n.left);
-        walk(n.right);
+        walk(n.left, n.op);
+        walk(n.right, n.op);
         break;
       case "call": {
         const schema = FUNCTIONS[n.fn];
-        const msg = callError(n.fn, kind, parentFn);
+        const msg = callError(n.fn, kind, expectsTargets);
         if (msg) errors.push({ id: n.id, arg: "fn", msg });
         schema.args.forEach((arg, i) => {
           const v = n.args[i];
           if (arg.type === "expr") {
-            walk(v as Expr, n.fn);
+            walk(v as Expr, schema.filtersActions ? undefined : n.fn);
             return;
           }
           if (arg.type === "int") {
@@ -883,8 +883,8 @@ export const EXAMPLES = {
   aquery: {
     "aquery examples": [
       example("mnemonic", 'mnemonic("CppCompile", //...)', "Compile actions"),
-      example("inputs", 'inputs("\\.h$", //...)', "Actions that consume headers"),
-      example("outputs", 'outputs("\\.o$", //...)', "Actions that produce objects"),
+      example("inputs", 'inputs(".*\\.h$", //...)', "Actions that consume headers"),
+      example("outputs", 'outputs(".*\\.o$", //...)', "Actions that produce objects"),
     ],
   },
 } satisfies Record<QueryKind, Record<string, readonly Example[]>>;

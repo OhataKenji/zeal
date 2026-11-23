@@ -39,6 +39,16 @@ pub struct AppStateDto {
 pub struct WorkspaceDto {
     pub workspace: String,
     pub scope: crate::scope::Scope,
+    /// Equal only for matching origins within this snapshot. The URL itself
+    /// can contain credentials and is not needed by the webview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_group: Option<usize>,
+}
+
+#[derive(Default)]
+pub struct RegisteredWorkspace {
+    pub scope: crate::scope::Scope,
+    pub repo_url: Option<String>,
 }
 
 /// One Bazel operation Zeal launched: build/test/run under a terminal, or a
@@ -139,7 +149,7 @@ pub struct CoreState {
     /// Saved preference only; operations always name their workspace.
     pub last_workspace: Option<PathBuf>,
     /// Registered workspaces by canonical path, each with its discovery scope.
-    pub workspaces: BTreeMap<PathBuf, crate::scope::Scope>,
+    pub workspaces: BTreeMap<PathBuf, RegisteredWorkspace>,
     /// Every Bazel operation Zeal launched, by invocation id.
     pub invocations: BTreeMap<String, OwnedInvocation>,
     /// Workspaces with a `bazel mod` operation in flight; the modules page
@@ -156,6 +166,24 @@ pub struct CoreState {
 }
 
 impl CoreState {
+    fn workspace_dtos(&self) -> Vec<WorkspaceDto> {
+        let mut groups = BTreeMap::new();
+        self.workspaces
+            .iter()
+            .map(|(path, ws)| {
+                let next = groups.len();
+                WorkspaceDto {
+                    workspace: path.to_string_lossy().into_owned(),
+                    scope: ws.scope.clone(),
+                    repository_group: ws
+                        .repo_url
+                        .as_deref()
+                        .map(|url| *groups.entry(url).or_insert(next)),
+                }
+            })
+            .collect()
+    }
+
     /// `ws` is a canonical workspace id returned by `open_workspace`; only an
     /// exact registered key resolves, so a removed directory stays reachable.
     pub fn workspace_path(&self, ws: &str) -> Result<PathBuf, String> {
@@ -240,14 +268,7 @@ impl Core {
                 .last_workspace
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
-            workspaces: st
-                .workspaces
-                .iter()
-                .map(|(path, scope)| WorkspaceDto {
-                    workspace: path.to_string_lossy().into_owned(),
-                    scope: scope.clone(),
-                })
-                .collect(),
+            workspaces: st.workspace_dtos(),
             invocations: st
                 .invocations
                 .iter()
@@ -310,16 +331,50 @@ mod tests {
     }
 
     #[test]
+    fn workspace_groups_compare_origins_without_exposing_them() {
+        let core = Core::new();
+        let mut st = core.state.lock().unwrap();
+        for (path, origin) in [
+            ("/a", Some("https://example.com/shared")),
+            ("/b", Some("https://example.com/shared")),
+            ("/c", Some("https://example.com/unrelated")),
+            ("/d", None),
+        ] {
+            st.workspaces.insert(
+                PathBuf::from(path),
+                RegisteredWorkspace {
+                    scope: Default::default(),
+                    repo_url: origin.map(str::to_owned),
+                },
+            );
+        }
+        let workspaces = st.workspace_dtos();
+        assert!(workspaces[0].repository_group.is_some());
+        assert_eq!(
+            workspaces[0].repository_group,
+            workspaces[1].repository_group
+        );
+        assert_ne!(
+            workspaces[0].repository_group,
+            workspaces[2].repository_group
+        );
+        assert_eq!(workspaces[3].repository_group, None);
+        assert!(
+            !serde_json::to_string(&workspaces)
+                .unwrap()
+                .contains("example.com")
+        );
+    }
+
+    #[test]
     fn dto_lists_workspaces_and_owned_invocations_with_monotonic_revision() {
         let core = Core::new();
         let ws_a = PathBuf::from("/ws/a");
         let ws_b = PathBuf::from("/ws/b");
         {
             let mut st = core.state.lock().unwrap();
-            st.workspaces
-                .insert(ws_a.clone(), crate::scope::Scope::default());
-            st.workspaces
-                .insert(ws_b.clone(), crate::scope::Scope::default());
+            st.workspaces.insert(ws_a.clone(), Default::default());
+            st.workspaces.insert(ws_b.clone(), Default::default());
             st.invocations.insert("one".to_string(), owned(&ws_a));
             st.invocations.insert("two".to_string(), owned(&ws_b));
             st.invocations.get_mut("two").unwrap().process.pgid = None;
@@ -345,8 +400,7 @@ mod tests {
         let ws = PathBuf::from("/ws");
         {
             let mut st = core.state.lock().unwrap();
-            st.workspaces
-                .insert(ws.clone(), crate::scope::Scope::default());
+            st.workspaces.insert(ws.clone(), Default::default());
             let mut invocation = owned(&ws);
             invocation.console = Some(crate::terminal::session_log().unwrap());
             st.invocations.insert("one".to_string(), invocation);
@@ -372,8 +426,7 @@ mod tests {
         );
         {
             let mut st = core.state.lock().unwrap();
-            st.workspaces
-                .insert(canonical.clone(), crate::scope::Scope::default());
+            st.workspaces.insert(canonical.clone(), Default::default());
         }
         assert_eq!(
             core.state

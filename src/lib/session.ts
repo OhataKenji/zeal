@@ -1,4 +1,5 @@
 import { COMMANDS } from "./commands.ts";
+import type { InvocationRow } from "./invocation.ts";
 import { createModules } from "./modules.ts";
 import type { Page } from "./pages.ts";
 import { targetError } from "./target.ts";
@@ -82,7 +83,8 @@ interface SessionState {
   workspace: Workspace | null;
   page: Page;
   selectedInvocationId: string | null;
-  start: object | null;
+  /** The pending start that may still open its Console in the current view. */
+  startFeedback: object | null;
   error: string | null;
   saved: Saved;
 }
@@ -109,7 +111,7 @@ function initialState(page: Page): SessionState {
     workspace: null,
     page,
     selectedInvocationId: null,
-    start: null,
+    startFeedback: null,
     error: null,
     saved: savedReaders(),
   };
@@ -124,15 +126,8 @@ function matchesOwner(record: InvocationRecord, execution: OwnedInvocation): boo
   return record.id === execution.id && record.workspace === execution.workspace;
 }
 
-function visibleExecution(state: SessionState, id: string | null): OwnedInvocation | null {
-  const ws = state.workspace;
-  const execution = state.core?.invocations.find((entry) => entry.id === id);
-  return ws &&
-    execution &&
-    (execution.workspace === ws.path ||
-      ws.history.some((record) => matchesOwner(record, execution)))
-    ? execution
-    : null;
+function visibleExecution(state: SessionState, id: string): OwnedInvocation | undefined {
+  return invocationRows(state).find((row) => row.record.id === id)?.execution;
 }
 
 function selectedInvocationId(state: SessionState): string | null {
@@ -162,25 +157,36 @@ function sameSelection(left: ExplorerSelection, right: ExplorerSelection): boole
   return left === null && right === null;
 }
 
-/** Live executions owned by the current workspace, newest first. */
+/** Live executions in the current repository, even before BEP registration. */
 function pinnedInvocations(state: SessionState): OwnedInvocation[] {
+  const core = state.core;
   const ws = state.workspace;
-  return (state.core?.invocations ?? [])
-    .filter((entry) => entry.workspace === ws?.path)
+  if (!core?.invocations.length || !ws) return [];
+  const path = ws.path;
+  const group = wsEntry(core, path)?.repositoryGroup;
+  const owners = new Set<string>();
+  if (group !== undefined) {
+    for (const entry of core.workspaces) {
+      if (entry.repositoryGroup === group) owners.add(entry.workspace);
+    }
+  }
+  // Sharing history does not transfer ownership. A sibling with a reused
+  // id cannot hide a local saved record or diagnostic behind its console.
+  const localIds = new Set(
+    [...ws.history, ...ws.diagnostics]
+      .filter((entry) => entry.workspace === path)
+      .map((entry) => entry.id),
+  );
+  return core.invocations
+    .filter(
+      (entry) =>
+        entry.workspace === path || (owners.has(entry.workspace) && !localIds.has(entry.id)),
+    )
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** One History row: a live execution, a saved record, or a local diagnostic.
- * A diagnostic's `record` carries the same fields a saved record would, but
- * never an `exitCode` — its process exit is reported separately. */
-interface InvocationRow {
-  record: InvocationRecord;
-  execution?: OwnedInvocation;
-  diagnostic?: ProcessDiagnostic;
-}
-
 /** Saved records join the projection in history order: they upgrade a
- * pinned row only when this workspace owns them, and attach a live
+ * pinned row only when the execution owns them, and attach a live
  * execution of any workspace the record matches. */
 function addSavedRows(state: SessionState, ws: Workspace, rows: Map<string, InvocationRow>) {
   const executions = state.core?.invocations ?? [];
@@ -208,7 +214,7 @@ function addDiagnosticRows(ws: Workspace, rows: Map<string, InvocationRow>) {
  * saved-reader eligibility. Pinned live executions keep the head — their
  * local start time can differ from the timestamp a record later reports —
  * and the rest sort newest first with undated rows last. A saved record
- * replaces its pinned row only when this workspace owns it; a diagnostic
+ * replaces its pinned row only when the execution owns it; a diagnostic
  * yields to any same-owner row — live or saved — and takes the place of a
  * foreign same-id record, which is a different build that stays in saved
  * history only. */
@@ -264,7 +270,7 @@ function sessionView(state: SessionState) {
     targetPhase: target?.phase.value ?? null,
     targetPhaseError: target?.phase.error ?? null,
     modules: ws?.modules.state ?? null,
-    starting: state.start !== null,
+    starting: state.startFeedback !== null,
     error: state.error,
     invocations: history,
     invocationsError: ws?.historyError ?? null,
@@ -303,6 +309,33 @@ export function createSession(
   // After an explicit open, saved preferences no longer choose the workspace.
   let workspaceRequest: object | null = null;
   const unlistens: Array<() => void> = [];
+  // A superseded reader can still hold Bazel's lock, even after A → B → A.
+  // Track process lifetimes by canonical path, separately from UI ownership.
+  const discovery = new Map<string, Promise<void>>();
+
+  function trackDiscovery(path: string, operation: Promise<unknown>) {
+    const idle: Promise<void> = Promise.allSettled([discovery.get(path), operation]).then(() => {
+      if (discovery.get(path) === idle) discovery.delete(path);
+    });
+    discovery.set(path, idle);
+  }
+
+  async function dispatchStart(
+    workspace: string,
+    cmd: BazelCommand,
+    pattern: string,
+    args: string,
+  ) {
+    // Recheck after each wait: a reload may have started in the meantime.
+    while (discovery.has(workspace)) await discovery.get(workspace);
+    if (disposed) return;
+    return transport.invoke<string>(COMMANDS.startInvocation, {
+      workspace,
+      cmd,
+      pattern,
+      arguments: args,
+    });
+  }
 
   function publish() {
     changed(sessionView(state));
@@ -373,7 +406,7 @@ export function createSession(
    * and flag changes replace `ws.target`, so every awaited step re-checks
    * that its reader is still current before scheduling another read.
    */
-  async function loadTarget() {
+  function loadTarget() {
     const ws = state.workspace;
     const target = ws?.target;
     const selection = target?.selection;
@@ -392,6 +425,15 @@ export function createSession(
     const current = () =>
       !disposed && state.workspace === ws && ws.target === target && ws.refresh === null;
     ws.targetBusy = true;
+    trackDiscovery(ws.path, readSelection(ws, target, args, current));
+  }
+
+  async function readSelection(
+    ws: Workspace,
+    target: TargetSelection,
+    args: { workspace: string; label: string },
+    current: () => boolean,
+  ) {
     try {
       if (target.detail.value === null) {
         const loaded = await read(
@@ -410,7 +452,7 @@ export function createSession(
       await readPhase(ws, target, args, current);
     } finally {
       ws.targetBusy = false;
-      if (!disposed && state.workspace === ws && ws.target !== target) void loadTarget();
+      if (!disposed && state.workspace === ws && ws.target !== target) loadTarget();
     }
   }
 
@@ -432,12 +474,15 @@ export function createSession(
     ws.target = targetSelection(present ? selection : null);
   }
 
-  async function refreshSnapshot() {
+  function refreshSnapshot() {
     const ws = state.workspace;
     if (disposed || !ws) return;
     const entry = wsEntry(state.core, ws.path);
     if (!entry || !state.core?.bazel) return;
-    const scope = entry.scope;
+    trackDiscovery(ws.path, fetchSnapshot(ws, entry.scope));
+  }
+
+  async function fetchSnapshot(ws: Workspace, scope: TargetScope) {
     const token = {};
     ws.refresh = token;
     ws.snapshotError = null;
@@ -461,7 +506,7 @@ export function createSession(
       ws.snapshotError = `Could not load the workspace snapshot: ${String(error)}`;
     }
     publish();
-    void loadTarget();
+    loadTarget();
   }
 
   function updateTargetsForWorkspace(
@@ -472,14 +517,14 @@ export function createSession(
     const ws = state.workspace;
     if (!ws) return;
     if (before !== null && after !== null && sameScope(before, after)) {
-      if (bazelArrived && ws.snapshot === null && ws.refresh === null) void refreshSnapshot();
+      if (bazelArrived && ws.snapshot === null && ws.refresh === null) refreshSnapshot();
       return;
     }
     // A different workspace entry or scope discards the target context; the
     // next refresh belongs to the new scope.
     ws.refresh = null;
     acceptSnapshot(ws, null);
-    if (after !== null) void refreshSnapshot();
+    if (after !== null) refreshSnapshot();
   }
 
   /** Claims History's first row while the page sits unselected. */
@@ -657,10 +702,13 @@ export function createSession(
     const ws = state.workspace;
     if (disposed || !ws || !state.core?.bazel || !wsEntry(state.core, ws.path)) return;
     const current = () => !disposed && state.workspace === ws;
-    void read(
-      ws.info,
-      () => transport.invoke<WorkspaceInfo>(COMMANDS.getWorkspaceInfo, { workspace: ws.path }),
-      current,
+    trackDiscovery(
+      ws.path,
+      read(
+        ws.info,
+        () => transport.invoke<WorkspaceInfo>(COMMANDS.getWorkspaceInfo, { workspace: ws.path }),
+        current,
+      ),
     );
   }
 
@@ -685,12 +733,11 @@ export function createSession(
       diagnostics: [],
     };
     state.selectedInvocationId = null;
-    state.start = null;
-    state.error = null;
+    state.startFeedback = null;
     state.saved = savedReaders();
     publish();
     requestHistory();
-    void refreshSnapshot();
+    refreshSnapshot();
     if (state.page === "workspace") loadWorkspaceInfo();
   }
 
@@ -699,7 +746,7 @@ export function createSession(
     const previousId = selectedInvocationId(state);
     state.page = "history";
     state.selectedInvocationId = id;
-    state.start = null;
+    state.startFeedback = null;
     if (previousId !== id) {
       state.saved = savedReaders();
     }
@@ -739,9 +786,9 @@ export function createSession(
 
   function showPage(page: Page) {
     if (disposed) return;
-    const changed = state.page !== page;
+    const changed = state.page !== page || state.startFeedback !== null;
     state.page = page;
-    state.start = null;
+    state.startFeedback = null;
     if (changed) {
       // Claim History's first row before the frame so it never flashes empty.
       claimFirstInvocation();
@@ -750,14 +797,14 @@ export function createSession(
     }
     if (page === "workspace") maybeLoadWorkspaceInfo();
     // Returning to Targets kicks any phase read deferred while away.
-    if (page === "targets") void loadTarget();
+    if (page === "targets") loadTarget();
   }
 
   /** Replaces the phase reader; loadTarget reloads only the active one. */
   function reloadTargetPhase(ws: Workspace) {
     ws.target = { ...ws.target, phase: reader() };
     publish();
-    void loadTarget();
+    loadTarget();
   }
 
   /** Switches the inspector tab; phase readers restart, detail is kept. */
@@ -765,6 +812,7 @@ export function createSession(
     if (disposed) return;
     const ws = state.workspace;
     if (!ws || ws.targetTab === tab) return;
+    state.startFeedback = null;
     ws.targetTab = tab;
     reloadTargetPhase(ws);
   }
@@ -783,7 +831,7 @@ export function createSession(
   function select(selection: ExplorerSelection) {
     if (disposed) return;
     state.page = "targets";
-    state.start = null;
+    state.startFeedback = null;
     const ws = state.workspace;
     if (!ws) {
       publish();
@@ -804,7 +852,7 @@ export function createSession(
       target.selection = selection;
     }
     publish();
-    void loadTarget();
+    loadTarget();
   }
 
   function restorableWorkspace(snapshot: AppState): string | null {
@@ -849,32 +897,16 @@ export function createSession(
     const ws = state.workspace;
     if (disposed || !ws || !canSend(sessionView(state), pattern)) return;
     const token = {};
-    const openRequest = workspaceRequest;
-    state.start = token;
+    state.startFeedback = token;
     state.error = null;
     publish();
     try {
-      const id = await transport.invoke<string>(COMMANDS.startInvocation, {
-        workspace: ws.path,
-        cmd,
-        pattern,
-        arguments: argumentsText,
-      });
-      if (disposed || state.start !== token) return;
-      state.start = null;
-      if (workspaceRequest !== openRequest || state.workspace !== ws) {
-        publish();
-        return;
-      }
-      openInvocation(id, false);
+      const id = await dispatchStart(ws.path, cmd, pattern, argumentsText);
+      if (id !== undefined && state.startFeedback === token) openInvocation(id, false);
     } catch (error) {
-      if (disposed || state.start !== token) return;
-      state.start = null;
-      if (workspaceRequest !== openRequest || state.workspace !== ws) {
-        publish();
-        return;
-      }
-      state.error = String(error);
+      if (disposed) return;
+      if (state.startFeedback === token) state.startFeedback = null;
+      state.error = `Could not start bazel ${cmd} ${pattern} in ${ws.path}: ${String(error)}`;
       publish();
     }
   }
@@ -907,6 +939,11 @@ export function createSession(
     if (disposed) return false;
     const request = {};
     workspaceRequest = request;
+    if (state.startFeedback !== null || state.error !== null) {
+      state.startFeedback = null;
+      state.error = null;
+      publish();
+    }
     try {
       const result = await transport.invoke<OpenWorkspaceResult>(COMMANDS.openWorkspace, {
         path,
@@ -983,7 +1020,7 @@ export function createSession(
     stop: (id: string) => void stop(id),
     openWorkspace,
     loadWorkspaceInfo,
-    refresh: () => void refreshSnapshot(),
+    refresh: refreshSnapshot,
     loadModules: () => state.workspace?.modules.load(),
     selectModule: (key: string | null) => state.workspace?.modules.select(key),
     explainModule: () => state.workspace?.modules.explain(),

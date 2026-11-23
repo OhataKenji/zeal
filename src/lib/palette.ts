@@ -1,7 +1,7 @@
-import { invocationStatus } from "./invocation.ts";
+import { rowStatus, type InvocationRow } from "./invocation.ts";
 import { search, type SearchIndex } from "./search.ts";
 import { pages, type Page } from "./pages.ts";
-import type { InvocationRecord, OwnedInvocation } from "./types.ts";
+import type { InvocationRecord } from "./types.ts";
 
 export type PaletteGroup = "commands" | "targets" | "invocations";
 
@@ -25,10 +25,7 @@ export interface PaletteItem {
 export interface PaletteInput {
   readonly query: string;
   readonly targetIndex: SearchIndex | null;
-  readonly invocations: ReadonlyArray<{
-    readonly record: InvocationRecord;
-    readonly execution?: OwnedInvocation;
-  }>;
+  readonly invocations: ReadonlyArray<InvocationRow>;
   readonly canRun: boolean;
   readonly canRefresh: boolean;
   readonly isMac: boolean;
@@ -96,12 +93,9 @@ function commandMatches(command: PaletteCommand, needle: string): boolean {
   );
 }
 
-function invocationItem(row: {
-  readonly record: InvocationRecord;
-  readonly execution?: OwnedInvocation;
-}): PaletteItem {
-  const { record, execution } = row;
-  const status = invocationStatus(record, execution);
+function invocationItem(row: InvocationRow): PaletteItem {
+  const { record } = row;
+  const status = rowStatus(row);
   return {
     id: `invocation:${record.id}`,
     group: "invocations",

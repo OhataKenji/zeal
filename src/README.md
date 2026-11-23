@@ -6,15 +6,21 @@ fetched data and calls IPC. Forms, Query, Analytics, comparison, and Console
 keep their state in their views.
 
 - Rust owns processes by workspace and invocation ID.
-- Console serves live terminal output; History is workspace-scoped and shows a
-  saved BEP record or, for a terminal completion without one, a bounded
-  in-memory process diagnostic (process exit code and output tail) that a
-  later matching BEP record supersedes.
+- History shows saved records and live executions across workspaces with the
+  same Git origin. Console and Stop use the individual execution's owner.
+  Without a BEP record, the owning workspace can show a bounded in-memory
+  diagnostic (process exit code and output tail). Failed includes known process
+  failures without implying a BEP result. A matching BEP record supersedes it.
 - Async responses must match their captured owner and a live session, including
   A→B→A navigation. Core snapshots must have a newer revision.
-- Starts capture content and workspace-open identity. A target/package change
-  invalidates the captured content; explicit-open intent blocks saved-workspace
-  restoration even after failure.
+- A build, test, or run waits for Zeal's outstanding target and workspace-info
+  reads in that canonical workspace, including superseded reloads. Navigation
+  or opening another workspace drops the automatic Console transition, not
+  the submitted command. A rejected launch is reported with its original
+  workspace, not as an invocation. Disposing the session cancels unsent
+  starts. User invocations do not wait for other user invocations: Bazel
+  still rejects output-base lock contention immediately. An explicit open
+  blocks saved-workspace restoration even after failure.
 - The target explorer builds one package tree per snapshot: the sidebar tree
   and the package table read the same nodes. Selection and target reads live
   in the session; expansion and direct/subtree scope stay local to the views.

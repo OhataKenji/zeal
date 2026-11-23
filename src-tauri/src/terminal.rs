@@ -272,8 +272,7 @@ mod tests {
                 spawn(Command::new("sh").args(["-c", script]), &log).unwrap();
             let core = Core::new();
             let mut st = core.state.lock().unwrap();
-            st.workspaces
-                .insert(PathBuf::from(WS), crate::scope::Scope::default());
+            st.workspaces.insert(PathBuf::from(WS), Default::default());
             st.invocations.insert(
                 id.clone(),
                 OwnedInvocation {
