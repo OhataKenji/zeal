@@ -37,10 +37,6 @@
   align-items: stretch;
 }
 
-.tree-row.dir.grouping {
-  color: var(--muted-foreground);
-}
-
 .tree-row.target:not(.selected) {
   color: color-mix(in oklch, var(--foreground) 75%, var(--muted-foreground));
 }

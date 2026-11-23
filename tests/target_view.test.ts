@@ -561,7 +561,7 @@ test("PackageView direct and subtree scopes, the scope switch, and the row cap",
   });
 });
 
-test("Tree marks grouping-only folders and renders root targets", async (t) => {
+test("Tree lists collapsed directories before root targets", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: Tree } = await load("/src/lib/Tree.svelte");
 
@@ -584,17 +584,6 @@ test("Tree marks grouping-only folders and renders root targets", async (t) => {
     .body.replace(/<!--[\s\S]*?-->/g, "")
     .replace(/\s+/g, " ");
 
-  function dirRow(caretLabel: string): string {
-    const rows = html.match(/<div class="tree-row dir[\s\S]*?<\/div>/g) ?? [];
-    const row = rows.find((r: string) => r.includes(caretLabel));
-    assert.ok(row, `missing directory row for ${caretLabel}`);
-    return row;
-  }
-
-  // //outer has no direct targets (only //outer/inner does), so it groups.
-  assert.match(dirRow("Expand //outer"), /grouping/);
-  // //real declares :t itself, so it is a real package row.
-  assert.doesNotMatch(dirRow("Expand //real"), /grouping/);
   // Collapsed dirs hide their children; the root package's own target still
   // renders as a depth-zero leaf.
   assert.equal((html.match(/tree-row target/g) ?? []).length, 1);
