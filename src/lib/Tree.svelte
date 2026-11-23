@@ -58,7 +58,6 @@
     <div
       class="tree-row dir"
       class:selected={isPkg}
-      class:grouping={dir.targets.length === 0}
       style:padding-left="{8 + depth * 12}px"
     >
       <button
