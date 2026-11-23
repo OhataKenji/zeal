@@ -23,10 +23,9 @@ via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.
 
 ```sh
-mise run check           # all checks (frontend, rust, then actions)
+mise run check           # all checks (frontend, then rust)
 mise run check:frontend  # type check, tests, format check, lint, build
 mise run check:rust      # cargo fmt --check, clippy, test (src-tauri/)
-mise run check:actions   # actionlint + local action validation
 mise run fmt             # auto-format (oxfmt + cargo fmt)
 ```
 

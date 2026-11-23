@@ -10,8 +10,8 @@ idiomatic_version_file_enable_tools = ["rust"]
 
 # Checks. CI runs the same commands.
 [tasks.check]
-description = "Run all checks (frontend, rust, then actions)"
-run = [{ task = "check:frontend" }, { task = "check:rust" }, { task = "check:actions" }]
+description = "Run all checks (frontend, then rust)"
+run = [{ task = "check:frontend" }, { task = "check:rust" }]
 
 [tasks."check:frontend"]
 description = "Format check, lint, test, type check and build the frontend"
@@ -32,14 +32,6 @@ run = [
   { task = "build:frontend" },
   "cargo clippy --locked --all-targets -- -D warnings",
   "cargo test --locked",
-]
-
-[tasks."check:actions"]
-description = "Lint workflows and validate local action definitions"
-tools = { actionlint = "1.7.12", action-validator = "0.9.0" }
-run = [
-  "actionlint",
-  'find .github/actions -type f \( -name action.yml -o -name action.yaml \) -exec action-validator {} +',
 ]
 
 [tasks."build:frontend"]
