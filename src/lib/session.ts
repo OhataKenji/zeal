@@ -561,13 +561,21 @@ export function createSession(
       !detail.loading &&
       detail.error === null &&
       JSON.stringify(next) !== JSON.stringify(detail.value.record);
+    // Log and BEP share one receipt; unlike BEP, the log's incomplete status
+    // is not raised by the display-size cap, so pending or incomplete logs
+    // — and an in-flight first read — can still gain events.
+    const awaitingEvents =
+      detail.value?.log.status === "pending" ||
+      detail.value?.log.status === "incomplete" ||
+      (detail.loading && detail.value === null);
     ws.diagnostics = result.diagnostics;
     ws.history = records;
     ws.historyError = null;
     // An unselected history page claims its first row; reconcileSaved below
     // starts the saved readers exactly once for the new selection.
     claimFirstInvocation();
-    if (changed || detailMismatch) refreshSavedFromHistory();
+    if (changed || detailMismatch || (next && detail.error === null && awaitingEvents))
+      refreshSavedFromHistory();
     reconcileSaved(wasEligible);
   }
 

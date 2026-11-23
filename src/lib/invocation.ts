@@ -83,6 +83,7 @@ export function sectionNoticeTone(section: Section<unknown>): "error" | "warning
       return "warning";
     case "ok":
     case "missing":
+    case "pending":
     case "not_available":
       return "neutral";
   }
@@ -97,6 +98,8 @@ export function sectionMessage(section: Section<unknown>): string {
       return `incomplete — ${section.note}`;
     case "missing":
       return "missing — no record";
+    case "pending":
+      return "No build events available yet.";
     case "parse_error":
       return `parse error — ${section.note}`;
     case "read_error":
