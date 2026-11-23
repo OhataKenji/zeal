@@ -600,4 +600,8 @@ test("Tree marks grouping-only folders and renders root targets", async (t) => {
   assert.equal((html.match(/tree-row target/g) ?? []).length, 1);
   assert.match(html, /<span class="dim">:<\/span>r/);
   assert.match(html, /\/\/:r \(cc_library\)/);
+  assert.deepEqual(
+    [...html.matchAll(/title="([^"]+)"/g)].map((match) => match[1]),
+    ["//outer", "//real", "//:r (cc_library)"],
+  );
 });
