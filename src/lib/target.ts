@@ -12,7 +12,7 @@ export function packageScopeNote(pattern: string): string | null {
   const [pkg, target] = pattern.split(":");
   const wildcard = target === "all" || target === "*" || target === "all-targets";
   if (pkg.endsWith("/...") || !wildcard) return null;
-  return `Bazel runs ${pattern}, not the Explorer list. It may include other targets in this package.`;
+  return "Zelith only lists targets in your workspace scope. Bazel may build or test unlisted targets in this package.";
 }
 
 /** Validates a single target token without trimming or splitting it. */

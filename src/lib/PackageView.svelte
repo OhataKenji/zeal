@@ -1,6 +1,7 @@
 <script lang="ts">
   import ActionPair from "./ActionPair.svelte";
   import type { packageContents } from "./model";
+  import { packageScopeNote } from "./target";
   import type { BazelCommand } from "./types";
 
   let {
@@ -18,15 +19,18 @@
   } = $props();
 
   const ROW_CAP = 500;
-  const { name, targets, pattern, primaryCmd } = $derived(pkg);
+  const { targets, pattern, primaryCmd } = $derived(pkg);
 </script>
 
 <div class="view-head">
   <div>
-    <h1 class="view-title mono">{name}</h1>
+    <h1 class="view-title mono">{pattern}</h1>
     <div class="view-meta">
       {targets.length} discovered {targets.length === 1 ? "target" : "targets"}
     </div>
+    {#if targets.length > 0}
+      <p class="view-meta">{packageScopeNote(pattern)}</p>
+    {/if}
   </div>
   {#if targets.length > 0}
     <ActionPair

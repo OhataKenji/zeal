@@ -57,10 +57,8 @@ test("package tree sorts directories and targets and counts subtree totals", () 
   assert.equal(tree.dirs[1].count, 1);
   // byPath hands out the same node objects the tree rows render.
   assert.equal(byPath.get("app/lib"), app.dirs[1]);
-  // packageContents keeps the //path heading separate from the :all action target.
-  const contents = packageContents(app);
-  assert.equal(contents.name, "//app");
-  assert.equal(contents.pattern, "//app:all");
+  // packageContents hands the shared //path:all pattern to package actions.
+  assert.equal(packageContents(app).pattern, "//app:all");
 });
 
 test("ancestorsOf includes the package but not the root", () => {

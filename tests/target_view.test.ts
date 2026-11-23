@@ -429,8 +429,11 @@ test("Run dialog completes targets freely and explains only direct package wildc
 
   for (const pattern of ["//:all", "//app:all", "//app:*", "//app:all-targets"]) {
     const html = dialog(pattern);
-    assert.ok(html.includes(`Bazel runs ${pattern}, not the Explorer list.`));
-    assert.ok(html.includes("It may include other targets in this package."));
+    assert.ok(
+      html.includes(
+        "Zelith only lists targets in your workspace scope. Bazel may build or test unlisted targets in this package.",
+      ),
+    );
   }
   for (const pattern of [
     "//...",
@@ -478,8 +481,7 @@ test("PackageView lists direct package targets and hides actions for grouping fo
 
   await t.test("the root lists only its direct targets", () => {
     const html = output(MIXED);
-    assert.match(html, /<h1[^>]*>\/\/<\/h1>/);
-    assert.doesNotMatch(html, /:all\b/);
+    assert.match(html, /<h1[^>]*>\/\/:all<\/h1>/);
     assert.match(html, />\s*1 discovered target\s*</);
     assert.ok(html.includes(">:root</button>"));
     assert.doesNotMatch(html, />:all_tests</);
@@ -491,9 +493,13 @@ test("PackageView lists direct package targets and hides actions for grouping fo
 
   await t.test("a package lists direct targets and picks Test for a test_suite", () => {
     const html = output(MIXED, "app");
-    assert.match(html, /<h1[^>]*>\/\/app<\/h1>/);
-    assert.doesNotMatch(html, /:all\b/);
+    assert.match(html, /<h1[^>]*>\/\/app:all<\/h1>/);
     assert.match(html, />\s*1 discovered target\s*</);
+    assert.ok(
+      html.includes(
+        "Zelith only lists targets in your workspace scope. Bazel may build or test unlisted targets in this package.",
+      ),
+    );
     assert.ok(html.includes(">:all_tests</button>"));
     // //app/lib:deep is a descendant, not a direct target.
     assert.doesNotMatch(html, />:deep</);
@@ -506,7 +512,7 @@ test("PackageView lists direct package targets and hides actions for grouping fo
   await t.test("a grouping-only folder shows no rows or package actions", () => {
     const html = output([indexedTarget("//app/lib:deep"), indexedTarget("//app/web:ui")], "app");
     // //app:all may not name a real Bazel package, so no actions are offered.
-    assert.match(html, /<h1[^>]*>\/\/app<\/h1>/);
+    assert.match(html, /<h1[^>]*>\/\/app:all<\/h1>/);
     assert.match(html, />\s*0 discovered targets\s*</);
     assert.match(html, /No targets discovered directly at this path\./);
     assert.doesNotMatch(html, /class="clickable"/);

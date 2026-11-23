@@ -104,13 +104,11 @@ export function isTestRule(ruleClass: string): boolean {
   return ruleClass.endsWith("_test") || ruleClass === "test_suite";
 }
 
-/** The package view's data: direct targets, the //path heading, :all pattern, and primary command. */
+/** The package view's data: direct targets, the shared //path:all pattern, and primary command. */
 export function packageContents({ path, targets }: DirNode) {
-  const name = `//${path}`;
   return {
-    name,
     targets,
-    pattern: `${name}:all`,
+    pattern: `//${path}:all`,
     primaryCmd: targets.some((t) => isTestRule(t.ruleClass)) ? "test" : "build",
   } as const;
 }
