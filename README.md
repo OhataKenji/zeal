@@ -52,45 +52,41 @@ Open only trusted repositories.
 
 ## Features
 
-### Find and Run Targets
+### Workspace
 
-Select a folder in the Targets sidebar to browse its package, or a `:target` to open its details. A package with direct targets opens at `//pkg:all`; if it also has subpackages, choose **Subtree** to browse or run `//pkg/...` instead. The **Targets** heading returns to the root package.
+Find your build output and test logs. Choose which packages Zeal scans. To record terminal builds too, copy the settings shown here into your `.bazelrc`.
 
-Search `//:` for root targets or `//pkg:` for targets in one package. Type a name after the colon to narrow the list, or omit the package prefix to fuzzy-search across packages.
+![The Workspace tab shows where Bazel stores build output and test logs](docs/screenshots/workspace-info.png)
 
-![Fuzzy search for Bazel targets](docs/screenshots/fuzzy-search.jpg)
+### Targets
 
-### Command Palette
+Browse packages or press `⌘K` / `Ctrl+K` to find a target. Build, test, or run it. Open **Definition** for rule attributes or **Configured** for resolved outputs and dependencies. **Actions** shows each action's command, inputs, and outputs.
 
-Press `⌘K` (macOS) or `Ctrl+K` — or the search button in the toolbar — to jump to a page, run Bazel, open a target, or open an invocation. Paste a full invocation ID to look up a build older than the recent history list.
+![The CcStrip action for //rates:rate_server shows its command, inputs, and output](docs/screenshots/target-actions.png)
 
-### Query Builder
+### Modules
 
-Build Bazel queries visually from preset examples or from scratch across all three query graphs: `query` (loading), `cquery` (analysis), and `aquery` (action graph). View results as target lists, dependency graphs, or action details.
+Select a Bzlmod module. Follow **Required by** to see what depends on it, or choose **Explain** to see why Bazel picked that version.
 
-![Query Builder with visual expression blocks and a dependency graph](docs/screenshots/query-builder.jpg)
+![The root module depends on c-ares through gRPC](docs/screenshots/module-explain.png)
 
-### Bzlmod Modules
+### Query
 
-Open **Modules** and choose **Load modules** to see which modules depend on each other. Select a module to browse its parents and dependencies, or choose **Explain** to ask Bazel why that version was selected.
+Use the visual query builder to write `query`, `cquery`, and `aquery` expressions without memorizing Bazel's query syntax.
 
-### Invocation Page
+![The Query editor shows the selected deps function, the generated Bazel command, and a graph of platform dependencies](docs/screenshots/query-graph.png)
 
-View logs, results, details, and available timing data.
+### History
 
-![Invocation Page showing build phases and a per-thread timing trace](docs/screenshots/run-page.jpg)
+Follow builds across worktrees. If you started a build in Zeal, you can stop it from any worktree. After a run, check its logs and test results. Use **Timing** to see what took time or **Compare** to see which flags changed between runs.
 
-### Compare Invocations
+![A rate_server build with a nine-second phase selected on the main thread](docs/screenshots/history-timing.png)
 
-Compare commands, options, and outcomes of two invocations side by side.
+### Analytics
 
-![Invocation comparison highlighting changed fields and distinguishing unrecorded options](docs/screenshots/invocation-comparison.jpg)
+See daily results and run times (p50 and p95) for builds and tests recorded on your machine. Filter the charts by workspace, command, or target pattern. The ranking lists target patterns by total build time.
 
-### Analytics Page
-
-Filter build and test history from Zeal and recorded terminal commands. Compare counts, results, and durations (total, p50, p95).
-
-![Analytics Page showing date filters and daily invocation counts by outcome](docs/screenshots/analytics-page.jpg)
+![Daily build and test counts, grouped by result](docs/screenshots/analytics-invocations.png)
 
 ## Record terminal invocations
 
