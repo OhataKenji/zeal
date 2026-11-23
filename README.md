@@ -60,7 +60,7 @@ Find the output directory or test logs without sifting through `bazel info`. Set
 
 ### Targets
 
-Browse packages or press `⌘K` / `Ctrl+K` to find a target by name, then build, test, or run it. Inspect its rule attributes in **Definition**, resolved outputs and dependencies in **Configured**, or the commands Bazel will execute in **Actions**.
+Browse packages or press `⌘K` / `Ctrl+K` to find a target by name, then build, test, or run it. Inspect its rule attributes in **Definition**, resolved outputs and dependencies in **Configured**, or each action's command, inputs, and outputs in **Actions**.
 
 ![The Actions tab for //rates:rate_server with CcStrip expanded to show its command, output, and inputs](docs/screenshots/target-actions.png)
 
@@ -78,13 +78,13 @@ Build a `deps` expression from blocks and see both the dependency graph and the 
 
 ### History
 
-Follow live runs across worktrees, or open a finished invocation to inspect logs and test results. Select a span in **Timing** to see where a build spent its time, or use **Compare** to find which flags changed between two runs.
+Follow live runs across worktrees and stop a build started in Zeal without switching back to its worktree. For finished runs, inspect logs and test results, select a span in **Timing** to see where the build spent its time, or use **Compare** to see which flags changed.
 
 ![Timing trace for a rate_server build with the nine-second analysis and execution phase selected on the main thread](docs/screenshots/history-timing.png)
 
 ### Analytics
 
-Track daily outcomes and p50/p95 durations for builds and tests recorded locally. Filter by workspace, command, or target pattern, then rank patterns by total time to see where slower builds add up.
+Filter daily outcomes and p50/p95 durations for locally recorded builds and tests by workspace, command, or target pattern. The ranking shows which target patterns account for the most build time in total, regardless of the chart's target pattern filter.
 
 ![Daily invocation counts stacked by outcome, with workspace, command, and target pattern filters](docs/screenshots/analytics-invocations.png)
 
