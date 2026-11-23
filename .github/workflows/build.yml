@@ -45,12 +45,13 @@ jobs:
               - '!renovate.json'
 
   tauri-build:
-    name: tauri build (${{ matrix.os }})
+    name: tauri ${{ matrix.task }} (${{ matrix.os }})
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
+        task: [test, build]
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -69,22 +70,26 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          key: ${{ matrix.task }}
+          # PRs restore main's cache without uploading a PR-scoped copy.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test
+        if: matrix.task == 'test'
         run: cargo test --locked
         working-directory: src-tauri
 
-      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        with:
-          args: -- --locked
+      - name: Build Tauri bundles
+        if: matrix.task == 'build'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Match tauri-action's DMG packaging on macOS runners.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm tauri build -- --locked
 
   # Branch protection requires a stable check name, but a matrix job skipped
-  # by `if` reports only the literal, unexpanded `tauri build (${{ matrix.os }})`.
+  # by `if` reports only the literal, unexpanded `tauri ${{ matrix.task }} (${{ matrix.os }})`.
   # This always-run gate aggregates the matrix legs under a fixed name.
   build-result:
     name: tauri build
