@@ -44,43 +44,37 @@ jobs:
               - '!LICENSE'
               - '!renovate.json'
 
-  tauri-build:
-    name: tauri ${{ matrix.task }} (${{ matrix.os }})
+  tauri-test:
+    name: tauri test (${{ matrix.os }})
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
-        task: [test, build]
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # https://v2.tauri.app/start/prerequisites/#linux
-      - name: Install Tauri system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-
-      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
-
-      # After the toolchain install: the cache key includes the rustc version.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: src-tauri
-          key: ${{ matrix.task }}
-          # PRs restore main's cache without uploading a PR-scoped copy.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: ./.github/actions/setup-tauri
 
       - name: cargo test
-        if: matrix.task == 'test'
         run: cargo test --locked
         working-directory: src-tauri
 
+  tauri-build:
+    name: tauri build (${{ matrix.os }})
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-tauri
+
       - name: Build Tauri bundles
-        if: matrix.task == 'build'
         env:
           # Match tauri-action's DMG packaging on macOS runners.
           TAURI_BUNDLER_DMG_IGNORE_CI: "true"
@@ -88,25 +82,15 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm tauri build -- --locked
 
-  # Branch protection requires a stable check name, but a matrix job skipped
-  # by `if` reports only the literal, unexpanded `tauri ${{ matrix.task }} (${{ matrix.os }})`.
-  # This always-run gate aggregates the matrix legs under a fixed name.
+  # Branch protection requires a stable check name. Docs-only changes skip
+  # the matrices entirely, which is valid, so this always-run gate fails only
+  # on failure or cancellation and aggregates under a fixed name.
   build-result:
     name: tauri build
-    needs: [changes, tauri-build]
+    needs: [changes, tauri-test, tauri-build]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Propagate build result
-        run: |
-          changes="${{ needs.changes.result }}"
-          build="${{ needs.tauri-build.result }}"
-          if [ "$changes" != "success" ]; then
-            echo "::error::change detection $changes"
-            exit 1
-          fi
-          if [ "$build" = "failure" ] || [ "$build" = "cancelled" ]; then
-            echo "::error::tauri build $build"
-            exit 1
-          fi
-          echo "tauri build $build"
+      - name: Reject failed or cancelled checks
+        if: needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
