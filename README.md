@@ -84,7 +84,7 @@ Follow builds across worktrees. If you started a build in Zeal, you can stop it 
 
 ### Analytics
 
-See daily results and run times (p50 and p95) for builds and tests recorded on your machine. Filter the charts by workspace, command, or target pattern. The ranking lists target patterns by total build time. The target pattern filter does not change this ranking.
+See daily results and run times (p50 and p95) for builds and tests recorded on your machine. Filter the charts by workspace, command, or target pattern. The ranking lists target patterns by total build time.
 
 ![Daily build and test counts, grouped by result](docs/screenshots/analytics-invocations.png)
 
