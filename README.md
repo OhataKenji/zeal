@@ -23,7 +23,7 @@
 > [!WARNING]
 > Zeal is in development. Expect breaking changes. Local data may not carry over to new versions.
 
-### Step1: Install
+### Step 1: Install
 
 #### Option 1: Download a release
 
@@ -35,7 +35,7 @@ Download the app from [GitHub Releases](https://github.com/OhataKenji/zeal/relea
 
 Follow the [Development guide](docs/development.md#getting-started).
 
-### Step2: Open a repository
+### Step 2: Open a workspace
 
 **Requires:** Bazelisk or Bazel on your `PATH`.
 
@@ -43,12 +43,12 @@ On macOS and Linux, Zeal loads your login shell's `PATH`.
 
 Open only trusted repositories.
 
-1. Enter your Bazel workspace root path or select it with **Choose folder…**.
-2. Keep **target patterns** as `//...` for all packages in the main repository. To narrow the scope, use a pattern such as `//app/...`.
-3. Select **open**.
-4. Select a target and run `build`, `test`, or `run`.
+1. Select **Choose folder…** and pick the root of your Bazel workspace, or enter its path in **Workspace**.
+2. Under **Target patterns**, keep `//...` to include all packages in the main repository. For a large workspace, try a smaller scope such as `//app/...`.
+3. Select **Open workspace**.
+4. Open **Targets**, select a target, and build, test, or run it.
 
-![Workspace form with an example path and target pattern](docs/screenshots/open-workspace.jpg)
+![Open a workspace form with a workspace path, the default //... target pattern, and the Open workspace button](docs/screenshots/open-workspace.jpg)
 
 ## Features
 
