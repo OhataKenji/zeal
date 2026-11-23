@@ -39,7 +39,7 @@ description = "Lint workflows and validate local action definitions"
 tools = { actionlint = "1.7.12", action-validator = "0.9.0" }
 run = [
   "actionlint",
-  'find .github -path ".github/actions/*" -type f \( -name action.yml -o -name action.yaml \) -exec action-validator {} +',
+  'find .github/actions -type f \( -name action.yml -o -name action.yaml \) -exec action-validator {} +',
 ]
 
 [tasks."build:frontend"]
