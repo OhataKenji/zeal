@@ -85,20 +85,6 @@
   color: var(--muted-foreground);
 }
 
-.tree-dot {
-  width: 10px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  color: var(--primary);
-}
-
-.tree-dot.test {
-  color: var(--test-color);
-}
-
 .target-head {
   display: flex;
   flex-wrap: wrap;

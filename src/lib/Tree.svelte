@@ -1,7 +1,7 @@
 <script lang="ts">
   import { CaretDown, CaretRight } from "phosphor-svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { ancestorsOf, flatten, isTestRule, splitLabel, type DirNode } from "./model";
+  import { ancestorsOf, flatten, splitLabel, type DirNode } from "./model";
   import type { ExplorerSelection } from "./types";
 
   let {
@@ -86,7 +86,6 @@
     {:else}
       {@const target = row.target}
       {@const isTarget = selection?.kind === "target" && selection.label === target.label}
-      {@const test = isTestRule(target.ruleClass)}
       <button
         type="button"
         class="tree-row target"
@@ -96,7 +95,6 @@
         style:padding-left="{8 + row.depth * 12}px"
         onclick={() => onselect({ kind: "target", label: target.label })}
       >
-        <span class="tree-dot" class:test aria-hidden="true">{test ? "◇" : "●"}</span>
         <span class="tree-name"><span class="dim">:</span>{target.name}</span>
       </button>
     {/if}
