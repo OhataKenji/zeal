@@ -12,10 +12,10 @@
   <a href="https://github.com/OhataKenji/zelith/actions/workflows/ci.yml"><img src="https://github.com/OhataKenji/zelith/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-[![Watch the Zelith demo on YouTube](docs/screenshots/overview.jpg)](https://youtu.be/Kkmc5_eOLA0)
+[![Watch the Zelith demo on YouTube](docs/screenshots/thumbnail-youtube.png)](https://youtu.be/4RE5FgrUCo4?si=KmxKi0voqdBThoIC)
 
 <p align="center">
-  <a href="https://youtu.be/Kkmc5_eOLA0">Watch on YouTube</a>
+  <a href="https://youtu.be/4RE5FgrUCo4?si=KmxKi0voqdBThoIC">Watch on YouTube</a>
 </p>
 
 ## Getting Started
