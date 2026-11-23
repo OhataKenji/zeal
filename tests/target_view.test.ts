@@ -404,7 +404,7 @@ test("TargetView renders target details", async (t) => {
   });
 });
 
-test("Run with flags explains package patterns but not individual labels", async (t) => {
+test("Run dialog completes targets freely and explains package pattern scope", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: RunDialog } = await load("/src/lib/RunDialog.svelte");
   function dialog(pattern: string) {
@@ -413,12 +413,20 @@ test("Run with flags explains package patterns but not individual labels", async
         cmd: "build",
         pattern,
         flags: "",
+        targetIndex: null,
         canRun: () => true,
         onrun: () => {},
         onclose: () => {},
       },
     }).body;
   }
+
+  const html = dialog("//app/...");
+  const field = html.match(/<input[^>]*aria-label="Target pattern"[^>]*>/)?.[0] ?? "";
+  assert.match(field, /role="combobox"/);
+  assert.ok(html.includes("bazel build //app/..."));
+  assert.doesNotMatch(html, /class="button button-primary"[^>]*disabled/);
+
   for (const pattern of ["//:all", "//app:all", "//app:*", "//app:all-targets"]) {
     assert.match(dialog(pattern), /in this package, not just the targets listed in Explorer/);
   }

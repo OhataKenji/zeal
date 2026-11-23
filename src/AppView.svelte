@@ -20,6 +20,7 @@
   import { buildTree } from "./lib/model";
   import type { PaletteAction } from "./lib/palette";
   import { pages, type Page } from "./lib/pages";
+  import { createIndex } from "./lib/search";
   import Tree from "./lib/Tree.svelte";
   import PackageView from "./lib/PackageView.svelte";
   import TargetView from "./lib/TargetView.svelte";
@@ -48,6 +49,7 @@
   const core = $derived(view.core);
   const snap = $derived(view.snapshot);
   const tree = $derived(snap ? buildTree(snap.targets) : null);
+  const targetIndex = $derived(snap ? createIndex(snap.targets) : null);
   const selection = $derived(view.selection);
   const selectedTarget = $derived(selection?.kind === "target" ? selection.label : null);
   const selectedDir = $derived(
@@ -508,7 +510,7 @@
           <div class="page-center">
             {#key st.workspace}
               <QueryView
-                {snap}
+                {targetIndex}
                 workspace={st.workspace}
                 bazelAvailable={core !== null && core.bazel !== null}
               />
@@ -543,7 +545,7 @@
 
     <CommandPalette
       open={surface?.kind === "palette"}
-      snapshot={snap}
+      {targetIndex}
       invocations={view.invocationRows}
       canRun={canSend(view, selectedTarget ?? "//...")}
       canRefresh={Boolean(st && core?.bazel && !view.snapshotLoading)}
@@ -558,6 +560,7 @@
         cmd={surface.cmd}
         pattern={surface.pattern}
         flags={surface.flags}
+        {targetIndex}
         canRun={(pattern) => canSend(view, pattern)}
         onrun={(cmd, pattern, flags) => session.start(cmd, pattern, flags)}
         onclose={() => {

@@ -84,7 +84,7 @@ test("CommandPalette renders an accessible combobox listbox with grouped options
   const html = render(CommandPalette, {
     props: {
       open: true,
-      snapshot: SNAPSHOT,
+      targetIndex: null,
       invocations,
       canRun: true,
       canRefresh: true,
@@ -118,7 +118,7 @@ test("a closed CommandPalette renders no options", async (t) => {
   const html = render(CommandPalette, {
     props: {
       open: false,
-      snapshot: SNAPSHOT,
+      targetIndex: null,
       invocations: [
         {
           record: {

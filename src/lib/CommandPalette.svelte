@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createIndex, moveIndex, optionId } from "./search";
+  import { moveIndex, optionId } from "./search";
   import {
     paletteItems,
     type PaletteAction,
@@ -7,11 +7,10 @@
     type PaletteInput,
     type PaletteItem,
   } from "./palette";
-  import type { TargetIndex } from "./types";
 
   let {
     open,
-    snapshot,
+    targetIndex,
     invocations,
     canRun,
     canRefresh,
@@ -20,7 +19,7 @@
     onclose,
   }: {
     open: boolean;
-    snapshot: TargetIndex | null;
+    targetIndex: PaletteInput["targetIndex"];
     invocations: PaletteInput["invocations"];
     canRun: boolean;
     canRefresh: boolean;
@@ -45,7 +44,6 @@
   let pointerX = -1;
   let pointerY = -1;
 
-  const targetIndex = $derived(snapshot === null ? null : createIndex(snapshot.targets));
   const items = $derived(
     open ? paletteItems({ query, targetIndex, invocations, canRun, canRefresh, isMac }) : [],
   );

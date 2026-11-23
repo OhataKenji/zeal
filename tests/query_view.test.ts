@@ -9,7 +9,7 @@ test("QueryView blocks Execute only on Bazel availability", async (t) => {
 
   function output(bazelAvailable: boolean): string {
     return render(QueryView, {
-      props: { snap: null, workspace: "/workspace", bazelAvailable },
+      props: { targetIndex: null, workspace: "/workspace", bazelAvailable },
     }).body;
   }
 

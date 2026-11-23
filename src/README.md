@@ -24,6 +24,8 @@ keep their state in their views.
 - The target explorer builds one package tree per snapshot: the sidebar tree
   and the package table read the same nodes. Selection and target reads live
   in the session; expansion and direct/subtree scope stay local to the views.
+  Run, Query, and the command palette share the target search index derived
+  once per snapshot.
 - Target reads have two lifetimes: static detail once per selection, then one
   phase reader for the active target detail tab (configured or actions) under the
   workspace's applied build flags; Definition issues no phase read. The UI

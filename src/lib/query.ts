@@ -745,7 +745,7 @@ export function codeDiverged(root: Expr, draft: string): boolean {
  * Rule classes take the ` rule` suffix kind patterns expect, except classes
  * already ending in "file".
  */
-export function kindCandidates(targets: Target[]): Target[] {
+export function kindCandidates(targets: readonly Target[]): Target[] {
   return [
     ".*_test rule",
     "source file",
