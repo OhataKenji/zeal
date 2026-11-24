@@ -46,5 +46,8 @@ keep their state in their views.
   page navigation. Switching workspaces discards them. Search and depth filters
   are local to the Modules page and reset when you leave it.
 - Query input changes clear results; execution is explicit.
+- Clipboard actions use `CopyButton` with a target-specific accessible label.
+  Inline and overlay placement share the same copy, success, and failure
+  feedback.
 
 See [tests](../tests) for behavior and [development](../docs/development.md) for checks.

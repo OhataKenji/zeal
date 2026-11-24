@@ -18,6 +18,7 @@
   import { tabKeydown } from "./tabs";
   import ActionPair from "./ActionPair.svelte";
   import ActionsSection from "./TargetActions.svelte";
+  import CopyButton from "./CopyButton.svelte";
 
   let {
     index,
@@ -75,24 +76,8 @@
   // a string is the in-progress edit. Apply only fires from Enter or the
   // button; nothing runs on draft changes or blur.
   let flagsDraft = $state<string | null>(null);
-  let copyNote = $state<{ key: string; ok: boolean } | null>(null);
-  $effect(() => {
-    if (!copyNote) return;
-    const id = setTimeout(() => {
-      copyNote = null;
-    }, 1500);
-    return () => clearTimeout(id);
-  });
   function location(file: string, line: number) {
     return `${file.startsWith(wsRoot + "/") ? file.slice(wsRoot.length + 1) : file}:${line}`;
-  }
-  async function copy(key: string, text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      copyNote = { key, ok: true };
-    } catch {
-      copyNote = { key, ok: false };
-    }
   }
   function applyFlags(event: SubmitEvent) {
     event.preventDefault();
@@ -301,18 +286,13 @@
               <div class="configured-config mono">
                 <span>{configured.configuration.mnemonic}</span>
                 <span class="dim">·</span>
-                <button
-                  type="button"
-                  class="link mono"
-                  title={`Copy configuration hash ${configured.configuration.checksum}`}
-                  onclick={() =>
-                    copy("config", configured?.configuration?.checksum ?? "")}
+                <span title={configured.configuration.checksum}
+                  >{configured.configuration.checksum.slice(0, 12)}</span
                 >
-                  {configured.configuration.checksum.slice(0, 12)}{#if copyNote?.key === "config"}<span
-                      class="copied-tag" class:copied-failed={!copyNote.ok}
-                      >{copyNote.ok ? "Copied" : "Copy failed"}</span
-                    >{/if}
-                </button>
+                <CopyButton
+                  text={configured.configuration.checksum}
+                  label={`Copy configuration hash ${configured.configuration.checksum}`}
+                />
               </div>
             {:else}
               <p class="dim">No configuration</p>
@@ -333,16 +313,7 @@
                     <span class="configured-path mono" title={path}
                       >{shortOutputPath(path)}</span
                     >
-                    <button
-                      type="button"
-                      class="button button-ghost configured-copy"
-                      onclick={() => copy(`out:${path}`, path)}
-                      >{copyNote?.key === `out:${path}`
-                        ? copyNote.ok
-                          ? "Copied"
-                          : "Copy failed"
-                        : "Copy"}</button
-                    >
+                    <CopyButton text={path} label={`Copy output path ${path}`} />
                   </div>
                 {/each}
               </div>

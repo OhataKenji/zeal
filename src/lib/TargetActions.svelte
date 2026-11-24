@@ -2,6 +2,7 @@
   import type { TargetAction, TargetActions } from "./types";
   import { commandLine, shortOutputPath } from "./model";
   import { tick } from "svelte";
+  import CopyButton from "./CopyButton.svelte";
 
   let {
     actions,
@@ -17,14 +18,12 @@
     showOwner?: boolean;
   } = $props();
 
-  let copyState = $state<{ index: number; status: "copied" | "failed" } | null>(null);
   let open = $state<boolean[]>([]);
   let highlighted = $state<number | null>(null);
   const details: HTMLDetailsElement[] = [];
 
   $effect.pre(() => {
     void actions;
-    copyState = null;
     open = [];
     highlighted = null;
   });
@@ -39,16 +38,6 @@
     highlighted = producer;
     await tick();
     details[producer]?.scrollIntoView({ block: "nearest" });
-  }
-
-  async function copyCommand(action: TargetAction, index: number) {
-    const current = actions;
-    try {
-      await navigator.clipboard.writeText(commandLine(action));
-      if (actions === current) copyState = { index, status: "copied" };
-    } catch {
-      if (actions === current) copyState = { index, status: "failed" };
-    }
   }
 
   function actionMeta(action: TargetAction): { text: string; title: string } | null {
@@ -136,30 +125,20 @@
               {/if}
             </summary>
             {#if open[index]}
+              {@const command = commandLine(action)}
               <div class="action-details">
                 <section class="action-section action-command-section">
                   <div class="action-section-head">
                     <h3>Command</h3>
                     {#if action.arguments.length > 0}
-                      <span class="action-copy-status">
-                        <button
-                          type="button"
-                          class="button button-ghost action-copy"
-                          onclick={() => copyCommand(action, index)}>Copy</button
-                        >
-                        {#if copyState && copyState.index === index}
-                          {#if copyState.status === "copied"}<span
-                              class="dim"
-                              role="status">Copied</span
-                            >{:else}<span class="dim" role="status"
-                              >Copy failed</span
-                            >{/if}
-                        {/if}
-                      </span>
+                      <CopyButton
+                        text={command}
+                        label={`Copy ${action.mnemonic} command`}
+                      />
                     {/if}
                   </div>
                   {#if action.arguments.length > 0}
-                    <pre class="action-command">{commandLine(action)}</pre>
+                    <pre class="action-command">{command}</pre>
                   {:else}
                     <p class="dim">No command line provided</p>
                   {/if}

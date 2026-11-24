@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import { ArrowClockwise } from "phosphor-svelte";
   import BesSetup from "./BesSetup.svelte";
+  import CopyButton from "./CopyButton.svelte";
   import Notice from "./Notice.svelte";
   import type { TargetScope, WorkspaceInfo } from "./types";
 
@@ -31,7 +32,6 @@
   let lastScopeKey = untrack(() => `${workspace}\0${scope.include.join("\n")}`);
   let saving = $state(false);
   let saveError = $state<string | null>(null);
-  let copiedKey = $state<string | null>(null);
   let expanded = $state(false);
 
   const PRIMARY_KEYS = [
@@ -56,18 +56,6 @@
       includeText = scope.include.join("\n");
     }
   });
-
-  async function copyValue(key: string, value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      copiedKey = key;
-      setTimeout(() => {
-        if (copiedKey === key) copiedKey = null;
-      }, 1500);
-    } catch {
-      // Ignore clipboard failures in restricted environments.
-    }
-  }
 
   async function saveScope(event: SubmitEvent) {
     event.preventDefault();
@@ -117,15 +105,13 @@
     <table class="lens-table">
       <tbody>
         {#each rows as row (row.key)}
-          <tr
-            class="clickable"
-            onclick={() => void copyValue(row.key, row.value)}
-            title="Click to copy"
-          >
+          <tr>
             <td class="mono">{row.key}</td>
             <td class="mono path-cell">
-              {row.value}{#if copiedKey === row.key}{" "}
-                <span class="copied-tag">Copied</span>{/if}
+              <div class="workspace-info-value">
+                <span>{row.value}</span>
+                <CopyButton text={row.value} label={`Copy ${row.key} value`} />
+              </div>
             </td>
           </tr>
         {/each}

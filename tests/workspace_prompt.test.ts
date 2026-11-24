@@ -107,14 +107,16 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
       html,
       /<pre[^>]*><code[^>]*>--bes_backend=grpc:\/\/127\.0\.0\.1:12345<\/code><\/pre>/,
     );
-    const button = tag(html, /<button[^>]*aria-label="Copy session option"[^>]*>/);
+    const button = tag(
+      html,
+      /<button[^>]*aria-label="Copy session option"[^>]*>[\s\S]*?<\/button>/,
+    );
     assert.match(button, /type="button"/);
     assert.match(button, /title="Copy session option"/);
     assert.doesNotMatch(button, /disabled/);
-    assert.match(
-      tag(html, /<button[^>]*aria-label="Copy session option"[^>]*>[\s\S]*?<\/button>/),
-      /<svg/,
-    );
+    assert.match(button, /<svg/);
+    // Icon-only: the button carries no visible text.
+    assert.equal(button.replace(/<[^>]+>/g, "").trim(), "");
   });
 
   await t.test("copy button can be disabled", () => {
@@ -123,7 +125,6 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
         text: "build //...",
         label: "Copy settings",
         disabled: true,
-        onerror: () => {},
       },
     }).body;
     assert.match(tag(html, /<button[^>]*>/), /disabled/);

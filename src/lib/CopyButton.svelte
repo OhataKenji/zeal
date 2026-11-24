@@ -1,80 +1,52 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
-  import { Check, Copy } from "phosphor-svelte";
+  import { Check, Copy, WarningCircle } from "phosphor-svelte";
 
   let {
     text,
     label,
     disabled = false,
-    onerror,
   }: {
     text: string;
     label: string;
     disabled?: boolean;
-    onerror: (message: string) => void;
   } = $props();
 
-  // The icon flips to a check for a moment, like GitHub code blocks.
-  let copied = $state(false);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let disposed = false;
-
-  onDestroy(() => {
-    disposed = true;
-    clearTimeout(timer);
+  let feedback = $state<{ text: string; ok: boolean } | null>(null);
+  const result = $derived(feedback?.text === text ? feedback : null);
+  const message = $derived(
+    !result ? "" : result.ok ? "Copied" : "Copy failed: clipboard unavailable.",
+  );
+  $effect(() => {
+    if (!feedback) return;
+    const timer = setTimeout(() => (feedback = null), 1500);
+    return () => clearTimeout(timer);
   });
 
   async function copy() {
+    const value = text;
     try {
-      await navigator.clipboard.writeText(text);
-      if (disposed) return;
-      copied = true;
-      clearTimeout(timer);
-      timer = setTimeout(() => (copied = false), 1500);
+      await navigator.clipboard.writeText(value);
+      feedback = { text: value, ok: true };
     } catch {
-      if (!disposed)
-        onerror(
-          "Clipboard access is unavailable — copy the displayed text manually.",
-        );
+      feedback = { text: value, ok: false };
     }
   }
 </script>
 
 <button
   type="button"
-  class="copy-button"
+  class="button button-ghost icon-button"
   aria-label={label}
-  title={label}
+  title={message || label}
   {disabled}
   onclick={copy}
 >
-  {#if copied}<Check size={14} />{:else}<Copy size={14} />{/if}
+  {#if !result}
+    <Copy size={14} />
+  {:else if result.ok}
+    <Check size={14} color="var(--success)" />
+  {:else}
+    <WarningCircle size={14} color="var(--warning)" />
+  {/if}
 </button>
-
-<style>
-  .copy-button {
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-  }
-
-  .copy-button:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--foreground);
-  }
-
-  .copy-button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-</style>
+<span class="sr-only" role="status">{message}</span>

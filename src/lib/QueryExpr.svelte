@@ -153,7 +153,7 @@
   >
     {@render kindSelect()}
     <div class="query-arg">
-      <label for={fieldId("text")}>Target pattern</label>
+      <label class="sr-only" for={fieldId("text")}>Target pattern</label>
       <SearchInput
         id={fieldId("text")}
         aria-label="{context} target pattern"

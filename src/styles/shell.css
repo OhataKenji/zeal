@@ -285,6 +285,12 @@
   word-break: break-all;
 }
 
+.workspace-info-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .table-link {
   border: 0;
   background: transparent;
@@ -296,16 +302,6 @@
 
 .table-link:hover {
   text-decoration: underline;
-}
-
-.copied-tag {
-  margin-left: 8px;
-  font-size: 11px;
-  color: var(--success);
-}
-
-.copied-tag.copied-failed {
-  color: var(--destructive);
 }
 
 .scope-form {
