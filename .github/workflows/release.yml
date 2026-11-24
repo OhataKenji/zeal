@@ -29,12 +29,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_BODY: |
-            Download the DMG for macOS on Apple Silicon.
-            The macOS app is ad-hoc signed and is not notarized by Apple.
-            Download the AppImage or .deb package for Linux on x86_64 or ARM64.
-            Install Bazelisk or Bazel separately. Updates are installed manually.
+            - macOS (Apple Silicon): DMG (ad-hoc signed, not notarized).
+            - Linux (x86_64 or ARM64): AppImage or `.deb`.
 
-            Maintainer: add release notes and complete docs/release-guide.md before publishing.
+            Install Bazelisk or Bazel separately. Update Zelith manually.
         run: |
           version=$(jq -er '.version | strings | select(length > 0)' src-tauri/tauri.conf.json)
           tag="v$version"

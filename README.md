@@ -27,7 +27,10 @@
 
 #### Option 1: Download a release
 
-Download the DMG for macOS (Apple Silicon), or the AppImage or `.deb` package for Linux (x86_64 or ARM64), from [GitHub Releases](https://github.com/OhataKenji/zelith/releases).
+Choose a package from [GitHub Releases](https://github.com/OhataKenji/zelith/releases):
+
+- macOS (Apple Silicon): DMG
+- Linux (x86_64 or ARM64): AppImage or `.deb`
 
 #### Option 2: Build from source
 
