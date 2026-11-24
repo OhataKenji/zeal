@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare-release:
+  create-draft:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -23,7 +23,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select or create the draft release
+      - name: Create draft release
         id: draft
         shell: bash
         env:
@@ -41,23 +41,12 @@ jobs:
             echo "::error::Tag $tag already exists. Use a new version."
             exit 1
           fi
-
-          releases="repos/$GITHUB_REPOSITORY/releases"
-          draft_id=$(gh api --paginate "$releases?per_page=100" | jq -sr --arg tag "$tag" '
-            add | map(select(.tag_name == $tag)) |
-            if any(.[]; .draft == false) then error("Release \($tag) is already published")
-            elif length > 1 then error("Multiple drafts match \($tag)")
-            elif length == 1 then .[0].id
-            else empty end')
-          if [[ -z "$draft_id" ]]; then
-            draft_id=$(gh api --method POST "$releases" -f tag_name="$tag" -f name="Zelith $tag" \
-              -f target_commitish="$GITHUB_SHA" -f body="$RELEASE_BODY" -F draft=true --jq '.id')
-          fi
-          [[ "$draft_id" =~ ^[1-9][0-9]*$ ]]
-          echo "release_id=$draft_id" >> "$GITHUB_OUTPUT"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$tag" -f name="Zelith $tag" -f target_commitish="$GITHUB_SHA" \
+            -f body="$RELEASE_BODY" -F draft=true --jq '"release_id=\(.id)"' >> "$GITHUB_OUTPUT"
 
   build-packages:
-    needs: prepare-release
+    needs: create-draft
     strategy:
       fail-fast: false
       matrix:
@@ -88,5 +77,5 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
         with:
           args: ${{ matrix.args }} -- --locked
-          releaseId: ${{ needs.prepare-release.outputs.release_id }}
+          releaseId: ${{ needs.create-draft.outputs.release_id }}
           uploadUpdaterJson: false
