@@ -30,7 +30,7 @@
         "object-src": "'none'",
         "base-uri": "'none'",
         "form-action": "'none'",
-        "frame-src": "http://127.0.0.1:*",
+        "frame-src": "perfetto: http://perfetto.localhost",
         "frame-ancestors": "'none'"
       }
     }

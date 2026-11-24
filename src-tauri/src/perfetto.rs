@@ -1,50 +1,106 @@
-//! Ephemeral loopback origin serving the bundled Perfetto UI.
+//! Custom `perfetto://` scheme serving the bundled Perfetto UI.
 //!
 //! The viewer is a fixed set of digest-pinned assets fetched at build time;
-//! this server exposes exactly those names on `127.0.0.1` with an ephemeral
-//! port, a strict `Host` check against DNS rebinding, the viewer CSP, and no
-//! CORS or write endpoints. Invocation traces never pass through it — the
-//! frontend transfers them over `postMessage` after a PING/PONG handshake.
+//! the scheme exposes exactly those names plus the first-party `embed.html`
+//! bootstrap — never directories or arbitrary paths. Invocation traces are
+//! not path-addressable: `prepare_invocation_timing` opens the validated
+//! artifact and issues a random one-shot grant, and only
+//! `/trace/{token}/profile.json.gz` consumes it.
 
-use axum::{
-    Router,
-    body::Body,
-    extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
-    routing::get,
-};
 use std::{
     collections::HashSet,
-    net::Ipv4Addr,
+    fs::File,
+    io,
     path::{Path as FsPath, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Mutex, OnceLock},
 };
-use tauri::{AppHandle, Manager};
-use tokio::{net::TcpListener, sync::OnceCell};
+
+use tauri::{
+    AppHandle, Manager,
+    http::{Method, Request, Response, StatusCode, header},
+};
+use uuid::Uuid;
+
+/// Viewer origin per platform: custom schemes surface as
+/// `<scheme>://localhost` on macOS, iOS and Linux, and as
+/// `http://<scheme>.localhost` on Windows and Android.
+#[cfg(any(target_os = "windows", target_os = "android"))]
+pub(crate) const VIEWER_ORIGIN: &str = "http://perfetto.localhost";
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+pub(crate) const VIEWER_ORIGIN: &str = "perfetto://localhost";
 
 /// Response policy for every viewer document and asset. `frame-ancestors`
 /// names the only pages allowed to embed the viewer: the packaged app origin
 /// and the Vite dev server used by `tauri dev`.
 const VIEWER_CSP: &str = "default-src 'self'; connect-src 'self' blob:; worker-src 'self' blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; frame-ancestors tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:1420 http://127.0.0.1:1420; base-uri 'none'; form-action 'none'";
 
-/// Lazily bound loopback listener, managed as Tauri state. The origin is
-/// stable for the process lifetime once resolved.
-pub struct PerfettoServer {
-    origin: OnceCell<String>,
-}
+/// The single outstanding trace grant. `begin` reserves the slot before the
+/// artifact finishes opening so a newer selection always supersedes an
+/// in-flight one; `finish` installs the file only while the reservation is
+/// current, and `take` consumes a matching token without holding the lock
+/// during the read.
+#[derive(Default)]
+pub struct PendingTrace(Mutex<Option<(Uuid, Option<File>)>>);
 
-impl PerfettoServer {
-    pub fn new() -> Self {
-        Self {
-            origin: OnceCell::new(),
+impl PendingTrace {
+    /// Claim the grant slot for a new selection, replacing any previous one.
+    pub fn begin(&self) -> Uuid {
+        let token = Uuid::new_v4();
+        *self.0.lock().expect("pending trace lock poisoned") = Some((token, None));
+        token
+    }
+
+    /// Install the opened artifact while `token` still holds the slot.
+    pub fn finish(&self, token: Uuid, file: File) -> bool {
+        let mut grant = self.0.lock().expect("pending trace lock poisoned");
+        match grant.as_mut() {
+            Some((issued, slot)) if *issued == token => {
+                *slot = Some(file);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Consume the grant `token` names; wrong, stale or unfinished tokens
+    /// get `None`.
+    pub fn take(&self, token: Uuid) -> Option<File> {
+        let mut grant = self.0.lock().expect("pending trace lock poisoned");
+        if matches!(grant.as_ref(), Some((issued, _)) if *issued == token) {
+            grant.take().and_then(|(_, file)| file)
+        } else {
+            None
         }
     }
 }
 
-struct Serve {
-    root: PathBuf,
-    host: String,
+/// What a viewer path resolves to.
+enum Target {
+    /// A bundled asset by resource name: `index.html`, the first-party
+    /// `embed.html`, or a manifest-listed file.
+    Asset(String),
+    /// A pending trace grant token.
+    Trace(Uuid),
+}
+
+fn resolve(path: &str) -> Option<Target> {
+    let name = path.strip_prefix('/').unwrap_or(path);
+    if name.is_empty() {
+        return Some(Target::Asset("index.html".to_string()));
+    }
+    if let Some(token) = name
+        .strip_prefix("trace/")
+        .and_then(|rest| rest.strip_suffix("/profile.json.gz"))
+        .and_then(|token| Uuid::parse_str(token).ok())
+    {
+        return Some(Target::Trace(token));
+    }
+    // `embed.html` is the tracked first-party bootstrap; every other name
+    // must come from the pinned upstream manifest.
+    if name == "embed.html" || manifest_assets().contains(name) {
+        return Some(Target::Asset(name.to_string()));
+    }
+    None
 }
 
 /// Resource names the pinned manifest allows, including `index.html`.
@@ -78,78 +134,81 @@ fn mime(name: &str) -> &'static str {
     }
 }
 
-fn respond(status: StatusCode, body: Body, content_type: Option<&'static str>) -> Response {
-    let mut response = (status, body).into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(VIEWER_CSP),
-    );
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
+fn reply(
+    status: StatusCode,
+    body: Vec<u8>,
+    content_type: Option<&'static str>,
+) -> Response<Vec<u8>> {
+    let mut response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_SECURITY_POLICY, VIEWER_CSP)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CACHE_CONTROL, "no-store");
     if let Some(kind) = content_type {
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+        response = response.header(header::CONTENT_TYPE, kind);
     }
-    response
+    response.body(body).expect("valid viewer response")
 }
 
-async fn index(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
-    serve_asset(&serve, &headers, "index.html").await
+fn empty(status: StatusCode) -> Response<Vec<u8>> {
+    reply(status, Vec::new(), None)
 }
 
-async fn asset(
-    State(serve): State<Arc<Serve>>,
-    headers: HeaderMap,
-    Path(path): Path<String>,
-) -> Response {
-    let name = if path.is_empty() {
-        "index.html"
-    } else {
-        path.as_str()
+async fn asset(app: &AppHandle, name: &str) -> Response<Vec<u8>> {
+    let Ok(root) = asset_root(app) else {
+        return empty(StatusCode::NOT_FOUND);
     };
-    serve_asset(&serve, &headers, name).await
-}
-
-async fn serve_asset(serve: &Serve, headers: &HeaderMap, name: &str) -> Response {
-    // Only requests addressed to this listener's exact loopback authority
-    // are served; anything else is a rebinding or stray probe.
-    if headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        != Some(serve.host.as_str())
-    {
-        return respond(StatusCode::FORBIDDEN, Body::empty(), None);
-    }
-    // `embed.html` is the tracked first-party bootstrap; every other name
-    // must come from the pinned upstream manifest.
-    if name != "embed.html" && !manifest_assets().contains(name) {
-        return respond(StatusCode::NOT_FOUND, Body::empty(), None);
-    }
-    match tokio::fs::read(serve.root.join(name)).await {
-        Ok(bytes) => respond(StatusCode::OK, Body::from(bytes), Some(mime(name))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            respond(StatusCode::NOT_FOUND, Body::empty(), None)
-        }
-        Err(_) => respond(StatusCode::INTERNAL_SERVER_ERROR, Body::empty(), None),
+    match tokio::fs::read(root.join(name)).await {
+        Ok(bytes) => reply(StatusCode::OK, bytes, Some(mime(name))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => empty(StatusCode::NOT_FOUND),
+        Err(_) => empty(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
-fn router(root: PathBuf, port: u16) -> Router {
-    Router::new()
-        .route("/", get(index))
-        .route("/{*path}", get(asset))
-        .with_state(Arc::new(Serve {
-            root,
-            host: format!("127.0.0.1:{port}"),
-        }))
+async fn trace(app: &AppHandle, token: Uuid) -> Response<Vec<u8>> {
+    let Some(pending) = app.try_state::<PendingTrace>() else {
+        return empty(StatusCode::NOT_FOUND);
+    };
+    // The grant is consumed before the read: wrong, replayed and failed
+    // requests all surface the same 404.
+    let Some(file) = pending.take(token) else {
+        return empty(StatusCode::NOT_FOUND);
+    };
+    match tauri::async_runtime::spawn_blocking(move || crate::profile::read(file)).await {
+        Ok(Ok(bytes)) => reply(StatusCode::OK, bytes, Some("application/octet-stream")),
+        _ => empty(StatusCode::NOT_FOUND),
+    }
+}
+
+/// Serve one viewer request, restricted to the main webview, `GET`, and the
+/// exact trusted host for this scheme on this platform.
+pub async fn handle(
+    app: &AppHandle,
+    main_webview: bool,
+    request: &Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let uri = request.uri();
+    let trusted = main_webview
+        && *request.method() == Method::GET
+        && match (uri.scheme_str(), uri.host()) {
+            (Some("perfetto"), Some("localhost")) => true,
+            // Wry presents Windows/Android custom schemes as
+            // `http://<scheme>.localhost` to the handler.
+            (Some("http"), Some("perfetto.localhost")) => true,
+            _ => false,
+        };
+    let target = if trusted { resolve(uri.path()) } else { None };
+    match target {
+        Some(Target::Asset(name)) => asset(app, &name).await,
+        Some(Target::Trace(token)) => trace(app, token).await,
+        None => empty(StatusCode::NOT_FOUND),
+    }
 }
 
 /// Bundled resources win; the manifest-dir copy serves `cargo run`/`tauri
 /// dev` and tests, where nothing is bundled yet. The source-tree fallback is
 /// compiled out of release builds.
-fn asset_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn asset_root(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Ok(dir) = app.path().resource_dir() {
         candidates.push(dir.join("perfetto"));
@@ -168,137 +227,43 @@ fn asset_root(app: &AppHandle) -> Result<PathBuf, String> {
     Err("Perfetto viewer assets are not installed; run `pnpm dev` or `pnpm build` first".into())
 }
 
-async fn serve(listener: TcpListener, app: Router) {
-    if let Err(error) = axum::serve(listener, app).await {
-        log::warn!("Perfetto viewer server stopped: {error}");
-    }
-}
-
-/// Resolve (binding on first use) and return the loopback origin.
-pub async fn origin(app: &AppHandle, server: &PerfettoServer) -> Result<String, String> {
-    server
-        .origin
-        .get_or_try_init(|| async {
-            let root = asset_root(app)?;
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-                .await
-                .map_err(|error| format!("cannot bind the Perfetto viewer: {error}"))?;
-            let port = listener
-                .local_addr()
-                .map_err(|error| format!("cannot read the Perfetto viewer address: {error}"))?
-                .port();
-            let app = router(root, port);
-            tokio::spawn(serve(listener, app));
-            Ok(format!("http://127.0.0.1:{port}"))
-        })
-        .await
-        .cloned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Minimal fixture: the permitted names plus `private.txt`, a real file
-    /// on disk that the manifest whitelist must still refuse.
-    fn fixture() -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("zelith-perfetto-{}", uuid::Uuid::new_v4()));
-        let assets = root.join("perfetto");
-        for name in ["index.html", "embed.html", "trace_processor.wasm"] {
-            let path = assets.join(name);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, format!("fixture:{name}")).unwrap();
+    fn opened_file() -> File {
+        File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap()
+    }
+
+    #[test]
+    fn grants_are_reserved_installed_once_and_token_checked() {
+        let pending = PendingTrace::default();
+
+        // A newer reservation supersedes an in-flight open.
+        let first = pending.begin();
+        let second = pending.begin();
+        assert!(!pending.finish(first, opened_file()));
+
+        // An arbitrary token neither consumes nor reveals the grant.
+        assert!(pending.take(Uuid::new_v4()).is_none());
+        assert!(pending.finish(second, opened_file()));
+        assert!(pending.take(second).is_some());
+        // Consumed grants cannot be replayed.
+        assert!(pending.take(second).is_none());
+    }
+
+    #[test]
+    fn resolve_allows_only_manifest_names_embed_and_trace_grants() {
+        for path in ["/", "/embed.html", "/trace_processor.wasm"] {
+            assert!(resolve(path).is_some(), "{path}");
         }
-        std::fs::write(assets.join("private.txt"), "fixture:private.txt").unwrap();
-        (root, assets)
-    }
-
-    async fn serve_fixture(root: PathBuf) -> u16 {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(listener, router(root, port)));
-        port
-    }
-
-    /// Raw HTTP/1.0-style exchange; `Connection: close` ends the response.
-    async fn exchange(port: u16, request: &str) -> String {
-        let mut socket = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-            .await
-            .unwrap();
-        socket.write_all(request.as_bytes()).await.unwrap();
-        let mut raw = Vec::new();
-        socket.read_to_end(&mut raw).await.unwrap();
-        String::from_utf8_lossy(&raw).into_owned()
-    }
-
-    fn request(port: u16, method: &str, path: &str) -> String {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-        )
-    }
-
-    async fn expect_status(port: u16, request: String, status: &str) {
-        let response = exchange(port, &request).await;
-        assert!(response.starts_with(status), "{request}: {response}");
-    }
-
-    #[tokio::test]
-    async fn serves_manifest_assets_with_viewer_headers() {
-        let (root, assets) = fixture();
-        let port = serve_fixture(assets).await;
-        let response = exchange(port, &request(port, "GET", "/")).await;
-        let lower = response.to_lowercase();
-        assert!(lower.starts_with("http/1.1 200"), "{response}");
-        assert!(lower.contains("content-type: text/html"), "{response}");
-        assert!(lower.contains("content-security-policy:"), "{response}");
-        assert!(
-            lower.contains("x-content-type-options: nosniff"),
-            "{response}"
-        );
-        assert!(response.ends_with("fixture:index.html"), "{response}");
-
-        let response = exchange(port, &request(port, "GET", "/embed.html")).await;
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        assert!(response.ends_with("fixture:embed.html"), "{response}");
-
-        let response = exchange(port, &request(port, "GET", "/trace_processor.wasm")).await;
-        assert!(
-            response
-                .to_lowercase()
-                .contains("content-type: application/wasm"),
-            "{response}"
-        );
-        assert!(
-            response.ends_with("fixture:trace_processor.wasm"),
-            "{response}"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn denies_unlisted_traversal_and_foreign_hosts() {
-        let (root, assets) = fixture();
-        let port = serve_fixture(assets).await;
-        // Unlisted names (even real files), traversal and foreign Hosts are
-        // all refused; the wildcard route only accepts GET/HEAD, so writes
-        // never reach a path.
-        expect_status(port, request(port, "GET", "/private.txt"), "HTTP/1.1 404").await;
-        expect_status(
-            port,
-            request(port, "GET", "/..%2f..%2fCargo.toml"),
-            "HTTP/1.1 404",
-        )
-        .await;
-        // A rebinding-style Host is refused before any path lookup.
-        expect_status(
-            port,
-            "GET /index.html HTTP/1.1\r\nHost: attacker.example\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-                .to_string(),
-            "HTTP/1.1 403",
-        )
-        .await;
-        expect_status(port, request(port, "POST", "/trace"), "HTTP/1.1 405").await;
-        let _ = std::fs::remove_dir_all(&root);
+        let token = Uuid::new_v4();
+        assert!(matches!(
+            resolve(&format!("/trace/{token}/profile.json.gz")),
+            Some(Target::Trace(granted)) if granted == token
+        ));
+        for path in ["/private.txt", "/trace/not-a-uuid/profile.json.gz"] {
+            assert!(resolve(path).is_none(), "{path}");
+        }
     }
 }

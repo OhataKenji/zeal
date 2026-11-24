@@ -1,87 +1,31 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { COMMANDS } from "./commands";
-  import { startTraceHandshake } from "./perfetto";
   import Notice from "./Notice.svelte";
 
-  let {
-    workspace,
-    id,
-    title,
-  }: { workspace: string; id: string; title?: string } = $props();
-
-  let frame = $state<HTMLIFrameElement>();
-  let viewer = $state<string | null>(null);
-  let error = $state<string | null>(null);
-  let loading = $state(true);
-  let attempt = $state(0);
+  let { workspace, id }: { workspace: string; id: string } = $props();
 
   // The parent keys this component by workspace+id; `attempt` only bumps on
-  // manual retry. Cleanup guarantees no send outlives the view.
-  $effect(() => {
+  // manual retry, so prepare runs once per mount or retry.
+  let attempt = $state(0);
+  const viewer = $derived.by(() => {
     void attempt;
-    let cancelled = false;
-    let stop: (() => void) | null = null;
-    void (async () => {
-      try {
-        const origin = await invoke<string>(COMMANDS.perfettoOrigin);
-        if (cancelled) return;
-        viewer = origin;
-        stop = startTraceHandshake({
-          frame: () => frame,
-          viewer: origin,
-          load: () =>
-            invoke<ArrayBuffer>(COMMANDS.readInvocationTrace, { workspace, id }),
-          title: title ?? `Invocation ${id}`,
-          onSent: () => {
-            loading = false;
-          },
-          onError: (failure) => {
-            const detail = failure as { type?: string; message?: string } | null;
-            error =
-              detail?.type === "missing"
-                ? "No saved timing profile is available for this invocation."
-                : `Could not load timing data: ${detail?.message ?? String(failure)}`;
-            loading = false;
-          },
-          onTimeout: () => {
-            error = "The timing viewer did not respond.";
-            loading = false;
-          },
-        });
-      } catch (failure) {
-        if (!cancelled) {
-          error = `Could not load timing data: ${String(failure)}`;
-          loading = false;
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
+    return invoke<string>(COMMANDS.prepareInvocationTiming, { workspace, id });
   });
-
-  const retry = () => {
-    error = null;
-    loading = true;
-    viewer = null;
-    attempt += 1;
-  };
 </script>
 
 <div class="perfetto-view">
-  {#if error}
-    <Notice tone="error" onaction={retry}>{error}</Notice>
-  {:else}
-    {#if loading}<p class="panel-empty" role="status">Loading timing viewer…</p>{/if}
+  {#await viewer}
+    <p class="panel-empty" role="status">Loading timing viewer…</p>
+  {:then src}
     <iframe
-      bind:this={frame}
-      src={viewer === null ? undefined : `${viewer}/embed.html`}
+      src={src}
       sandbox="allow-scripts allow-same-origin"
       title="Invocation timing"
     ></iframe>
-  {/if}
+  {:catch error}
+    <Notice tone="error" onaction={() => attempt++}>{String(error)}</Notice>
+  {/await}
 </div>
 
 <style>

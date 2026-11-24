@@ -1,6 +1,7 @@
 //! Bounded reads of the saved Bazel profiling trace. The gzip artifact is
 //! handed to the bundled Perfetto viewer verbatim, so only its compressed
 //! size is capped here; the expanded JSON is never parsed in Rust.
+use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -10,10 +11,11 @@ use crate::store;
 /// expanded JSON has no Rust-side limit.
 pub const COMPRESSED_LIMIT: u64 = 64 * 1024 * 1024;
 
-/// Read the saved trace artifact, refusing anything past the compressed
-/// bound. Metadata rejects oversized files before any allocation; the bounded
-/// read stays as a backstop if the file grows in between.
-pub fn trace(data: &Path, workspace: &Path, id: &str) -> io::Result<Vec<u8>> {
+/// Open the saved trace artifact for a one-shot grant, refusing anything past
+/// the compressed bound before the handle is issued. Metadata rejects
+/// oversized files before any allocation; holding the `File` keeps the read
+/// pinned to the validated inode.
+pub fn open(data: &Path, workspace: &Path, id: &str) -> io::Result<File> {
     let file = store::artifact(data, workspace, id, "profile.json.gz")?;
     if file.metadata()?.len() > COMPRESSED_LIMIT {
         return Err(io::Error::new(
@@ -21,6 +23,12 @@ pub fn trace(data: &Path, workspace: &Path, id: &str) -> io::Result<Vec<u8>> {
             "profile exceeds the 64 MiB limit",
         ));
     }
+    Ok(file)
+}
+
+/// Read a granted artifact. The bounded read stays as a backstop if the file
+/// grew past the limit after `open`.
+pub fn read(file: File) -> io::Result<Vec<u8>> {
     trace_bytes(file, COMPRESSED_LIMIT)
 }
 
@@ -52,29 +60,30 @@ mod tests {
     }
 
     #[test]
-    fn trace_returns_the_artifact_bytes_unchanged() {
+    fn open_and_read_return_the_artifact_bytes_unchanged() {
         let expected = [0x1f, 0x8b, 0xff, 0x00];
         let (f, id) = fixture_with_profile(&expected);
-        assert_eq!(trace(&f.data, &f.ws, &id).unwrap(), expected);
+        let file = open(&f.data, &f.ws, &id).unwrap();
+        assert_eq!(read(file).unwrap(), expected);
     }
 
     #[test]
-    fn trace_rejects_an_over_cap_artifact() {
-        // Sparse file: the read bound trips on length, not allocation.
+    fn open_rejects_an_over_cap_artifact() {
+        // Sparse file: the metadata bound trips on length, not allocation.
         let (f, id) = fixture_with_profile(b"gzip");
         let path = f.dir().join("attempt/1/profile.json.gz");
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(COMPRESSED_LIMIT + 1).unwrap();
-        assert!(trace(&f.data, &f.ws, &id).is_err());
+        assert!(open(&f.data, &f.ws, &id).is_err());
     }
 
     #[test]
-    fn trace_fails_closed_without_an_artifact() {
+    fn open_fails_closed_without_an_artifact() {
         let f = Fixture::new();
         f.complete();
         let id = f.stream.invocation_id.clone();
         assert_eq!(
-            trace(&f.data, &f.ws, &id).unwrap_err().kind(),
+            open(&f.data, &f.ws, &id).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
     }

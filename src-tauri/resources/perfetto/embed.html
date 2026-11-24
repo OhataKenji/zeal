@@ -12,5 +12,8 @@
   } catch {
     /* A settings failure must not prevent opening the trace. */
   }
-  location.replace("./#!/?mode=embedded");
+  // The grant token travels in the hash so it never reaches server logs;
+  // `./` keeps the resolved trace URL on this origin.
+  const trace = new URL("./" + location.hash.slice(1), location.href);
+  location.replace("./#!/?" + new URLSearchParams({ mode: "embedded", url: trace.href }));
 </script>

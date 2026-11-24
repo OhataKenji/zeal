@@ -29,14 +29,7 @@ import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
 
-/** Preview-only shape of a captured trace: per-thread lanes of raw events.
- * The saved artifact keeps thread ids on the lane, not on each event. */
-interface CapturedProfile {
-  lanes: Array<{ tid: number; name: string; events: Record<string, unknown>[] }>;
-}
-
-/** One captured invocation: the history row plus its saved log, BEP and
- * trace. Lane events keep their original timestamps. */
+/** One captured invocation: the history row plus its saved log and BEP. */
 interface CapturedInvocation {
   record: {
     id: string;
@@ -48,7 +41,6 @@ interface CapturedInvocation {
   };
   log: string;
   bep: Bep;
-  profile: CapturedProfile;
 }
 
 /** The captured workspace: real `bazel query`/`mod graph`/`aquery`/`cquery`
@@ -544,34 +536,16 @@ export function installPreview() {
       wsEntry(workspace);
       return getInvocation(workspace, payload?.id);
     },
-    // Same-origin stand-in for the native loopback viewer; vite.config.ts
-    // mounts the verified assets under /__perfetto in dev only.
-    perfetto_origin: () => `${location.origin}/__perfetto`,
-    read_invocation_trace: async (payload) => {
+    // Same-origin stand-in for the native perfetto:// scheme; vite.config.ts
+    // serves the fixture trace and mounts the verified assets in dev only.
+    prepare_invocation_timing: (payload) => {
       const workspace = String(payload?.workspace ?? "");
       wsEntry(workspace);
       const record = records.find((inv) => inv.id === payload?.id && inv.workspace === workspace);
       const item = record && captured.get(record.id);
-      // Mirrors the native TraceError shape so the viewer words it the same.
-      if (!item) throw Object.assign(new Error("missing"), { type: "missing" });
-      // The capture stores thread ids on the lane; the trace format wants
-      // them on every event plus a thread_name marker per lane.
-      const trace = {
-        traceEvents: item.profile.lanes.flatMap((lane) => [
-          {
-            ph: "M",
-            name: "thread_name",
-            pid: 1,
-            tid: lane.tid,
-            args: { name: lane.name },
-          },
-          ...lane.events.map((event) => ({ ...event, pid: 1, tid: lane.tid })),
-        ]),
-      };
-      const zipped = new Blob([JSON.stringify(trace)])
-        .stream()
-        .pipeThrough(new CompressionStream("gzip"));
-      return new Response(zipped).arrayBuffer();
+      // Mirrors the native missing-profile error so the viewer words it the same.
+      if (!item) throw new Error("No saved timing profile is available for this invocation.");
+      return `${location.origin}/__perfetto/embed.html#trace/${item.record.id}/profile.json.gz`;
     },
     // The app sends this command with the AnalyticsFilter shape.
     get_analytics: (payload) => {

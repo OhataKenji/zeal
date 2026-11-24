@@ -38,10 +38,6 @@
       : null,
   );
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
-  const timingTitle = $derived(
-    [shown?.cmd, shown?.pattern].filter(Boolean).join(" ") ||
-      `Invocation ${shown?.id ?? ""}`,
-  );
   const rerunCandidate = $derived(rerunArgs(shown));
   const canRerun = $derived(
     rerunCandidate !== null &&
@@ -226,11 +222,7 @@
                   </p>
                 {:else if active === "Timing" && view.state}
                   {#key `${view.state.workspace}:${shown.id}`}
-                    <PerfettoView
-                      workspace={view.state.workspace}
-                      id={shown.id}
-                      title={timingTitle}
-                    />
+                    <PerfettoView workspace={view.state.workspace} id={shown.id} />
                   {/key}
                 {:else}
                   <p class="panel-empty">

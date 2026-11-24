@@ -483,57 +483,44 @@ async fn get_invocation(
     .map_err(|_| "invocation detail worker failed".to_string())?
 }
 
-/// Trace-read failures keep their kind so the viewer can word a missing
-/// artifact differently from a real read error.
-#[derive(serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum TraceError {
-    Missing,
-    Failed { message: String },
-}
-
-impl TraceError {
-    fn failed(message: impl Into<String>) -> Self {
-        Self::Failed {
-            message: message.into(),
-        }
-    }
-}
-
-/// Return the saved profiling trace as raw gzip bytes for the viewer.
+/// Timing-tab entry point: validate the saved artifact, confirm the bundled
+/// viewer is installed, then issue a one-shot grant and return the viewer
+/// URL carrying only its random token — never the workspace or invocation id.
 #[tauri::command]
 #[tracing::instrument(
     target = "zelith::operations",
-    name = "invocation.trace.request",
+    name = "invocation.timing.request",
     skip_all
 )]
-async fn read_invocation_trace(
+async fn prepare_invocation_timing(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    pending: State<'_, perfetto::PendingTrace>,
     workspace: String,
     id: String,
-) -> Result<tauri::ipc::Response, TraceError> {
-    let (data, ws, id) =
-        saved_invocation_scope(&app, core.inner(), &workspace, &id).map_err(TraceError::failed)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        profile::trace(&data, &ws, &id)
-            .map(tauri::ipc::Response::new)
-            .map_err(|e| match e.kind() {
-                io::ErrorKind::NotFound => TraceError::Missing,
-                _ => TraceError::failed(e.to_string()),
-            })
+) -> Result<String, String> {
+    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
+    perfetto::asset_root(&app)?;
+    // Reserve the grant before the first await so a newer selection can
+    // supersede this one while the artifact is still opening.
+    let token = pending.begin();
+    let file = tauri::async_runtime::spawn_blocking(move || {
+        profile::open(&data, &ws, &id).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => {
+                "No saved timing profile is available for this invocation.".to_string()
+            }
+            _ => e.to_string(),
+        })
     })
     .await
-    .map_err(|_| TraceError::failed("profile worker failed"))?
-}
-
-/// Loopback origin of the bundled Perfetto UI, bound on first use.
-#[tauri::command]
-async fn perfetto_origin(
-    app: AppHandle,
-    state: State<'_, perfetto::PerfettoServer>,
-) -> Result<String, String> {
-    perfetto::origin(&app, state.inner()).await
+    .map_err(|_| "profile worker failed".to_string())??;
+    if !pending.finish(token, file) {
+        return Err("Timing selection changed.".into());
+    }
+    Ok(format!(
+        "{}/embed.html#trace/{token}/profile.json.gz",
+        perfetto::VIEWER_ORIGIN
+    ))
 }
 
 /// `~/...` in a typed path expands to the user's home directory.
@@ -605,6 +592,13 @@ fn emit_invocations_changed(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("perfetto", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let main_webview = context.webview_label() == "main";
+            tauri::async_runtime::spawn(async move {
+                responder.respond(perfetto::handle(&app, main_webview, &request).await);
+            });
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -616,7 +610,7 @@ pub fn run() {
             telemetry::init(app);
             let core = Arc::new(Core::new());
             app.manage(core.clone());
-            app.manage(perfetto::PerfettoServer::new());
+            app.manage(perfetto::PendingTrace::default());
             let data = app.path().app_data_dir().map_err(|error| error.to_string());
             let receiver_core = core.clone();
             let handle = app.handle().clone();
@@ -652,8 +646,7 @@ pub fn run() {
             list_invocations,
             get_analytics,
             get_invocation,
-            read_invocation_trace,
-            perfetto_origin
+            prepare_invocation_timing
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
