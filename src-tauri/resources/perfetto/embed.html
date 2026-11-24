@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Opening Perfetto</title>
+<script>
+  try {
+    const key = "perfettoSettings";
+    const saved = JSON.parse(localStorage.getItem(key) ?? "{}");
+    localStorage.setItem(
+      key,
+      JSON.stringify({ theme: "dark", timestampFormat: "seconds", ...saved }),
+    );
+  } catch {
+    /* A settings failure must not prevent opening the trace. */
+  }
+  location.replace("./#!/?mode=embedded");
+</script>

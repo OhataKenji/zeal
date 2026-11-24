@@ -122,7 +122,9 @@ async fn serve_asset(serve: &Serve, headers: &HeaderMap, name: &str) -> Response
     {
         return respond(StatusCode::FORBIDDEN, Body::empty(), None);
     }
-    if !manifest_assets().contains(name) {
+    // `embed.html` is the tracked first-party bootstrap; every other name
+    // must come from the pinned upstream manifest.
+    if name != "embed.html" && !manifest_assets().contains(name) {
         return respond(StatusCode::NOT_FOUND, Body::empty(), None);
     }
     match tokio::fs::read(serve.root.join(name)).await {
@@ -198,12 +200,14 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Minimal fixture: only manifest-listed names may exist under `root`.
+    /// Minimal fixture: manifest-listed names plus the first-party
+    /// `embed.html` may exist under `root`.
     fn fixture() -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("zelith-perfetto-{}", uuid::Uuid::new_v4()));
         let assets = root.join("perfetto");
         for name in [
             "index.html",
+            "embed.html",
             "frontend_bundle.js",
             "frontend.css",
             "trace_processor.wasm",
@@ -259,6 +263,10 @@ mod tests {
             "{response}"
         );
         assert!(response.ends_with("fixture:index.html"), "{response}");
+
+        let response = exchange(port, &request(port, "GET", "/embed.html")).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("fixture:embed.html"), "{response}");
 
         let response = exchange(port, &request(port, "GET", "/trace_processor.wasm")).await;
         assert!(

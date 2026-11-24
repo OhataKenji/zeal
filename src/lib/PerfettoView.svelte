@@ -77,7 +77,7 @@
     {#if loading}<p class="panel-empty" role="status">Loading timing viewer…</p>{/if}
     <iframe
       bind:this={frame}
-      src={viewer === null ? undefined : `${viewer}/#!/?mode=embedded`}
+      src={viewer === null ? undefined : `${viewer}/embed.html`}
       sandbox="allow-scripts allow-same-origin"
       title="Invocation timing"
     ></iframe>

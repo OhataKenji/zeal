@@ -31,6 +31,12 @@ through `bundle.resources` in `tauri.conf.json`. Upstream license and notices
 live in `src-tauri/resources/perfetto/`. The app never downloads viewer code
 at runtime: it serves the bundled files from an ephemeral `127.0.0.1` origin.
 
+The iframe loads the tracked `embed.html` bootstrap first. It seeds the
+viewer’s `perfettoSettings` localStorage key with `theme: "dark"` and
+`timestampFormat: "seconds"` defaults, then layers any values already saved
+on that origin on top, so viewer-side prefs win. Because the origin’s port
+is ephemeral, nothing carries over to the next app run.
+
 ## Checks
 
 Checks are defined as [mise tasks](https://mise.jdx.dev/tasks/) in `mise.toml`.
