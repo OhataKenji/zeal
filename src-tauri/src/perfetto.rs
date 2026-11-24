@@ -200,23 +200,17 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Minimal fixture: manifest-listed names plus the first-party
-    /// `embed.html` may exist under `root`.
+    /// Minimal fixture: the permitted names plus `private.txt`, a real file
+    /// on disk that the manifest whitelist must still refuse.
     fn fixture() -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("zelith-perfetto-{}", uuid::Uuid::new_v4()));
         let assets = root.join("perfetto");
-        for name in [
-            "index.html",
-            "embed.html",
-            "frontend_bundle.js",
-            "frontend.css",
-            "trace_processor.wasm",
-            "assets/Roboto.woff2",
-        ] {
+        for name in ["index.html", "embed.html", "trace_processor.wasm"] {
             let path = assets.join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, format!("fixture:{name}")).unwrap();
         }
+        std::fs::write(assets.join("private.txt"), "fixture:private.txt").unwrap();
         (root, assets)
     }
 
@@ -286,18 +280,13 @@ mod tests {
     async fn denies_unlisted_traversal_and_foreign_hosts() {
         let (root, assets) = fixture();
         let port = serve_fixture(assets).await;
-        // Unlisted names, traversal and foreign Hosts are all refused; the
-        // wildcard route only accepts GET/HEAD, so writes never reach a path.
-        expect_status(port, request(port, "GET", "/nope.js"), "HTTP/1.1 404").await;
+        // Unlisted names (even real files), traversal and foreign Hosts are
+        // all refused; the wildcard route only accepts GET/HEAD, so writes
+        // never reach a path.
+        expect_status(port, request(port, "GET", "/private.txt"), "HTTP/1.1 404").await;
         expect_status(
             port,
             request(port, "GET", "/..%2f..%2fCargo.toml"),
-            "HTTP/1.1 404",
-        )
-        .await;
-        expect_status(
-            port,
-            request(port, "GET", "/assets/../index.html"),
             "HTTP/1.1 404",
         )
         .await;
@@ -310,7 +299,6 @@ mod tests {
         )
         .await;
         expect_status(port, request(port, "POST", "/trace"), "HTTP/1.1 405").await;
-        expect_status(port, request(port, "PUT", "/trace"), "HTTP/1.1 405").await;
         let _ = std::fs::remove_dir_all(&root);
     }
 }

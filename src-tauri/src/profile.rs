@@ -21,16 +21,16 @@ pub fn trace(data: &Path, workspace: &Path, id: &str) -> io::Result<Vec<u8>> {
             "profile exceeds the 64 MiB limit",
         ));
     }
-    trace_bytes(file)
+    trace_bytes(file, COMPRESSED_LIMIT)
 }
 
-fn trace_bytes<R: Read>(input: R) -> io::Result<Vec<u8>> {
+fn trace_bytes(input: impl Read, limit: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    input.take(COMPRESSED_LIMIT + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > COMPRESSED_LIMIT {
+    input.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "profile exceeds the 64 MiB limit",
+            "profile exceeds the transfer size limit",
         ));
     }
     Ok(bytes)
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn trace_returns_the_artifact_bytes_unchanged() {
-        let expected: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+        let expected = [0x1f, 0x8b, 0xff, 0x00];
         let (f, id) = fixture_with_profile(&expected);
         assert_eq!(trace(&f.data, &f.ws, &id).unwrap(), expected);
     }
@@ -81,12 +81,11 @@ mod tests {
 
     #[test]
     fn trace_bytes_stops_one_past_the_bound() {
-        // A file exactly at the limit reads fully; one byte more fails.
-        let at_limit = vec![0u8; COMPRESSED_LIMIT as usize];
-        let file = std::io::Cursor::new(at_limit.clone());
-        assert_eq!(trace_bytes(file).unwrap(), at_limit);
-        let over = vec![0u8; COMPRESSED_LIMIT as usize + 1];
-        let file = std::io::Cursor::new(over);
-        assert!(trace_bytes(file).is_err());
+        // Reads up to `limit` bytes; one byte more fails as InvalidData.
+        assert_eq!(trace_bytes(&b"abc"[..], 3).unwrap(), b"abc");
+        assert_eq!(
+            trace_bytes(&b"abcd"[..], 3).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }
