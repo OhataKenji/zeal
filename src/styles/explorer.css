@@ -209,7 +209,6 @@ details[open] > .action-summary .action-mnemonic::before {
 .action-section-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
 }
@@ -360,7 +359,6 @@ details[open] > .action-summary .action-mnemonic::before {
 .configured-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   font-size: 11.5px;
 }
@@ -388,6 +386,7 @@ details[open] > .action-summary .action-mnemonic::before {
 .dep-transition {
   flex-shrink: 1;
   min-width: 0;
+  margin-left: auto;
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;

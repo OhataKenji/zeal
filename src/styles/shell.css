@@ -285,6 +285,12 @@
   word-break: break-all;
 }
 
+.workspace-info-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .table-link {
   border: 0;
   background: transparent;

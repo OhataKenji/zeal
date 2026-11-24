@@ -107,8 +107,12 @@
         {#each rows as row (row.key)}
           <tr>
             <td class="mono">{row.key}</td>
-            <td class="mono path-cell">{row.value}</td>
-            <td><CopyButton text={row.value} label={`Copy ${row.key} value`} /></td>
+            <td class="mono path-cell">
+              <div class="workspace-info-value">
+                <span>{row.value}</span>
+                <CopyButton text={row.value} label={`Copy ${row.key} value`} />
+              </div>
+            </td>
           </tr>
         {/each}
       </tbody>

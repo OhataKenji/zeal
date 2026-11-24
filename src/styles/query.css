@@ -386,8 +386,14 @@
   margin-top: 4px;
 }
 
-.query-command {
+.query-command,
+.query-raw-wrap {
   position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.query-command {
   margin-top: 6px;
 }
 
@@ -467,10 +473,6 @@
 
 .query-results-body {
   overflow-x: auto;
-}
-
-.query-raw-wrap {
-  position: relative;
 }
 
 .query-raw {
