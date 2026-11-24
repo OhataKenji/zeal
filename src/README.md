@@ -22,8 +22,11 @@ keep their state in their views.
   still rejects output-base lock contention immediately. An explicit open
   blocks saved-workspace restoration even after failure.
 - The target explorer builds one package tree per snapshot: the sidebar tree
-  and the package table read the same nodes. Selection and target reads live
-  in the session; expansion and direct/subtree scope stay local to the views.
+  walks the nodes while `packageContents` projects a selection into the
+  package table's direct targets, its `//path:all` heading and action
+  pattern, and primary command — a scope note explains that Bazel may match
+  unlisted targets. Selection and target reads live in the session;
+  expansion stays local to the views.
   Run, Query, and the command palette share the target search index derived
   once per snapshot.
 - Target reads have two lifetimes: static detail once per selection, then one

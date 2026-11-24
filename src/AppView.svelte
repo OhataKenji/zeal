@@ -17,7 +17,7 @@
     type HistoryFilter,
     type InvocationRow,
   } from "./lib/invocation";
-  import { buildTree } from "./lib/model";
+  import { buildTree, packageContents } from "./lib/model";
   import type { PaletteAction } from "./lib/palette";
   import { pages, type Page } from "./lib/pages";
   import { createIndex } from "./lib/search";
@@ -52,11 +52,12 @@
   const targetIndex = $derived(snap ? createIndex(snap.targets) : null);
   const selection = $derived(view.selection);
   const selectedTarget = $derived(selection?.kind === "target" ? selection.label : null);
-  const selectedDir = $derived(
-    selection?.kind === "package" ? tree?.byPath.get(selection.path) : tree?.root,
-  );
+  const pkg = $derived.by(() => {
+    if (view.page !== "targets" || selectedTarget !== null || !tree) return null;
+    const node = selection?.kind === "package" ? tree.byPath.get(selection.path) : tree.root;
+    return node ? packageContents(node) : null;
+  });
   const invocation = $derived(view.invocation);
-  let packageView: ReturnType<typeof PackageView> | undefined = $state();
 
   let opening = $state(false);
   let switchError = $state<string | null>(null);
@@ -152,8 +153,13 @@
   // An open run form keeps its edits; the prompt owns the keyboard too.
   function openRunShortcut() {
     if (!canOpenPalette) return;
-    if (packageView) packageView.openFlags();
-    else openRunDialog("build", selectedTarget ?? "//...");
+    if (pkg) {
+      if (pkg.targets.length && canSend(view, pkg.pattern)) {
+        openRunDialog(pkg.primaryCmd, pkg.pattern);
+      }
+    } else {
+      openRunDialog("build", selectedTarget ?? "//...");
+    }
   }
 
   function onWindowKeydown(event: KeyboardEvent) {
@@ -461,12 +467,11 @@
                 {:else}
                   <p class="dim">Loading target details…</p>
                 {/if}
-              {:else if selectedDir}
-                {#key selectedDir.path}
+              {:else if pkg}
+                {#key pkg.pattern}
                   <PackageView
-                    bind:this={packageView}
-                    node={selectedDir}
-                    canRun={canSend(view, "//...")}
+                    {pkg}
+                    canRun={canSend(view, pkg.pattern)}
                     onselect={selectTarget}
                     onrun={session.start}
                     onopenflags={openRunDialog}

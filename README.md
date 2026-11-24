@@ -60,7 +60,7 @@ Find your build output and test logs. Choose which packages Zelith scans. To rec
 
 Browse packages or press `⌘K` / `Ctrl+K` to find a target. Build, test, or run it. Open **Definition** for rule attributes or **Configured** for resolved outputs and dependencies. **Actions** shows each action's command, inputs, and outputs.
 
-Counts show targets discovered within your workspace's target patterns. Package actions pass the displayed pattern to Bazel: they can build or test targets that aren't listed. To run just one target, select its row instead.
+Counts show targets discovered within your workspace's target patterns, and each package lists its direct targets under its `//path:all` heading. A note explains that Bazel may build or test targets the list doesn't show. To run just one target, select its row instead.
 
 ![The CcStrip action for //rates:rate_server shows its command, inputs, and output](docs/screenshots/target-actions.png)
 

@@ -99,26 +99,18 @@ export function buildTree(targets: readonly Target[]) {
   return { root, byPath };
 }
 
-/**
- * Every target in the node's subtree: the node's own targets first, then
- * descendant targets sorted by label.
- */
-export function subtreeTargets(node: DirNode): Target[] {
-  const descendants: Target[] = [];
-  const collect = (parent: DirNode): void => {
-    for (const child of parent.dirs) {
-      for (const target of child.targets) descendants.push(target);
-      collect(child);
-    }
-  };
-  collect(node);
-  descendants.sort((a, b) => compare(a.label, b.label));
-  return node.targets.concat(descendants);
-}
-
 /** Whether a rule class marks a test: `*_test` rules and `test_suite`s. */
 export function isTestRule(ruleClass: string): boolean {
   return ruleClass.endsWith("_test") || ruleClass === "test_suite";
+}
+
+/** The package view's data: direct targets, the shared //path:all pattern, and primary command. */
+export function packageContents({ path, targets }: DirNode) {
+  return {
+    targets,
+    pattern: `//${path}:all`,
+    primaryCmd: targets.some((t) => isTestRule(t.ruleClass)) ? "test" : "build",
+  } as const;
 }
 
 /** Returns package ancestors from the root through the selected package. */

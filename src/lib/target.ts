@@ -10,11 +10,9 @@ const FORBIDDEN_CHARACTERS = /[\p{White_Space}\p{Cc}]/u;
 export function packageScopeNote(pattern: string): string | null {
   if (!pattern.startsWith("//")) return null;
   const [pkg, target] = pattern.split(":");
-  const recursive = pkg.endsWith("/...");
   const wildcard = target === "all" || target === "*" || target === "all-targets";
-  if (!wildcard && !(recursive && target === undefined)) return null;
-  const scope = recursive ? "recursively across packages" : "in this package";
-  return `Bazel can match targets ${scope}, not just the targets listed in Explorer.`;
+  if (pkg.endsWith("/...") || !wildcard) return null;
+  return "Zelith only lists targets in your workspace scope. Bazel may build or test unlisted targets in this package.";
 }
 
 /** Validates a single target token without trimming or splitting it. */
