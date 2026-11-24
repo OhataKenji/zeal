@@ -11,8 +11,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-tauri:
+  prepare-release:
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select or create the draft release
+        id: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BODY: |
+            Download the DMG for macOS on Apple Silicon.
+            The macOS app is ad-hoc signed and is not notarized by Apple.
+            Download the AppImage or .deb package for Linux on x86_64 or ARM64.
+            Install Bazelisk or Bazel separately. Updates are installed manually.
+
+            Maintainer: add release notes and complete docs/release-guide.md before publishing.
+        run: |
+          version=$(jq -er '.version | strings | select(length > 0)' src-tauri/tauri.conf.json)
+          tag="v$version"
+          existing_tag=$(git ls-remote --tags --refs origin "refs/tags/$tag")
+          if [[ -n "$existing_tag" ]]; then
+            echo "::error::Tag $tag already exists. Use a new version."
+            exit 1
+          fi
+
+          releases="repos/$GITHUB_REPOSITORY/releases"
+          draft_id=$(gh api --paginate "$releases?per_page=100" | jq -sr --arg tag "$tag" '
+            add | map(select(.tag_name == $tag)) |
+            if any(.[]; .draft == false) then error("Release \($tag) is already published")
+            elif length > 1 then error("Multiple drafts match \($tag)")
+            elif length == 1 then .[0].id
+            else empty end')
+          if [[ -z "$draft_id" ]]; then
+            draft_id=$(gh api --method POST "$releases" -f tag_name="$tag" -f name="Zelith $tag" \
+              -f target_commitish="$GITHUB_SHA" -f body="$RELEASE_BODY" -F draft=true --jq '.id')
+          fi
+          [[ "$draft_id" =~ ^[1-9][0-9]*$ ]]
+          echo "release_id=$draft_id" >> "$GITHUB_OUTPUT"
+
+  build-packages:
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
@@ -43,16 +90,5 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
         with:
           args: ${{ matrix.args }} -- --locked
-          tagName: v__VERSION__
-          releaseName: Zelith v__VERSION__
-          releaseCommitish: ${{ github.sha }}
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
           uploadUpdaterJson: false
-          releaseBody: |
-            Download the DMG for macOS on Apple Silicon.
-            The macOS app is ad-hoc signed and is not notarized by Apple.
-            Download the AppImage or .deb package for Linux on x86_64 or ARM64.
-            Install Bazelisk or Bazel separately. Updates are installed manually.
-
-            Maintainer: add release notes and complete docs/release-guide.md before publishing.
