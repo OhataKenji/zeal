@@ -34,7 +34,7 @@ Releaseの説明にも、公証がないことを残してください。
 x86_64とARM64の各環境で、対応するパッケージを確認します。
 
 - AppImageは`chmod +x`して実行できる。
-- `.deb`は`sudo apt install ./*_$(dpkg --print-architecture).deb`のようにローカルファイルを指定してインストールでき、アプリケーションメニューまたは`zelith`コマンドで起動できる。
+- ダウンロードしたZelithの`.deb`をファイル名で指定してインストールし（`sudo apt install ./ファイル名.deb`）、アプリケーションメニューまたは`zelith`コマンドで起動できることを確認します。
 
 ## Verify on both platforms
 
