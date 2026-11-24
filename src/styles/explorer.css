@@ -218,13 +218,6 @@ details[open] > .action-summary .action-mnemonic::before {
   margin: 0;
 }
 
-.action-copy-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
 .action-command {
   display: block;
   margin: 0;
@@ -232,12 +225,6 @@ details[open] > .action-summary .action-mnemonic::before {
   overflow-y: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.action-copy {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11px;
 }
 
 .action-paths {
@@ -384,13 +371,6 @@ details[open] > .action-summary .action-mnemonic::before {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted-foreground);
-}
-
-.configured-copy {
-  height: 20px;
-  padding: 0 6px;
-  font-size: 10.5px;
-  flex-shrink: 0;
 }
 
 .configured-dep {

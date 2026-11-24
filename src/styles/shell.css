@@ -298,16 +298,6 @@
   text-decoration: underline;
 }
 
-.copied-tag {
-  margin-left: 8px;
-  font-size: 11px;
-  color: var(--success);
-}
-
-.copied-tag.copied-failed {
-  color: var(--destructive);
-}
-
 .scope-form {
   display: flex;
   flex-direction: column;

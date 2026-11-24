@@ -307,20 +307,6 @@
   max-width: 360px;
 }
 
-/* The target row's label is screen-reader only, like the mock's clipped one. */
-
-.query-atom-row[data-kind="target"] .query-arg > label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-  padding: 0;
-}
-
 .query-kind-select {
   width: calc(21ch + 44px);
   min-width: 0;
@@ -495,6 +481,14 @@
   font: 12px/1.6 var(--mono);
   white-space: pre;
   overflow-x: auto;
+}
+
+/* Copy buttons overlay the command and output blocks. */
+.query-command > .icon-button,
+.query-raw-wrap > .icon-button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
 }
 
 .query-graph-actions {

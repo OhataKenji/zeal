@@ -179,12 +179,23 @@ test("TargetView renders target details", async (t) => {
     assert.match(html, /k8-fastbuild/);
     assert.ok(html.includes("0123456789ab"));
     assert.match(html, /title="Copy configuration hash 0123456789abcdef0123"/);
+    assert.match(html, /aria-label="Copy configuration hash 0123456789abcdef0123"/);
     assert.match(html, /Resolved Outputs \(2\)/);
     assert.match(html, /Direct deps &amp; transitions \(3\)/);
     // Outputs display the short path; the full path stays the title.
     assert.ok(html.includes('title="bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"'));
     assert.ok(html.includes(">app/lib/libparser.jar</span>"));
-    assert.equal((html.match(/configured-copy/g) ?? []).length, 2);
+    // Each output gets an icon button named by its full path.
+    assert.ok(
+      html.includes(
+        'aria-label="Copy output path bazel-out/k8-fastbuild/bin/app/lib/libparser.jar"',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        'aria-label="Copy output path bazel-out/k8-fastbuild/bin/app/lib/libparser-src.jar"',
+      ),
+    );
     // Indexed deps navigate; external deps stay readable text.
     assert.match(
       html,

@@ -478,7 +478,6 @@
               text={command}
               label="Copy command line"
               disabled={!valid || command === ""}
-              onerror={setFeedback}
             />
           </div>
           <div class="query-flags">
@@ -567,7 +566,6 @@
                   <CopyButton
                     text={stored.stdout}
                     label="Copy output"
-                    onerror={setFeedback}
                   />
                 </div>
                 {#if rawMore > 0}
