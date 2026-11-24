@@ -11,47 +11,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  publish-tauri:
     if: github.ref == 'refs/heads/main'
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin --bundles dmg
+          - platform: ubuntu-22.04
+            args: --bundles appimage,deb
+          - platform: ubuntu-22.04-arm
+            args: --bundles appimage,deb
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
-    outputs:
-      release_id: ${{ steps.draft.outputs.releaseId }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      # Start each version with a new tag and release, including drafts.
-      - name: Check release version
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version=$(jq -er '.version' src-tauri/tauri.conf.json)
-          release_tag="v$version"
-          tag=$(git ls-remote --tags origin "refs/tags/$release_tag")
-          release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" | \
-            jq -c --arg tag "$release_tag" '.[] | select(.tag_name == $tag)')
-          if [ -n "$tag" ] || [ -n "$release" ]; then
-            echo "::error::Tag or release $release_tag already exists. Use a new version."
-            exit 1
-          fi
 
       - uses: ./.github/actions/setup-tauri
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build DMG and create draft release
-        id: draft
+      - name: Build packages and upload to draft release
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: "-"
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
         with:
-          args: --target aarch64-apple-darwin --bundles dmg -- --locked
+          args: ${{ matrix.args }} -- --locked
           tagName: v__VERSION__
           releaseName: Zelith v__VERSION__
           releaseCommitish: ${{ github.sha }}
@@ -65,30 +56,3 @@ jobs:
             Install Bazelisk or Bazel separately. Updates are installed manually.
 
             Maintainer: add release notes and complete docs/release-guide.md before publishing.
-
-  linux:
-    needs: release
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-22.04, ubuntu-22.04-arm]
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-tauri
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Linux packages and upload to draft release
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --bundles appimage,deb -- --locked
-          releaseId: ${{ needs.release.outputs.release_id }}
-          uploadUpdaterJson: false

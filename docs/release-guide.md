@@ -17,7 +17,9 @@ Apple Developer Programへの加入やSecretsの登録は不要です。
 4. Releaseの説明に変更内容を追記し、`Publish release`を押します。
    タグは自動で作成されるため、先に作る必要はありません。
 
-Linuxジョブだけが失敗した場合は、Draft Releaseを公開せず、同じ実行の「Re-run failed jobs」でLinuxジョブを再実行します。
+一部のビルドが失敗した場合は「Re-run failed jobs」で再試行できます。
+同じバージョンでReleaseを再度実行すると、既存のドラフトの同名パッケージが置き換わります。
+別のコミットから再実行した場合は、公開前にタグの対象が最後に成功した実行のコミットを指すことを確認し、その実行のパッケージを検証してください。
 
 ## Verify the DMG
 
