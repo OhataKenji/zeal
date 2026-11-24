@@ -27,9 +27,7 @@
 
 #### Option 1: Download a release
 
-Prebuilt releases currently support **macOS (Apple Silicon) only**.
-
-Download the app from [GitHub Releases](https://github.com/OhataKenji/zelith/releases).
+Download the DMG for macOS (Apple Silicon), or the AppImage or `.deb` package for Linux (x86_64 or ARM64), from [GitHub Releases](https://github.com/OhataKenji/zelith/releases).
 
 #### Option 2: Build from source
 

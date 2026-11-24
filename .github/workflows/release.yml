@@ -16,6 +16,8 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.releaseId }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,16 +39,13 @@ jobs:
             exit 1
           fi
 
-      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
-
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: src-tauri
+      - uses: ./.github/actions/setup-tauri
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build DMG and create draft release
+        id: draft
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -61,7 +60,35 @@ jobs:
           uploadUpdaterJson: false
           releaseBody: |
             Download the DMG for macOS on Apple Silicon.
-            This app is ad-hoc signed and is not notarized by Apple.
+            The macOS app is ad-hoc signed and is not notarized by Apple.
+            Download the AppImage or .deb package for Linux on x86_64 or ARM64.
             Install Bazelisk or Bazel separately. Updates are installed manually.
 
             Maintainer: add release notes and complete docs/release-guide.md before publishing.
+
+  linux:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Linux packages and upload to draft release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles appimage,deb -- --locked
+          releaseId: ${{ needs.release.outputs.release_id }}
+          uploadUpdaterJson: false

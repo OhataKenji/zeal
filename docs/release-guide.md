@@ -1,6 +1,6 @@
 # Release guide
 
-Apple Silicon向けのDMGを配布します。
+macOS (Apple Silicon) 向けのDMGと、Linux (x86_64、ARM64) 向けのAppImageと.debを配布します。
 Apple Developer Programへの加入やSecretsの登録は不要です。
 
 ## Create a release
@@ -13,9 +13,11 @@ Apple Developer Programへの加入やSecretsの登録は不要です。
    ```
 
 2. GitHubの`Actions → Release → Run workflow`で`main`を選んで実行し、その実行対象コミットの`CI`と`Build`が成功していることを確認します。
-3. 作成されたDraft ReleaseからDMGをダウンロードし、下の確認を行います。
+3. Release workflowの実行が成功するのを待ち、作成されたDraft ReleaseからDMGと、x86_64とARM64両方のAppImageと.debをすべてダウンロードして下の確認を行います。
 4. Releaseの説明に変更内容を追記し、`Publish release`を押します。
    タグは自動で作成されるため、先に作る必要はありません。
+
+Linuxジョブだけが失敗した場合は、Draft Releaseを公開せず、同じ実行の「Re-run failed jobs」でLinuxジョブを再実行します。
 
 ## Verify the DMG
 
@@ -26,8 +28,18 @@ Apple Developer Programへの加入やSecretsの登録は不要です。
 Releaseの説明にも、公証がないことを残してください。
 
 - Applicationsへコピーし、Finderから起動できる。
+
+## Verify Linux packages
+
+x86_64とARM64の各環境で、対応するパッケージを確認します。
+
+- AppImageは`chmod +x`して実行できる。
+- `.deb`は`sudo apt install ./*_$(dpkg --print-architecture).deb`のようにローカルファイルを指定してインストールでき、アプリケーションメニューまたは`zelith`コマンドで起動できる。
+
+## Verify on both platforms
+
 - Bazelを検出し、target検索、build、キャンセルが動く。
 - 再起動後も履歴が残る。
 
-すべて確認できたDMGをそのまま公開します。
-更新は新版DMGの手動インストールです。
+すべてのパッケージを確認できたら、そのまま公開します。
+更新は各プラットフォームで対応するパッケージ（macOSはDMG、LinuxはAppImageまたは.deb）の手動インストールです。
