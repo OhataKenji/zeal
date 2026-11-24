@@ -126,7 +126,6 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
       props: {
         view,
         reload: () => {},
-        reloadProfile: () => {},
         onstop: () => {},
         onconsole: () => {},
       },

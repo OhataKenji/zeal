@@ -15,7 +15,6 @@ import type {
   InvocationRecord,
   ModulesSnapshot,
   OwnedInvocation,
-  Profile,
   Target,
   TargetAction,
   TargetActions,
@@ -30,9 +29,14 @@ import { previewAnalytics } from "./preview/analytics.ts";
 import { interpretConsoleInput } from "./preview/console.ts";
 import type { CommandName } from "./lib/commands.ts";
 
+/** Preview-only shape of a captured trace: per-thread lanes of raw events.
+ * The saved artifact keeps thread ids on the lane, not on each event. */
+interface CapturedProfile {
+  lanes: Array<{ tid: number; name: string; events: Record<string, unknown>[] }>;
+}
+
 /** One captured invocation: the history row plus its saved log, BEP and
- * profile. The profile's lanes and phases are the selected trace events;
- * they keep their original timestamps. */
+ * trace. Lane events keep their original timestamps. */
 interface CapturedInvocation {
   record: {
     id: string;
@@ -44,7 +48,7 @@ interface CapturedInvocation {
   };
   log: string;
   bep: Bep;
-  profile: Profile;
+  profile: CapturedProfile;
 }
 
 /** The captured workspace: real `bazel query`/`mod graph`/`aquery`/`cquery`
@@ -66,8 +70,8 @@ const history: CapturedInvocation[] = JSON.parse(historyRaw);
 const capture: WorkspaceCapture = JSON.parse(workspaceRaw);
 const queries: QueryPreset[] = JSON.parse(queriesRaw);
 const NOW = Date.now();
-// History timestamps are shifted so the newest capture ends "now"; profile
-// phase/thread timings inside each entry stay at their original values.
+// History timestamps are shifted so the newest capture ends "now"; trace
+// event timings inside each entry stay at their original values.
 const shift = NOW - Math.max(...history.map((h) => h.record.finishedAt));
 type PreviewRecord = InvocationRecord & {
   workspace: string;
@@ -540,13 +544,34 @@ export function installPreview() {
       wsEntry(workspace);
       return getInvocation(workspace, payload?.id);
     },
-    get_invocation_profile: (payload) => {
+    // Same-origin stand-in for the native loopback viewer; vite.config.ts
+    // mounts the verified assets under /__perfetto in dev only.
+    perfetto_origin: () => `${location.origin}/__perfetto`,
+    read_invocation_trace: async (payload) => {
       const workspace = String(payload?.workspace ?? "");
       wsEntry(workspace);
       const record = records.find((inv) => inv.id === payload?.id && inv.workspace === workspace);
-      if (!record) throw new Error("Preview invocation not found");
-      const item = captured.get(record.id);
-      return item ? { status: "ok" as const, data: item.profile } : { status: "missing" as const };
+      const item = record && captured.get(record.id);
+      // Mirrors the native TraceError shape so the viewer words it the same.
+      if (!item) throw Object.assign(new Error("missing"), { type: "missing" });
+      // The capture stores thread ids on the lane; the trace format wants
+      // them on every event plus a thread_name marker per lane.
+      const trace = {
+        traceEvents: item.profile.lanes.flatMap((lane) => [
+          {
+            ph: "M",
+            name: "thread_name",
+            pid: 1,
+            tid: lane.tid,
+            args: { name: lane.name },
+          },
+          ...lane.events.map((event) => ({ ...event, pid: 1, tid: lane.tid })),
+        ]),
+      };
+      const zipped = new Blob([JSON.stringify(trace)])
+        .stream()
+        .pipeThrough(new CompressionStream("gzip"));
+      return new Response(zipped).arrayBuffer();
     },
     // The app sends this command with the AnalyticsFilter shape.
     get_analytics: (payload) => {

@@ -8,6 +8,7 @@ mod detail;
 mod ingest;
 mod label;
 mod modules;
+mod perfetto;
 mod profile;
 mod protocol;
 mod query;
@@ -30,10 +31,10 @@ pub use store::{
     list as list_invocation_records, read_record as read_invocation_record,
 };
 
-use detail::{InvocationDetail, Section};
-use profile::Profile;
+use detail::InvocationDetail;
 use query::QueryOutput;
 use state::{AppStateDto, Core, OpenWorkspaceResult, RegisteredWorkspace};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -482,25 +483,57 @@ async fn get_invocation(
     .map_err(|_| "invocation detail worker failed".to_string())?
 }
 
-/// Return the saved timing profile and its availability status.
+/// Trace-read failures keep their kind so the viewer can word a missing
+/// artifact differently from a real read error.
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TraceError {
+    Missing,
+    Failed { message: String },
+}
+
+impl TraceError {
+    fn failed(message: impl Into<String>) -> Self {
+        Self::Failed {
+            message: message.into(),
+        }
+    }
+}
+
+/// Return the saved profiling trace as raw gzip bytes for the viewer.
 #[tauri::command]
 #[tracing::instrument(
     target = "zelith::operations",
-    name = "invocation.profile.request",
+    name = "invocation.trace.request",
     skip_all
 )]
-async fn get_invocation_profile(
+async fn read_invocation_trace(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
     workspace: String,
     id: String,
-) -> Result<Section<Profile>, String> {
-    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
+) -> Result<tauri::ipc::Response, TraceError> {
+    let (data, ws, id) =
+        saved_invocation_scope(&app, core.inner(), &workspace, &id).map_err(TraceError::failed)?;
     tauri::async_runtime::spawn_blocking(move || {
-        detail::invocation_profile(&data, &ws, &id).map_err(|e| e.to_string())
+        profile::trace(&data, &ws, &id)
+            .map(tauri::ipc::Response::new)
+            .map_err(|e| match e.kind() {
+                io::ErrorKind::NotFound => TraceError::Missing,
+                _ => TraceError::failed(e.to_string()),
+            })
     })
     .await
-    .map_err(|_| "profile worker failed".to_string())?
+    .map_err(|_| TraceError::failed("profile worker failed"))?
+}
+
+/// Loopback origin of the bundled Perfetto UI, bound on first use.
+#[tauri::command]
+async fn perfetto_origin(
+    app: AppHandle,
+    state: State<'_, perfetto::PerfettoServer>,
+) -> Result<String, String> {
+    perfetto::origin(&app, state.inner()).await
 }
 
 /// `~/...` in a typed path expands to the user's home directory.
@@ -583,6 +616,7 @@ pub fn run() {
             telemetry::init(app);
             let core = Arc::new(Core::new());
             app.manage(core.clone());
+            app.manage(perfetto::PerfettoServer::new());
             let data = app.path().app_data_dir().map_err(|error| error.to_string());
             let receiver_core = core.clone();
             let handle = app.handle().clone();
@@ -618,7 +652,8 @@ pub fn run() {
             list_invocations,
             get_analytics,
             get_invocation,
-            get_invocation_profile
+            read_invocation_trace,
+            perfetto_origin
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -79,7 +79,7 @@ Use the visual query builder to write `query`, `cquery`, and `aquery` expression
 
 ### History
 
-Follow builds across worktrees. If you started a build in Zelith, you can stop it from any worktree. After a run, check its logs and test results. Use **Timing** to see what took time or **Compare** to see which flags changed between runs.
+Follow builds across worktrees. If you started a build in Zelith, you can stop it from any worktree. After a run, check its logs and test results. Use **Timing** to explore the bundled Perfetto trace viewer or **Compare** to see which flags changed between runs.
 
 ![A rate_server build with a nine-second phase selected on the main thread](docs/screenshots/history-timing.png)
 

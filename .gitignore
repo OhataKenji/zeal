@@ -100,5 +100,11 @@ AGENTS.local.md
 **/.dsh/cache/
 **/.dsh/attachments/
 
+# Perfetto viewer assets are fetched and digest-verified by
+# scripts/fetch-perfetto.mjs; only the license files stay tracked.
+/src-tauri/resources/perfetto/*
+!/src-tauri/resources/perfetto/LICENSE
+!/src-tauri/resources/perfetto/THIRD_PARTY_NOTICES.md
+
 # Scratch
 /.audit-scratch/

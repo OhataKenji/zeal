@@ -41,7 +41,9 @@ keep their state in their views.
   flags before spawning Bazel and the diagnostic surfaces as the phase
   error. Tab and flag changes replace the phase reader, so
   stale replies cannot land. Other workspaces do not wait. History notifications
-  coalesce into one follow-up. Saved detail/profile reads remain independent.
+  coalesce into one follow-up. The saved detail read is the session's only
+  per-invocation fetch; the Timing viewer pulls the raw trace itself once its
+  embedded handshake completes.
 - The selected workspace keeps the module graph, selection, and explanation across
   page navigation. Switching workspaces discards them. Search and depth filters
   are local to the Modules page and reset when you leave it.
