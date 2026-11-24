@@ -15,27 +15,10 @@ pnpm tauri dev    # run the app in dev mode
 pnpm tauri build -- --locked  # build a release bundle
 ```
 
+The first dev run or build needs internet access to download Perfetto. The bundled Timing viewer works offline.
+
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
-
-## Perfetto viewer assets
-
-The Timing tab embeds the [Perfetto UI](https://ui.perfetto.dev), pinned to
-upstream `v59.1-491832c0d`. `pnpm dev` and `pnpm build` run
-`scripts/fetch-perfetto.mjs` first, which downloads the manifest-listed files
-into the gitignored `src-tauri/resources/perfetto/` and verifies every file's
-SHA-256 against `src-tauri/resources/perfetto-manifest.json` — including files
-already on disk, so a warm cache is re-validated rather than trusted. Only
-missing or corrupt files hit the network; release builds bundle the directory
-through `bundle.resources` in `tauri.conf.json`. Upstream license and notices
-live in `src-tauri/resources/perfetto/`. The app never downloads viewer code
-at runtime: it serves the bundled files from an ephemeral `127.0.0.1` origin.
-
-The iframe loads the tracked `embed.html` bootstrap first. It seeds the
-viewer’s `perfettoSettings` localStorage key with `theme: "dark"` and
-`timestampFormat: "seconds"` defaults, then layers any values already saved
-on that origin on top, so viewer-side prefs win. Because the origin’s port
-is ephemeral, nothing carries over to the next app run.
 
 ## Checks
 

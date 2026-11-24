@@ -79,9 +79,11 @@ Use the visual query builder to write `query`, `cquery`, and `aquery` expression
 
 ### History
 
-Follow builds across worktrees. If you started a build in Zelith, you can stop it from any worktree. After a run, check its logs and test results. Use **Timing** to explore the bundled Perfetto trace viewer or **Compare** to see which flags changed between runs.
+Select a finished build and open **Timing** to find slow actions in its Bazel profile. The profile stays on your machine. Use **Compare** to see which flags changed between runs.
 
-![A rate_server build with a nine-second phase selected on the main thread](docs/screenshots/history-timing.png)
+History also shows logs and test results across worktrees. You can stop a running build from any worktree if you started it in Zelith.
+
+![Perfetto timeline showing parallel actions in a rate_server build](docs/screenshots/history-timing.png)
 
 ### Analytics
 
