@@ -27,7 +27,7 @@ jobs:
         id: draft
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_BODY: |
             Download the DMG for macOS on Apple Silicon.
             The macOS app is ad-hoc signed and is not notarized by Apple.
