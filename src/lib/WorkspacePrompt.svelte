@@ -26,9 +26,13 @@
   // Props seed this form once.
   let path = $state(untrack(() => initial));
   let include = $state(untrack(() => initialScope.include.join("\n")));
-  let error = $state<string | null>(null);
-  let choosing = $state(false);
-  const busy = $derived(choosing || opening);
+  type PromptAction =
+    | { kind: "idle" }
+    | { kind: "choosing" }
+    | { kind: "submitting" }
+    | { kind: "failed"; error: string };
+  let action = $state<PromptAction>({ kind: "idle" });
+  const busy = $derived(opening || action.kind === "choosing" || action.kind === "submitting");
   const canSubmit = $derived(
     bazelAvailable && !busy && path.trim() !== "" && include.trim() !== "",
   );
@@ -36,8 +40,7 @@
 
   async function selectWorkspace() {
     if (busy) return;
-    choosing = true;
-    error = null;
+    action = { kind: "choosing" };
     try {
       const selected = await open({
         directory: true,
@@ -46,21 +49,21 @@
         defaultPath: path.trim() || undefined,
       });
       if (selected !== null) path = selected;
+      action = { kind: "idle" };
     } catch (e) {
-      error = String(e);
-    } finally {
-      choosing = false;
+      action = { kind: "failed", error: String(e) };
     }
   }
 
   async function submit() {
     if (!canSubmit) return;
-    error = null;
+    action = { kind: "submitting" };
     opening = true;
     try {
       if (await onopen(path.trim(), { include: include.split("\n") })) onclose?.();
+      action = { kind: "idle" };
     } catch (e) {
-      error = String(e);
+      action = { kind: "failed", error: String(e) };
     } finally {
       opening = false;
     }
@@ -136,8 +139,8 @@
       <button class="button" type="button" onclick={onclose} disabled={busy}>Cancel</button>
     {/if}
   </div>
-  {#if error}
-    <Notice tone="error">{error}</Notice>
+  {#if action.kind === "failed" && action.error}
+    <Notice tone="error">{action.error}</Notice>
   {/if}
   <BesSetup endpoint={besEndpoint} />
 </form>

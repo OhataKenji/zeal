@@ -30,8 +30,9 @@
   const persistedScope = $derived(`${workspace}\0${scope.include.join("\n")}`);
   let includeText = $state(untrack(() => scope.include.join("\n")));
   let lastScopeKey = untrack(() => `${workspace}\0${scope.include.join("\n")}`);
-  let saving = $state(false);
-  let saveError = $state<string | null>(null);
+  type ScopeSave = { kind: "idle" } | { kind: "saving" } | { kind: "failed"; error: string };
+  let save = $state<ScopeSave>({ kind: "idle" });
+  const saving = $derived(save.kind === "saving");
   let expanded = $state(false);
 
   const PRIMARY_KEYS = [
@@ -60,14 +61,12 @@
   async function saveScope(event: SubmitEvent) {
     event.preventDefault();
     if (saving || includeText.trim() === "") return;
-    saving = true;
-    saveError = null;
+    save = { kind: "saving" };
     try {
       await onsavescope({ include: includeText.split("\n") });
+      save = { kind: "idle" };
     } catch (e) {
-      saveError = String(e);
-    } finally {
-      saving = false;
+      save = { kind: "failed", error: String(e) };
     }
   }
 </script>
@@ -143,7 +142,7 @@
       bind:value={includeText}
       disabled={saving}
     ></textarea>
-    {#if saveError}<Notice tone="error">{saveError}</Notice>{/if}
+    {#if save.kind === "failed" && save.error}<Notice tone="error">{save.error}</Notice>{/if}
     <div>
       <button type="submit" class="button" disabled={saving || includeText.trim() === ""}>
         {saving ? "Saving…" : "Save scope"}

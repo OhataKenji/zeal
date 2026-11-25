@@ -981,6 +981,11 @@ export function emptyQueryState(): QueryState {
   return { running: false, error: null, result: null };
 }
 
+type QueryExecution =
+  | { phase: "idle" | "running" | "draining" | "disposed" }
+  | { phase: "ready"; result: QueryOutput }
+  | { phase: "failed"; error: string };
+
 /**
  * One editor owns its query result: `select` (the inputs changed) clears the
  * result and marks the in-flight reply stale, `run` publishes only the reply
@@ -988,42 +993,46 @@ export function emptyQueryState(): QueryState {
  * editor owns this controller, so results never cross workspaces.
  */
 export function createQuery(workspace: string, t: Transport, changed: (s: QueryState) => void) {
-  let state = emptyQueryState();
-  let disposed = false;
-  let acceptResult = false;
+  let state: QueryExecution = { phase: "idle" };
   let selected: QueryInputs | null = null;
-  function update(patch: Partial<QueryState>) {
-    if (disposed) return;
-    state = { ...state, ...patch };
-    changed(state);
+  function inFlight() {
+    return state.phase === "running" || state.phase === "draining";
+  }
+  function update(next: QueryExecution) {
+    if (state.phase === "disposed") return;
+    state = next;
+    changed({
+      running: inFlight(),
+      error: next.phase === "failed" ? next.error : null,
+      result: next.phase === "ready" ? next.result : null,
+    });
   }
   function select(args: QueryInputs) {
-    if (disposed) return;
+    if (state.phase === "disposed") return;
     const previous = selected;
     const keys = Object.keys(args) as Array<keyof QueryInputs>;
     if (previous && keys.every((key) => previous[key] === args[key])) return;
     selected = args;
-    acceptResult = false;
-    update({ result: null, error: null });
+    update({ phase: inFlight() ? "draining" : "idle" });
   }
   async function run(args: QueryInputs): Promise<void> {
-    if (disposed || state.running) return;
+    if (state.phase === "disposed" || inFlight()) return;
     selected = args;
-    acceptResult = true;
-    update({ running: true, error: null, result: null });
+    update({ phase: "running" });
     let result: QueryOutput;
     try {
       result = await t.invoke<QueryOutput>(COMMANDS.runQuery, { request: { workspace, ...args } });
     } catch (error) {
-      update({ running: false, error: acceptResult ? String(error) : null });
+      update(
+        state.phase === "running" ? { phase: "failed", error: String(error) } : { phase: "idle" },
+      );
       return;
     }
-    update({ running: false, result: acceptResult ? result : null });
+    update(state.phase === "running" ? { phase: "ready", result } : { phase: "idle" });
   }
 
   function dispose() {
-    acceptResult = false;
-    disposed = true;
+    state = { phase: "disposed" };
   }
   return { select, run, dispose };
 }

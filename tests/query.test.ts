@@ -723,19 +723,20 @@ test("selecting clears the result without IPC and a stale reply never displays",
   assert.equal(h.calls.length, 3);
 });
 
-test("editing during an invocation discards its reply without releasing the busy slot", async () => {
+test("editing back to the original query keeps its slot but discards its reply", async () => {
   const h = harness();
   const pending = h.runner.run(loading("deps(//a)"));
   h.runner.select(loading("deps(//b)", "graph"));
+  h.runner.select(loading("deps(//a)"));
   assert.equal(h.state.running, true);
-  await h.runner.run(loading("deps(//b)", "graph"));
+  await h.runner.run(loading("deps(//a)"));
   assert.equal(h.calls.length, 1);
   h.calls[0].resolve(OUTPUT);
   await pending;
   assert.equal(h.state.running, false);
   assert.equal(h.state.result, null);
   assert.equal(h.state.error, null);
-  const next = h.runner.run(loading("deps(//b)", "graph"));
+  const next = h.runner.run(loading("deps(//a)"));
   h.calls[1].resolve(OUTPUT);
   await next;
   assert.deepEqual(h.state.result, OUTPUT);

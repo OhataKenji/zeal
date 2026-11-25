@@ -179,6 +179,7 @@ function harness(initial = Promise.resolve(READY), page: Page = "targets") {
   let initialRequested = false;
   let stateReads = 0;
   const listeners = new Map<string, (payload: unknown) => void>();
+  const unlistened: string[] = [];
   const pending: Array<{
     command: string;
     args?: Record<string, unknown>;
@@ -204,6 +205,7 @@ function harness(initial = Promise.resolve(READY), page: Page = "targets") {
     listen: async <T>(name: string, callback: (payload: T) => void) => {
       listeners.set(name, callback as (payload: unknown) => void);
       return () => {
+        unlistened.push(name);
         listeners.delete(name);
       };
     },
@@ -226,6 +228,7 @@ function harness(initial = Promise.resolve(READY), page: Page = "targets") {
       return view;
     },
     listeners,
+    unlistened,
     pending,
     stateRequested: stateRequested.promise,
     stateReads: () => stateReads,
@@ -332,6 +335,50 @@ test("initial page survives the initial state fetch", async () => {
   const h = harness(Promise.resolve(READY), "query");
   await h.session.init();
   assert.equal(h.view.page, "query");
+});
+
+test("concurrent and subsequent init calls share one mounted subscription", async () => {
+  const h = harness();
+  const first = h.session.init();
+  assert.deepEqual([...h.listeners.keys()], ["invocations-changed"]);
+  assert.equal(h.session.init(), first);
+  await first;
+  await h.session.init();
+  assert.equal(h.stateReads(), 1);
+  h.session.dispose();
+  await h.session.init();
+  assert.equal(h.listeners.size, 0);
+  assert.deepEqual(h.unlistened, ["invocations-changed", "app-state"]);
+});
+
+test("retry after a failed initial snapshot reuses the listeners", async () => {
+  const initial = deferred<AppState>();
+  const h = harness(initial.promise);
+  const first = h.session.init();
+  await h.stateRequested;
+  initial.reject(new Error("snapshot unavailable"));
+  await first;
+  assert.match(h.view.error ?? "", /snapshot unavailable/);
+  await h.session.init();
+  assert.equal(h.view.core, READY);
+  assert.equal(h.view.error, null);
+  assert.equal(h.stateReads(), 2);
+  h.session.dispose();
+  assert.deepEqual(h.unlistened, ["invocations-changed", "app-state"]);
+});
+
+test("a push restores readiness after the initial snapshot failed", async () => {
+  const initial = deferred<AppState>();
+  const h = harness(initial.promise);
+  const first = h.session.init();
+  await h.stateRequested;
+  initial.reject(new Error("snapshot unavailable"));
+  await first;
+  h.emit("app-state", READY);
+  await h.session.init();
+  assert.equal(h.view.error, null);
+  assert.equal(h.view.core, READY);
+  assert.equal(h.stateReads(), 1);
 });
 
 test("initial restore selects lastWorkspace and loads its readers", async () => {

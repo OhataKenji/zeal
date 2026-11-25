@@ -125,6 +125,16 @@ test("late filters, errors and disposed workspace requests cannot replace the la
   // The disposed response never lands; the last applied data stays put.
   assert.equal(h.view.data?.days[0].count, 9);
 });
+test("loads after disposal neither notify nor invoke IPC, even with reversed dates", async (t) => {
+  const changed = t.mock.fn();
+  const invoke = t.mock.fn(async () => assert.fail("unexpected analytics IPC"));
+  const model = createAnalytics("/workspace", { invoke }, changed);
+  model.dispose();
+  await model.load(RESULT.filter);
+  await model.load({ ...RESULT.filter, start: "2026-03-31" });
+  assert.equal(changed.mock.callCount(), 0);
+  assert.equal(invoke.mock.callCount(), 0);
+});
 test("reloading keeps the previous charts until the response lands", async () => {
   const h = harness();
   const initial = h.model.load();

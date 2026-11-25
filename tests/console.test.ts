@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { setImmediate } from "node:timers/promises";
 import assert from "node:assert/strict";
 import { createConsole } from "../src/lib/console.ts";
 
@@ -134,6 +135,72 @@ test("partial writes and backpressure keep key bytes in order", async () => {
   assert.deepEqual(received, [27, 91, 65, 3]);
 });
 
+for (const outcome of ["success", "failure"]) {
+  test(`a stale write ${outcome} leaves reactivated input intact`, async () => {
+    const writes: number[][] = [];
+    const reports: Array<string | null> = [];
+    let resolve!: (count: number) => void;
+    let reject!: (error: Error) => void;
+    const oldWrite = new Promise<number>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    const console = createConsole(
+      "/workspace",
+      "owned",
+      {
+        invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+          assert.equal(command, "write_console");
+          const data = args?.data as number[];
+          writes.push(data);
+          return (writes.length === 1 ? await oldWrite : data.length) as T;
+        },
+      },
+      async () => {},
+      (error) => reports.push(error),
+    );
+    console.input(Uint8Array.of(1));
+    console.setWritable(false);
+    console.setWritable(true);
+    console.input(Uint8Array.of(2, 3));
+    console.setWritable(true);
+    assert.deepEqual(writes, [[1]]);
+    if (outcome === "success") resolve(1);
+    else reject(new Error("stale write"));
+    await setImmediate();
+    assert.deepEqual(reports, []);
+    assert.deepEqual(writes, [[1], [2, 3]]);
+  });
+}
+
+test("a stale resize reply does not clear the current resize error", async () => {
+  const reports: Array<string | null> = [];
+  let resolve!: () => void;
+  const oldResize = new Promise<void>((yes) => {
+    resolve = yes;
+  });
+  const console = createConsole(
+    "/workspace",
+    "owned",
+    {
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        assert.equal(command, "resize_console");
+        if (args?.cols === 80) return (await oldResize) as T;
+        throw new Error("current resize");
+      },
+    },
+    async () => {},
+    (error) => reports.push(error),
+  );
+  const resizing = console.resize(80, 24);
+  console.setWritable(false);
+  console.setWritable(true);
+  await console.resize(90, 24);
+  resolve();
+  await resizing;
+  assert.deepEqual(reports, ["Error: current resize"]);
+});
+
 test("closing a Console ignores late output without stopping the process", async () => {
   // The Promise executor assigns the callback before this helper returns.
   let resolve!: (value: unknown) => void;
@@ -158,9 +225,12 @@ test("closing a Console ignores late output without stopping the process", async
   );
   const reading = console.poll();
   console.dispose();
+  console.setWritable(false);
+  console.setWritable(true);
   resolve({ data: [65], offset: 1 });
   await reading;
   console.input(Uint8Array.from([3]));
+  await console.resize(80, 24);
   await console.poll();
   assert.deepEqual(calls, ["read_console"]);
 });

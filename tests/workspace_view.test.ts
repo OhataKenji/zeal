@@ -34,3 +34,24 @@ test("WorkspaceView info rows offer per-value copy buttons", async (t) => {
   assert.ok(html.includes('title="Copy workspace value"'));
   assert.doesNotMatch(html, /Click to copy/);
 });
+
+test("a Bazel info retry does not lock the scope editor", async (t) => {
+  const { load, render } = await createSvelteHarness(t);
+  const { default: WorkspaceView } = await load("/src/lib/WorkspaceView.svelte");
+  const html = render(WorkspaceView, {
+    props: {
+      workspace: "/ws",
+      scope: { include: ["//app/..."] },
+      info: null,
+      loading: true,
+      error: null,
+      besEndpoint: null,
+      onretry: () => {},
+      onsavescope: async () => true,
+    },
+  }).body;
+
+  assert.match(html, /Loading bazel info…/);
+  assert.match(html, /<textarea\b(?![^>]*\bdisabled\b)[^>]*>/);
+  assert.match(html, /<button\b(?![^>]*\bdisabled\b)[^>]*type="submit"[^>]*>/);
+});
