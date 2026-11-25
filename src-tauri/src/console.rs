@@ -89,7 +89,7 @@ mod tests {
                     cmd: "build".to_string(),
                     pattern: "//:b".to_string(),
                     started_at: 1,
-                    process: ActiveInvocation::stub(Some(42)),
+                    process: ActiveInvocation::stub(42),
                     console: Some(session_log),
                 },
             );
@@ -122,7 +122,8 @@ mod tests {
                 .get_mut(&self.id)
                 .unwrap()
                 .process
-                .pgid = None;
+                .group
+                .revoke();
         }
 
         /// The worker released the entry: its console is gone with it.

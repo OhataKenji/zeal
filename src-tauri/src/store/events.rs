@@ -36,13 +36,20 @@ pub struct AckRange {
     pub last: i64,
 }
 
+enum ReceiptSink {
+    Replay,
+    Recording {
+        attempt: i64,
+        dir: Dir,
+        writer: Option<Encoder<'static, BufWriter<File>>>,
+    },
+}
+
 pub struct Receipt {
     data: PathBuf,
     stream: bes::StreamId,
-    attempt: Option<i64>,
-    writer: Option<(Dir, Encoder<'static, BufWriter<File>>)>,
-    first: Option<i64>,
-    last: i64,
+    sink: ReceiptSink,
+    range: Option<AckRange>,
     last_message: bool,
     facts: Facts,
 }
@@ -60,7 +67,7 @@ impl Receipt {
         let invocation_id = id(&stream.invocation_id)?;
         let attempt = reserve_attempt(data, &invocation_id)?;
         // No Store or SQL transaction survives into file writes.
-        let writer = if let Some(attempt) = attempt {
+        let sink = if let Some(attempt) = attempt {
             let root = Dir::root(data)?;
             let dir = root
                 .child("invocations", true)?
@@ -72,17 +79,19 @@ impl Receipt {
                 0,
             )?;
             writer.include_checksum(true)?;
-            Some((dir, writer))
+            ReceiptSink::Recording {
+                attempt,
+                dir,
+                writer: Some(writer),
+            }
         } else {
-            None
+            ReceiptSink::Replay
         };
         Ok(Self {
             data: data.into(),
             stream: stream.clone(),
-            attempt,
-            writer,
-            first: None,
-            last: 0,
+            sink,
+            range: None,
             last_message: false,
             facts: Facts::default(),
         })
@@ -90,14 +99,15 @@ impl Receipt {
 
     /// Reports whether Started was committed to the history database.
     pub fn append(&mut self, ordered: &bes::OrderedBuildEvent) -> Result<bool, StoreError> {
-        if ordered.stream_id.as_ref() != Some(&self.stream)
-            || ordered.sequence_number < 1
-            || ordered.encoded_len() > FRAME_LIMIT
-            || self.first.is_some() && self.last.checked_add(1) != Some(ordered.sequence_number)
-            || self.first.is_none() && self.attempt.is_some() && ordered.sequence_number != 1
-        {
+        if ordered.stream_id.as_ref() != Some(&self.stream) || ordered.encoded_len() > FRAME_LIMIT {
             return Err(fail(ErrorKind::Conflict));
         }
+        let last = ordered.sequence_number;
+        let first = match &self.range {
+            Some(range) if range.last.checked_add(1) == Some(last) => range.first,
+            None if last == 1 || (last > 0 && matches!(self.sink, ReceiptSink::Replay)) => last,
+            _ => return Err(fail(ErrorKind::Conflict)),
+        };
         let wrapper = ordered
             .event
             .as_ref()
@@ -107,8 +117,7 @@ impl Receipt {
         } else {
             false
         };
-        self.first.get_or_insert(ordered.sequence_number);
-        self.last = ordered.sequence_number;
+        self.range = Some(AckRange { first, last });
         Ok(changed)
     }
 
@@ -132,7 +141,8 @@ impl Receipt {
             }),
             _ => None,
         };
-        if let Some((dir, writer)) = &mut self.writer {
+        if let ReceiptSink::Recording { dir, writer, .. } = &mut self.sink {
+            let writer = writer.as_mut().expect("only finalization takes the writer");
             // Keep the decoded BuildEvent, including Progress stdout/stderr.
             let mut bytes = Vec::with_capacity(10);
             prost::encoding::encode_varint(any.value.len() as u64, &mut bytes);
@@ -246,7 +256,7 @@ impl Receipt {
         {
             return Err(fail(ErrorKind::Conflict));
         }
-        if let Some(attempt) = self.attempt {
+        if let ReceiptSink::Recording { attempt, .. } = self.sink {
             self.save_attempt(&tx, &invocation_id, attempt, path.as_deref(), complete)?;
         }
         tx.commit()?;
@@ -287,10 +297,7 @@ impl Receipt {
     pub fn finish(mut self) -> Result<AckRange, StoreError> {
         self.finish_writer()?;
         self.save(self.last_message)?;
-        Ok(AckRange {
-            first: self.first.ok_or_else(|| fail(ErrorKind::Invalid))?,
-            last: self.last,
-        })
+        self.range.ok_or_else(|| fail(ErrorKind::Invalid))
     }
     pub fn partial(mut self) -> Result<(), StoreError> {
         self.finish_writer()?;
@@ -299,8 +306,12 @@ impl Receipt {
 
     #[tracing::instrument(target = "zelith::operations", name = "bes.save.flush", skip_all)]
     fn finish_writer(&mut self) -> Result<(), StoreError> {
-        if let Some((_, writer)) = self.writer.take() {
-            writer.finish()?.flush()?;
+        if let ReceiptSink::Recording { writer, .. } = &mut self.sink {
+            writer
+                .take()
+                .expect("finalization consumes the receipt")
+                .finish()?
+                .flush()?;
         }
         Ok(())
     }
@@ -416,13 +427,14 @@ pub(crate) mod test_support {
         pub fn new() -> Self {
             let root =
                 std::env::temp_dir().join(format!("zelith-receipt-{}", uuid::Uuid::new_v4()));
-            let ws = root.join("workspace");
-            std::fs::create_dir_all(&ws).unwrap();
-            let id = uuid::Uuid::new_v4().to_string();
+            std::fs::create_dir_all(root.join("workspace")).unwrap();
+            Self::at(root, uuid::Uuid::new_v4().to_string())
+        }
+        pub(super) fn at(root: PathBuf, id: String) -> Self {
             Self {
                 data: root.join("data"),
+                ws: root.join("workspace"),
                 root,
-                ws,
                 stream: bes::StreamId {
                     build_id: id.clone(),
                     invocation_id: id,
@@ -681,6 +693,78 @@ mod tests {
         assert!(!f.dir().join("attempt/2").exists());
     }
 
+    #[test]
+    fn restart_after_writer_flush_retries_before_ack() {
+        const ROOT: &str = "ZELITH_TEST_FLUSHED_RECEIPT_ROOT";
+        const ID: &str = "ZELITH_TEST_FLUSHED_RECEIPT_ID";
+        const FLUSHED: i32 = 73;
+
+        if let Some(root) = std::env::var_os(ROOT) {
+            // Only the parent owns cleanup, including if the child panics.
+            let f =
+                std::mem::ManuallyDrop::new(Fixture::at(root.into(), std::env::var(ID).unwrap()));
+            let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+            receipt.append(&f.ordered(1, f.started())).unwrap();
+            receipt.append(&f.ordered(2, f.finished())).unwrap();
+            receipt.finish_writer().unwrap();
+            std::process::exit(FLUSHED);
+        }
+
+        let f = Fixture::new();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::events::tests::restart_after_writer_flush_retries_before_ack",
+            ])
+            .env(ROOT, &f.root)
+            .env(ID, &f.stream.invocation_id)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(FLUSHED));
+        let record = || read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
+        let partial = record();
+        assert_eq!(
+            (partial.started_at, partial.finished_at, partial.exit_code),
+            (Some(1000), None, None)
+        );
+
+        let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
+        retry.append(&f.ordered(1, f.started())).unwrap();
+        retry.append(&f.ordered(2, f.finished())).unwrap();
+        let ack = retry.finish().unwrap();
+        assert_eq!((ack.first, ack.last), (1, 2));
+        let complete = record();
+        assert_eq!(
+            (complete.finished_at, complete.exit_code),
+            (Some(2000), Some(0))
+        );
+
+        assert_retry_artifact_survives_replay(&f);
+    }
+
+    fn assert_retry_artifact_survives_replay(f: &Fixture) {
+        let path = f.dir().join("attempt/2/bep.binpb.zst");
+        let file = artifact(&f.data, &f.ws, &f.stream.invocation_id, "bep.binpb.zst").unwrap();
+        assert_eq!(
+            file.metadata().unwrap().ino(),
+            path.metadata().unwrap().ino()
+        );
+        let expected = [
+            f.started().encode_length_delimited_to_vec(),
+            f.finished().encode_length_delimited_to_vec(),
+        ]
+        .concat();
+        assert_eq!(zstd::stream::decode_all(file).unwrap(), expected);
+
+        let bytes = std::fs::read(&path).unwrap();
+        let mut replay = Receipt::begin(&f.data, &f.stream).unwrap();
+        replay.append(&f.ordered(2, f.finished())).unwrap();
+        let ack = replay.finish().unwrap();
+        assert_eq!((ack.first, ack.last), (2, 2));
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+        assert!(!f.dir().join("attempt/3").exists());
+    }
+
     fn finished(exit_code: i32, seconds: i64) -> bep::BuildEvent {
         bep::BuildEvent {
             payload: Some(Payload::Finished(bep::BuildFinished {
@@ -812,7 +896,8 @@ mod tests {
         wrong.stream_id.as_mut().unwrap().build_id = "other".into();
         assert!(receipt.append(&wrong).is_err());
         receipt.append(&f.ordered(2, f.finished())).unwrap();
-        receipt.finish().unwrap();
+        let ack = receipt.finish().unwrap();
+        assert_eq!((ack.first, ack.last), (1, 2));
         let mut retry = Receipt::begin(&f.data, &f.stream).unwrap();
         let mut started = f.started();
         if let Some(Payload::Started(v)) = &mut started.payload {
@@ -854,8 +939,10 @@ mod tests {
         let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
         let path = f.dir().join("attempt/1/bep.binpb.zst");
         // A read-only FD deterministically fails when the buffer is flushed.
-        receipt.writer.as_mut().unwrap().1 =
-            Encoder::new(BufWriter::new(File::open(path).unwrap()), 0).unwrap();
+        let ReceiptSink::Recording { writer, .. } = &mut receipt.sink else {
+            panic!("expected a recording receipt");
+        };
+        *writer = Some(Encoder::new(BufWriter::new(File::open(path).unwrap()), 0).unwrap());
         receipt.append(&f.ordered(1, f.started())).unwrap();
         receipt.append(&f.ordered(2, f.finished())).unwrap();
         assert!(receipt.finish().is_err());

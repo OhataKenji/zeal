@@ -1,7 +1,7 @@
 //! The app-owned loopback Build Event Service. Build receipts acknowledge only
 //! after normal EOF, file flush, and the conditional database update.
 use crate::protocol::bes as wire;
-use crate::state::Core;
+use crate::state::{Core, ReceiverState};
 use crate::store;
 use crate::store::events::{AckRange, Receipt};
 use std::io;
@@ -283,8 +283,7 @@ async fn bind(preferred: &str) -> io::Result<tokio::net::TcpListener> {
 
 fn unavailable(core: &Core, error: String) {
     let mut state = core.state.lock().expect("application state lock poisoned");
-    state.bes_endpoint = None;
-    state.bes_error = Some(error);
+    state.receiver = ReceiverState::Unavailable(error);
 }
 
 /// Publish only the listener we own. Any server termination revokes readiness.
@@ -313,12 +312,12 @@ async fn serve_ready(
     let endpoint = format!("grpc://{address}");
     {
         let mut state = core.state.lock().expect("application state lock poisoned");
-        state.bes_error = (address.port() != 4718).then(|| {
+        let warning = (address.port() != 4718).then(|| {
             format!(
                 "BES port 4718 is occupied; use --bes_backend={endpoint} for terminal invocations"
             )
         });
-        state.bes_endpoint = Some(endpoint);
+        state.receiver = ReceiverState::Listening { endpoint, warning };
     }
     state_changed();
     serve_with_invocations_changed(listener, data, invocations_changed)
@@ -608,17 +607,20 @@ mod tests {
         )
         .await;
         let state = core.state.lock().unwrap();
-        assert!(state.bes_endpoint.is_none());
-        assert_eq!(state.bes_error.as_deref(), Some("app data unavailable"));
+        assert!(state.receiver.endpoint().is_none());
+        assert_eq!(state.receiver.message(), Some("app data unavailable"));
     }
 
     #[test]
     fn server_termination_revokes_the_published_endpoint() {
         let core = Core::new();
-        core.state.lock().unwrap().bes_endpoint = Some("grpc://127.0.0.1:12345".into());
+        core.state.lock().unwrap().receiver = ReceiverState::Listening {
+            endpoint: "grpc://127.0.0.1:12345".into(),
+            warning: None,
+        };
         unavailable(&core, "BES receiver stopped".into());
         let state = core.state.lock().unwrap();
-        assert!(state.bes_endpoint.is_none());
-        assert_eq!(state.bes_error.as_deref(), Some("BES receiver stopped"));
+        assert!(state.receiver.endpoint().is_none());
+        assert_eq!(state.receiver.message(), Some("BES receiver stopped"));
     }
 }

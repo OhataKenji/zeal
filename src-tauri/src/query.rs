@@ -530,13 +530,13 @@ mod tests {
         assert_eq!(invocation.workspace, PathBuf::from(ws));
         let process = &invocation.process;
         assert!(process.terminal.is_none());
-        assert!(process.pgid.is_some());
+        assert!(process.group.pgid().is_some());
     }
 
     fn assert_reap_state(st: &crate::state::CoreState, reaped: &str, other: &str) {
         // The reap revokes signal ownership; the entry releases at guard drop.
         let process = &st.invocations[reaped].process;
-        assert!(process.pgid.is_none());
+        assert!(process.group.pgid().is_none());
         assert!(st.invocations.contains_key(other));
     }
 
