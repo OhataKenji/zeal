@@ -67,8 +67,7 @@ interface Workspace {
   modules: ReturnType<typeof createModules>;
   history: InvocationRecord[];
   historyError: string | null;
-  historyBusy: boolean;
-  historyDirty: boolean;
+  historyRead: "idle" | "reading" | "queued";
   /** This workspace's local diagnostics from the last history reply. */
   diagnostics: ProcessDiagnostic[];
 }
@@ -274,7 +273,7 @@ function sessionView(state: SessionState) {
     error: state.error,
     invocations: history,
     invocationsError: ws?.historyError ?? null,
-    historyLoading: ws?.historyBusy ?? false,
+    historyLoading: ws !== null && ws.historyRead !== "idle",
     detail: saved.detail.value,
     detailError: saved.detail.error,
     profile: saved.profile.value,
@@ -549,7 +548,7 @@ export function createSession(
     const next = records.find((record) => record.id === id);
     // Retry with the new selection pinned before replacing its history row.
     if (id !== null && id !== selectedId && next === undefined) {
-      ws.historyDirty = true;
+      ws.historyRead = "queued";
       return;
     }
     const previous = ws.history.find((record) => record.id === id);
@@ -582,15 +581,12 @@ export function createSession(
   function requestHistory() {
     const ws = state.workspace;
     if (disposed || !ws) return;
-    if (ws.historyBusy) {
-      ws.historyDirty = true;
-      return;
-    }
-    void readHistory(ws);
+    if (ws.historyRead === "idle") void readHistory(ws);
+    else ws.historyRead = "queued";
   }
 
   async function readHistory(ws: Workspace) {
-    ws.historyBusy = true;
+    ws.historyRead = "reading";
     ws.historyError = null;
     const selectedId = state.selectedInvocationId;
     publish();
@@ -604,14 +600,15 @@ export function createSession(
     } catch (error) {
       if (current()) ws.historyError = String(error);
     } finally {
-      ws.historyBusy = false;
-      if (current()) {
-        publish();
-        if (ws.historyDirty) {
-          ws.historyDirty = false;
-          requestHistory();
-        }
-      }
+      if (current()) finishHistory(ws);
+    }
+  }
+
+  function finishHistory(ws: Workspace) {
+    if (ws.historyRead === "queued") void readHistory(ws);
+    else {
+      ws.historyRead = "idle";
+      publish();
     }
   }
 
@@ -736,8 +733,7 @@ export function createSession(
       modules: createModules(path, transport, () => state.core?.bazel != null, publish),
       history: [],
       historyError: null,
-      historyBusy: false,
-      historyDirty: false,
+      historyRead: "idle",
       diagnostics: [],
     };
     state.selectedInvocationId = null;
