@@ -174,6 +174,7 @@ afterEach(() => {
 function harness(initial = Promise.resolve(READY), page: Page = "targets") {
   let view = emptyView(page);
   const selections: Array<typeof view.selection> = [];
+  const historyLoading: boolean[] = [];
   let coreState = READY;
   let initialRequested = false;
   let stateReads = 0;
@@ -212,6 +213,7 @@ function harness(initial = Promise.resolve(READY), page: Page = "targets") {
     (next) => {
       view = next;
       selections.push(next.selection);
+      historyLoading.push(next.historyLoading);
     },
     page,
   );
@@ -219,6 +221,7 @@ function harness(initial = Promise.resolve(READY), page: Page = "targets") {
   return {
     session,
     selections,
+    historyLoading,
     get view() {
       return view;
     },
@@ -2063,11 +2066,14 @@ test("history notifications coalesce and owned-state pushes do not refetch", asy
   h.emit("invocations-changed", null);
   await settle();
   assert.equal(requestCount(h, "list_invocations"), base + 1);
+  const beforeReply = h.historyLoading.length;
   lastPendingRequest(h, "list_invocations").reply.resolve(history([]));
   await settle();
   assert.equal(requestCount(h, "list_invocations"), base + 2);
+  assert.ok(!h.historyLoading.slice(beforeReply).includes(false));
   lastPendingRequest(h, "list_invocations").reply.resolve(history([]));
   await settle();
+  assert.equal(h.view.historyLoading, false);
   assert.equal(requestCount(h, "list_invocations"), base + 2);
   // An owned-state-only app-state push touches neither history nor targets.
   const refreshes = requestCount(h, "refresh");

@@ -110,6 +110,20 @@ jobs:
       - name: Scan for secrets
         run: gitleaks git --redact .
 
+  models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check TLA+ models
+        run: |
+          export JAVA="$JAVA_HOME_21_X64/bin/java"
+          export TLA2TOOLS_JAR="$RUNNER_TEMP/tla2tools.jar"
+          curl --fail --show-error --silent --location --output "$TLA2TOOLS_JAR" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $TLA2TOOLS_JAR" | sha256sum --check
+          sh specs/check.sh
+
   rust:
     name: rust (fmt / clippy / test)
     needs: changes
@@ -166,7 +180,7 @@ jobs:
   # This always-run gate aggregates every job under one required check.
   ci:
     name: ci
-    needs: [changes, frontend, gitleaks, rust, actions-lint]
+    needs: [changes, frontend, gitleaks, models, rust, actions-lint]
     if: always()
     runs-on: ubuntu-latest
     steps:

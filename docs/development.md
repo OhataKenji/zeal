@@ -32,6 +32,18 @@ mise run fmt             # auto-format (oxfmt + cargo fmt)
 
 All of the above run in CI (`.github/workflows/`).
 
+CI checks the invocation history reader in
+[History.tla](../specs/History.tla). To run the same finite model and its
+lost-follow-up negative control locally, use Python 3, Java 21, and
+[tla2tools.jar v1.7.4](https://github.com/tlaplus/tlaplus/releases/tag/v1.7.4):
+
+```sh
+TLA2TOOLS_JAR=/absolute/path/to/tla2tools.jar sh specs/check.sh
+```
+
+The model checks one workspace reader under eventual replies; it does not
+model IPC delivery or the history records themselves.
+
 The modules graph parser is tested against a fixture captured from a real
 `bazel mod graph --output=json` run (`src-tauri/tests/fixtures/`). `bazel mod
 explain` needs an explicit `--depth`: its default view hides transitive
