@@ -1,62 +1,6 @@
-<script lang="ts" module>
-  import VizWorker from "./viz-worker?worker";
-
-  // The Graphviz wasm is only fetched when a graph result is rendered. The
-  // worker is shared across remounts; a hung layout is abandoned by
-  // terminating it, which also drops the next render's warm instance.
-  let vizWorker: Worker | undefined;
-  let vizBusy = false;
-  const VIZ_TIMEOUT = 30_000;
-
-  function renderDot(
-    dot: string,
-    ok: (svg: string) => void,
-    fail: (error: string) => void,
-  ): () => void {
-    if (vizBusy) {
-      vizWorker?.terminate();
-      vizWorker = undefined;
-      vizBusy = false;
-    }
-    const w = (vizWorker ??= new VizWorker());
-    vizBusy = true;
-    const timer = setTimeout(() => {
-      kill();
-      fail("Graphviz could not lay out this result within 30s.");
-    }, VIZ_TIMEOUT);
-    w.onmessage = (e) => {
-      settle();
-      const d = e.data as { svg?: string; error?: string };
-      if (d.error) fail(d.error);
-      else ok(d.svg ?? "");
-    };
-    w.onerror = (e) => {
-      settle();
-      fail(e.message || "the graph renderer crashed");
-    };
-    function settle() {
-      clearTimeout(timer);
-      vizBusy = false;
-      w.onmessage = null;
-      w.onerror = null;
-    }
-    function kill() {
-      settle();
-      if (vizWorker === w) {
-        w.terminate();
-        vizWorker = undefined;
-      }
-    }
-    w.postMessage(dot);
-    // Abandoning a render means killing the worker: the queued DOT would
-    // otherwise delay the next layout by whatever time it still needs.
-    return () => {
-      if (vizBusy && vizWorker === w) kill();
-    };
-  }
-</script>
-
 <script lang="ts">
+  import VizWorker from "./viz-worker?worker";
+  import { createGraphRenderer } from "./graph-renderer";
   import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
@@ -137,13 +81,13 @@
   let viewEl = $state<HTMLElement>();
   let detailsEl = $state<HTMLDetailsElement>();
 
+  // Each mounted view owns its lazy Graphviz worker and reuses it between layouts.
+  const renderer = createGraphRenderer(() => new VizWorker());
   const controller = createQuery(untrack(() => workspace), { invoke }, (s) => (qstate = s));
   onDestroy(() => {
     controller.dispose();
     clearTimeout(fbTimer);
-    vizWorker?.terminate();
-    vizWorker = undefined;
-    vizBusy = false;
+    renderer.dispose();
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
 
@@ -252,7 +196,7 @@
     const dot = graphDot;
     graphError = null;
     if (!dot) return;
-    const abandon = renderDot(
+    const abandon = renderer.render(
       dot,
       (svg) => {
         graphUrl = URL.createObjectURL(

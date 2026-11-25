@@ -98,6 +98,26 @@ for (const outcome of ["success", "error"]) {
       { command: "explain_module", args: { workspace, moduleKey: a.key } },
     ]);
   });
+
+  test(`returning to the original module still discards a late ${outcome}`, async () => {
+    const h = harness();
+    h.select(a.key);
+    const pending = h.explain();
+    h.select(b.key);
+    h.select(a.key);
+    assert.equal(h.state.busy, "explain");
+    await h.load();
+    await h.explain();
+    if (outcome === "error") h.fail();
+    else h.succeed(partialExplanation);
+    await pending;
+    assert.equal(h.state.selectedKey, a.key);
+    assert.equal(h.state.busy, null);
+    assert.equal(h.state.explanation, null);
+    assert.deepEqual(h.calls, [
+      { command: "explain_module", args: { workspace, moduleKey: a.key } },
+    ]);
+  });
 }
 
 test("loads can be retried, failed refreshes preserve the last good snapshot", async () => {
@@ -165,6 +185,7 @@ test("explain stores the partial result without an error", async () => {
   await load;
   h.select(a.key);
   const pending = h.explain();
+  h.select(a.key);
   assert.equal(h.state.busy, "explain");
   assert.equal(h.state.snapshot, snapshot);
   h.succeed(partialExplanation);

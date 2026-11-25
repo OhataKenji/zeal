@@ -15,6 +15,13 @@ export function filterModules(modules: readonly ModuleNode[], query: string, dep
 
 type ExplanationResult = ModuleExplanation | { error: string };
 
+const busyByPhase = {
+  idle: null,
+  loading: "load",
+  explaining: "explain",
+  draining: "explain",
+} as const;
+
 export interface ModulesState {
   snapshot: ModulesSnapshot | null;
   selectedKey: string | null;
@@ -27,7 +34,7 @@ export function emptyModulesState(): ModulesState {
   return {
     snapshot: null,
     selectedKey: null,
-    busy: null,
+    busy: busyByPhase.idle,
     loadError: null,
     explanation: null,
   };
@@ -41,36 +48,42 @@ export function createModules(
   changed: () => void,
 ) {
   let state = emptyModulesState();
-  let disposed = false;
+  let phase: keyof typeof busyByPhase | "disposed" = "idle";
 
-  function update(patch: Partial<ModulesState>) {
-    if (disposed) return;
-    state = { ...state, ...patch };
+  function update(next: keyof typeof busyByPhase, patch: Partial<Omit<ModulesState, "busy">>) {
+    if (phase === "disposed") return;
+    phase = next;
+    state = { ...state, ...patch, busy: busyByPhase[phase] };
     changed();
   }
 
   async function load() {
-    if (disposed || state.busy || !bazelAvailable()) return;
-    update({ busy: "load", loadError: null });
+    if (phase !== "idle" || !bazelAvailable()) return;
+    update("loading", { loadError: null });
     try {
       const snapshot = await transport.invoke<ModulesSnapshot>(COMMANDS.getModules, { workspace });
       const selectedKey = snapshot.modules.some((node) => node.key === state.selectedKey)
         ? state.selectedKey
         : null;
-      update({ snapshot, selectedKey, busy: null, explanation: null });
+      update("idle", { snapshot, selectedKey, explanation: null });
     } catch (error) {
-      update({ busy: null, loadError: String(error) });
+      update("idle", { loadError: String(error) });
     }
   }
 
   function select(key: string | null) {
-    if (key !== state.selectedKey) update({ selectedKey: key, explanation: null });
+    if (key === state.selectedKey || phase === "disposed") return;
+    update(phase === "explaining" ? "draining" : phase, { selectedKey: key, explanation: null });
+  }
+
+  function finishExplanation(explanation: ExplanationResult) {
+    update("idle", { explanation: phase === "explaining" ? explanation : null });
   }
 
   async function explain() {
     const moduleKey = state.selectedKey;
-    if (disposed || state.busy || !moduleKey || !bazelAvailable()) return;
-    update({ busy: "explain", explanation: null });
+    if (phase !== "idle" || !moduleKey || !bazelAvailable()) return;
+    update("explaining", { explanation: null });
     let explanation: ExplanationResult;
     try {
       explanation = await transport.invoke<ModuleExplanation>(COMMANDS.explainModule, {
@@ -80,7 +93,7 @@ export function createModules(
     } catch (error) {
       explanation = { error: String(error) };
     }
-    update({ busy: null, explanation: state.selectedKey === moduleKey ? explanation : null });
+    finishExplanation(explanation);
   }
 
   return {
@@ -91,7 +104,7 @@ export function createModules(
       return state;
     },
     dispose: () => {
-      disposed = true;
+      phase = "disposed";
     },
   };
 }

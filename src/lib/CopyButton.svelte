@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Check, Copy, WarningCircle } from "phosphor-svelte";
+  import { onDestroy } from "svelte";
+  import { createClipboardFeedback, type ClipboardFeedback } from "./clipboard-feedback";
 
   let {
     text,
@@ -11,7 +13,12 @@
     disabled?: boolean;
   } = $props();
 
-  let feedback = $state<{ text: string; ok: boolean } | null>(null);
+  let feedback = $state<ClipboardFeedback | null>(null);
+  const clipboard = createClipboardFeedback(
+    (value) => navigator.clipboard.writeText(value),
+    (result) => (feedback = result),
+  );
+  onDestroy(clipboard.dispose);
   const result = $derived(feedback?.text === text ? feedback : null);
   const message = $derived(
     !result ? "" : result.ok ? "Copied" : "Copy failed: clipboard unavailable.",
@@ -21,16 +28,6 @@
     const timer = setTimeout(() => (feedback = null), 1500);
     return () => clearTimeout(timer);
   });
-
-  async function copy() {
-    const value = text;
-    try {
-      await navigator.clipboard.writeText(value);
-      feedback = { text: value, ok: true };
-    } catch {
-      feedback = { text: value, ok: false };
-    }
-  }
 </script>
 
 <button
@@ -39,7 +36,7 @@
   aria-label={label}
   title={message || label}
   {disabled}
-  onclick={copy}
+  onclick={() => clipboard.copy(text)}
 >
   {#if !result}
     <Copy size={14} />

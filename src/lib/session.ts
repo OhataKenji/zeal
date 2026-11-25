@@ -36,10 +36,14 @@ export interface Transport {
   listen<T>(event: string, callback: (payload: T) => void): Promise<() => void>;
 }
 
+type ReadState<T> =
+  | { phase: "empty"; value: null }
+  | { phase: "ready"; value: T }
+  | { phase: "loading"; value: T | null }
+  | { phase: "failed"; value: T | null; error: string };
+
 interface Reader<T> {
-  value: T | null;
-  error: string | null;
-  loading: boolean;
+  state: ReadState<T>;
 }
 
 interface TargetSelection {
@@ -77,6 +81,18 @@ interface Saved {
   profile: Reader<Section<Profile>>;
 }
 
+interface Initialization {
+  phase:
+    | "new"
+    | "registeringHistory"
+    | "registeringState"
+    | "fetchingSnapshot"
+    | "ready"
+    | "failed";
+  promise: Promise<void>;
+  unlistens: Array<() => void>;
+}
+
 interface SessionState {
   core: AppState | null;
   workspace: Workspace | null;
@@ -88,8 +104,16 @@ interface SessionState {
   saved: Saved;
 }
 
+function cachedState<T>(value: T | null): ReadState<T> {
+  return value === null ? { phase: "empty", value: null } : { phase: "ready", value };
+}
+
 function reader<T>(value: T | null = null): Reader<T> {
-  return { value, error: null, loading: false };
+  return { state: cachedState(value) };
+}
+
+function readError<T>(state?: ReadState<T>): string | null {
+  return state?.phase === "failed" ? state.error : null;
 }
 
 function targetSelection(selection: ExplorerSelection = null): TargetSelection {
@@ -254,32 +278,32 @@ function sessionView(state: SessionState) {
     invocation: state.page === "history" ? (selected ?? null) : null,
     core,
     state: wsEntry(core, ws?.path ?? null),
-    workspaceInfo: ws?.info.value ?? null,
-    workspaceInfoLoading: ws?.info.loading ?? false,
-    workspaceInfoError: ws?.info.error ?? null,
+    workspaceInfo: ws?.info.state.value ?? null,
+    workspaceInfoLoading: ws?.info.state.phase === "loading",
+    workspaceInfoError: readError(ws?.info.state),
     invocationRows: rows,
     snapshot: ws?.snapshot ?? null,
     snapshotLoading: ws !== null && ws.refresh !== null,
     snapshotError: ws?.snapshotError ?? null,
     selection: target?.selection ?? null,
-    targetDetail: target?.detail.value ?? null,
-    targetDetailError: target?.detail.error ?? null,
+    targetDetail: target?.detail.state.value ?? null,
+    targetDetailError: readError(target?.detail.state),
     targetTab: ws?.targetTab ?? "definition",
     targetFlags: ws?.targetFlags ?? "",
-    targetPhase: target?.phase.value ?? null,
-    targetPhaseError: target?.phase.error ?? null,
+    targetPhase: target?.phase.state.value ?? null,
+    targetPhaseError: readError(target?.phase.state),
     modules: ws?.modules.state ?? null,
     starting: state.startFeedback !== null,
     error: state.error,
     invocations: history,
     invocationsError: ws?.historyError ?? null,
     historyLoading: ws !== null && ws.historyRead !== "idle",
-    detail: saved.detail.value,
-    detailError: saved.detail.error,
-    profile: saved.profile.value,
-    detailLoading: eligible && saved.detail.loading,
-    profileLoading: eligible && saved.profile.loading,
-    profileError: saved.profile.error,
+    detail: saved.detail.state.value,
+    detailError: readError(saved.detail.state),
+    profile: saved.profile.state.value,
+    detailLoading: eligible && saved.detail.state.phase === "loading",
+    profileLoading: eligible && saved.profile.state.phase === "loading",
+    profileError: readError(saved.profile.state),
   };
 }
 
@@ -307,7 +331,11 @@ export function createSession(
   let disposed = false;
   // After an explicit open, saved preferences no longer choose the workspace.
   let workspaceRequest: object | null = null;
-  const unlistens: Array<() => void> = [];
+  const initialization: Initialization = {
+    phase: "new",
+    promise: Promise.resolve(),
+    unlistens: [],
+  };
   // A superseded reader can still hold Bazel's lock, even after A → B → A.
   // Track process lifetimes by canonical path, separately from UI ownership.
   const discovery = new Map<string, Promise<void>>();
@@ -346,22 +374,23 @@ export function createSession(
     operation: () => Promise<T>,
     current: () => boolean,
   ): Promise<boolean> {
-    if (disposed || slot.loading || !current()) return false;
-    slot.loading = true;
-    slot.error = null;
+    if (disposed || slot.state.phase === "loading" || !current()) return false;
+    const cached = slot.state.value;
+    slot.state = { phase: "loading", value: cached };
     publish();
+    let next: ReadState<T>;
     try {
-      const value = await operation();
-      if (!current()) return false;
-      slot.value = value;
+      next = { phase: "ready", value: await operation() };
     } catch (error) {
-      if (!current()) return false;
-      slot.error = String(error);
-    } finally {
-      slot.loading = false;
-      if (current()) publish();
+      next = { phase: "failed", value: cached, error: String(error) };
     }
-    return current() && slot.error === null;
+    if (!current()) {
+      slot.state = cachedState(cached);
+      return false;
+    }
+    slot.state = next;
+    publish();
+    return current() && next.phase === "ready";
   }
 
   /** The active non-Definition phase read; a no-op on Definition or away.
@@ -377,7 +406,7 @@ export function createSession(
     const phase = ws.targetTab;
     if (state.page !== "targets" || phase === "definition") return;
     const slot = target.phase;
-    if (slot.value !== null || slot.error !== null) return;
+    if (slot.state.phase !== "empty") return;
     const active = () => current() && state.page === "targets";
     const flags = ws.targetFlags;
     const load = <T>(step: TargetReadStep) => {
@@ -434,7 +463,7 @@ export function createSession(
     current: () => boolean,
   ) {
     try {
-      if (target.detail.value === null) {
+      if (target.detail.state.value === null) {
         const loaded = await read(
           target.detail,
           async () => {
@@ -553,12 +582,10 @@ export function createSession(
     }
     const previous = ws.history.find((record) => record.id === id);
     const changed = JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
-    const detail = state.saved.detail;
+    const detail = state.saved.detail.state;
     const detailMismatch =
       next !== undefined &&
-      detail.value !== null &&
-      !detail.loading &&
-      detail.error === null &&
+      detail.phase === "ready" &&
       JSON.stringify(next) !== JSON.stringify(detail.value.record);
     // Log and BEP share one receipt; unlike BEP, the log's incomplete status
     // is not raised by the display-size cap, so pending or incomplete logs
@@ -566,14 +593,14 @@ export function createSession(
     const awaitingEvents =
       detail.value?.log.status === "pending" ||
       detail.value?.log.status === "incomplete" ||
-      (detail.loading && detail.value === null);
+      (detail.phase === "loading" && detail.value === null);
     ws.diagnostics = result.diagnostics;
     ws.history = records;
     ws.historyError = null;
     // An unselected history page claims its first row; reconcileSaved below
     // starts the saved readers exactly once for the new selection.
     claimFirstInvocation();
-    if (changed || detailMismatch || (next && detail.error === null && awaitingEvents))
+    if (changed || detailMismatch || (next && detail.phase !== "failed" && awaitingEvents))
       refreshSavedFromHistory();
     reconcileSaved(wasEligible);
   }
@@ -658,20 +685,8 @@ export function createSession(
   function ensureSaved() {
     const ctx = savedContext();
     if (!ctx) return;
-    if (
-      ctx.saved.detail.value === null &&
-      ctx.saved.detail.error === null &&
-      !ctx.saved.detail.loading
-    ) {
-      readSavedDetail();
-    }
-    if (
-      ctx.saved.profile.value === null &&
-      ctx.saved.profile.error === null &&
-      !ctx.saved.profile.loading
-    ) {
-      readSavedProfile();
-    }
+    if (ctx.saved.detail.state.phase === "empty") readSavedDetail();
+    if (ctx.saved.profile.state.phase === "empty") readSavedProfile();
   }
 
   /** A history update re-reads saved results even when values are cached. */
@@ -685,8 +700,8 @@ export function createSession(
     // Replacing the wrapper orphans any in-flight read; the retained values
     // stay visible until the fresh pair lands or fails.
     state.saved = {
-      detail: reader(saved.detail.value),
-      profile: reader(saved.profile.value),
+      detail: reader(saved.detail.state.value),
+      profile: reader(saved.profile.state.value),
     };
     readSavedDetail();
     readSavedProfile();
@@ -773,8 +788,8 @@ export function createSession(
       return;
     }
     // Re-selecting the same invocation only retries failed readers.
-    if (saved.detail.error !== null) readSavedDetail();
-    if (saved.profile.error !== null) readSavedProfile();
+    if (saved.detail.state.phase === "failed") readSavedDetail();
+    if (saved.profile.state.phase === "failed") readSavedProfile();
   }
 
   function selectInvocation(id: string) {
@@ -783,9 +798,7 @@ export function createSession(
 
   function maybeLoadWorkspaceInfo() {
     const ws = state.workspace;
-    if (ws && ws.info.value === null && ws.info.error === null && !ws.info.loading) {
-      loadWorkspaceInfo();
-    }
+    if (ws?.info.state.phase === "empty") loadWorkspaceInfo();
   }
 
   function showPage(page: Page) {
@@ -847,7 +860,7 @@ export function createSession(
     // tail publishes and lets loadTarget kick any deferred phase read.
     if (
       !sameSelection(target.selection, selection) ||
-      (selection?.kind === "target" && target.detail.error !== null)
+      (selection?.kind === "target" && target.detail.state.phase === "failed")
     ) {
       ws.target = targetSelection(selection);
     } else {
@@ -967,9 +980,15 @@ export function createSession(
     }
   }
 
-  /** Registers both event listeners; false means init must not proceed. */
+  function failInitialization(error: unknown) {
+    initialization.phase = "failed";
+    state.error = `Could not connect: ${String(error)}`;
+    publish();
+  }
+
   async function subscribe(): Promise<boolean> {
     try {
+      initialization.phase = "registeringHistory";
       const removeHistory = await transport.listen<void>("invocations-changed", () => {
         if (!disposed) requestHistory();
       });
@@ -977,43 +996,64 @@ export function createSession(
         removeHistory();
         return false;
       }
-      unlistens.push(removeHistory);
-      const removeState = await transport.listen<AppState>("app-state", applyState);
+      initialization.unlistens.push(removeHistory);
+      initialization.phase = "registeringState";
+      const removeState = await transport.listen<AppState>("app-state", (snapshot) => {
+        if (!disposed && initialization.phase === "failed") initialization.phase = "ready";
+        applyState(snapshot);
+      });
       if (disposed) {
         removeState();
         return false;
       }
-      unlistens.push(removeState);
+      initialization.unlistens.push(removeState);
       return true;
     } catch (error) {
-      unlistens.splice(0).forEach((remove) => remove());
-      if (!disposed) {
-        state.error = `Could not connect: ${String(error)}`;
-        publish();
-      }
+      initialization.unlistens.splice(0).forEach((remove) => remove());
+      if (!disposed) failInitialization(error);
       return false;
     }
   }
 
-  /** Runs once per mounted session; the root pairs it with dispose. */
-  async function init() {
-    if (disposed) return;
-    if (!(await subscribe()) || disposed) return;
+  async function initialize() {
+    const subscribed = initialization.unlistens.length > 0 || (await subscribe());
+    if (!subscribed || disposed) return;
+    initialization.phase = "fetchingSnapshot";
     try {
       const snapshot = await transport.invoke<AppState>(COMMANDS.getState);
-      if (!disposed) applyState(snapshot);
+      if (disposed) return;
+      applyState(snapshot);
+      initialization.phase = "ready";
     } catch (error) {
-      if (!disposed && state.core === null) {
-        state.error = `Could not connect: ${String(error)}`;
-        publish();
+      if (disposed) return;
+      if (state.core !== null) {
+        initialization.phase = "ready";
+        return;
       }
+      failInitialization(error);
     }
   }
 
+  function init(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    if (initialization.phase !== "new" && initialization.phase !== "failed") {
+      return initialization.promise;
+    }
+    // Install the shared promise before the transport can call back into init.
+    let start!: (work: Promise<void>) => void;
+    const promise = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    initialization.promise = promise;
+    start(initialize());
+    return promise;
+  }
+
   function dispose() {
+    if (disposed) return;
     disposed = true;
     state.workspace?.modules.dispose();
-    unlistens.splice(0).forEach((remove) => remove());
+    initialization.unlistens.splice(0).forEach((remove) => remove());
   }
 
   return {

@@ -23,6 +23,7 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
         bazelAvailable,
         besEndpoint: null,
         onopen: async () => true,
+        onclose: () => {},
         opening,
       },
     })
@@ -84,13 +85,15 @@ test("WorkspacePrompt supports direct path input and folder picking", async (t) 
     assert.match(submitButton(html), /\bdisabled\b/);
   });
 
-  await t.test("an in-flight workspace open disables the path input, picker, and submit", () => {
+  await t.test("an external workspace open locks every form action", () => {
     const html = output("/workspace", SCOPE.include, true, true);
     const input = workspaceField(html);
     assert.match(input, /\bdisabled\b/);
     const choose = chooseButton(html);
     assert.match(choose.slice(0, choose.indexOf(">") + 1), /\bdisabled\b/);
     assert.match(submitButton(html), /\bdisabled\b/);
+    assert.match(tag(html, /<textarea\b[^>]*>/), /\bdisabled\b/);
+    assert.match(tag(html, /<button\b[^>]*>\s*Cancel\s*<\/button>/), /\bdisabled\b/);
   });
 
   await t.test("session BES flag has a non-submitting copy button", () => {

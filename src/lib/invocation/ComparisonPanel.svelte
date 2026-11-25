@@ -27,18 +27,22 @@
   );
 
   let input = $state("");
-  let right = $state.raw<ComparisonInvocation | null>(null);
-  let loading = $state(false);
-  let error = $state<string | null>(null);
-  let disposed = false;
+  type Comparison =
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "failed"; error: string }
+    | { kind: "ready"; right: ComparisonInvocation }
+    | { kind: "disposed" };
+  let comparison = $state.raw<Comparison>({ kind: "idle" });
   onDestroy(() => {
-    disposed = true;
+    comparison = { kind: "disposed" };
   });
 
   const leftReady = $derived(
     !!left && !leftLoading && !leftError && !runningIds.includes(left.record.id),
   );
   const leftActive = $derived(!!left && runningIds.includes(left.record.id));
+  const right = $derived(comparison.kind === "ready" ? comparison.right : null);
   const rightReady = $derived(right !== null && !runningIds.includes(right.record.id));
   const rightActive = $derived(right !== null && runningIds.includes(right.record.id));
   const rows = $derived(comparisonRows(leftReady ? left : null, rightReady ? right : null));
@@ -46,21 +50,25 @@
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     const id = input.trim();
-    if (!id || loading || !leftReady) return;
-    right = null;
-    error = null;
-    if (runningIds.includes(id)) {
-      error = "Comparison is available after the invocation finishes.";
+    if (!id || !leftReady || comparison.kind === "loading" || comparison.kind === "disposed") {
       return;
     }
-    loading = true;
+    if (runningIds.includes(id)) {
+      comparison = {
+        kind: "failed",
+        error: "Comparison is available after the invocation finishes.",
+      };
+      return;
+    }
+    const request = { kind: "loading" } as const;
+    comparison = request;
     try {
       const detail = await fetchDetail(id);
-      if (!disposed) right = { record: detail.record, bep: detail.bep };
+      if (comparison === request) {
+        comparison = { kind: "ready", right: { record: detail.record, bep: detail.bep } };
+      }
     } catch (cause) {
-      if (!disposed) error = String(cause);
-    } finally {
-      if (!disposed) loading = false;
+      if (comparison === request) comparison = { kind: "failed", error: String(cause) };
     }
   }
 </script>
@@ -93,17 +101,16 @@
               class="input compare-id-input"
               type="text"
               bind:value={input}
-              disabled={loading || !leftReady}
+              disabled={comparison.kind === "loading" || !leftReady}
               autocomplete="off"
               spellcheck="false"
               placeholder="Enter an invocation ID and press Enter."
             />
           </form>
-          {#if loading}
+          {#if comparison.kind === "loading"}
             <p class="compare-status" role="status">Loading…</p>
-          {/if}
-          {#if error}
-            <Notice tone="error">{error}</Notice>
+          {:else if comparison.kind === "failed" && comparison.error}
+            <Notice tone="error">{comparison.error}</Notice>
           {/if}
           {#if rightActive}
             <p class="compare-status">

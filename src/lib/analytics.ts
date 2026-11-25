@@ -77,15 +77,17 @@ export function createAnalytics(
   changed: (view: AnalyticsView) => void,
 ) {
   let view = emptyAnalytics();
-  let generation = 0;
-  let disposed = false;
+  let owner: object | "disposed" | null = null;
   async function load(filter = view.filter) {
-    const request = ++generation;
+    if (owner === "disposed") return;
     if (analyticsDateError(filter)) {
+      owner = null;
       view = { filter: { ...filter }, data: null, loading: false, error: null };
       changed(view);
       return;
     }
+    const request = {};
+    owner = request;
     // Keep the previous charts visible while the reload runs; an error
     // still drops stale data so it never sits next to an error banner.
     view = { filter: { ...filter }, data: view.data, loading: true, error: null };
@@ -95,19 +97,19 @@ export function createAnalytics(
         workspace,
         filter: view.filter,
       });
-      if (disposed || request !== generation) return;
+      if (request !== owner) return;
       view = { filter: data.filter, data, loading: false, error: null };
     } catch (error) {
-      if (disposed || request !== generation) return;
+      if (request !== owner) return;
       view = { ...view, data: null, loading: false, error: String(error) };
     }
+    owner = null;
     changed(view);
   }
   return {
     load,
     dispose: () => {
-      disposed = true;
-      ++generation;
+      owner = "disposed";
     },
   };
 }
