@@ -9,7 +9,7 @@
 
 use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
 use crate::state::{
-    ActiveInvocation, Core, CoreState, OwnedInvocation, ProcessDiagnostic, now_millis,
+    ActiveInvocation, Core, CoreState, OwnedInvocation, ProcessDiagnostic, ProcessGroup, now_millis,
 };
 use rustix::process::{self, Pid, Signal};
 #[cfg(test)]
@@ -106,8 +106,7 @@ pub(crate) fn spawn(
             started_at: now_millis(),
             process: ActiveInvocation {
                 terminal,
-                pgid: Some(child.id() as i32),
-                stop_started: None,
+                group: ProcessGroup::Running(child.id() as i32),
             },
             console,
         },
@@ -166,7 +165,7 @@ pub fn start(
         // Drop capture before the guard on unwind, so Console completion can
         // never precede the capture worker's final drain.
         let mut capture = capture;
-        let waited = wait(&core, &id, || poll_capture(&mut child, &capture));
+        let waited = wait(&core, &id, |pgid| poll_capture(&mut child, &capture, pgid));
         if let Err(error) = &waited {
             log::warn!("Could not confirm invocation exit: {error}");
         }
@@ -250,19 +249,24 @@ fn remember_diagnostic(
 fn poll_capture(
     child: &mut std::process::Child,
     capture: &crate::terminal::Capture,
+    pgid: Option<i32>,
 ) -> io::Result<Option<i32>> {
     let status = child.try_wait()?;
-    if status.is_none() && capture.failed() {
-        let _ = signal_group(child.id() as i32, Signal::KILL);
+    if status.is_none()
+        && capture.failed()
+        && let Some(pgid) = pgid
+    {
+        let _ = signal_group(pgid, Signal::KILL);
     }
     Ok(status.map(|status| status.code().unwrap_or(-1)))
 }
 
 fn receiver_endpoint(st: &CoreState) -> Result<&str, String> {
-    st.bes_endpoint.as_deref().ok_or_else(|| {
-        st.bes_error
-            .clone()
-            .unwrap_or_else(|| "BES receiver is not ready".to_string())
+    st.receiver.endpoint().ok_or_else(|| {
+        st.receiver
+            .message()
+            .unwrap_or("BES receiver is not ready")
+            .to_owned()
     })
 }
 
@@ -292,21 +296,28 @@ fn begin_stop(st: &mut CoreState, ws: &Path, id: &str) -> Result<(), String> {
 }
 
 fn interrupt(process: &mut ActiveInvocation) {
-    let Some(pgid) = process.pgid.filter(|_| process.stop_started.is_none()) else {
+    let ProcessGroup::Running(pgid) = process.group else {
         return;
     };
-    process.stop_started = Some(Instant::now());
+    process.group = ProcessGroup::Interrupting {
+        pgid,
+        since: Instant::now(),
+    };
     if let Err(e) = signal_process(process, pgid, Signal::INT) {
         log::warn!("SIGINT to invocation group failed: {e}");
     }
 }
 
-fn wait(core: &Core, id: &str, poll: impl FnMut() -> io::Result<Option<i32>>) -> io::Result<i32> {
+fn wait(
+    core: &Core,
+    id: &str,
+    poll: impl FnMut(Option<i32>) -> io::Result<Option<i32>>,
+) -> io::Result<i32> {
     observe_process(core, id, poll, STOP_GRACE, STOP_CONFIRM)
 }
 
 pub(crate) fn wait_query(core: &Core, id: &str, child: &mut Child) -> Result<i32, String> {
-    let waited = wait(core, id, || {
+    let waited = wait(core, id, |_| {
         child
             .try_wait()
             .map(|status| status.map(|status| status.code().unwrap_or(-1)))
@@ -315,7 +326,7 @@ pub(crate) fn wait_query(core: &Core, id: &str, child: &mut Child) -> Result<i32
     let stopping = st
         .invocations
         .get(id)
-        .is_some_and(|invocation| invocation.process.stop_started.is_some());
+        .is_some_and(|invocation| invocation.process.group.stop_started().is_some());
     drop(st);
     let exit = waited.map_err(|error| format!("failed to wait on query: {error}"))?;
     if stopping {
@@ -331,11 +342,10 @@ pub(crate) fn wait_query(core: &Core, id: &str, child: &mut Child) -> Result<i32
 fn observe_process(
     core: &Core,
     id: &str,
-    mut poll: impl FnMut() -> io::Result<Option<i32>>,
+    mut poll: impl FnMut(Option<i32>) -> io::Result<Option<i32>>,
     grace: Duration,
     confirm: Duration,
 ) -> io::Result<i32> {
-    let mut killed = false;
     loop {
         let mut st = core.state.lock().expect("application state lock poisoned");
         let Some(process) = st
@@ -345,32 +355,32 @@ fn observe_process(
         else {
             return Err(io::Error::other("invocation no longer owned"));
         };
-        match poll() {
+        match poll(process.group.pgid()) {
             Ok(Some(code)) => {
-                process.pgid = None;
+                process.group.revoke();
                 return Ok(code);
             }
             Ok(None) => (),
             Err(error) => {
                 // A failed wait can mean another reaper already consumed the
                 // child. Its former PID is no longer safe to signal.
-                process.pgid = None;
+                process.group.revoke();
                 return Err(error);
             }
         }
-        if let Some(started) = process.stop_started {
-            if started.elapsed() >= grace && !killed {
-                if let Some(pgid) = process.pgid
-                    && let Err(error) = signal_process(process, pgid, Signal::KILL)
-                {
-                    log::warn!("SIGKILL to invocation group failed: {error}");
-                }
-                killed = true;
+        if let ProcessGroup::Interrupting { pgid, since } = process.group
+            && since.elapsed() >= grace
+        {
+            process.group = ProcessGroup::Escalated { pgid, since };
+            if let Err(error) = signal_process(process, pgid, Signal::KILL) {
+                log::warn!("SIGKILL to invocation group failed: {error}");
             }
-            if started.elapsed() >= grace + confirm {
-                process.pgid = None;
-                return Err(io::Error::new(io::ErrorKind::TimedOut, STOP_UNCONFIRMED));
-            }
+        }
+        if let Some(started) = process.group.stop_started()
+            && started.elapsed() >= grace + confirm
+        {
+            process.group.revoke();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, STOP_UNCONFIRMED));
         }
         drop(st);
         thread::sleep(EXIT_POLL);
@@ -408,7 +418,7 @@ impl<F: Fn()> Drop for InvocationGuard<'_, F> {
 /// revoked at reap, so this never addresses a recycled group.
 fn kill_invocation_groups(st: &CoreState) {
     for invocation in st.invocations.values() {
-        let Some(pgid) = invocation.process.pgid else {
+        let Some(pgid) = invocation.process.group.pgid() else {
             continue;
         };
         if let Err(error) = signal_process(&invocation.process, pgid, Signal::KILL) {
@@ -421,7 +431,7 @@ fn kill_invocation_groups(st: &CoreState) {
 /// signal ownership so no later stop can address a possibly recycled pid.
 fn revoke_unconfirmed_groups(st: &mut CoreState) {
     for invocation in st.invocations.values_mut() {
-        invocation.process.pgid = None;
+        invocation.process.group.revoke();
     }
 }
 
@@ -500,7 +510,7 @@ fn signal_process(process: &ActiveInvocation, pgid: i32, signal: Signal) -> io::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::OwnedInvocation;
+    use crate::state::{OwnedInvocation, ReceiverState};
     use crate::store;
     use crate::store::events::test_support::Fixture;
     use std::path::{Path, PathBuf};
@@ -533,8 +543,7 @@ mod tests {
                 started_at: 1,
                 process: ActiveInvocation {
                     terminal: Some(terminal),
-                    pgid: Some(pgid),
-                    stop_started: None,
+                    group: ProcessGroup::Running(pgid),
                 },
                 console: Some(log),
             },
@@ -647,8 +656,10 @@ mod tests {
                 started_at: 1,
                 process: ActiveInvocation {
                     terminal: None,
-                    pgid,
-                    stop_started: None,
+                    group: pgid.map_or(
+                        ProcessGroup::Revoked { stop_started: None },
+                        ProcessGroup::Running,
+                    ),
                 },
                 console: None,
             },
@@ -658,13 +669,13 @@ mod tests {
     fn held_pgid(st: &CoreState, id: &str) -> Option<i32> {
         st.invocations
             .get(id)
-            .and_then(|invocation| invocation.process.pgid)
+            .and_then(|invocation| invocation.process.group.pgid())
     }
 
     fn is_stopping(st: &CoreState, id: &str) -> bool {
         st.invocations
             .get(id)
-            .is_some_and(|invocation| invocation.process.stop_started.is_some())
+            .is_some_and(|invocation| invocation.process.group.stop_started().is_some())
     }
 
     fn process_count(st: &CoreState) -> usize {
@@ -718,6 +729,45 @@ mod tests {
             String::from_utf8_lossy(&log_bytes(&log)),
             "out\r\r\nerr\r\n\u{fffd}tail"
         );
+    }
+
+    fn capture_failure_exit(revoked: bool) -> i32 {
+        let core = Core::new();
+        let dir = LogDir::new();
+        let release = dir.0.join("release");
+        let (mut child, _terminal, capture) = crate::terminal::spawn(
+            Command::new("sh").current_dir(&dir.0).args([
+                "-c",
+                "echo ready; while [ ! -f release ]; do sleep 0.05; done; exit 7",
+            ]),
+            &File::open("/dev/null").unwrap(), // Read-only: capture cannot write the output.
+        )
+        .unwrap();
+        let pgid = child.id() as i32;
+        let _guard = GroupGuard(pgid);
+        hold_process(&core, Path::new(WS), "invocation", Some(pgid));
+        if revoked {
+            revoke_unconfirmed_groups(&mut core.state.lock().unwrap());
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !capture.failed() {
+            assert!(Instant::now() < deadline, "capture did not fail");
+            thread::sleep(Duration::from_millis(10));
+        }
+        wait(&core, "invocation", |pgid| {
+            assert!(Instant::now() < deadline, "child did not exit");
+            let status = poll_capture(&mut child, &capture, pgid)?;
+            // After polling, let an unsignalled shell complete normally.
+            File::create(&release)?;
+            Ok(status)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn capture_failure_kills_only_a_still_owned_group() {
+        assert_eq!(capture_failure_exit(false), -1);
+        assert_eq!(capture_failure_exit(true), 7);
     }
 
     #[test]
@@ -778,10 +828,12 @@ mod tests {
             receiver_endpoint(&state).unwrap_err(),
             "BES receiver is not ready"
         );
-        state.bes_endpoint = Some("grpc://127.0.0.1:12345".into());
+        state.receiver = ReceiverState::Listening {
+            endpoint: "grpc://127.0.0.1:12345".into(),
+            warning: Some("preferred port occupied".into()),
+        };
         assert_eq!(receiver_endpoint(&state).unwrap(), "grpc://127.0.0.1:12345");
-        state.bes_endpoint = None;
-        state.bes_error = Some("BES receiver stopped".into());
+        state.receiver = ReceiverState::Unavailable("BES receiver stopped".into());
         assert_eq!(
             receiver_endpoint(&state).unwrap_err(),
             "BES receiver stopped"
@@ -926,7 +978,7 @@ mod tests {
                     cmd: "build".to_string(),
                     pattern: "//:b".to_string(),
                     started_at: 1,
-                    process: ActiveInvocation::stub(Some(42)),
+                    process: ActiveInvocation::stub(42),
                     console: Some(crate::terminal::session_log().unwrap()),
                 },
             );
@@ -937,7 +989,7 @@ mod tests {
                     cmd: "build".to_string(),
                     pattern: "//:b".to_string(),
                     started_at: 1,
-                    process: ActiveInvocation::stub(Some(43)),
+                    process: ActiveInvocation::stub(43),
                     console: None,
                 },
             );
@@ -1184,7 +1236,7 @@ mod tests {
         for run in runs {
             let invocation = &st.invocations[&run.id];
             assert!(
-                invocation.process.pgid.is_some(),
+                invocation.process.group.pgid().is_some(),
                 "{} lost signal ownership while its program waited",
                 run.id
             );
@@ -1196,7 +1248,7 @@ mod tests {
         let st = core.state.lock().unwrap();
         let invocation = &st.invocations[&run.id];
         assert!(
-            invocation.process.pgid.is_some(),
+            invocation.process.group.pgid().is_some(),
             "{} lost signal ownership",
             run.id
         );
@@ -1450,7 +1502,7 @@ mod tests {
         let waited = observe_process(
             &core,
             &id,
-            || Ok(child.try_wait()?.map(|status| status.code().unwrap_or(-1))),
+            |pgid| poll_capture(&mut child, &capture, pgid),
             STOP_GRACE,
             STOP_CONFIRM,
         );
@@ -1583,7 +1635,7 @@ mod tests {
         let exit = observe_process(
             &core,
             "invocation",
-            || Ok(None),
+            |_| Ok(None),
             Duration::ZERO,
             Duration::ZERO,
         )
@@ -1618,7 +1670,7 @@ mod tests {
         let exit = observe_process(
             &core,
             "invocation",
-            || Ok(None),
+            |_| Ok(None),
             Duration::ZERO,
             Duration::ZERO,
         )
@@ -1871,7 +1923,7 @@ mod tests {
         let exit = observe_process(
             &core,
             "invocation",
-            || {
+            |_| {
                 child
                     .try_wait()
                     .map(|status| status.map(|status| status.code().unwrap_or(-1)))
@@ -1892,7 +1944,7 @@ mod tests {
         let error = observe_process(
             &core,
             "invocation",
-            || Err(io::Error::from_raw_os_error(libc::ECHILD)),
+            |_| Err(io::Error::from_raw_os_error(libc::ECHILD)),
             Duration::ZERO,
             Duration::ZERO,
         )
@@ -1922,7 +1974,7 @@ mod tests {
             observe_process(
                 &core,
                 "invocation",
-                || Ok(Some(7)),
+                |_| Ok(Some(7)),
                 STOP_GRACE,
                 STOP_CONFIRM
             )
@@ -1955,7 +2007,7 @@ mod tests {
     }
 
     fn wait_child(core: &Core, id: &str, child: &mut Child) -> i32 {
-        wait(core, id, || {
+        wait(core, id, |_| {
             child
                 .try_wait()
                 .map(|status| status.map(|status| status.code().unwrap_or(-1)))
@@ -2009,7 +2061,7 @@ mod tests {
         {
             let st = core.state.lock().unwrap();
             let b = &st.invocations["b"];
-            assert_eq!(b.process.pgid, Some(child_b.id() as i32));
+            assert_eq!(b.process.group.pgid(), Some(child_b.id() as i32));
             assert!(!is_stopping(&st, "b"));
         }
         // A repeated stop for A is an idempotent no-op now that its entry
@@ -2050,10 +2102,13 @@ mod tests {
         hold_process(&core, ws, "other", Some(i32::MAX));
         let mut st = core.state.lock().unwrap();
         begin_stop(&mut st, ws, "invocation").unwrap();
-        let first = st.invocations["invocation"].process.stop_started;
+        let first = st.invocations["invocation"].process.group.stop_started();
         begin_stop(&mut st, ws, "invocation").unwrap();
-        assert_eq!(st.invocations["invocation"].process.stop_started, first);
-        assert!(st.invocations["other"].process.stop_started.is_none());
+        assert_eq!(
+            st.invocations["invocation"].process.group.stop_started(),
+            first
+        );
+        assert!(!is_stopping(&st, "other"));
     }
 
     #[test]
@@ -2068,7 +2123,7 @@ mod tests {
         {
             let st = core.state.lock().unwrap();
             let invocation = &st.invocations["query"];
-            assert!(invocation.process.pgid.is_none());
+            assert!(invocation.process.group.pgid().is_none());
             assert_eq!(held_pgid(&st, "other"), Some(i32::MAX));
         }
         release_process(&core, "query");
@@ -2093,8 +2148,8 @@ mod tests {
         {
             let st = core.state.lock().unwrap();
             let process = &st.invocations["query"].process;
-            assert!(process.pgid.is_none());
-            assert!(process.stop_started.is_some());
+            assert!(process.group.pgid().is_none());
+            assert!(process.group.stop_started().is_some());
         }
         release_process(&core, "query");
         assert!(!core.state.lock().unwrap().invocations.contains_key("query"));
@@ -2109,7 +2164,7 @@ mod tests {
             observe_process(
                 &core,
                 "old",
-                || panic!("old owner polled"),
+                |_| panic!("old owner polled"),
                 Duration::ZERO,
                 Duration::ZERO
             )
@@ -2157,7 +2212,7 @@ mod tests {
         let (polling_tx, polling_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
         let owner_core = core.clone();
-        let poll = move || {
+        let poll = move |_| {
             polling_tx.send(()).unwrap();
             release_rx.recv().unwrap();
             Ok(Some(0))
@@ -2229,7 +2284,10 @@ mod tests {
         st.shutting_down.store(true, Ordering::Relaxed);
         register_ws(&mut st, Path::new(WS));
         st.bazel = Some(PathBuf::from("/bin/true"));
-        st.bes_endpoint = Some("grpc://127.0.0.1:1".into());
+        st.receiver = ReceiverState::Listening {
+            endpoint: "grpc://127.0.0.1:1".into(),
+            warning: None,
+        };
         let error = spawn(
             &mut st,
             &mut Command::new("true"),

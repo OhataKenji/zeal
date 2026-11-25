@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 /// Serializable copy of everything the UI needs, pushed as the `app-state`
@@ -99,30 +99,54 @@ pub struct OpenWorkspaceResult {
     pub state: AppStateDto,
 }
 
-/// The Bazel operation holding an invocation entry's process slot. Its fields
-/// exist exactly while it owns the process: releasing it drops them together,
-/// so a group id can never outlive the operation it belongs to. `pgid` is
-/// revoked at reap so a racing stop can never signal a recycled process group.
+/// Signal ownership for an invocation. Revocation drops the group id so a
+/// racing stop cannot signal a recycled group, but retains the first stop time.
+pub enum ProcessGroup {
+    Running(i32),
+    Interrupting { pgid: i32, since: Instant },
+    Escalated { pgid: i32, since: Instant },
+    Revoked { stop_started: Option<Instant> },
+}
+
+impl ProcessGroup {
+    pub fn pgid(&self) -> Option<i32> {
+        match *self {
+            Self::Running(pgid)
+            | Self::Interrupting { pgid, .. }
+            | Self::Escalated { pgid, .. } => Some(pgid),
+            Self::Revoked { .. } => None,
+        }
+    }
+
+    pub fn stop_started(&self) -> Option<Instant> {
+        match *self {
+            Self::Running(_) => None,
+            Self::Interrupting { since, .. } | Self::Escalated { since, .. } => Some(since),
+            Self::Revoked { stop_started } => stop_started,
+        }
+    }
+
+    pub fn revoke(&mut self) {
+        *self = Self::Revoked {
+            stop_started: self.stop_started(),
+        };
+    }
+}
+
+/// The Bazel operation holding an invocation entry's process slot.
 pub struct ActiveInvocation {
     /// Present for terminal output; queries use stdout/stderr pipes.
     pub terminal: Option<crate::terminal::Control>,
-    /// The child's process group, for the one stop that signals it; `None`
-    /// once the owner has reaped the child.
-    pub pgid: Option<i32>,
-    /// First stop request: its group was signalled and a repeated stop does
-    /// nothing. It stays until the process leaves the entry, however it ends,
-    /// and the child owner applies its escalation deadlines from it.
-    pub stop_started: Option<std::time::Instant>,
+    pub group: ProcessGroup,
 }
 
 impl ActiveInvocation {
     /// A held process for state tests; its terminal is detached from any pty.
     #[cfg(test)]
-    pub fn stub(pgid: Option<i32>) -> Self {
+    pub fn stub(pgid: i32) -> Self {
         Self {
             terminal: Some(crate::terminal::Control::stub()),
-            pgid,
-            stop_started: None,
+            group: ProcessGroup::Running(pgid),
         }
     }
 }
@@ -141,10 +165,37 @@ pub struct OwnedInvocation {
     pub console: Option<std::fs::File>,
 }
 
+/// Only this process's bound receiver may be used for a new Bazel child.
+pub enum ReceiverState {
+    Starting,
+    Listening {
+        endpoint: String,
+        warning: Option<String>,
+    },
+    Unavailable(String),
+}
+
+impl ReceiverState {
+    #[must_use]
+    pub fn endpoint(&self) -> Option<&str> {
+        match self {
+            Self::Listening { endpoint, .. } => Some(endpoint),
+            Self::Starting | Self::Unavailable(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Self::Starting => None,
+            Self::Listening { warning, .. } => warning.as_deref(),
+            Self::Unavailable(error) => Some(error),
+        }
+    }
+}
+
 pub struct CoreState {
-    pub bes_error: Option<String>,
-    /// Only this process's bound receiver may be used for a new Bazel child.
-    pub bes_endpoint: Option<String>,
+    pub receiver: ReceiverState,
     pub bazel: Option<PathBuf>,
     /// Saved preference only; operations always name their workspace.
     pub last_workspace: Option<PathBuf>,
@@ -221,8 +272,8 @@ fn owned_dto(id: &str, invocation: &OwnedInvocation) -> OwnedInvocationDto {
         cmd: invocation.cmd.clone(),
         pattern: invocation.pattern.clone(),
         started_at: invocation.started_at,
-        stoppable: invocation.process.pgid.is_some(),
-        stopping: invocation.process.stop_started.is_some(),
+        stoppable: invocation.process.group.pgid().is_some(),
+        stopping: invocation.process.group.stop_started().is_some(),
         console: invocation.console.is_some(),
     }
 }
@@ -237,8 +288,7 @@ impl Core {
     pub fn new() -> Self {
         Core {
             state: Mutex::new(CoreState {
-                bes_error: None,
-                bes_endpoint: None,
+                receiver: ReceiverState::Starting,
                 bazel: crate::workspace::resolve_bazel(),
                 last_workspace: None,
                 workspaces: BTreeMap::new(),
@@ -261,8 +311,8 @@ impl Core {
         let revision = st.revision;
         AppStateDto {
             revision,
-            bes_error: st.bes_error.clone(),
-            bes_endpoint: st.bes_endpoint.clone(),
+            bes_error: st.receiver.message().map(str::to_owned),
+            bes_endpoint: st.receiver.endpoint().map(str::to_owned),
             bazel: st.bazel.as_ref().map(|p| p.to_string_lossy().into_owned()),
             last_workspace: st
                 .last_workspace
@@ -301,7 +351,7 @@ mod tests {
             cmd: "build".to_string(),
             pattern: "//pkg:b".to_string(),
             started_at: 1,
-            process: ActiveInvocation::stub(Some(42)),
+            process: ActiveInvocation::stub(42),
             console: None,
         }
     }
@@ -311,20 +361,15 @@ mod tests {
         let core = Core::new();
         assert!(serde_json::to_value(core.dto()).unwrap()["besEndpoint"].is_null());
 
-        {
-            let mut st = core.state.lock().unwrap();
-            st.bes_endpoint = Some("grpc://127.0.0.1:12345".to_string());
-            st.bes_error = Some("preferred port occupied".to_string());
-        }
+        core.state.lock().unwrap().receiver = ReceiverState::Listening {
+            endpoint: "grpc://127.0.0.1:12345".into(),
+            warning: Some("preferred port occupied".into()),
+        };
         let available = serde_json::to_value(core.dto()).unwrap();
         assert_eq!(available["besEndpoint"], "grpc://127.0.0.1:12345");
         assert_eq!(available["besError"], "preferred port occupied");
 
-        {
-            let mut st = core.state.lock().unwrap();
-            st.bes_endpoint = None;
-            st.bes_error = Some("receiver stopped".to_string());
-        }
+        core.state.lock().unwrap().receiver = ReceiverState::Unavailable("receiver stopped".into());
         let unavailable = serde_json::to_value(core.dto()).unwrap();
         assert!(unavailable["besEndpoint"].is_null());
         assert_eq!(unavailable["besError"], "receiver stopped");
@@ -377,7 +422,12 @@ mod tests {
             st.workspaces.insert(ws_b.clone(), Default::default());
             st.invocations.insert("one".to_string(), owned(&ws_a));
             st.invocations.insert("two".to_string(), owned(&ws_b));
-            st.invocations.get_mut("two").unwrap().process.pgid = None;
+            st.invocations
+                .get_mut("two")
+                .unwrap()
+                .process
+                .group
+                .revoke();
         }
         let first = core.dto();
         let second = core.dto();

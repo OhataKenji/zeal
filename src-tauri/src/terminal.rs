@@ -1,5 +1,5 @@
 //! Unix PTY ownership and captured output. A Console view never owns the child.
-use crate::state::Core;
+use crate::state::{Core, ProcessGroup};
 use rustix::event::{self, PollFd, PollFlags, Timespec};
 use rustix::fs::{self, OFlags};
 use rustix::termios::{self, Winsize};
@@ -217,7 +217,7 @@ pub fn write(core: &Core, ws: &str, id: &str, bytes: &[u8]) -> Result<usize, Str
         return Err("terminal is no longer running".into());
     }
     let process = &mut invocation.process;
-    if process.pgid.is_none() || process.stop_started.is_some() {
+    if !matches!(process.group, ProcessGroup::Running(_)) {
         return Err("terminal is no longer running".into());
     }
     process
@@ -241,7 +241,7 @@ pub fn resize(core: &Core, ws: &str, id: &str, cols: u16, rows: u16) -> Result<(
     else {
         return Ok(());
     };
-    if process.pgid.is_none() {
+    if process.group.pgid().is_none() {
         return Ok(());
     }
     process.terminal.as_ref().map_or(Ok(()), |terminal| {
@@ -282,8 +282,7 @@ mod tests {
                     started_at: 1,
                     process: ActiveInvocation {
                         terminal: Some(control),
-                        pgid: Some(child.id() as i32),
-                        stop_started: None,
+                        group: ProcessGroup::Running(child.id() as i32),
                     },
                     console: None,
                 },
@@ -318,7 +317,7 @@ mod tests {
         let Some(invocation) = st.invocations.get_mut(id) else {
             return;
         };
-        invocation.process.pgid = None;
+        invocation.process.group.revoke();
     }
 
     fn wait_for_output(fixture: &Fixture, text: &str) {
