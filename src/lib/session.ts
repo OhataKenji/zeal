@@ -502,11 +502,15 @@ export function createSession(
     ws.target = targetSelection(present ? selection : null);
   }
 
+  function discoveryReady(core: AppState | null): boolean {
+    return Boolean(core?.bazel && core.besEndpoint);
+  }
+
   function refreshSnapshot() {
     const ws = state.workspace;
     if (disposed || !ws) return;
     const entry = wsEntry(state.core, ws.path);
-    if (!entry || !state.core?.bazel) return;
+    if (!entry || !discoveryReady(state.core)) return;
     trackDiscovery(ws.path, fetchSnapshot(ws, entry.scope));
   }
 
@@ -540,12 +544,12 @@ export function createSession(
   function updateTargetsForWorkspace(
     before: WorkspaceState | null,
     after: WorkspaceState | null,
-    bazelArrived: boolean,
+    discoveryBecameReady: boolean,
   ) {
     const ws = state.workspace;
     if (!ws) return;
     if (before !== null && after !== null && sameScope(before, after)) {
-      if (bazelArrived && ws.snapshot === null && ws.refresh === null) refreshSnapshot();
+      if (discoveryBecameReady && ws.snapshot === null && ws.refresh === null) refreshSnapshot();
       return;
     }
     // A different workspace entry or scope discards the target context; the
@@ -900,7 +904,7 @@ export function createSession(
       updateTargetsForWorkspace(
         wsEntry(before, state.workspace.path),
         wsEntry(snapshot, state.workspace.path),
-        !before?.bazel && snapshot.bazel !== null,
+        !discoveryReady(before) && discoveryReady(snapshot),
       );
     }
     // A live invocation arriving while History sits unselected claims the

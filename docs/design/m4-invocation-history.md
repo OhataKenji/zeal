@@ -65,7 +65,10 @@ indexは `invocation(workspace_id, started_at_ms DESC, id)` とする。
 #### 起動と履歴の作成
 
 起動時はランダムなinvocation IDをBazelへ渡す。
+`build`、`test`、`run` と、探索用を含む `query`、`cquery`、`aquery` は同じ起動経路を通る。
+受信先と ID は通常の Bazel オプションとして渡す。`info` と `mod` はこの経路を通らない。
 履歴と保存先はBESが作り、Consoleの入力はメモリだけに保持する。
+`query` の開始イベントに UUID や workspace がない場合、受信側はストリームの ID と canonical command line の workspace を使う。
 保存障害はBES受信時に検出し、Bazelも非ゼロで終了する場合がある。
 
 ### event fileと受信

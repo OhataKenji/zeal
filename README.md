@@ -91,7 +91,11 @@ See daily results and run times (p50 and p95) for builds and tests recorded on y
 
 ## Record terminal invocations
 
-Zelith records commands run in the app. To also record terminal commands, add to `.bazelrc`:
+Zelith records its `build`, `test`, `run`, `query`, `cquery`, and `aquery` invocations, including queries used to populate the target views. They require a listening receiver. `info` and `mod` do not send build events.
+
+For these app launches, Zelith passes the receiver and invocation ID as ordinary Bazel options, so later flags may override them.
+
+To also record builds from your terminal, add to `.bazelrc`:
 
 ```bazelrc
 build --bes_backend=grpc://127.0.0.1:4718

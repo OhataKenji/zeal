@@ -2,6 +2,9 @@
 //! current receiving attempt; acknowledgements follow EOF, flush and SQL.
 use super::securefs::Dir;
 use super::{ErrorKind, Store, StoreError, database, fail, id};
+use crate::protocol::generated::command_line::{
+    CommandLine, CommandLineSection, command_line_section::SectionType,
+};
 use crate::protocol::{bep, bes};
 use bep::build_event::Payload;
 use bep::build_event_id::Id;
@@ -28,6 +31,65 @@ struct Facts {
     started: Option<i64>,
     finished: Option<i64>,
     exit: Option<i32>,
+}
+
+fn query_expression(section: &CommandLineSection) -> Option<&str> {
+    let ("residual", Some(SectionType::ChunkList(list))) =
+        (section.section_label.as_str(), &section.section_type)
+    else {
+        return None;
+    };
+    let [expr] = list.chunk.as_slice() else {
+        return None;
+    };
+    // A longer expression stays available in the BEP artifact.
+    (expr.len() <= 64 * 1024).then_some(expr.as_str())
+}
+
+impl Facts {
+    fn set_workspace(&mut self, path: &str) -> Result<(), StoreError> {
+        if path.len() > 16 * 1024 {
+            return Err(fail(ErrorKind::Invalid));
+        }
+        let path = database::workspace_path(Path::new(path))?;
+        self.repo_url = crate::workspace::repo_url(&path);
+        self.workspace = Some(path);
+        Ok(())
+    }
+
+    /// Plain `query` Started omits the workspace and target pattern; recover
+    /// them from Bazel's canonical argv, never overwriting Started facts.
+    fn observe_query_line(&mut self, line: &CommandLine) -> Result<(), StoreError> {
+        let mut paths = line
+            .sections
+            .iter()
+            .flat_map(
+                |section| match (section.section_label.as_str(), &section.section_type) {
+                    ("startup options", Some(SectionType::OptionList(list))) => {
+                        list.option.as_slice()
+                    }
+                    _ => &[],
+                },
+            )
+            .filter(|option| option.option_name == "workspace_directory")
+            .map(|option| option.option_value.as_str());
+        let workspace = paths.next();
+        if paths.any(|path| Some(path) != workspace) {
+            return Err(fail(ErrorKind::Conflict));
+        }
+        if let Some(path) = workspace {
+            self.set_workspace(path)?;
+        }
+        if self.pattern.is_none() {
+            self.pattern = line
+                .sections
+                .iter()
+                .rev()
+                .find_map(query_expression)
+                .map(str::to_owned);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -133,6 +195,7 @@ impl Receipt {
         }
         let event =
             bep::BuildEvent::decode(any.value.as_slice()).map_err(|_| fail(ErrorKind::Invalid))?;
+        let had_workspace = self.facts.workspace.is_some();
         self.observe(&event)?;
         let profile_uri = match &event.payload {
             Some(Payload::BuildToolLogs(logs)) => logs.log.iter().find_map(|log| match &log.file {
@@ -153,7 +216,8 @@ impl Receipt {
                 .map_or(Ok(()), |uri| copy_profile(uri, dir))
                 .unwrap_or_else(|e| log::warn!("Could not copy invocation profile: {e}"));
         }
-        let changed = matches!(event.payload, Some(Payload::Started(_)));
+        let changed = matches!(event.payload, Some(Payload::Started(_)))
+            || (!had_workspace && self.facts.workspace.is_some());
         if changed {
             self.save(false)?;
         }
@@ -165,6 +229,13 @@ impl Receipt {
     fn observe(&mut self, event: &bep::BuildEvent) -> Result<(), StoreError> {
         match &event.payload {
             Some(Payload::Started(started)) => self.observe_started(started, &event.children)?,
+            Some(Payload::StructuredCommandLine(line))
+                if line.command_line_label == "canonical"
+                    && self.facts.cmd.as_deref() == Some("query")
+                    && self.facts.workspace.is_none() =>
+            {
+                self.facts.observe_query_line(line)?;
+            }
             Some(Payload::Finished(finished)) => {
                 let _span =
                     tracing::info_span!(target: "zelith::operations", "bes.receive.build_finished")
@@ -184,26 +255,21 @@ impl Receipt {
         started: &bep::BuildStarted,
         children: &[bep::BuildEventId],
     ) -> Result<(), StoreError> {
-        if id(&started.uuid)? != id(&self.stream.invocation_id)? {
+        let plain_query = started.command == "query";
+        if (!plain_query || !started.uuid.is_empty())
+            && id(&started.uuid)? != id(&self.stream.invocation_id)?
+        {
             return Err(fail(ErrorKind::Conflict));
         }
-        if self.facts.workspace.is_some()
-            || started.workspace_directory.len() > 16 * 1024
-            || started.command.len() > 64
-        {
+        if self.facts.cmd.is_some() || started.command.len() > 64 {
             return Err(fail(ErrorKind::Invalid));
         }
         let pattern = target_patterns(children)?;
-        self.facts.workspace = Some(database::workspace_path(Path::new(
-            &started.workspace_directory,
-        ))?);
-        self.facts.repo_url = self
-            .facts
-            .workspace
-            .as_deref()
-            .and_then(crate::workspace::repo_url);
+        if !plain_query || !started.workspace_directory.is_empty() {
+            self.facts.set_workspace(&started.workspace_directory)?;
+        }
         self.facts.cmd = Some(started.command.clone());
-        self.facts.pattern = Some(pattern);
+        self.facts.pattern = (!plain_query || !pattern.is_empty()).then_some(pattern);
         self.facts.started = millis(started.start_time.as_ref(), started.start_time_millis);
         Ok(())
     }
@@ -512,6 +578,21 @@ mod tests {
     use super::test_support::Fixture;
     use super::*;
     use crate::store::{artifact, list, read_record};
+
+    #[test]
+    fn query_started_with_an_explicit_mismatched_uuid_is_rejected() {
+        let f = Fixture::new();
+        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
+        let mut started = f.started();
+        if let Some(Payload::Started(v)) = &mut started.payload {
+            v.command = "query".into();
+            v.uuid = uuid::Uuid::new_v4().to_string();
+        }
+        assert_eq!(
+            receipt.append(&f.ordered(1, started)).unwrap_err().kind,
+            ErrorKind::Conflict
+        );
+    }
 
     #[test]
     fn refuses_nonlocal_profile_uris() {
