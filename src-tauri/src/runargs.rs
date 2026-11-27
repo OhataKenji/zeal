@@ -20,6 +20,8 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
 /// Keep app defaults and the selected target before user arguments. A trailing
 /// value-taking option cannot consume them, and `run --` reaches the program
 /// without any Zelith flags appended to it. User options retain Bazel precedence.
+/// Keep the injected command options in step with `ZELITH_DEFAULT_OPTIONS` in
+/// `src/lib/invocation.ts` so History re-runs strip them cleanly.
 pub fn argv(
     cmd: &str,
     pattern: &str,

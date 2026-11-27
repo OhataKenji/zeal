@@ -504,7 +504,7 @@
                 reload={session.loadDetail}
                 reloadProfile={session.loadProfile}
                 onstop={session.stop}
-                onrerun={(cmd, pattern) => session.start(cmd, pattern)}
+                onrerun={(cmd, pattern, flags) => session.start(cmd, pattern, flags)}
                 onselecttarget={selectTarget}
               />
             {/key}

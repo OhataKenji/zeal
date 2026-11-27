@@ -171,4 +171,50 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     assert.equal(h1Text(header({ id: "run-id", pattern: "//app:server" })), "//app:server");
     assert.equal(h1Text(header({ id: "run-id", cmd: "build" })), "build run-id");
   });
+
+  await t.test(
+    "InvocationView disables Re-run while detail is loading and enables it once loaded",
+    async () => {
+      const { emptyView } = await load("/src/lib/session.ts");
+      const { default: InvocationView } = await load("/src/lib/InvocationView.svelte");
+      const left = detail({ cmd: "build", pattern: "//app:server", workspace: "/workspace" });
+      const base = {
+        ...emptyView(),
+        core: {
+          revision: 1,
+          besError: null,
+          besEndpoint: "grpc://127.0.0.1:4718",
+          bazel: "/usr/bin/bazel",
+          lastWorkspace: left.record.workspace!,
+          workspaces: [{ workspace: left.record.workspace!, scope: { include: ["//..."] } }],
+          invocations: [],
+        },
+        state: { workspace: left.record.workspace!, scope: { include: ["//..."] } },
+        invocations: [left.record],
+        invocation: { record: left.record },
+      };
+
+      const loadingHtml = render(InvocationView, {
+        props: {
+          view: { ...base, detail: null, detailLoading: true },
+          reload: () => {},
+          reloadProfile: () => {},
+          onstop: () => {},
+          onrerun: () => {},
+        },
+      }).body;
+      assert.match(loadingHtml, /<button[^>]*disabled[^>]*>\s*Re-run\s*<\/button>/);
+
+      const readyHtml = render(InvocationView, {
+        props: {
+          view: { ...base, detail: left, detailLoading: false },
+          reload: () => {},
+          reloadProfile: () => {},
+          onstop: () => {},
+          onrerun: () => {},
+        },
+      }).body;
+      assert.match(readyHtml, /<button(?![^>]*disabled)[^>]*>\s*Re-run\s*<\/button>/);
+    },
+  );
 });

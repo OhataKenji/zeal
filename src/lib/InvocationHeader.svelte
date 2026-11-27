@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { BazelCommand, InvocationRecord, OwnedInvocation } from "./types";
-  import { rerunArgs, type InvocationStatus as Status } from "./invocation";
+  import type { InvocationStatus as Status, RerunArgs } from "./invocation";
   import InvocationStatus from "./InvocationStatus.svelte";
 
   let {
     record,
     status,
     execution,
+    rerun = null,
     canRerun = false,
     onstop,
     onrerun,
@@ -16,13 +17,13 @@
     record: InvocationRecord;
     status: Status;
     execution?: OwnedInvocation;
+    rerun?: RerunArgs | null;
     canRerun?: boolean;
     onstop: (id: string) => void;
-    onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     children?: Snippet;
   } = $props();
 
-  const rerun = $derived(rerunArgs(record));
   const titleText = $derived(`${record.cmd ? `${record.cmd} ` : ""}${record.pattern ?? record.id}`);
 </script>
 
@@ -50,7 +51,7 @@
           type="button"
           class="button button-primary"
           disabled={!rerun || !canRerun}
-          onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern)}
+          onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern, rerun.flags)}
         >
           Re-run
         </button>

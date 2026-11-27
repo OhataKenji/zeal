@@ -1,6 +1,8 @@
+import { formatOptions } from "./invocation/options.ts";
 import { targetError } from "./target.ts";
 import type {
   BazelCommand,
+  Bep,
   InvocationRecord,
   OwnedInvocation,
   ProcessDiagnostic,
@@ -139,12 +141,60 @@ export function summarizeRunners(counts: RunnerCount[] | undefined): RunnerSumma
   };
 }
 
-/** Extracts a valid `(cmd, pattern)` pair when a finished invocation can be safely re-run. */
+/** Arguments extracted from a finished invocation so History can re-run it. */
+export interface RerunArgs {
+  cmd: BazelCommand;
+  pattern: string;
+  flags: string;
+}
+
+// Command options Zelith prepends in `src-tauri/src/runargs.rs` (`argv`).
+// Keep in lockstep with `argv` so Re-run strips app defaults without dropping
+// user flags (including explicit overrides of `--color`, `--curses`, etc.).
+const ZELITH_DEFAULT_OPTIONS: ReadonlyArray<(option: string) => boolean> = [
+  (option) => option.startsWith("--bes_backend="),
+  (option) => option === "--bes_proxy=",
+  (option) => option === "--bes_upload_mode=wait_for_upload_complete",
+  (option) => option === "--tool_tag=zelith",
+  (option) => option === "--color=yes",
+  (option) => option === "--curses=no",
+  (option) => option.startsWith("--invocation_id="),
+];
+
+function rerunFlags(explicitCmdLine: readonly string[] | undefined): string {
+  if (!explicitCmdLine?.length) return "";
+  const hasZelithPrefix =
+    explicitCmdLine.length >= ZELITH_DEFAULT_OPTIONS.length &&
+    ZELITH_DEFAULT_OPTIONS.every((matches, index) => matches(explicitCmdLine[index]));
+  const rest = hasZelithPrefix
+    ? explicitCmdLine.slice(ZELITH_DEFAULT_OPTIONS.length)
+    : explicitCmdLine;
+  const userFlags: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const option = rest[i];
+    if (option === "--bes_backend" || option === "--invocation_id") {
+      i++;
+      continue;
+    }
+    if (option.startsWith("--bes_backend=") || option.startsWith("--invocation_id=")) {
+      continue;
+    }
+    userFlags.push(option);
+  }
+  return formatOptions(userFlags);
+}
+
+/** Extracts a valid `(cmd, pattern, flags)` triple when a finished invocation can be safely re-run. */
 export function rerunArgs(
   record: InvocationRecord | undefined,
-): { cmd: BazelCommand; pattern: string } | null {
+  bep?: Bep | null,
+): RerunArgs | null {
   if (!record?.cmd || !record.pattern) return null;
   if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") return null;
   if (targetError(record.pattern) !== null) return null;
-  return { cmd: record.cmd, pattern: record.pattern };
+  return {
+    cmd: record.cmd,
+    pattern: record.pattern,
+    flags: rerunFlags(bep?.options?.explicitCmdLine),
+  };
 }
