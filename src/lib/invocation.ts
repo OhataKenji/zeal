@@ -162,7 +162,7 @@ const ZELITH_DEFAULT_OPTIONS: ReadonlyArray<(option: string) => boolean> = [
   (option) => option === "--curses=no",
 ];
 
-const INTERNAL_OPTION_PATTERN = /^--(bes_backend|invocation_id)(?:=|\s|$)/;
+const STRIPPED_OPTION_PATTERN = /^--(bes_backend|invocation_id|target_pattern_file)(?:=|\s|$)/;
 
 function stripZelithPrefix(options: readonly string[]): readonly string[] {
   const hasZelithPrefix =
@@ -174,7 +174,7 @@ function stripZelithPrefix(options: readonly string[]): readonly string[] {
 function rerunFlags(bep: Bep | null | undefined): string {
   if (bep?.originalCommandOptions) {
     const rest = stripZelithPrefix(bep.originalCommandOptions);
-    return rest.filter((option) => !INTERNAL_OPTION_PATTERN.test(option)).join(" ");
+    return rest.filter((option) => !STRIPPED_OPTION_PATTERN.test(option)).join(" ");
   }
   const explicitCmdLine = bep?.options?.explicitCmdLine;
   if (!explicitCmdLine?.length) return "";
@@ -182,11 +182,19 @@ function rerunFlags(bep: Bep | null | undefined): string {
   const userFlags: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const option = rest[i];
-    if (option === "--bes_backend" || option === "--invocation_id") {
+    if (
+      option === "--bes_backend" ||
+      option === "--invocation_id" ||
+      option === "--target_pattern_file"
+    ) {
       i++;
       continue;
     }
-    if (option.startsWith("--bes_backend=") || option.startsWith("--invocation_id=")) {
+    if (
+      option.startsWith("--bes_backend=") ||
+      option.startsWith("--invocation_id=") ||
+      option.startsWith("--target_pattern_file=")
+    ) {
       continue;
     }
     userFlags.push(option);

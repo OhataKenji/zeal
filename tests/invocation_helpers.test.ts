@@ -106,7 +106,7 @@ test("rerunArgs preserves user flags while stripping Zelith defaults and BES ide
     },
   );
 
-  // External/terminal build: strip --bes_backend and --invocation_id, keep all other user flags.
+  // External/terminal build: strip --bes_backend, --invocation_id, and --target_pattern_file.
   assert.deepEqual(
     rerunArgs(
       record,
@@ -115,7 +115,10 @@ test("rerunArgs preserves user flags while stripping Zelith defaults and BES ide
         "--config=opt",
         "--invocation_id",
         "external-id",
+        "--target_pattern_file=targets.txt",
         "--define=qa_mode=enabled",
+        "--target_pattern_file",
+        "more.txt",
         "--bes_backend",
         "grpc://127.0.0.1:9999",
       ]),
@@ -127,7 +130,7 @@ test("rerunArgs preserves user flags while stripping Zelith defaults and BES ide
     },
   );
 
-  // Structured original command options preserve Starlark settings omitted from explicitCmdLine.
+  // Structured original command options preserve Starlark settings and strip --target_pattern_file.
   assert.deepEqual(
     rerunArgs(record, {
       ...bep([
@@ -148,6 +151,7 @@ test("rerunArgs preserves user flags while stripping Zelith defaults and BES ide
         "--tool_tag=zelith",
         "--color=yes",
         "--curses=no",
+        "--target_pattern_file targets.txt",
         "--//pkg:mode=prod",
         "--//pkg:msg='hello world'",
         "--define=qa_mode=enabled",
