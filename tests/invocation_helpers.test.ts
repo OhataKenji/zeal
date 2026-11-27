@@ -1,166 +1,115 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rerunArgs, summarizeRunners } from "../src/lib/invocation.ts";
+import test from "node:test";
+import { rerunState, summarizeRunners } from "../src/lib/invocation.ts";
+import type { InvocationDetail } from "../src/lib/types.ts";
 
 test("summarizeRunners excludes total row and computes cache hit percentage", () => {
-  const sum = summarizeRunners([
-    { name: "total", count: 42 },
-    { name: "disk cache hit", count: 28 },
-    { name: "remote cache hit", count: 6 },
-    { name: "darwin-sandbox", count: 8 },
-  ]);
-  assert.deepEqual(sum, {
-    total: 42,
-    cached: 34,
-    hitPct: 81,
-    runners: [
-      { name: "disk cache hit", count: 28, cached: true },
-      { name: "remote cache hit", count: 6, cached: true },
-      { name: "darwin-sandbox", count: 8, cached: false },
-    ],
-  });
-  assert.equal(summarizeRunners([]), null);
-  assert.equal(summarizeRunners([{ name: "total", count: 5 }]), null);
   assert.deepEqual(
     summarizeRunners([
       { name: "total", count: 10 },
-      { name: "disk cache hit", count: 9 },
-      { name: "internal", count: 1 },
+      { name: "internal", count: 2 },
+      { name: "remote cache hit", count: 6 },
+      { name: "linux-sandbox", count: 2 },
+      { name: "zero", count: 0 },
     ]),
     {
-      total: 9,
-      cached: 9,
-      hitPct: 100,
-      runners: [{ name: "disk cache hit", count: 9, cached: true }],
+      total: 8,
+      cached: 6,
+      hitPct: 75,
+      runners: [
+        { name: "remote cache hit", count: 6, cached: true },
+        { name: "linux-sandbox", count: 2, cached: false },
+      ],
     },
   );
+  assert.equal(
+    summarizeRunners([
+      { name: "total", count: 3 },
+      { name: "internal", count: 3 },
+    ]),
+    null,
+  );
+  assert.equal(summarizeRunners([]), null);
+  assert.equal(summarizeRunners(undefined), null);
 });
 
-test("rerunArgs allows build/test/run with valid patterns and rejects invalid ones", () => {
-  assert.deepEqual(rerunArgs({ id: "1", cmd: "test", pattern: "//app:all" }), {
-    cmd: "test",
-    pattern: "//app:all",
+function savedDetail(id: string, rerunFlags?: string): InvocationDetail {
+  return {
+    record: { id, cmd: "build", pattern: "//:mode_sensitive" },
+    bep: { status: "ok", data: { targets: [], tests: [], rerunFlags, truncated: false } },
+    log: { status: "ok", data: "" },
+  };
+}
+
+test("rerunState models History Re-run transitions explicitly", () => {
+  const base = {
+    record: { id: "1", cmd: "build", pattern: "//:mode_sensitive" },
+    execution: undefined,
+    diagnostic: null,
+    detail: savedDetail("1", "--define=qa_mode=enabled"),
+    detailLoading: false,
+    detailError: null,
+    runnable: true,
+  };
+
+  assert.deepEqual(rerunState(base), {
+    kind: "ready",
+    cmd: "build",
+    pattern: "//:mode_sensitive",
+    flags: "--define=qa_mode=enabled",
+  });
+  assert.deepEqual(rerunState({ ...base, detail: savedDetail("1", "") }), {
+    kind: "ready",
+    cmd: "build",
+    pattern: "//:mode_sensitive",
     flags: "",
   });
-  assert.equal(rerunArgs({ id: "1", cmd: "query", pattern: "//..." }), null);
-  assert.equal(rerunArgs({ id: "1", cmd: "build", pattern: "-//app:bad" }), null);
-  assert.equal(rerunArgs({ id: "1", cmd: "build" }), null);
-});
-
-test("rerunArgs preserves user flags while stripping Zelith defaults and BES identity options", () => {
-  const record = { id: "1", cmd: "build", pattern: "//:mode_sensitive" };
-  const bep = (explicitCmdLine: string[]) => ({
-    targets: [],
-    tests: [],
-    truncated: false,
-    options: {
-      startupOptions: [],
-      explicitStartupOptions: [],
-      cmdLine: explicitCmdLine,
-      explicitCmdLine,
-    },
+  assert.deepEqual(rerunState({ ...base, detailLoading: true }), { kind: "loading" });
+  assert.deepEqual(rerunState({ ...base, detailError: "read failed" }), { kind: "unavailable" });
+  assert.deepEqual(rerunState({ ...base, detail: savedDetail("other", "--foo") }), {
+    kind: "unavailable",
   });
-
-  // Zelith-launched build: strip the 7 injected defaults, keep user flags and overrides.
+  assert.deepEqual(rerunState({ ...base, detail: savedDetail("1", undefined) }), {
+    kind: "unavailable",
+  });
+  assert.deepEqual(rerunState({ ...base, runnable: false }), { kind: "unavailable" });
+  assert.deepEqual(rerunState({ ...base, record: { id: "1", cmd: "query", pattern: "//..." } }), {
+    kind: "unavailable",
+  });
   assert.deepEqual(
-    rerunArgs(
-      record,
-      bep([
-        "--bes_backend=grpc://127.0.0.1:4718",
-        "--bes_proxy=",
-        "--bes_upload_mode=wait_for_upload_complete",
-        "--invocation_id=1aa7f527-6489-4848-bc6f-5e8ca927f812",
-        "--tool_tag=zelith",
-        "--color=yes",
-        "--curses=no",
-        "--define=qa_mode=enabled",
-        "--color=no",
-        "--define=msg=hello world",
-      ]),
-    ),
-    {
-      cmd: "build",
-      pattern: "//:mode_sensitive",
-      flags: "--define=qa_mode=enabled --color=no --define='msg=hello world'",
-    },
+    rerunState({ ...base, record: { id: "1", cmd: "build", pattern: "-//app:bad" } }),
+    { kind: "unavailable" },
   );
-
-  // Zelith-launched build with no user flags produces an empty flags string.
   assert.deepEqual(
-    rerunArgs(
-      record,
-      bep([
-        "--bes_backend=grpc://127.0.0.1:50000",
-        "--bes_proxy=",
-        "--bes_upload_mode=wait_for_upload_complete",
-        "--invocation_id=abc",
-        "--tool_tag=zelith",
-        "--color=yes",
-        "--curses=no",
-      ]),
-    ),
-    {
-      cmd: "build",
-      pattern: "//:mode_sensitive",
-      flags: "",
-    },
-  );
-
-  // External/terminal build: strip --bes_backend, --invocation_id, and --target_pattern_file.
-  assert.deepEqual(
-    rerunArgs(
-      record,
-      bep([
-        "--bes_backend=grpc://127.0.0.1:4718",
-        "--config=opt",
-        "--invocation_id",
-        "external-id",
-        "--target_pattern_file=targets.txt",
-        "--define=qa_mode=enabled",
-        "--target_pattern_file",
-        "more.txt",
-        "--bes_backend",
-        "grpc://127.0.0.1:9999",
-      ]),
-    ),
-    {
-      cmd: "build",
-      pattern: "//:mode_sensitive",
-      flags: "--config=opt --define=qa_mode=enabled",
-    },
-  );
-
-  // Structured original command options preserve Starlark settings and strip --target_pattern_file.
-  assert.deepEqual(
-    rerunArgs(record, {
-      ...bep([
-        "--bes_backend=grpc://127.0.0.1:4718",
-        "--bes_proxy=",
-        "--bes_upload_mode=wait_for_upload_complete",
-        "--invocation_id=abc",
-        "--tool_tag=zelith",
-        "--color=yes",
-        "--curses=no",
-        "--define=qa_mode=enabled",
-      ]),
-      originalCommandOptions: [
-        "--bes_backend=grpc://127.0.0.1:4718",
-        "--bes_proxy=''",
-        "--bes_upload_mode=wait_for_upload_complete",
-        "--invocation_id=abc",
-        "--tool_tag=zelith",
-        "--color=yes",
-        "--curses=no",
-        "--target_pattern_file targets.txt",
-        "--//pkg:mode=prod",
-        "--//pkg:msg='hello world'",
-        "--define=qa_mode=enabled",
-      ],
+    rerunState({
+      ...base,
+      execution: {
+        id: "1",
+        workspace: "/ws",
+        cmd: "build",
+        pattern: "//:mode_sensitive",
+        startedAt: 1,
+        stoppable: true,
+        stopping: false,
+        console: true,
+      },
     }),
-    {
-      cmd: "build",
-      pattern: "//:mode_sensitive",
-      flags: "--//pkg:mode=prod --//pkg:msg='hello world' --define=qa_mode=enabled",
-    },
+    { kind: "unavailable" },
+  );
+  assert.deepEqual(
+    rerunState({
+      ...base,
+      detail: null,
+      diagnostic: {
+        id: "1",
+        workspace: "/ws",
+        cmd: "build",
+        pattern: "//:mode_sensitive",
+        startedAt: 1,
+        processExitCode: 1,
+        output: "",
+      },
+    }),
+    { kind: "ready", cmd: "build", pattern: "//:mode_sensitive", flags: "" },
   );
 });

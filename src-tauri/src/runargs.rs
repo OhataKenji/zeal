@@ -18,9 +18,7 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
 }
 
 /// Ordinary Bazel defaults, not an invocation policy: caller arguments
-/// follow and may override them. Keep the injected command options in step
-/// with `ZELITH_DEFAULT_OPTIONS` in `src/lib/invocation.ts` so History re-runs
-/// strip them cleanly.
+/// follow and may override them.
 pub fn argv(cmd: &str, arguments: &[String], endpoint: &str, id: &str) -> Vec<String> {
     let mut args = vec![
         "--noblock_for_lock".into(),

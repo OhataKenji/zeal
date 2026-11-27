@@ -3,7 +3,7 @@
   import { canSend, type SessionView } from "./session";
   import {
     invocationStatus,
-    rerunArgs,
+    rerunState,
     sectionData,
     sectionMessage,
     sectionNoticeTone,
@@ -41,13 +41,19 @@
       : null,
   );
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
-  const rerunCandidate = $derived(rerunArgs(shown, bep));
-  const detailReady = $derived(diagnostic !== null || (!view.detailLoading && detail !== null));
-  const canRerun = $derived(
-    rerunCandidate !== null &&
-      detailReady &&
-      shown?.workspace === view.state?.workspace &&
-      canSend(view, rerunCandidate.pattern),
+  const rerun = $derived(
+    rerunState({
+      record: shown,
+      execution,
+      diagnostic,
+      detail,
+      detailLoading: view.detailLoading,
+      detailError: view.detailError,
+      runnable:
+        shown?.workspace === view.state?.workspace &&
+        shown?.pattern !== undefined &&
+        canSend(view, shown.pattern),
+    }),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
@@ -63,7 +69,7 @@
 
 {#if diagnostic && shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} rerun={rerunCandidate} {canRerun} {onstop} {onrerun} />
+    <InvocationHeader record={shown} {status} {rerun} {onstop} {onrerun} />
     <Notice tone="neutral">
       No build event record. Bazel process exit code: {diagnostic.processExitCode ??
         "unknown"}.
@@ -72,7 +78,7 @@
   </div>
 {:else if shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {execution} rerun={rerunCandidate} {canRerun} {onstop} {onrerun}>
+    <InvocationHeader record={shown} {status} {execution} {rerun} {onstop} {onrerun}>
       <div class="tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab}
           <button

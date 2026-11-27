@@ -38,7 +38,7 @@ pub struct Bep {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_command_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original_command_options: Option<Vec<String>>,
+    pub rerun_flags: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_counts: Option<Vec<RunnerCount>>,
     pub truncated: bool,
@@ -53,7 +53,7 @@ pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
     };
     let mut parts = Vec::new();
     let mut seen_command = false;
-    let mut command_options: Option<Vec<String>> = None;
+    let mut raw_options: Vec<&CommandLineOption> = Vec::new();
     for section in &command_line.sections {
         append_command_line_section(section, &mut parts);
         if !is_original {
@@ -65,18 +65,14 @@ pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
             && section.section_label == "command options"
             && let Some(SectionType::OptionList(options)) = &section.section_type
         {
-            command_options.get_or_insert_with(Vec::new).extend(
-                options
-                    .option
-                    .iter()
-                    .filter(|option| !is_bazel_rc_option(option))
-                    .map(format_option),
-            );
+            raw_options.extend(options.option.iter());
         }
     }
     if is_original {
         bep.original_command_line = Some(parts.join(" "));
-        bep.original_command_options = command_options;
+        if seen_command {
+            bep.rerun_flags = Some(rerun_flags(&raw_options));
+        }
     } else {
         bep.canonical_command_line = Some(parts.join(" "));
     }
@@ -115,18 +111,46 @@ fn quote_argument(argument: &str) -> String {
     }
 }
 
-fn is_bazel_rc_option(option: &CommandLineOption) -> bool {
-    matches!(
-        option.option_name.as_str(),
-        "rc_source" | "default_override"
-    ) || matches_flag(&option.combined_form, "--rc_source")
-        || matches_flag(&option.combined_form, "--default_override")
+fn is_option(option: &CommandLineOption, name: &str) -> bool {
+    option.option_name == name
+        || option
+            .combined_form
+            .strip_prefix("--")
+            .and_then(|rest| rest.strip_prefix(name))
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['=', ' ', '\t']))
 }
 
-fn matches_flag(combined_form: &str, flag: &str) -> bool {
-    combined_form
-        .strip_prefix(flag)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['=', ' ', '\t']))
+fn is_zelith_prefix(options: &[&CommandLineOption]) -> bool {
+    options.len() >= 7
+        && is_option(options[0], "bes_backend")
+        && options[1].combined_form == "--bes_proxy="
+        && options[2].combined_form == "--bes_upload_mode=wait_for_upload_complete"
+        && is_option(options[3], "invocation_id")
+        && options[4].combined_form == "--tool_tag=zelith"
+        && options[5].combined_form == "--color=yes"
+        && options[6].combined_form == "--curses=no"
+}
+
+fn rerun_flags(options: &[&CommandLineOption]) -> String {
+    let user_facing: Vec<&CommandLineOption> = options
+        .iter()
+        .copied()
+        .filter(|option| !is_option(option, "rc_source") && !is_option(option, "default_override"))
+        .collect();
+    let rest = if is_zelith_prefix(&user_facing) {
+        &user_facing[7..]
+    } else {
+        &user_facing[..]
+    };
+    rest.iter()
+        .filter(|option| {
+            !is_option(option, "bes_backend")
+                && !is_option(option, "invocation_id")
+                && !is_option(option, "target_pattern_file")
+        })
+        .map(|option| format_option(option))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn format_option(option: &CommandLineOption) -> String {
@@ -390,12 +414,7 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
         24,
         size,
     );
-    bep.truncated |= !replace(
-        &mut bep.original_command_options,
-        delta.original_command_options,
-        26,
-        size,
-    );
+    bep.truncated |= !replace(&mut bep.rerun_flags, delta.rerun_flags, 15, size);
     bep.truncated |= !replace(&mut bep.runner_counts, delta.runner_counts, 16, size);
 }
 fn append_tail(log: &mut String, value: &str) {
@@ -793,8 +812,8 @@ mod tests {
             )
         );
         assert_eq!(
-            parsed.original_command_options.as_deref(),
-            Some(&["--define='a=b c'".to_string(), "--define d=e".to_string()][..])
+            parsed.rerun_flags.as_deref(),
+            Some("--define='a=b c' --define d=e")
         );
         assert_eq!(
             parsed.canonical_command_line.as_deref(),
@@ -803,6 +822,84 @@ mod tests {
         let json = serde_json::to_value(&parsed).unwrap();
         assert_eq!(json["canonicalCommandLine"], "bazel test //pkg:test");
         assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
+    }
+
+    #[test]
+    fn rerun_flags_match_zelith_argv_and_strip_internal_options() {
+        let injected = crate::runargs::argv(
+            "build",
+            &["--color=yes".into(), "--curses=no".into()],
+            "grpc://127.0.0.1:4718",
+            "inv-1",
+        );
+        let mut command_options: Vec<(String, String)> = vec![
+            ("--rc_source=/ws/.bazelrc".into(), "/ws/.bazelrc".into()),
+            (
+                "--default_override=0:build=--jobs=4".into(),
+                "0:build=--jobs=4".into(),
+            ),
+        ];
+        for arg in &injected[2..] {
+            let value = arg.split_once('=').map_or("", |(_, v)| v);
+            command_options.push((arg.clone(), value.into()));
+        }
+        command_options.extend([
+            ("--//pkg:mode=prod".into(), "prod".into()),
+            ("--//pkg:msg=hello world".into(), "hello world".into()),
+            ("--color=no".into(), "no".into()),
+            ("--define=qa_mode=enabled".into(), "qa_mode=enabled".into()),
+        ]);
+        let option_refs: Vec<(&str, &str)> = command_options
+            .iter()
+            .map(|(form, value)| (form.as_str(), value.as_str()))
+            .collect();
+        let parsed = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks("executable", &["bazel"]),
+                    chunks("command", &["build"]),
+                    options(&option_refs),
+                    chunks("residual", &["//:mode_sensitive"]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.rerun_flags.as_deref(),
+            Some("--//pkg:mode=prod --//pkg:msg='hello world' --color=no --define=qa_mode=enabled")
+        );
+
+        let no_user_refs: Vec<(&str, &str)> = option_refs[..option_refs.len() - 4].to_vec();
+        let no_user = parse(
+            event(command_line(
+                "original",
+                vec![chunks("command", &["build"]), options(&no_user_refs)],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(no_user.rerun_flags.as_deref(), Some(""));
+
+        let external = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks("command", &["build"]),
+                    options(&[
+                        (
+                            "--bes_backend=grpc://127.0.0.1:4718",
+                            "grpc://127.0.0.1:4718",
+                        ),
+                        ("--invocation_id ext", "ext"),
+                        ("--target_pattern_file=targets.txt", "targets.txt"),
+                        ("--target_pattern_file more.txt", "more.txt"),
+                        ("--config=opt", "opt"),
+                    ]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(external.rerun_flags.as_deref(), Some("--config=opt"));
     }
 
     #[test]

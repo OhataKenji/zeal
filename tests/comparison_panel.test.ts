@@ -177,7 +177,18 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     async () => {
       const { emptyView } = await load("/src/lib/session.ts");
       const { default: InvocationView } = await load("/src/lib/InvocationView.svelte");
-      const left = detail({ cmd: "build", pattern: "//app:server", workspace: "/workspace" });
+      const left = detail(
+        { cmd: "build", pattern: "//app:server", workspace: "/workspace" },
+        {
+          status: "ok",
+          data: {
+            targets: [],
+            tests: [],
+            rerunFlags: "--define=qa_mode=enabled",
+            truncated: false,
+          },
+        },
+      );
       const base = {
         ...emptyView(),
         core: {

@@ -1,8 +1,7 @@
-import { formatOptions } from "./invocation/options.ts";
 import { targetError } from "./target.ts";
 import type {
   BazelCommand,
-  Bep,
+  InvocationDetail,
   InvocationRecord,
   OwnedInvocation,
   ProcessDiagnostic,
@@ -141,78 +140,32 @@ export function summarizeRunners(counts: RunnerCount[] | undefined): RunnerSumma
   };
 }
 
-/** Arguments extracted from a finished invocation so History can re-run it. */
-export interface RerunArgs {
-  cmd: BazelCommand;
-  pattern: string;
-  flags: string;
-}
+/** Explicit History Re-run readiness state (modeled in `specs/HistoryRerun.tla`). */
+export type RerunState =
+  | { kind: "unavailable" }
+  | { kind: "loading" }
+  | { kind: "ready"; cmd: BazelCommand; pattern: string; flags: string };
 
-// Command options Zelith prepends in `src-tauri/src/runargs.rs` (`argv`) and
-// `src-tauri/src/runner.rs` (`start`). Keep in lockstep so Re-run strips app
-// defaults without dropping user flags (including explicit overrides of
-// `--color`, `--curses`, etc.).
-const ZELITH_DEFAULT_OPTIONS: ReadonlyArray<(option: string) => boolean> = [
-  (option) => option.startsWith("--bes_backend="),
-  (option) => option === "--bes_proxy=" || option === "--bes_proxy=''",
-  (option) => option === "--bes_upload_mode=wait_for_upload_complete",
-  (option) => option.startsWith("--invocation_id="),
-  (option) => option === "--tool_tag=zelith",
-  (option) => option === "--color=yes",
-  (option) => option === "--curses=no",
-];
-
-const STRIPPED_OPTION_PATTERN = /^--(bes_backend|invocation_id|target_pattern_file)(?:=|\s|$)/;
-
-function stripZelithPrefix(options: readonly string[]): readonly string[] {
-  const hasZelithPrefix =
-    options.length >= ZELITH_DEFAULT_OPTIONS.length &&
-    ZELITH_DEFAULT_OPTIONS.every((matches, index) => matches(options[index]));
-  return hasZelithPrefix ? options.slice(ZELITH_DEFAULT_OPTIONS.length) : options;
-}
-
-function rerunFlags(bep: Bep | null | undefined): string {
-  if (bep?.originalCommandOptions) {
-    const rest = stripZelithPrefix(bep.originalCommandOptions);
-    return rest.filter((option) => !STRIPPED_OPTION_PATTERN.test(option)).join(" ");
+/** Derives History Re-run readiness from the selected row and its detail state. */
+export function rerunState(input: {
+  record: InvocationRecord | undefined;
+  execution: OwnedInvocation | undefined;
+  diagnostic: ProcessDiagnostic | null;
+  detail: InvocationDetail | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  runnable: boolean;
+}): RerunState {
+  const { record, execution, diagnostic, detail, detailLoading, detailError, runnable } = input;
+  if (!runnable || execution || !record?.cmd || !record.pattern) return { kind: "unavailable" };
+  if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") {
+    return { kind: "unavailable" };
   }
-  const explicitCmdLine = bep?.options?.explicitCmdLine;
-  if (!explicitCmdLine?.length) return "";
-  const rest = stripZelithPrefix(explicitCmdLine);
-  const userFlags: string[] = [];
-  for (let i = 0; i < rest.length; i++) {
-    const option = rest[i];
-    if (
-      option === "--bes_backend" ||
-      option === "--invocation_id" ||
-      option === "--target_pattern_file"
-    ) {
-      i++;
-      continue;
-    }
-    if (
-      option.startsWith("--bes_backend=") ||
-      option.startsWith("--invocation_id=") ||
-      option.startsWith("--target_pattern_file=")
-    ) {
-      continue;
-    }
-    userFlags.push(option);
-  }
-  return formatOptions(userFlags);
-}
-
-/** Extracts a valid `(cmd, pattern, flags)` triple when a finished invocation can be safely re-run. */
-export function rerunArgs(
-  record: InvocationRecord | undefined,
-  bep?: Bep | null,
-): RerunArgs | null {
-  if (!record?.cmd || !record.pattern) return null;
-  if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") return null;
-  if (targetError(record.pattern) !== null) return null;
-  return {
-    cmd: record.cmd,
-    pattern: record.pattern,
-    flags: rerunFlags(bep),
-  };
+  if (targetError(record.pattern) !== null) return { kind: "unavailable" };
+  if (diagnostic) return { kind: "ready", cmd: record.cmd, pattern: record.pattern, flags: "" };
+  if (detailLoading) return { kind: "loading" };
+  if (detailError || !detail || detail.record.id !== record.id) return { kind: "unavailable" };
+  const bep = sectionData(detail.bep);
+  if (bep?.rerunFlags === undefined) return { kind: "unavailable" };
+  return { kind: "ready", cmd: record.cmd, pattern: record.pattern, flags: bep.rerunFlags };
 }
