@@ -136,6 +136,7 @@ const LAUNCHER_OPTIONS: &[&str] = &[
     "rc_source",
     "default_override",
     "startup_time",
+    "extract_data_time",
     "command_wait_time",
     "restart_reason",
     "binary_path",
@@ -143,27 +144,32 @@ const LAUNCHER_OPTIONS: &[&str] = &[
     "client_cwd",
 ];
 
+fn has_metadata(option: &CommandLineOption, tag: OptionMetadataTag) -> bool {
+    option.metadata_tags.contains(&(tag as i32))
+}
+
 fn is_launcher_or_internal(option: &CommandLineOption) -> bool {
-    option
-        .metadata_tags
-        .contains(&(OptionMetadataTag::Internal as i32))
+    has_metadata(option, OptionMetadataTag::Internal)
         || LAUNCHER_OPTIONS.iter().any(|name| is_option(option, name))
 }
 
 fn rerun_flags(options: &[&CommandLineOption]) -> String {
-    let user_facing: Vec<&CommandLineOption> = options
+    let start = options
         .iter()
-        .copied()
-        .filter(|option| !is_launcher_or_internal(option))
-        .collect();
-    let rest = if is_zelith_prefix(&user_facing) {
-        &user_facing[7..]
+        .position(|option| {
+            !has_metadata(option, OptionMetadataTag::Hidden)
+                && !has_metadata(option, OptionMetadataTag::Internal)
+        })
+        .unwrap_or(options.len());
+    let rest = if is_zelith_prefix(&options[start..]) {
+        &options[start + 7..]
     } else {
-        &user_facing[..]
+        options
     };
     rest.iter()
         .filter(|option| {
-            !is_option(option, "bes_backend")
+            !is_launcher_or_internal(option)
+                && !is_option(option, "bes_backend")
                 && !is_option(option, "invocation_id")
                 && !is_option(option, "target_pattern_file")
         })
@@ -875,6 +881,7 @@ mod tests {
                 &[OptionMetadataTag::Hidden],
             ),
             command_option("--startup_time=12", "12", &[OptionMetadataTag::Hidden]),
+            command_option("--extract_data_time=45", "45", &[OptionMetadataTag::Hidden]),
             command_option("--command_wait_time=0", "0", &[OptionMetadataTag::Hidden]),
             command_option(
                 "--binary_path=/usr/bin/bazel",
