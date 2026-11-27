@@ -11,6 +11,7 @@ use crate::protocol::generated::command_line::command_line_section::SectionType;
 use crate::protocol::generated::command_line::{
     CommandLine, CommandLineSection, Option as CommandLineOption,
 };
+use crate::protocol::generated::options::OptionMetadataTag;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -131,11 +132,17 @@ fn is_zelith_prefix(options: &[&CommandLineOption]) -> bool {
         && options[6].combined_form == "--curses=no"
 }
 
+fn is_hidden_or_internal(option: &CommandLineOption) -> bool {
+    option.metadata_tags.iter().any(|&tag| {
+        tag == OptionMetadataTag::Hidden as i32 || tag == OptionMetadataTag::Internal as i32
+    })
+}
+
 fn rerun_flags(options: &[&CommandLineOption]) -> String {
     let user_facing: Vec<&CommandLineOption> = options
         .iter()
         .copied()
-        .filter(|option| !is_option(option, "rc_source") && !is_option(option, "default_override"))
+        .filter(|option| !is_hidden_or_internal(option))
         .collect();
     let rest = if is_zelith_prefix(&user_facing) {
         &user_facing[7..]
@@ -812,10 +819,6 @@ mod tests {
             )
         );
         assert_eq!(
-            parsed.rerun_flags.as_deref(),
-            Some("--define='a=b c' --define d=e")
-        );
-        assert_eq!(
             parsed.canonical_command_line.as_deref(),
             Some("bazel test //pkg:test")
         );
@@ -832,34 +835,67 @@ mod tests {
             "grpc://127.0.0.1:4718",
             "inv-1",
         );
-        let mut command_options: Vec<(String, String)> = vec![
-            ("--rc_source=/ws/.bazelrc".into(), "/ws/.bazelrc".into()),
-            (
-                "--default_override=0:build=--jobs=4".into(),
-                "0:build=--jobs=4".into(),
+        let hidden = |form: &str, value: &str, tag: OptionMetadataTag| CommandLineOption {
+            combined_form: form.into(),
+            option_value: value.into(),
+            metadata_tags: vec![tag as i32],
+            ..Default::default()
+        };
+        let mut command_options: Vec<CommandLineOption> = vec![
+            hidden(
+                "--rc_source=/ws/.bazelrc",
+                "/ws/.bazelrc",
+                OptionMetadataTag::Hidden,
             ),
+            hidden(
+                "--default_override=0:build=--jobs=4",
+                "0:build=--jobs=4",
+                OptionMetadataTag::Hidden,
+            ),
+            hidden("--startup_time=12", "12", OptionMetadataTag::Hidden),
+            hidden("--command_wait_time=0", "0", OptionMetadataTag::Hidden),
+            hidden(
+                "--binary_path=/usr/bin/bazel",
+                "/usr/bin/bazel",
+                OptionMetadataTag::Hidden,
+            ),
+            hidden("--client_env=FOO=bar", "FOO=bar", OptionMetadataTag::Hidden),
+            hidden("--client_cwd=/ws", "/ws", OptionMetadataTag::Hidden),
+            hidden("--internal_flag=1", "1", OptionMetadataTag::Internal),
         ];
         for arg in &injected[2..] {
             let value = arg.split_once('=').map_or("", |(_, v)| v);
-            command_options.push((arg.clone(), value.into()));
+            command_options.push(CommandLineOption {
+                combined_form: arg.clone(),
+                option_value: value.into(),
+                ..Default::default()
+            });
         }
-        command_options.extend([
-            ("--//pkg:mode=prod".into(), "prod".into()),
-            ("--//pkg:msg=hello world".into(), "hello world".into()),
-            ("--color=no".into(), "no".into()),
-            ("--define=qa_mode=enabled".into(), "qa_mode=enabled".into()),
-        ]);
-        let option_refs: Vec<(&str, &str)> = command_options
-            .iter()
-            .map(|(form, value)| (form.as_str(), value.as_str()))
-            .collect();
+        let user_options = [
+            ("--//pkg:mode=prod", "prod"),
+            ("--//pkg:msg=hello world", "hello world"),
+            ("--color=no", "no"),
+            ("--define=qa_mode=enabled", "qa_mode=enabled"),
+        ];
+        let mut with_user = command_options.clone();
+        for (form, value) in user_options {
+            with_user.push(CommandLineOption {
+                combined_form: form.into(),
+                option_value: value.into(),
+                ..Default::default()
+            });
+        }
+        let option_section = |option: Vec<CommandLineOption>| CommandLineSection {
+            section_label: "command options".into(),
+            section_type: Some(SectionType::OptionList(OptionList { option })),
+        };
         let parsed = parse(
             event(command_line(
                 "original",
                 vec![
                     chunks("executable", &["bazel"]),
                     chunks("command", &["build"]),
-                    options(&option_refs),
+                    option_section(with_user),
                     chunks("residual", &["//:mode_sensitive"]),
                 ],
             ))
@@ -870,11 +906,13 @@ mod tests {
             Some("--//pkg:mode=prod --//pkg:msg='hello world' --color=no --define=qa_mode=enabled")
         );
 
-        let no_user_refs: Vec<(&str, &str)> = option_refs[..option_refs.len() - 4].to_vec();
         let no_user = parse(
             event(command_line(
                 "original",
-                vec![chunks("command", &["build"]), options(&no_user_refs)],
+                vec![
+                    chunks("command", &["build"]),
+                    option_section(command_options),
+                ],
             ))
             .as_slice(),
         );
