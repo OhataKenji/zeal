@@ -1,7 +1,7 @@
 # Zelith の全体構成
 
 _OhataKenji_
-_Last update: 2026/11/18_
+_Last update: 2026/11/28_
 
 Zelith は Bazel の対象を探し、実行し、結果を調べるローカルの GUI です。
 Bazel がコマンドと排他を扱い、Zelith が起動したプロセスと観測した記録を管理します。
@@ -48,12 +48,17 @@ flowchart LR
 
 ### コンポーネント
 
-| コンポーネント                              | 責務                                                                                |
-| ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [UI セッション](../../src/README.md)        | 選択と読取の状態を持ち、コアの実行状態と保存済みの履歴を ID と workspace で照合する |
-| [実行の所有](../../src-tauri/src/runner.rs) | Zelith が起動したプロセスを管理し、端末入出力と停止を操作する                       |
-| [Bazel への問い合わせ](./target-loading.md) | 対象一覧、対象の詳細、利用者が指定した query を Bazel から取得する                  |
-| [履歴](../../src-tauri/src/store.rs)        | BES に届いた事実を保存し、履歴・詳細・比較・Analytics の読み取りに使う              |
+必要最小限の 4 コンポーネントに境界を保ち、派生ビューや中間キャッシュ層を増やしません。
+
+| コンポーネント                              | 責務                                                                                                        |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [UI セッション](../../src/README.md)        | `session.ts` と共有の [`AsyncRequest`](../../src/lib/request.ts) で選択・読取・破棄の状態遷移を明示管理する |
+| [実行の所有](../../src-tauri/src/runner.rs) | Zelith が起動したプロセスを管理し、端末入出力と停止を操作する                                               |
+| [Bazel への問い合わせ](./target-loading.md) | 対象一覧、対象の詳細、利用者が指定した query を Bazel から取得する                                          |
+| [履歴](../../src-tauri/src/store.rs)        | BES に届いた事実を SQLite と生成果物に保存し、履歴・詳細・比較・Analytics を都度読み取る                    |
+
+Rust の Tauri コマンド層（`src-tauri/src/lib.rs`）は入力検証・workspace 解決・blocking worker 起動の薄い境界に徹し、状態と永続化の規則はコアと store に閉じ込めます。
+状態遷移の明示モデルと TLA+ 検証の一覧は [specs/README.md](../../specs/README.md) に置き、共有非同期要求（[`AsyncRequest.tla`](../../specs/AsyncRequest.tla)）と Analytics → History → 詳細・比較の診断導線（[`DiagnosticFlow.tla`](../../specs/DiagnosticFlow.tla)）を全ケース検証します。
 
 ## 実行と観測
 

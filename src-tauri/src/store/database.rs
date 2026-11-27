@@ -335,18 +335,19 @@ fn attempt_artifact(
     if !matches!(name, "bep.binpb.zst" | "profile.json.gz") {
         return Err(fail(ErrorKind::Invalid));
     }
-    read_record(data, ws, invocation_id)?;
+    let ws = workspace_path(ws)?;
+    let invocation_id = id(invocation_id)?;
     let store = Store::open(data)?;
     let (attempt, complete): (i64, bool) = store.conn.query_row(
-        "SELECT attempt,received_complete FROM invocation WHERE id=?1",
-        [id(invocation_id)?],
+        "SELECT r.attempt,r.received_complete FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 WHERE (w.id=current.id OR w.repo_url=current.repo_url) AND r.id=?2",
+        params![ws.as_os_str().as_bytes(), &invocation_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     if attempt == 0 || (name == "profile.json.gz" && !complete) {
         return Err(fail(ErrorKind::Missing));
     }
     let file = store
-        .invocation_dir(invocation_id, false)?
+        .invocation_dir(&invocation_id, false)?
         .child("attempt", false)?
         .child(&attempt.to_string(), false)?
         .artifact(name)?;
