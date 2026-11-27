@@ -10,12 +10,12 @@
 //! Bazel operations; queries have no separate timeout.
 
 use crate::bazel_output::{capture_head, capture_tail};
-use crate::runner::{self, Output};
+use crate::runner;
 use crate::state::Core;
 use crate::{actions, runargs};
 use serde::{Deserialize, Serialize};
 use std::io::BufReader;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -147,8 +147,7 @@ pub(crate) fn build_flags(kind: QueryKind, flags: &str) -> Result<Vec<String>, S
 
 fn argv(req: &QueryRequest) -> Result<Vec<String>, String> {
     validate_expr(&req.expr)?;
-    let mut args = vec!["--noblock_for_lock".into(), req.kind.as_str().into()];
-    args.extend(build_flags(req.kind, &req.flags)?);
+    let mut args = build_flags(req.kind, &req.flags)?;
     args.push(format!("--output={}", req.output));
     match (req.kind, req.output.as_str()) {
         (QueryKind::Query, "label" | "graph") => {
@@ -286,25 +285,7 @@ fn query_output(
 /// Register the query as its own owned invocation and spawn it atomically.
 fn spawn_query(core: &Core, req: &QueryRequest) -> Result<(Child, String), String> {
     let args = argv(req)?;
-    let mut st = core.state.lock().expect("application state lock poisoned");
-    let ws_path = st.workspace_path(&req.workspace)?;
-    let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let mut command = Command::new(&bazel);
-    command.args(args).current_dir(&ws_path);
-    let (child, _) = runner::spawn(
-        &mut st,
-        &mut command,
-        runner::InvocationMeta {
-            workspace: &ws_path,
-            cmd: req.kind.as_str(),
-            pattern: &req.expr,
-            id: &id,
-        },
-        Output::Pipes,
-    )
-    .map_err(|error| format!("failed to spawn {}: {error}", bazel.display()))?;
-    Ok((child, id))
+    runner::spawn_query(core, &req.workspace, req.kind.as_str(), &req.expr, &args)
 }
 
 /// Receive a reader's capture. Even a confirmed exit is bounded: a descendant
@@ -320,6 +301,7 @@ fn drain<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ReceiverState;
     use std::fs;
     use std::io::{self, Read};
     use std::os::unix::fs::PermissionsExt;
@@ -338,13 +320,7 @@ mod tests {
         let req = request(QueryKind::Query, "label");
         assert_eq!(
             argv(&req).unwrap(),
-            [
-                "--noblock_for_lock",
-                "query",
-                "--output=label",
-                "--",
-                "//app:chosen"
-            ]
+            ["--output=label", "--", "//app:chosen"]
         );
         let req = QueryRequest {
             output: "graph".into(),
@@ -355,8 +331,6 @@ mod tests {
         assert_eq!(
             argv(&req).unwrap(),
             [
-                "--noblock_for_lock",
-                "query",
                 "--output=graph",
                 "--nograph:factored",
                 "--noimplicit_deps",
@@ -387,12 +361,7 @@ mod tests {
                 ..request(kind, output)
             };
             let output_flag = format!("--output={output}");
-            let mut expected = vec![
-                "--noblock_for_lock",
-                kind.as_str(),
-                "--config=opt",
-                &output_flag,
-            ];
+            let mut expected = vec!["--config=opt", &output_flag];
             expected.extend_from_slice(managed);
             expected.extend(["--", "//app:chosen"]);
             assert_eq!(argv(&req).unwrap(), expected);
@@ -547,6 +516,29 @@ mod tests {
     }
 
     #[test]
+    fn spawn_query_rejects_receivers_that_are_not_listening() {
+        let core = Core::new();
+        let req = request(QueryKind::Query, "label");
+        {
+            let mut st = core.state.lock().unwrap();
+            st.workspaces
+                .insert(PathBuf::from(&req.workspace), Default::default());
+            st.bazel = Some(PathBuf::from("/bin/bazel"));
+        }
+        for (receiver, diagnostic) in [
+            (ReceiverState::Starting, "BES receiver is not ready"),
+            (
+                ReceiverState::Unavailable("receiver stopped".into()),
+                "receiver stopped",
+            ),
+        ] {
+            core.state.lock().unwrap().receiver = receiver;
+            assert!(spawn_query(&core, &req).unwrap_err().contains(diagnostic));
+            assert!(core.state.lock().unwrap().invocations.is_empty());
+        }
+    }
+
+    #[test]
     fn spawned_queries_each_hold_their_own_invocation() {
         let dir = std::env::temp_dir().join(format!("zelith-query-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
@@ -562,6 +554,10 @@ mod tests {
         let mut st = core.state.lock().unwrap();
         st.workspaces.insert(workspace, Default::default());
         st.bazel = Some(bazel);
+        st.receiver = ReceiverState::Listening {
+            endpoint: "grpc://127.0.0.1:1".into(),
+            warning: None,
+        };
         drop(st);
         // Queries never serialize each other: both register before either ends.
         let a = QueryRequest {

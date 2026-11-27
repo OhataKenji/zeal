@@ -8,14 +8,12 @@
 use crate::actions;
 use crate::configured;
 use crate::query_proto::{self, ParsedQuery};
-use crate::runner::{self, Output};
+use crate::runner;
 use crate::snapshot::{self, Status, Target, TargetIndex};
 use crate::state::Core;
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, ErrorKind, Read};
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::{ChildStdout, Command};
+use std::process::{Child, ChildStdout};
 use std::sync::Arc;
 use std::thread;
 use tauri::AppHandle;
@@ -58,18 +56,15 @@ pub fn request(
     scope: crate::scope::Scope,
 ) -> Result<TargetLoad, String> {
     let query = scope.validated()?.rules_query();
-    let (ws_path, bazel) = acquire_target(&core, ws)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let mut command = command(&ws_path, &bazel, &query, "label_kind");
     let outcome = fetch(
         &core,
-        runner::InvocationMeta {
-            workspace: &ws_path,
-            cmd: "query",
-            pattern: &query,
-            id: &id,
-        },
-        &mut command,
+        runner::spawn_query(
+            &core,
+            ws,
+            "query",
+            &query,
+            &query_args(&query, "label_kind"),
+        ),
         || core.emit(&app),
         snapshot::parse_label_kind,
         |targets: &Vec<Target>| !targets.is_empty(),
@@ -99,18 +94,9 @@ pub fn target_detail(
     label: &str,
 ) -> Result<snapshot::TargetDetail, String> {
     let query = crate::scope::target_query(label)?;
-    let (ws_path, bazel) = acquire_target(&core, ws)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let mut command = command(&ws_path, &bazel, &query, "proto");
     let (query, status) = match fetch(
         &core,
-        runner::InvocationMeta {
-            workspace: &ws_path,
-            cmd: "query",
-            pattern: &query,
-            id: &id,
-        },
-        &mut command,
+        runner::spawn_query(&core, ws, "query", &query, &query_args(&query, "proto")),
         || core.emit(&app),
         query_proto::parse_query,
         |query: &ParsedQuery| !query.rules.is_empty(),
@@ -140,17 +126,13 @@ pub enum TargetRead {
 }
 
 impl TargetRead {
-    /// The Bazel argv for this step: `--noblock_for_lock`, the query kind,
-    /// the validated user flags, the fixed managed options, `--`, and the
-    /// expression. Every cquery format asks only about the selected
-    /// target's own `config()`; actions quotes the label for aquery.
+    /// Each cquery asks about the selected target's configuration; actions
+    /// quotes the label for aquery.
     fn command(
         self,
-        bazel: &Path,
-        ws: &Path,
         label: &str,
         flags: &str,
-    ) -> Result<(Command, &'static str, String), String> {
+    ) -> Result<(Vec<String>, &'static str, String), String> {
         let (kind, managed): (crate::query::QueryKind, &[&str]) = match self {
             Self::Actions => (
                 crate::query::QueryKind::Aquery,
@@ -176,14 +158,10 @@ impl TargetRead {
         } else {
             format!("config(\"{label}\", target)")
         };
-        let mut cmd = Command::new(bazel);
-        cmd.current_dir(ws)
-            .args(["--noblock_for_lock", kind.as_str()])
-            .args(crate::query::build_flags(kind, flags)?)
-            .args(managed)
-            .arg("--")
-            .arg(&expr);
-        Ok((cmd, kind.as_str(), expr))
+        let mut args = crate::query::build_flags(kind, flags)?;
+        args.extend(managed.iter().map(|s| (*s).to_owned()));
+        args.extend(["--".into(), expr.clone()]);
+        Ok((args, kind.as_str(), expr))
     }
 
     /// Parse this step's stdout into its bare payload.
@@ -225,18 +203,10 @@ pub fn read_target(
     flags: &str,
     step: TargetRead,
 ) -> Result<TargetReadData, String> {
-    let (ws_path, bazel) = acquire_target(&core, ws)?;
-    let (mut command, cmd, expr) = step.command(&bazel, &ws_path, label, flags)?;
-    let id = uuid::Uuid::new_v4().to_string();
+    let (args, cmd, expr) = step.command(label, flags)?;
     match fetch(
         &core,
-        runner::InvocationMeta {
-            workspace: &ws_path,
-            cmd,
-            pattern: &expr,
-            id: &id,
-        },
-        &mut command,
+        runner::spawn_query(&core, ws, cmd, &expr, &args),
         || core.emit(&app),
         move |input| step.parse(input),
         |_| false,
@@ -246,49 +216,30 @@ pub fn read_target(
     }
 }
 
-/// Resolve `ws`'s registered path and the bazel executable. Only that
-/// workspace is consulted; nothing here serializes other work.
-fn acquire_target(core: &Core, ws: &str) -> Result<(PathBuf, PathBuf), String> {
-    let st = core.state.lock().expect("application state lock poisoned");
-    let ws_path = st.workspace_path(ws)?;
-    let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
-    Ok((ws_path, bazel))
-}
-
-fn command(ws: &Path, bazel: &Path, query: &str, output: &str) -> Command {
-    let mut command = Command::new(bazel);
-    command
-        .arg("--noblock_for_lock")
-        .arg("query")
-        .arg(query)
-        .arg(format!("--output={output}"))
-        .args(["--noimplicit_deps", "--keep_going"])
-        .current_dir(ws);
-    command
+fn query_args(query: &str, output: &str) -> Vec<String> {
+    vec![
+        query.into(),
+        format!("--output={output}"),
+        "--noimplicit_deps".into(),
+        "--keep_going".into(),
+    ]
 }
 
 /// Run one scoped query and parse stdout.
 #[tracing::instrument(target = "zelith::operations", name = "bazel.query", skip_all)]
 fn fetch<T: Send + 'static>(
     core: &Core,
-    meta: runner::InvocationMeta<'_>,
-    command: &mut Command,
+    spawned: Result<(Child, String), String>,
     emit: impl Fn(),
     parse: impl FnOnce(BufReader<ChildStdout>) -> Result<T, String> + Send + 'static,
     has_data: impl Fn(&T) -> bool,
 ) -> Outcome<T> {
-    let id = meta.id.to_string();
-    let bazel = command.get_program().to_string_lossy().into_owned();
-    let spawned = {
-        let mut st = core.state.lock().expect("application state lock poisoned");
-        runner::spawn(&mut st, command, meta, Output::Pipes)
-    };
-    let (mut child, _) = match spawned {
-        Ok(child) => child,
-        Err(error) => {
+    let (mut child, id) = match spawned {
+        Ok(spawned) => spawned,
+        Err(summary) => {
             return Outcome::Failed(IngestError {
                 exit_code: None,
-                summary: format!("failed to spawn {bazel}: {error}"),
+                summary,
             });
         }
     };
@@ -394,6 +345,7 @@ mod tests {
     use prost::Message;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     #[test]
     fn stderr_tail_is_bounded_independently_of_total_output() {
@@ -426,7 +378,7 @@ mod tests {
 
     struct QueryFixture {
         workspace: PathBuf,
-        bazel: PathBuf,
+        core: Core,
     }
 
     impl QueryFixture {
@@ -434,6 +386,7 @@ mod tests {
             let workspace =
                 std::env::temp_dir().join(format!("zelith-ingest-stderr-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&workspace).unwrap();
+            let workspace = workspace.canonicalize().unwrap();
             let result = query_schema::QueryResult {
                 target: vec![query_schema::Target {
                     r#type: query_schema::target::Discriminator::Rule as i32,
@@ -457,7 +410,17 @@ while [ "$i" -lt 40 ]; do
   i=$((i + 1))
 done
 printf 'final diagnostic marker\n' >&2
-case "$3" in
+while [ "$#" -gt 0 ] && [ "$1" != query ]; do shift; done
+[ "$1" = query ] || exit 99
+shift
+for arg do
+  case "$arg" in
+    --output=*) output=$arg ;;
+    -*) ;;
+    *) scenario=$arg ;;
+  esac
+done
+case "$scenario" in
   success) code=0 ;;
   partial) code=9 ;;
   failed) code=7 ;;
@@ -465,11 +428,11 @@ case "$3" in
   malformed-partial) code=9 ;;
   *) exit 99 ;;
 esac
-if [ "$3" != failed ]; then
-  case "$4" in
+if [ "$scenario" != failed ]; then
+  case "$output" in
     --output=label_kind) printf 'cc_library rule //app:chosen\n' ;;
     --output=proto)
-      case "$3" in
+      case "$scenario" in
         malformed-*) cat bad.pb ;;
         *) cat query.pb ;;
       esac
@@ -482,7 +445,16 @@ exit "$code"
             )
             .unwrap();
             fs::set_permissions(&bazel, fs::Permissions::from_mode(0o700)).unwrap();
-            Self { workspace, bazel }
+            let core = Core::new();
+            let mut st = core.state.lock().unwrap();
+            st.workspaces.insert(workspace.clone(), Default::default());
+            st.bazel = Some(bazel);
+            st.receiver = crate::state::ReceiverState::Listening {
+                endpoint: "grpc://127.0.0.1:1".into(),
+                warning: None,
+            };
+            drop(st);
+            Self { workspace, core }
         }
     }
 
@@ -493,18 +465,15 @@ exit "$code"
     }
 
     fn fetch_list(fixture: &QueryFixture, scenario: &str) -> Outcome<Vec<Target>> {
-        let core = Core::new();
-        let id = uuid::Uuid::new_v4().to_string();
-        let mut command = command(&fixture.workspace, &fixture.bazel, scenario, "label_kind");
         fetch(
-            &core,
-            runner::InvocationMeta {
-                workspace: &fixture.workspace,
-                cmd: "query",
-                pattern: scenario,
-                id: &id,
-            },
-            &mut command,
+            &fixture.core,
+            runner::spawn_query(
+                &fixture.core,
+                fixture.workspace.to_str().unwrap(),
+                "query",
+                scenario,
+                &query_args(scenario, "label_kind"),
+            ),
             || (),
             snapshot::parse_label_kind,
             |targets: &Vec<Target>| !targets.is_empty(),
@@ -512,18 +481,15 @@ exit "$code"
     }
 
     fn fetch_detail(fixture: &QueryFixture, scenario: &str) -> Outcome<ParsedQuery> {
-        let core = Core::new();
-        let id = uuid::Uuid::new_v4().to_string();
-        let mut command = command(&fixture.workspace, &fixture.bazel, scenario, "proto");
         fetch(
-            &core,
-            runner::InvocationMeta {
-                workspace: &fixture.workspace,
-                cmd: "query",
-                pattern: scenario,
-                id: &id,
-            },
-            &mut command,
+            &fixture.core,
+            runner::spawn_query(
+                &fixture.core,
+                fixture.workspace.to_str().unwrap(),
+                "query",
+                scenario,
+                &query_args(scenario, "proto"),
+            ),
             || (),
             query_proto::parse_query,
             |query: &ParsedQuery| !query.rules.is_empty(),
@@ -605,33 +571,27 @@ exit "$code"
     }
 
     #[test]
-    fn acquire_target_resolves_only_registered_roots_with_bazel() {
-        let core = Core::new();
-        let ws = PathBuf::from("/ws");
-        let other = PathBuf::from("/other");
-        {
-            let mut st = core.state.lock().unwrap();
-            st.workspaces.insert(ws.clone(), Default::default());
-            st.workspaces.insert(other.clone(), Default::default());
-            st.bazel = Some(PathBuf::from("/bin/bazel"));
-        }
-        // An unregistered workspace and a missing bazel are both rejected.
-        assert!(acquire_target(&core, "/missing").is_err());
-        {
-            let mut st = core.state.lock().unwrap();
-            st.bazel = None;
-        }
-        assert!(acquire_target(&core, "/ws").is_err());
-        {
-            let mut st = core.state.lock().unwrap();
-            st.bazel = Some(PathBuf::from("/bin/bazel"));
-        }
-        let (ws_path, bazel) = acquire_target(&core, "/ws").unwrap();
-        assert_eq!(ws_path, ws);
-        assert_eq!(bazel, PathBuf::from("/bin/bazel"));
-        // Roots resolve independently of each other.
-        let (other_path, _) = acquire_target(&core, "/other").unwrap();
-        assert_eq!(other_path, other);
+    fn spawn_query_rejects_an_unregistered_workspace_without_a_child() {
+        let fixture = QueryFixture::new();
+        let spawned = runner::spawn_query(
+            &fixture.core,
+            "/missing",
+            "query",
+            "success",
+            &query_args("success", "label_kind"),
+        );
+        assert_eq!(spawned.unwrap_err(), "workspace is not open");
+        assert!(fixture.core.state.lock().unwrap().invocations.is_empty());
+    }
+
+    #[test]
+    fn fetch_rejects_missing_bazel() {
+        let fixture = QueryFixture::new();
+        fixture.core.state.lock().unwrap().bazel = None;
+        assert!(
+            matches!(fetch_list(&fixture, "success"), Outcome::Failed(error)
+            if error.exit_code.is_none() && error.summary.contains("no bazel"))
+        );
     }
 
     #[test]
@@ -644,14 +604,21 @@ exit "$code"
         assert_eq!(error.summary, "final diagnostic marker");
     }
 
-    fn argv(cmd: &Command) -> Vec<&str> {
-        cmd.get_args().map(|arg| arg.to_str().unwrap()).collect()
+    #[test]
+    fn query_args_request_partial_output_without_implicit_deps() {
+        assert_eq!(
+            query_args("//...", "label_kind"),
+            [
+                "//...",
+                "--output=label_kind",
+                "--noimplicit_deps",
+                "--keep_going"
+            ]
+        );
     }
 
     #[test]
     fn read_command_scopes_every_cquery_step_to_the_target_configuration() {
-        let bazel = Path::new("/bin/bazel");
-        let ws = Path::new("/ws");
         let managed = [
             (
                 TargetRead::Configuration,
@@ -664,34 +631,26 @@ exit "$code"
             (TargetRead::Outputs, &["--output=files"][..]),
         ];
         for (step, options) in managed {
-            let (cmd, kind, expr) = step.command(bazel, ws, "//app:t", "--config=opt").unwrap();
+            let (args, kind, expr) = step.command("//app:t", "--config=opt").unwrap();
             assert_eq!(kind, "cquery");
             assert_eq!(expr, "config(\"//app:t\", target)");
-            assert_eq!(cmd.get_program(), bazel);
-            let mut expected = vec!["--noblock_for_lock", "cquery", "--config=opt"];
+            let mut expected = vec!["--config=opt"];
             expected.extend(options.iter().copied());
             expected.extend(["--", "config(\"//app:t\", target)"]);
-            assert_eq!(argv(&cmd), expected);
+            assert_eq!(args, expected);
         }
     }
 
     #[test]
     fn read_command_quotes_the_label_for_aquery() {
-        let (cmd, kind, expr) = TargetRead::Actions
-            .command(
-                Path::new("/bin/bazel"),
-                Path::new("/ws"),
-                "//app:t",
-                "--config=opt",
-            )
+        let (args, kind, expr) = TargetRead::Actions
+            .command("//app:t", "--config=opt")
             .unwrap();
         assert_eq!(kind, "aquery");
         assert_eq!(expr, "\"//app:t\"");
         assert_eq!(
-            argv(&cmd),
+            args,
             [
-                "--noblock_for_lock",
-                "aquery",
                 "--config=opt",
                 "--output=jsonproto",
                 "--include_commandline",
@@ -712,15 +671,7 @@ exit "$code"
             TargetRead::Outputs,
             TargetRead::Actions,
         ] {
-            assert!(
-                step.command(
-                    Path::new("/bin/bazel"),
-                    Path::new("/ws"),
-                    "//app:t",
-                    "--output=files"
-                )
-                .is_err()
-            );
+            assert!(step.command("//app:t", "--output=files").is_err());
         }
     }
 

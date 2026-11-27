@@ -148,17 +148,18 @@ export interface RerunArgs {
   flags: string;
 }
 
-// Command options Zelith prepends in `src-tauri/src/runargs.rs` (`argv`).
-// Keep in lockstep with `argv` so Re-run strips app defaults without dropping
-// user flags (including explicit overrides of `--color`, `--curses`, etc.).
+// Command options Zelith prepends in `src-tauri/src/runargs.rs` (`argv`) and
+// `src-tauri/src/runner.rs` (`start`). Keep in lockstep so Re-run strips app
+// defaults without dropping user flags (including explicit overrides of
+// `--color`, `--curses`, etc.).
 const ZELITH_DEFAULT_OPTIONS: ReadonlyArray<(option: string) => boolean> = [
   (option) => option.startsWith("--bes_backend="),
   (option) => option === "--bes_proxy=",
   (option) => option === "--bes_upload_mode=wait_for_upload_complete",
+  (option) => option.startsWith("--invocation_id="),
   (option) => option === "--tool_tag=zelith",
   (option) => option === "--color=yes",
   (option) => option === "--curses=no",
-  (option) => option.startsWith("--invocation_id="),
 ];
 
 function rerunFlags(explicitCmdLine: readonly string[] | undefined): string {
