@@ -110,6 +110,7 @@
             leftError={view.detailError}
             workspace={view.state?.workspace ?? ""}
             runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
+            history={view.invocations}
           />
         {/key}
       {:else if active === "All" && view.detail?.bep.status === "pending"}

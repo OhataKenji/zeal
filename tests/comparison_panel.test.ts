@@ -111,6 +111,40 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     assert.ok(html.includes("saved prefix missing"));
   });
 
+  await t.test("enables one-click compare button when a previous successful build exists", () => {
+    const html = output({
+      left: detail({ id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 1 }),
+      history: [
+        { id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 1 },
+        {
+          id: "prev-ok",
+          cmd: "build",
+          pattern: "//app:all",
+          startedAt: 3000,
+          finishedAt: 4200,
+          exitCode: 0,
+        },
+      ],
+    });
+    const button = html.match(/<button[^>]*compare-prev-btn[^>]*>/)?.[0];
+    assert.ok(button, "previous successful button is missing");
+    assert.doesNotMatch(button, /\bdisabled\b/);
+    assert.ok(!html.includes("No previous successful build for this target pattern."));
+    assert.match(html, /<select[^>]*aria-label="Recent invocations"/);
+    assert.ok(html.includes('value="prev-ok"'));
+  });
+
+  await t.test("disables one-click compare button when no previous successful build exists", () => {
+    const html = output({
+      left: detail({ id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 0 }),
+      history: [{ id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 0 }],
+    });
+    const button = html.match(/<button[^>]*compare-prev-btn[^>]*>/)?.[0];
+    assert.ok(button, "previous successful button is missing");
+    assert.match(button, /\bdisabled\b/);
+    assert.ok(html.includes("No previous successful build for this target pattern."));
+  });
+
   await t.test("InvocationView shows the Compare tab without the form on All", async () => {
     const { emptyView } = await load("/src/lib/session.ts");
     const { default: InvocationView } = await load("/src/lib/InvocationView.svelte");

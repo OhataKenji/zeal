@@ -42,32 +42,33 @@ flowchart LR
 
 - `InvocationView` の表示ボタン行(All、Targets、Details、Logs、Timing)に `Compare` を足す独立した表示で、All section の描画には含めない。左には現在選択中の invocation の詳細をそのまま使い、比較のために左を再読込しない。
 
-### 右側の ID 入力と読込
+### 右側の選択と読込
 
-- 「Comparison invocation」の入力欄に ID を指定し、Enter で確定する。操作説明は placeholder に表示する。keystroke ごとの fetch はしない。
-- submit で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず左の選択を維持し、workspace の一致は既存 backend が保証する。同一 ID の指定も許可する。
-- 入力は trim し、UUID 検証は既存に任せる。submit で旧右データを消し、loading の後に record と BEP を表示する(log は保持しない)。
-- 送信中は submit を無効にして in-flight を一件に絞り、左の detail 読込中も submit を待たせる。失敗(未知の ID、別 workspace、不正、busy)は右側に inline error として出し、利用者が修正して再 submit する。自動 retry、polling、queue、新しい backend は設けず、worker の busy が起きても error として表面化するだけとする。
+- 履歴 (`view.invocations`) から、現在の invocation より前に開始された同じ `pattern`（および `cmd`）の直前の成功ビルド (`exitCode === 0`) を特定し、Compare タブを開いて左側が準備できた時点で自動的に読み込む。
+- 「Compare with previous successful」ボタンで 1 クリック比較（再読込や切替後の復帰）ができ、最近の履歴ドロップダウンからも UUID 手入力なしで選択できる。直近履歴外の ID を指定したい場合は「Comparison invocation」入力欄に ID を入れて Enter で確定する。
+- 選択・submit で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず左の選択を維持し、workspace の一致は既存 backend が保証する。同一 ID の指定も許可する。
+- 送信中は入力・ボタンを無効にして in-flight を一件に絞り、左の detail 読込中も待たせる。失敗(未知の ID、別 workspace、不正、busy)は右側に inline error として出し、利用者が修正して再試行する。自動 retry、polling、queue、新しい backend は設けない。
 
 ### 比較項目
 
-比較行は BuildBuddy の compare view の FACETS に合わせ、項目名と値の対応は次の通り。
+比較行は BuildBuddy の compare view の FACETS に加え、キャッシュヒット率と所要時間の差分を並べる。
 
-| 項目                     | 値の由来                                                         |
-| ------------------------ | ---------------------------------------------------------------- |
-| Invocation ID            | `record.id`                                                      |
-| Command                  | `record.cmd`                                                     |
-| Pattern                  | `record.pattern`                                                 |
-| Exit code                | `record.exitCode`                                                |
-| Start date               | `record.startedAt`                                               |
-| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) |
-| Explicit command line    | `bep.options.explicitCmdLine`                                    |
-| Full command line        | `bep.options.cmdLine`                                            |
-| Explicit startup options | `bep.options.explicitStartupOptions`                             |
-| Full startup options     | `bep.options.startupOptions`                                     |
+| 項目                     | 値の由来                                                                                      |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| Invocation ID            | `record.id`                                                                                   |
+| Command                  | `record.cmd`                                                                                  |
+| Pattern                  | `record.pattern`                                                                              |
+| Exit code                | `record.exitCode`                                                                             |
+| Start date               | `record.startedAt`                                                                            |
+| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) + 差分 (`left - right`)      |
+| Cache hit rate           | `bep.runnerCounts` のキャッシュヒット率 (`hitPct% (cached/total)`) + 差分 (`left - right` pp) |
+| Explicit command line    | `bep.options.explicitCmdLine`                                                                 |
+| Full command line        | `bep.options.cmdLine`                                                                         |
+| Explicit startup options | `bep.options.explicitStartupOptions`                                                          |
+| Full startup options     | `bep.options.startupOptions`                                                                  |
 
 `originalCommandLine` と `canonicalCommandLine` は explicit/full の options 配列とは別の文字列で、対応する facet がないため行に出さない。
-Host、Git、cache、remote execution、metrics など BuildBuddy にある項目は Zelith の現在の projection にないため対象外とし、target/test の件数も Non Goals のままとする。
+Host、Git、remote execution など Zelith の現在の projection にない項目は対象外とし、target/test の件数も Non Goals のままとする。
 
 ### 表示と欠損
 
