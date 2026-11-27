@@ -65,9 +65,13 @@ pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
             && section.section_label == "command options"
             && let Some(SectionType::OptionList(options)) = &section.section_type
         {
-            command_options
-                .get_or_insert_with(Vec::new)
-                .extend(options.option.iter().map(format_option));
+            command_options.get_or_insert_with(Vec::new).extend(
+                options
+                    .option
+                    .iter()
+                    .filter(|option| !is_bazel_rc_option(option))
+                    .map(format_option),
+            );
         }
     }
     if is_original {
@@ -109,6 +113,20 @@ fn quote_argument(argument: &str) -> String {
     } else {
         format!("'{}'", argument.replace('\'', "'\\''"))
     }
+}
+
+fn is_bazel_rc_option(option: &CommandLineOption) -> bool {
+    matches!(
+        option.option_name.as_str(),
+        "rc_source" | "default_override"
+    ) || matches_flag(&option.combined_form, "--rc_source")
+        || matches_flag(&option.combined_form, "--default_override")
+}
+
+fn matches_flag(combined_form: &str, flag: &str) -> bool {
+    combined_form
+        .strip_prefix(flag)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['=', ' ', '\t']))
 }
 
 fn format_option(option: &CommandLineOption) -> String {
@@ -749,7 +767,15 @@ mod tests {
                 chunks("executable", &["bazel"]),
                 options(&[("--batch", "true")]),
                 chunks("command", &["test"]),
-                options(&[("--define=a=b c", "a=b c"), ("--define d=e", "d=e")]),
+                options(&[
+                    ("--rc_source=/workspace/.bazelrc", "/workspace/.bazelrc"),
+                    (
+                        "--default_override=0:test=--test_arg=--foo",
+                        "0:test=--test_arg=--foo",
+                    ),
+                    ("--define=a=b c", "a=b c"),
+                    ("--define d=e", "d=e"),
+                ]),
                 CommandLineSection::default(),
                 chunks("residual", &["//pkg:test", ""]),
             ],
@@ -762,7 +788,9 @@ mod tests {
         let parsed = parse(stream.as_slice());
         assert_eq!(
             parsed.original_command_line.as_deref(),
-            Some("bazel --batch test --define='a=b c' --define d=e //pkg:test ''")
+            Some(
+                "bazel --batch test --rc_source=/workspace/.bazelrc --default_override=0:test=--test_arg=--foo --define='a=b c' --define d=e //pkg:test ''"
+            )
         );
         assert_eq!(
             parsed.original_command_options.as_deref(),
