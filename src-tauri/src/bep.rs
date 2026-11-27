@@ -38,22 +38,44 @@ pub struct Bep {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_command_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_command_options: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_counts: Option<Vec<RunnerCount>>,
     pub truncated: bool,
 }
 
 /// Project Bazel's reported original or canonical command line in section order.
 pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
-    let destination = match command_line.command_line_label.as_str() {
-        "original" => &mut bep.original_command_line,
-        "canonical" => &mut bep.canonical_command_line,
+    let is_original = match command_line.command_line_label.as_str() {
+        "original" => true,
+        "canonical" => false,
         _ => return,
     };
     let mut parts = Vec::new();
+    let mut seen_command = false;
+    let mut command_options: Option<Vec<String>> = None;
     for section in &command_line.sections {
         append_command_line_section(section, &mut parts);
+        if !is_original {
+            continue;
+        }
+        if section.section_label == "command" {
+            seen_command = true;
+        } else if seen_command
+            && section.section_label == "command options"
+            && let Some(SectionType::OptionList(options)) = &section.section_type
+        {
+            command_options
+                .get_or_insert_with(Vec::new)
+                .extend(options.option.iter().map(format_option));
+        }
     }
-    *destination = Some(parts.join(" "));
+    if is_original {
+        bep.original_command_line = Some(parts.join(" "));
+        bep.original_command_options = command_options;
+    } else {
+        bep.canonical_command_line = Some(parts.join(" "));
+    }
 }
 
 fn append_command_line_section(section: &CommandLineSection, parts: &mut Vec<String>) {
@@ -348,6 +370,12 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
         &mut bep.canonical_command_line,
         delta.canonical_command_line,
         24,
+        size,
+    );
+    bep.truncated |= !replace(
+        &mut bep.original_command_options,
+        delta.original_command_options,
+        26,
         size,
     );
     bep.truncated |= !replace(&mut bep.runner_counts, delta.runner_counts, 16, size);
@@ -735,6 +763,10 @@ mod tests {
         assert_eq!(
             parsed.original_command_line.as_deref(),
             Some("bazel --batch test --define='a=b c' --define d=e //pkg:test ''")
+        );
+        assert_eq!(
+            parsed.original_command_options.as_deref(),
+            Some(&["--define='a=b c'".to_string(), "--define d=e".to_string()][..])
         );
         assert_eq!(
             parsed.canonical_command_line.as_deref(),

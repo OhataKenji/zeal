@@ -154,7 +154,7 @@ export interface RerunArgs {
 // `--color`, `--curses`, etc.).
 const ZELITH_DEFAULT_OPTIONS: ReadonlyArray<(option: string) => boolean> = [
   (option) => option.startsWith("--bes_backend="),
-  (option) => option === "--bes_proxy=",
+  (option) => option === "--bes_proxy=" || option === "--bes_proxy=''",
   (option) => option === "--bes_upload_mode=wait_for_upload_complete",
   (option) => option.startsWith("--invocation_id="),
   (option) => option === "--tool_tag=zelith",
@@ -162,14 +162,23 @@ const ZELITH_DEFAULT_OPTIONS: ReadonlyArray<(option: string) => boolean> = [
   (option) => option === "--curses=no",
 ];
 
-function rerunFlags(explicitCmdLine: readonly string[] | undefined): string {
-  if (!explicitCmdLine?.length) return "";
+const INTERNAL_OPTION_PATTERN = /^--(bes_backend|invocation_id)(?:=|\s|$)/;
+
+function stripZelithPrefix(options: readonly string[]): readonly string[] {
   const hasZelithPrefix =
-    explicitCmdLine.length >= ZELITH_DEFAULT_OPTIONS.length &&
-    ZELITH_DEFAULT_OPTIONS.every((matches, index) => matches(explicitCmdLine[index]));
-  const rest = hasZelithPrefix
-    ? explicitCmdLine.slice(ZELITH_DEFAULT_OPTIONS.length)
-    : explicitCmdLine;
+    options.length >= ZELITH_DEFAULT_OPTIONS.length &&
+    ZELITH_DEFAULT_OPTIONS.every((matches, index) => matches(options[index]));
+  return hasZelithPrefix ? options.slice(ZELITH_DEFAULT_OPTIONS.length) : options;
+}
+
+function rerunFlags(bep: Bep | null | undefined): string {
+  if (bep?.originalCommandOptions) {
+    const rest = stripZelithPrefix(bep.originalCommandOptions);
+    return rest.filter((option) => !INTERNAL_OPTION_PATTERN.test(option)).join(" ");
+  }
+  const explicitCmdLine = bep?.options?.explicitCmdLine;
+  if (!explicitCmdLine?.length) return "";
+  const rest = stripZelithPrefix(explicitCmdLine);
   const userFlags: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const option = rest[i];
@@ -196,6 +205,6 @@ export function rerunArgs(
   return {
     cmd: record.cmd,
     pattern: record.pattern,
-    flags: rerunFlags(bep?.options?.explicitCmdLine),
+    flags: rerunFlags(bep),
   };
 }

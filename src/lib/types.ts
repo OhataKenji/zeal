@@ -272,6 +272,7 @@ export interface Bep {
   tests: Array<{ label: string; status: string }>;
   originalCommandLine?: string;
   canonicalCommandLine?: string;
+  originalCommandOptions?: string[];
   options?: {
     startupOptions: string[];
     explicitStartupOptions: string[];

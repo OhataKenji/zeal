@@ -126,4 +126,37 @@ test("rerunArgs preserves user flags while stripping Zelith defaults and BES ide
       flags: "--config=opt --define=qa_mode=enabled",
     },
   );
+
+  // Structured original command options preserve Starlark settings omitted from explicitCmdLine.
+  assert.deepEqual(
+    rerunArgs(record, {
+      ...bep([
+        "--bes_backend=grpc://127.0.0.1:4718",
+        "--bes_proxy=",
+        "--bes_upload_mode=wait_for_upload_complete",
+        "--invocation_id=abc",
+        "--tool_tag=zelith",
+        "--color=yes",
+        "--curses=no",
+        "--define=qa_mode=enabled",
+      ]),
+      originalCommandOptions: [
+        "--bes_backend=grpc://127.0.0.1:4718",
+        "--bes_proxy=''",
+        "--bes_upload_mode=wait_for_upload_complete",
+        "--invocation_id=abc",
+        "--tool_tag=zelith",
+        "--color=yes",
+        "--curses=no",
+        "--//pkg:mode=prod",
+        "--//pkg:msg='hello world'",
+        "--define=qa_mode=enabled",
+      ],
+    }),
+    {
+      cmd: "build",
+      pattern: "//:mode_sensitive",
+      flags: "--//pkg:mode=prod --//pkg:msg='hello world' --define=qa_mode=enabled",
+    },
+  );
 });
