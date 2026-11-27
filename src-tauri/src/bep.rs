@@ -132,17 +132,29 @@ fn is_zelith_prefix(options: &[&CommandLineOption]) -> bool {
         && options[6].combined_form == "--curses=no"
 }
 
-fn is_hidden_or_internal(option: &CommandLineOption) -> bool {
-    option.metadata_tags.iter().any(|&tag| {
-        tag == OptionMetadataTag::Hidden as i32 || tag == OptionMetadataTag::Internal as i32
-    })
+const LAUNCHER_OPTIONS: &[&str] = &[
+    "rc_source",
+    "default_override",
+    "startup_time",
+    "command_wait_time",
+    "restart_reason",
+    "binary_path",
+    "client_env",
+    "client_cwd",
+];
+
+fn is_launcher_or_internal(option: &CommandLineOption) -> bool {
+    option
+        .metadata_tags
+        .contains(&(OptionMetadataTag::Internal as i32))
+        || LAUNCHER_OPTIONS.iter().any(|name| is_option(option, name))
 }
 
 fn rerun_flags(options: &[&CommandLineOption]) -> String {
     let user_facing: Vec<&CommandLineOption> = options
         .iter()
         .copied()
-        .filter(|option| !is_hidden_or_internal(option))
+        .filter(|option| !is_launcher_or_internal(option))
         .collect();
     let rest = if is_zelith_prefix(&user_facing) {
         &user_facing[7..]
@@ -827,68 +839,68 @@ mod tests {
         assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
     }
 
+    fn command_option(form: &str, value: &str, tags: &[OptionMetadataTag]) -> CommandLineOption {
+        CommandLineOption {
+            combined_form: form.into(),
+            option_value: value.into(),
+            metadata_tags: tags.iter().map(|&tag| tag as i32).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn option_section(option: Vec<CommandLineOption>) -> CommandLineSection {
+        CommandLineSection {
+            section_label: "command options".into(),
+            section_type: Some(SectionType::OptionList(OptionList { option })),
+        }
+    }
+
     #[test]
-    fn rerun_flags_match_zelith_argv_and_strip_internal_options() {
+    fn rerun_flags_match_zelith_argv_and_strip_launcher_options() {
         let injected = crate::runargs::argv(
             "build",
             &["--color=yes".into(), "--curses=no".into()],
             "grpc://127.0.0.1:4718",
             "inv-1",
         );
-        let hidden = |form: &str, value: &str, tag: OptionMetadataTag| CommandLineOption {
-            combined_form: form.into(),
-            option_value: value.into(),
-            metadata_tags: vec![tag as i32],
-            ..Default::default()
-        };
-        let mut command_options: Vec<CommandLineOption> = vec![
-            hidden(
+        let mut base = vec![
+            command_option(
                 "--rc_source=/ws/.bazelrc",
                 "/ws/.bazelrc",
-                OptionMetadataTag::Hidden,
+                &[OptionMetadataTag::Hidden],
             ),
-            hidden(
+            command_option(
                 "--default_override=0:build=--jobs=4",
                 "0:build=--jobs=4",
-                OptionMetadataTag::Hidden,
+                &[OptionMetadataTag::Hidden],
             ),
-            hidden("--startup_time=12", "12", OptionMetadataTag::Hidden),
-            hidden("--command_wait_time=0", "0", OptionMetadataTag::Hidden),
-            hidden(
+            command_option("--startup_time=12", "12", &[OptionMetadataTag::Hidden]),
+            command_option("--command_wait_time=0", "0", &[OptionMetadataTag::Hidden]),
+            command_option(
                 "--binary_path=/usr/bin/bazel",
                 "/usr/bin/bazel",
-                OptionMetadataTag::Hidden,
+                &[OptionMetadataTag::Hidden],
             ),
-            hidden("--client_env=FOO=bar", "FOO=bar", OptionMetadataTag::Hidden),
-            hidden("--client_cwd=/ws", "/ws", OptionMetadataTag::Hidden),
-            hidden("--internal_flag=1", "1", OptionMetadataTag::Internal),
+            command_option(
+                "--client_env=FOO=bar",
+                "FOO=bar",
+                &[OptionMetadataTag::Hidden],
+            ),
+            command_option("--client_cwd=/ws", "/ws", &[OptionMetadataTag::Hidden]),
+            command_option("--internal_flag=1", "1", &[OptionMetadataTag::Internal]),
         ];
         for arg in &injected[2..] {
             let value = arg.split_once('=').map_or("", |(_, v)| v);
-            command_options.push(CommandLineOption {
-                combined_form: arg.clone(),
-                option_value: value.into(),
-                ..Default::default()
-            });
+            base.push(command_option(arg, value, &[]));
         }
-        let user_options = [
-            ("--//pkg:mode=prod", "prod"),
-            ("--//pkg:msg=hello world", "hello world"),
-            ("--color=no", "no"),
-            ("--define=qa_mode=enabled", "qa_mode=enabled"),
-        ];
-        let mut with_user = command_options.clone();
-        for (form, value) in user_options {
-            with_user.push(CommandLineOption {
-                combined_form: form.into(),
-                option_value: value.into(),
-                ..Default::default()
-            });
-        }
-        let option_section = |option: Vec<CommandLineOption>| CommandLineSection {
-            section_label: "command options".into(),
-            section_type: Some(SectionType::OptionList(OptionList { option })),
-        };
+        let mut with_user = base.clone();
+        with_user.extend([
+            command_option("--//pkg:mode=prod", "prod", &[]),
+            command_option("--//pkg:msg=hello world", "hello world", &[]),
+            command_option("--nostart_end_lib", "0", &[OptionMetadataTag::Hidden]),
+            command_option("--color=no", "no", &[]),
+            command_option("--define=qa_mode=enabled", "qa_mode=enabled", &[]),
+        ]);
         let parsed = parse(
             event(command_line(
                 "original",
@@ -903,21 +915,22 @@ mod tests {
         );
         assert_eq!(
             parsed.rerun_flags.as_deref(),
-            Some("--//pkg:mode=prod --//pkg:msg='hello world' --color=no --define=qa_mode=enabled")
+            Some(
+                "--//pkg:mode=prod --//pkg:msg='hello world' --nostart_end_lib --color=no --define=qa_mode=enabled"
+            )
         );
-
         let no_user = parse(
             event(command_line(
                 "original",
-                vec![
-                    chunks("command", &["build"]),
-                    option_section(command_options),
-                ],
+                vec![chunks("command", &["build"]), option_section(base)],
             ))
             .as_slice(),
         );
         assert_eq!(no_user.rerun_flags.as_deref(), Some(""));
+    }
 
+    #[test]
+    fn rerun_flags_strip_external_identity_and_target_pattern_file() {
         let external = parse(
             event(command_line(
                 "original",
