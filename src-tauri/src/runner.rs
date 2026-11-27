@@ -45,24 +45,73 @@ const EXIT_POLL: Duration = Duration::from_millis(25);
 /// Shown when the group was killed but no exit was confirmed.
 const STOP_UNCONFIRMED: &str = "Could not confirm the stop";
 
-pub(crate) enum Output {
+enum Output {
     Terminal(File),
     Pipes,
 }
 
 /// What one spawned operation is: where it runs and what it runs. The id is
 /// the invocation map key, so it must be fresh for every launch.
-pub(crate) struct InvocationMeta<'a> {
-    pub workspace: &'a Path,
-    pub cmd: &'a str,
-    pub pattern: &'a str,
-    pub id: &'a str,
+struct InvocationMeta<'a> {
+    workspace: &'a Path,
+    cmd: &'a str,
+    pattern: &'a str,
+    id: &'a str,
+}
+
+/// Register the workspace's invocation and spawn it under one lock: the
+/// workspace, configured binary and listening receiver are all required, and
+/// the fresh id, argv and registration cannot be split by shutdown.
+fn spawn_bazel(
+    core: &Core,
+    workspace: &Path,
+    cmd: &str,
+    pattern: &str,
+    args: &[String],
+    output: Output,
+) -> Result<(Child, Option<crate::terminal::Capture>, String), String> {
+    let mut state = core.state.lock().expect("application state lock poisoned");
+    if !state.workspaces.contains_key(workspace) {
+        return Err("workspace is not open".to_string());
+    }
+    let bazel = state.bazel.as_ref().ok_or("no bazel")?;
+    let endpoint = receiver_endpoint(&state)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut command = Command::new(bazel);
+    command
+        .current_dir(workspace)
+        .args(argv(cmd, args, endpoint, &id));
+    let (child, capture) = spawn(
+        &mut state,
+        &mut command,
+        InvocationMeta {
+            workspace,
+            cmd,
+            pattern,
+            id: &id,
+        },
+        output,
+    )
+    .map_err(|error| format!("failed to start bazel {cmd}: {error}"))?;
+    Ok((child, capture, id))
+}
+
+/// Spawn a query-family Bazel read as its own owned invocation.
+pub(crate) fn spawn_query(
+    core: &Core,
+    ws: &str,
+    cmd: &str,
+    expr: &str,
+    args: &[String],
+) -> Result<(Child, String), String> {
+    let (child, _, id) = spawn_bazel(core, Path::new(ws), cmd, expr, args, Output::Pipes)?;
+    Ok((child, id))
 }
 
 /// Spawn `command` as the owned invocation `meta` describes and register it
 /// under the same lock, so shutdown cannot miss an owned child. Only shutdown
 /// and a duplicate id are rejected; other active invocations never block.
-pub(crate) fn spawn(
+fn spawn(
     state: &mut CoreState,
     command: &mut Command,
     meta: InvocationMeta<'_>,
@@ -126,35 +175,15 @@ pub fn start(
 ) -> Result<String, String> {
     validate_cmd(cmd)?;
     validate_pattern(pattern)?;
-    let arguments = parse_arguments(arguments)?;
-    let mut st = core.state.lock().expect("application state lock poisoned");
-    if !st.workspaces.contains_key(ws) {
-        return Err("workspace is not open".to_string());
-    }
-    let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
-    let endpoint = receiver_endpoint(&st)?.to_string();
-    // Held across the spawn so registration and shutdown stay one atomic step.
-    let id = uuid::Uuid::new_v4().to_string();
+    let mut args = vec!["--color=yes".into(), "--curses=no".into(), pattern.into()];
+    args.extend(parse_arguments(arguments)?);
     let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
     // Its own process group: a stop reaches bazel and whatever it started.
-    let (mut child, capture) = spawn(
-        &mut st,
-        Command::new(&bazel)
-            .args(argv(cmd, pattern, &arguments, &endpoint, &id))
-            .current_dir(ws),
-        InvocationMeta {
-            workspace: ws,
-            cmd,
-            pattern,
-            id: &id,
-        },
-        Output::Terminal(log),
-    )
-    .map_err(|e| format!("failed to spawn {}: {e}", bazel.display()))?;
+    let (mut child, capture, id) =
+        spawn_bazel(&core, ws, cmd, pattern, &args, Output::Terminal(log))?;
     let capture = capture.expect("terminal output capture");
-    let result = id.clone();
-    drop(st);
     core.emit(&app);
+    let result = id.clone();
 
     thread::spawn(move || {
         let _guard = InvocationGuard {
@@ -798,29 +827,6 @@ mod tests {
     }
 
     #[test]
-    fn argv_has_the_command_one_pattern_and_the_observation_flags() {
-        for (cmd, pattern) in [("build", "//pkg:b"), ("test", "//pkg:t")] {
-            let args = argv(cmd, pattern, &[], "grpc://127.0.0.1:12345", "abc");
-            assert_eq!(args[0], "--noblock_for_lock");
-            assert_eq!(args[1], cmd);
-            assert_eq!(args.last().unwrap(), pattern);
-            assert_eq!(
-                &args[2..args.len() - 1],
-                [
-                    "--bes_backend=grpc://127.0.0.1:12345",
-                    "--bes_proxy=",
-                    "--bes_upload_mode=wait_for_upload_complete",
-                    "--tool_tag=zelith",
-                    "--color=yes",
-                    "--curses=no",
-                    "--invocation_id=abc",
-                ],
-                "{cmd}"
-            );
-        }
-    }
-
-    #[test]
     fn receiver_readiness_is_required_before_and_after_server_termination() {
         let core = Core::new();
         let mut state = core.state.lock().unwrap();
@@ -1011,14 +1017,17 @@ mod tests {
     /// The rc deliberately points at another backend and an invalid Unix proxy.
     #[tokio::test]
     #[ignore = "set ZELITH_TEST_BAZEL to an installed Bazel 8.x binary"]
-    async fn real_bazel_gui_flags_build_test_and_run_with_input() {
+    async fn real_bazel_gui_records_terminal_and_query_commands() {
         let fixture = GuiBazelFixture::new().await;
         check_gui_run(&fixture, "build", "//:double").await;
         check_gui_run(&fixture, "test", "//:check").await;
         check_gui_run(&fixture, "run", "//:double").await;
+        check_gui_query(&fixture, "query").await;
+        check_gui_query(&fixture, "cquery").await;
+        check_gui_query(&fixture, "aquery").await;
         assert_eq!(
             store::list(&fixture.data, &fixture.ws, &[]).unwrap().len(),
-            3
+            6
         );
     }
 
@@ -1044,7 +1053,19 @@ mod tests {
             fs::create_dir(&ws).unwrap();
             let ws = ws.canonicalize().unwrap();
             fs::write(ws.join("WORKSPACE"), "workspace(name='zelith_gui_test')\n").unwrap();
-            fs::write(ws.join(".bazelrc"), "build --bes_proxy=unix:/zelith-test-no-proxy.sock\nbuild --bes_backend=grpc://127.0.0.1:1\n").unwrap();
+            fs::write(
+                ws.join(".bazelrc"),
+                "build --bes_proxy=unix:/zelith-test-no-proxy.sock\n\
+                 build --bes_backend=grpc://127.0.0.1:1\n\
+                 build --host_platform=//:host\n\
+                 build --platforms=//:host\n\
+                 build --spawn_strategy=local\n\
+                 common --enable_bzlmod=false\n\
+                 common --enable_workspace=true\n\
+                 common --incompatible_autoload_externally=\n\
+                 common --bes_timeout=10s\n",
+            )
+            .unwrap();
             fs::write(ws.join("BUILD"), "load(':binary.bzl','binary','check_test')\nplatform(name='host')\nbinary(name='double')\ncheck_test(name='check')\n").unwrap();
             fs::write(ws.join("binary.bzl"), "def _binary(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.py')\n    ctx.actions.write(out,'#!/usr/bin/env python3\\nprint(int(input())*2)\\nraise SystemExit(23)\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\ndef _check(ctx):\n    out=ctx.actions.declare_file(ctx.label.name+'.sh')\n    ctx.actions.write(out,'#!/bin/sh\\nexit 0\\n',is_executable=True)\n    return [DefaultInfo(executable=out)]\nbinary=rule(implementation=_binary,executable=True)\ncheck_test=rule(implementation=_check,test=True)\n").unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1076,16 +1097,7 @@ mod tests {
                 .current_dir(ws)
                 .args(["--batch", "--nosystem_rc", "--nohome_rc"])
                 .arg(format!("--output_user_root={}", root.display()))
-                .args(argv(cmd, pattern, &[], &self.endpoint, id))
-                .args([
-                    "--enable_bzlmod=false",
-                    "--enable_workspace=true",
-                    "--incompatible_autoload_externally=",
-                    "--host_platform=//:host",
-                    "--platforms=//:host",
-                    "--spawn_strategy=local",
-                    "--bes_timeout=10s",
-                ]);
+                .args(argv(cmd, &[pattern.into()], &self.endpoint, id));
             command
         }
     }
@@ -1150,6 +1162,29 @@ mod tests {
         assert!(record.finished_at.is_some());
         assert!(store::artifact(&fixture.data, &fixture.ws, id, "bep.binpb.zst").is_ok());
         assert!(store::artifact(&fixture.data, &fixture.ws, id, "profile.json.gz").is_ok());
+    }
+
+    /// One recorded query-family read over pipes: the command exits cleanly
+    /// and its BES record carries the command and a successful exit.
+    async fn check_gui_query(fixture: &GuiBazelFixture, cmd: &str) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut command = fixture.command(cmd, "deps(//:double, 0)", &id);
+        let output = tokio::task::spawn_blocking(move || command.output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{cmd}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.stdout.is_empty(), "{cmd}: no stdout");
+        let record = store::read_record(&fixture.data, &fixture.ws, &id).unwrap();
+        assert_eq!(record.cmd.as_deref(), Some(cmd));
+        assert_eq!(record.exit_code, Some(0));
+        if cmd == "query" {
+            assert_eq!(record.pattern.as_deref(), Some("deps(//:double, 0)"));
+        }
     }
 
     struct GuiRun {
@@ -1577,7 +1612,7 @@ mod tests {
         ] {
             assert!(validate_pattern(pattern).is_ok(), "{pattern:?}");
             assert_eq!(
-                argv("build", pattern, &[], "grpc://127.0.0.1:12345", "abc",)
+                argv("build", &[pattern.into()], "grpc://127.0.0.1:12345", "abc")
                     .last()
                     .unwrap(),
                 pattern

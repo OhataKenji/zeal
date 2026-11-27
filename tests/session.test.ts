@@ -395,6 +395,17 @@ test("initial restore selects lastWorkspace and loads its readers", async () => 
   assert.equal(pendingRequest(h, "refresh").args?.workspace, WS);
 });
 
+test("a restored workspace waits for BES before refreshing targets", async () => {
+  const h = harness(Promise.resolve(coreState({ besEndpoint: null })));
+  await initReady(h);
+  assert.equal(h.view.state?.workspace, WS);
+  assert.equal(requestCount(h, "refresh"), 0);
+
+  h.emit("app-state", coreState({ revision: 2 }));
+  await settle();
+  assert.equal(requestCount(h, "refresh"), 1);
+});
+
 test("late app-state with an older revision is ignored", async () => {
   const h = harness();
   await initReady(h);

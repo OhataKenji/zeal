@@ -17,27 +17,17 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
     shlex::split(input).ok_or_else(|| "Unclosed quote or trailing escape in arguments".to_string())
 }
 
-/// Keep app defaults and the selected target before user arguments. A trailing
-/// value-taking option cannot consume them, and `run --` reaches the program
-/// without any Zelith flags appended to it. User options retain Bazel precedence.
-pub fn argv(
-    cmd: &str,
-    pattern: &str,
-    arguments: &[String],
-    endpoint: &str,
-    id: &str,
-) -> Vec<String> {
+/// Ordinary Bazel defaults, not an invocation policy: caller arguments
+/// follow and may override them.
+pub fn argv(cmd: &str, arguments: &[String], endpoint: &str, id: &str) -> Vec<String> {
     let mut args = vec![
-        "--noblock_for_lock".to_string(),
-        cmd.to_string(),
+        "--noblock_for_lock".into(),
+        cmd.into(),
         format!("--bes_backend={endpoint}"),
-        "--bes_proxy=".to_string(),
-        "--bes_upload_mode=wait_for_upload_complete".to_string(),
-        "--tool_tag=zelith".to_string(),
-        "--color=yes".to_string(),
-        "--curses=no".to_string(),
+        "--bes_proxy=".into(),
+        "--bes_upload_mode=wait_for_upload_complete".into(),
         format!("--invocation_id={id}"),
-        pattern.to_string(),
+        "--tool_tag=zelith".into(),
     ];
     args.extend_from_slice(arguments);
     args
@@ -138,42 +128,29 @@ mod tests {
     }
 
     #[test]
-    fn app_defaults_and_target_precede_user_options_and_program_arguments() {
+    fn invocation_defaults_precede_verbatim_arguments() {
         let arguments =
-            parse_arguments("--config dev -- 'two words' --profile=program-value").unwrap();
-        let args = argv("run", "//:app", &arguments, "grpc://127.0.0.1:12345", "id");
-        let target = args.iter().position(|arg| arg == "//:app").unwrap();
-        assert!(args[..target].contains(&"--invocation_id=id".to_string()));
-        assert_eq!(&args[target + 1..], arguments);
+            parse_arguments("--invocation_id=app //:app --config dev -- 'two words'").unwrap();
+        let args = argv("run", &arguments, "grpc://127.0.0.1:12345", "id");
+        let first_argument = args.len() - arguments.len();
+        assert_eq!(
+            args[..first_argument],
+            [
+                "--noblock_for_lock",
+                "run",
+                "--bes_backend=grpc://127.0.0.1:12345",
+                "--bes_proxy=",
+                "--bes_upload_mode=wait_for_upload_complete",
+                "--invocation_id=id",
+                "--tool_tag=zelith",
+            ]
+        );
+        assert_eq!(args[first_argument..], arguments);
     }
 
     #[test]
     fn profiling_follows_bazel_configuration() {
-        let args = argv("build", "//:app", &[], "grpc://127.0.0.1:12345", "id");
+        let args = argv("build", &[], "grpc://127.0.0.1:12345", "id");
         assert!(!args.iter().any(|arg| arg.contains("profile")));
-    }
-
-    #[test]
-    fn explicit_full_profile_precedes_program_arguments() {
-        let arguments = parse_arguments("--noslim_profile -- --slim_profile").unwrap();
-        let args = argv("run", "//:app", &arguments, "grpc://127.0.0.1:12345", "id");
-        let target = args.iter().position(|arg| arg == "//:app").unwrap();
-        assert_eq!(
-            &args[target + 1..],
-            ["--noslim_profile", "--", "--slim_profile"]
-        );
-    }
-
-    #[test]
-    fn trailing_value_taking_option_has_no_app_argument_to_consume() {
-        let arguments = parse_arguments("--test_filter").unwrap();
-        let args = argv(
-            "test",
-            "//:test",
-            &arguments,
-            "grpc://127.0.0.1:12345",
-            "id",
-        );
-        assert_eq!(&args[args.len() - 2..], ["//:test", "--test_filter"]);
     }
 }
