@@ -627,22 +627,3 @@
     {/if}
   {/if}
 </div>
-
-<style>
-  .day-chip {
-    height: 20px;
-    padding: 0 6px;
-    font: 500 11px var(--mono);
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--primary);
-    background: var(--info-muted);
-    border: 0;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-  }
-
-  .day-chip:hover {
-    filter: brightness(1.1);
-  }
-</style>
