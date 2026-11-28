@@ -8,7 +8,7 @@
     record,
     status,
     execution,
-    explicitCmdLine,
+    rerunFlags = "",
     canRerun = false,
     onstop,
     onrerun,
@@ -18,7 +18,7 @@
     record: InvocationRecord;
     status: Status;
     execution?: OwnedInvocation;
-    explicitCmdLine?: readonly string[];
+    rerunFlags?: string;
     canRerun?: boolean;
     onstop: (id: string) => void;
     onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
@@ -26,30 +26,15 @@
     children?: Snippet;
   } = $props();
 
-  let menu = $state<HTMLDetailsElement>();
-  const rerun = $derived(rerunArgs(record, explicitCmdLine));
+  const rerun = $derived(rerunArgs(record));
   const rerunDisabled = $derived(!rerun || !canRerun);
   const rerunTitle = $derived(
     rerun && !rerunDisabled
-      ? `Re-run: bazel ${rerun.cmd} ${rerun.pattern}${rerun.flags ? ` ${rerun.flags}` : ""}`
+      ? `Re-run: bazel ${rerun.cmd} ${rerun.pattern}${rerunFlags ? ` ${rerunFlags}` : ""}`
       : undefined,
   );
   const titleText = $derived(`${record.cmd ? `${record.cmd} ` : ""}${record.pattern ?? record.id}`);
-
-  function closeMenu() {
-    if (menu) menu.open = false;
-  }
-
-  function onWindowPointerDown(event: PointerEvent) {
-    if (menu?.open && !menu.contains(event.target as Node)) closeMenu();
-  }
-
-  function onWindowKeyDown(event: KeyboardEvent) {
-    if (event.key === "Escape" && menu?.open) closeMenu();
-  }
 </script>
-
-<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeyDown} />
 
 <div class="invocation-header">
   <div class="invocation-head-row">
@@ -77,26 +62,18 @@
             class="button button-primary"
             disabled={rerunDisabled}
             title={rerunTitle}
-            onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern, rerun.flags)}
+            onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern, rerunFlags)}
           >
             Re-run
           </button>
           {#if onopenflags && !rerunDisabled}
-            <details class="dd" bind:this={menu}>
-              <summary class="button button-ghost" aria-label="More re-run actions">⋯</summary>
-              <div class="dd-menu dd-menu-right dd-menu-compact">
-                <button
-                  type="button"
-                  class="menu-item"
-                  onclick={() => {
-                    closeMenu();
-                    if (rerun) onopenflags(rerun.cmd, rerun.pattern, rerun.flags);
-                  }}
-                >
-                  Re-run with flags…
-                </button>
-              </div>
-            </details>
+            <button
+              type="button"
+              class="button"
+              onclick={() => rerun && onopenflags(rerun.cmd, rerun.pattern, rerunFlags)}
+            >
+              Edit flags…
+            </button>
           {/if}
         </div>
       {/if}

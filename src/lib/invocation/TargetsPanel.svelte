@@ -1,12 +1,6 @@
 <script lang="ts">
   import type { Bep, Section, TargetIndex } from "../types";
-  import {
-    isFailedTestStatus,
-    normalizeTargetLabel,
-    sectionData,
-    sectionMessage,
-    sectionNoticeTone,
-  } from "../invocation";
+  import { sectionData, sectionMessage, sectionNoticeTone } from "../invocation";
   import Notice from "../Notice.svelte";
 
   let {
@@ -26,10 +20,11 @@
   } = $props();
   const bep = $derived(sectionData(section));
   const labels = $derived(new Set((index?.targets ?? []).map((t) => t.label)));
+  const stripMainRepo = (label: string) => (label.startsWith("@@//") ? label.slice(2) : label);
 </script>
 
 {#snippet targetLabel(label: string)}
-  {@const key = normalizeTargetLabel(label)}
+  {@const key = stripMainRepo(label)}
   {#if onselecttarget && labels.has(key)}
     <button type="button" class="table-link mono" onclick={() => onselecttarget?.(key)}
       >{label}</button
@@ -67,18 +62,18 @@
 {#if bep}
   {#if bep.tests.length}
     {@const hasFailedRerun = Boolean(
-      onreruntest && bep.tests.some((test) => isFailedTestStatus(test.status)),
+      onreruntest && bep.tests.some((test) => test.status !== "PASSED"),
     )}
     <ul class="result-list">
       {#each bep.tests as test}
-        {@const pattern = normalizeTargetLabel(test.label)}
+        {@const pattern = stripMainRepo(test.label)}
         {@const disabled = canRerunTest ? !canRerunTest(pattern) : false}
         <li>
           <div class="result-identity">{@render targetLabel(test.label)}</div>
           <span class="result-status">{test.status}</span>
           {#if hasFailedRerun}
             <span class="result-action-slot">
-              {#if onreruntest && isFailedTestStatus(test.status)}
+              {#if onreruntest && test.status !== "PASSED"}
                 <button
                   type="button"
                   class="button result-action"

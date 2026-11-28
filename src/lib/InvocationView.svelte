@@ -34,14 +34,13 @@
   const profile = $derived(sectionData(view.profile ?? undefined));
   const detail = $derived(view.detail?.record.id === shown?.id ? view.detail : undefined);
   const bep = $derived(sectionData(detail?.bep));
-  const explicitCmdLine = $derived(bep?.options?.explicitCmdLine);
-  const rerunFlags = $derived(formatOptions(rerunOptions(explicitCmdLine)));
+  const rerunFlags = $derived(formatOptions(rerunOptions(bep?.options?.explicitCmdLine)));
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
   const sameWorkspace = $derived(Boolean(shown?.workspace && shown.workspace === view.state?.workspace));
   const targetIndex = $derived(sameWorkspace && view.core?.bazel ? view.snapshot : null);
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
-  const rerunCandidate = $derived(rerunArgs(shown, explicitCmdLine));
+  const rerunCandidate = $derived(rerunArgs(shown));
   const canRerun = $derived(
     rerunCandidate !== null &&
       sameWorkspace &&
@@ -78,7 +77,7 @@
       record={shown}
       {status}
       {execution}
-      {explicitCmdLine}
+      {rerunFlags}
       {canRerun}
       {onstop}
       {onrerun}

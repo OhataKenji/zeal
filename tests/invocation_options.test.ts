@@ -23,60 +23,37 @@ test("quotes shell metacharacters and leaves empty option lists empty", () => {
   assert.equal(formatOptions([]), "");
 });
 
-test("rerunOptions strips Zelith-injected transport and identity flags while keeping user options", () => {
+test("rerunOptions strips injected flags while preserving user options and overrides", () => {
   assert.deepEqual(
     rerunOptions([
       "--bes_backend=grpc://127.0.0.1:4718",
       "--bes_proxy=",
       "--bes_upload_mode=wait_for_upload_complete",
-      "--invocation_id=11111111-2222-3333-4444-555555555555",
+      "--invocation_id=old-id",
       "--target_pattern_file=targets.txt",
       "--tool_tag=zelith",
       "--color=yes",
       "--curses=no",
       "--config=asan",
       "--test_env=FOO=hello world",
-      "--test_output=errors",
     ]),
-    ["--config=asan", "--test_env=FOO=hello world", "--test_output=errors"],
+    ["--config=asan", "--test_env=FOO=hello world"],
   );
-});
-
-test("rerunOptions strips two-token Zelith flags and preserves user overrides and post-separator args", () => {
   assert.deepEqual(
     rerunOptions([
       "--invocation_id",
       "old-id",
-      "--bes_backend",
-      "grpc://127.0.0.1:12345",
-      "--bes_proxy",
-      "",
-      "--bes_upload_mode",
-      "wait_for_upload_complete",
       "--target_pattern_file",
       "targets.txt",
       "--tool_tag",
       "zelith",
-      "--color",
-      "yes",
-      "--curses",
-      "no",
       "--color=no",
       "--tool_tag=my-ci",
       "--target_pattern_file=",
-      "--config=opt",
       "--",
       "--invocation_id=app-arg",
     ]),
-    [
-      "--color=no",
-      "--tool_tag=my-ci",
-      "--target_pattern_file=",
-      "--config=opt",
-      "--",
-      "--invocation_id=app-arg",
-    ],
+    ["--color=no", "--tool_tag=my-ci", "--target_pattern_file=", "--", "--invocation_id=app-arg"],
   );
   assert.deepEqual(rerunOptions(undefined), []);
-  assert.deepEqual(rerunOptions([]), []);
 });

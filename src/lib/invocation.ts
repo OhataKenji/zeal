@@ -1,4 +1,3 @@
-import { formatOptions, rerunOptions } from "./invocation/options.ts";
 import { targetError } from "./target.ts";
 import type {
   BazelCommand,
@@ -140,27 +139,12 @@ export function summarizeRunners(counts: RunnerCount[] | undefined): RunnerSumma
   };
 }
 
-/** Normalizes a main-repository canonical label (`@@//...`) to `//...`. */
-export function normalizeTargetLabel(label: string): string {
-  return label.startsWith("@@//") ? label.slice(2) : label;
-}
-
-/** Returns true for any test summary status other than `PASSED`. */
-export function isFailedTestStatus(status: string): boolean {
-  return status !== "PASSED";
-}
-
-/** Extracts a valid `(cmd, pattern, flags)` triple when a finished invocation can be safely re-run. */
+/** Extracts a valid `(cmd, pattern)` pair when a finished invocation can be safely re-run. */
 export function rerunArgs(
   record: InvocationRecord | undefined,
-  explicitCmdLine?: readonly string[],
-): { cmd: BazelCommand; pattern: string; flags: string } | null {
+): { cmd: BazelCommand; pattern: string } | null {
   if (!record?.cmd || !record.pattern) return null;
   if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") return null;
   if (targetError(record.pattern) !== null) return null;
-  return {
-    cmd: record.cmd,
-    pattern: record.pattern,
-    flags: formatOptions(rerunOptions(explicitCmdLine)),
-  };
+  return { cmd: record.cmd, pattern: record.pattern };
 }
