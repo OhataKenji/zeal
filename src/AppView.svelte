@@ -532,6 +532,7 @@
                 {targetIndex}
                 workspace={st.workspace}
                 bazelAvailable={core !== null && core.bazel !== null}
+                active={view.page === "query" && surface === null}
                 onselecttarget={selectTarget}
               />
             {/key}
