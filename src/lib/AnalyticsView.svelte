@@ -1,6 +1,8 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import Notice from "./Notice.svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import type { HistoryFilter } from "./invocation";
   import {
     analyticsDateError,
     cacheHitRate,
@@ -20,7 +22,7 @@
   let { workspace, invocations, onselectday }: {
     workspace: string;
     invocations: InvocationRecord[];
-    onselectday?: (day: string) => void;
+    onselectday?: (day: string, filter: HistoryFilter) => void;
   } = $props();
   let view = $state.raw(emptyAnalytics());
   let controller = $state<ReturnType<typeof createAnalytics> | null>(null);
@@ -100,10 +102,13 @@
   function filter(patch: Partial<AnalyticsFilter>) {
     void controller?.load({ ...view.filter, ...patch });
   }
+  function selectDay(day: string) {
+    onselectday?.(day, view.filter.outcome === "failed" ? "failed" : "all");
+  }
   function onDayKey(event: KeyboardEvent, day: string) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      onselectday?.(day);
+      selectDay(day);
     }
   }
   type ChartKind = "count" | "total" | "duration" | "phase" | "cache";
@@ -139,7 +144,7 @@
   yMax: string | number,
   yZero: string,
   tipKind: ChartKind,
-  body: import("svelte").Snippet,
+  body: Snippet,
   describedBy?: string,
 )}
   <div class="chart-scroll" bind:clientWidth={chartWidth}>
@@ -169,7 +174,7 @@
             role="button"
             tabindex="0"
             aria-label={tip}
-            onclick={() => onselectday?.(day.day)}
+            onclick={() => selectDay(day.day)}
             onkeydown={(e) => onDayKey(e, day.day)}
           >
             <title>{tip}</title>

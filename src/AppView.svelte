@@ -100,14 +100,22 @@
       : -1;
   }
 
-  const filteredInvocations = $derived.by(() => {
-    const rows = view.invocationRows.filter(
+  function filterInvocations(
+    rows: InvocationRow[],
+    filter: HistoryFilter,
+    day: string | null,
+  ): InvocationRow[] {
+    const matching = rows.filter(
       (row) =>
-        matchesHistoryFilter(row, historyFilter) &&
-        (historyDay === null || localDay(row.record.startedAt) === historyDay),
+        matchesHistoryFilter(row, filter) &&
+        (day === null || localDay(row.record.startedAt) === day),
     );
-    return historyDay === null ? rows : rows.toSorted((a, b) => rowDuration(b) - rowDuration(a));
-  });
+    return day === null ? matching : matching.toSorted((a, b) => rowDuration(b) - rowDuration(a));
+  }
+
+  const filteredInvocations = $derived(
+    filterInvocations(view.invocationRows, historyFilter, historyDay),
+  );
 
   function openRunDialog(cmd: BazelCommand, pattern: string, flags = "") {
     surface = { kind: "run", cmd, pattern, flags };
@@ -231,12 +239,10 @@
     session.selectInvocation(id);
   }
 
-  function openHistoryDay(day: string) {
+  function openHistoryDay(day: string, filter: HistoryFilter = "all") {
     historyDay = day;
-    historyFilter = "all";
-    const slowest = view.invocationRows
-      .filter((row) => localDay(row.record.startedAt) === day)
-      .toSorted((a, b) => rowDuration(b) - rowDuration(a))[0];
+    historyFilter = filter;
+    const slowest = filterInvocations(view.invocationRows, filter, day)[0];
     if (slowest) {
       session.selectInvocation(slowest.record.id);
     } else {
@@ -436,8 +442,8 @@
               {:else}
                 <li class="dim empty-row">
                   {historyDay
-                    ? `No invocations for ${historyDay} in recent history.`
-                    : "No invocations."}
+                    ? `No ${historyFilter === "all" ? "" : `${historyFilter} `}invocations for ${historyDay} in recent history.`
+                    : `No ${historyFilter === "all" ? "" : `${historyFilter} `}invocations.`}
                 </li>
               {/each}
             </ul>
