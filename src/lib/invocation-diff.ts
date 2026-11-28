@@ -370,19 +370,21 @@ export function filterBaselineOptions(
     group,
     haystack: `${rec.cmd ?? ""} ${rec.pattern ?? ""} ${rec.workspace ?? ""} ${rec.id}`,
   });
-  const same = recent.sameTarget.map((rec) => toOption(rec, "Same target"));
-  const other = recent.other.map((rec) => toOption(rec, "Other recent"));
+  const all = [
+    ...recent.sameTarget.map((rec) => toOption(rec, "Same target")),
+    ...recent.other.map((rec) => toOption(rec, "Other recent")),
+  ];
   const trimmed = query.trim();
-  const match = (items: typeof same, max: number): BaselineOption[] =>
-    max <= 0
-      ? []
-      : trimmed === ""
-        ? items.slice(0, max).map(({ id, label, group }) => ({ id, label, group }))
-        : fuzzysort
-            .go(trimmed, items, { key: "haystack", limit: max, threshold: 0 })
-            .map(({ obj: { id, label, group } }) => ({ id, label, group }));
-  const matched = match(same, limit);
-  matched.push(...match(other, limit - matched.length));
+  const hits: BaselineOption[] =
+    trimmed === ""
+      ? all.slice(0, limit).map(({ id, label, group }) => ({ id, label, group }))
+      : fuzzysort
+          .go(trimmed, all, { key: "haystack", limit, threshold: 0 })
+          .map(({ obj: { id, label, group } }) => ({ id, label, group }));
+  const matched = [
+    ...hits.filter((opt) => opt.group === "Same target"),
+    ...hits.filter((opt) => opt.group === "Other recent"),
+  ];
   if (UUID_RE.test(trimmed)) {
     const normalized = trimmed.toLowerCase();
     if (!matched.some((opt) => opt.id.toLowerCase() === normalized)) {
