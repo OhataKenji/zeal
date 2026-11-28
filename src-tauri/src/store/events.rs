@@ -1256,13 +1256,9 @@ mod tests {
         assert_eq!(stored_repo_url(&f.data), None);
     }
 
-    #[test]
-    fn build_metrics_cache_hits_and_phase_times_persist_to_sqlite() {
-        use crate::protocol::bep::BuildMetrics;
-        use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
-        use crate::protocol::bep::build_metrics::{ActionSummary, TimingMetrics};
-        use crate::protocol::generated::blaze::ActionCacheStatistics;
-
+    fn ingest_metrics(
+        metrics: bep::BuildMetrics,
+    ) -> (Option<i64>, Option<i64>, Option<i64>, Option<i64>) {
         let f = Fixture::new();
         let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
         receipt.append(&f.ordered(1, f.started())).unwrap();
@@ -1270,48 +1266,14 @@ mod tests {
             .append(&f.ordered(
                 2,
                 bep::BuildEvent {
-                    payload: Some(Payload::BuildMetrics(BuildMetrics {
-                        action_summary: Some(ActionSummary {
-                            actions_executed: 20,
-                            runner_count: vec![
-                                RunnerCount {
-                                    name: "remote cache hit".into(),
-                                    count: 15,
-                                    exec_kind: String::new(),
-                                },
-                                RunnerCount {
-                                    name: "linux-sandbox".into(),
-                                    count: 5,
-                                    exec_kind: String::new(),
-                                },
-                            ],
-                            action_cache_statistics: Some(ActionCacheStatistics {
-                                hits: 80,
-                                misses: 20,
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }),
-                        timing_metrics: Some(TimingMetrics {
-                            analysis_phase_time_in_ms: 420,
-                            execution_phase_time_in_ms: 1580,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
+                    payload: Some(Payload::BuildMetrics(metrics)),
                     ..Default::default()
                 },
             ))
             .unwrap();
         receipt.append(&f.ordered(3, f.finished())).unwrap();
         receipt.finish().unwrap();
-
-        let (cache_hits, actions_total, analysis_ms, execution_ms): (
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-        ) = Store::open(&f.data)
+        Store::open(&f.data)
             .unwrap()
             .conn
             .query_row(
@@ -1319,276 +1281,99 @@ mod tests {
                 [&f.stream.invocation_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
-            .unwrap();
-        assert_eq!(cache_hits, Some(95));
-        assert_eq!(actions_total, Some(100));
-        assert_eq!(analysis_ms, Some(420));
-        assert_eq!(execution_ms, Some(1580));
-    }
-
-    #[test]
-    fn multi_spawn_runner_cache_hits_do_not_inflate_cache_rate() {
-        use crate::protocol::bep::BuildMetrics;
-        use crate::protocol::bep::build_metrics::ActionSummary;
-        use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
-
-        let f = Fixture::new();
-        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        receipt
-            .append(&f.ordered(
-                2,
-                bep::BuildEvent {
-                    payload: Some(Payload::BuildMetrics(BuildMetrics {
-                        action_summary: Some(ActionSummary {
-                            actions_executed: 10,
-                            runner_count: vec![
-                                RunnerCount {
-                                    name: "total".into(),
-                                    count: 20,
-                                    exec_kind: String::new(),
-                                },
-                                RunnerCount {
-                                    name: "remote cache hit".into(),
-                                    count: 10,
-                                    exec_kind: String::new(),
-                                },
-                                RunnerCount {
-                                    name: "linux-sandbox".into(),
-                                    count: 10,
-                                    exec_kind: String::new(),
-                                },
-                            ],
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                },
-            ))
-            .unwrap();
-        receipt.append(&f.ordered(3, f.finished())).unwrap();
-        receipt.finish().unwrap();
-
-        let (cache_hits, actions_total): (Option<i64>, Option<i64>) = Store::open(&f.data)
             .unwrap()
-            .conn
-            .query_row(
-                "SELECT cache_hits,actions_total FROM invocation WHERE id=?1",
-                [&f.stream.invocation_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!((cache_hits, actions_total), (Some(10), Some(20)));
     }
 
     #[test]
-    fn omitted_zero_phase_durations_remain_unknown() {
+    fn build_metrics_cache_hits_and_phase_times_persist_to_sqlite() {
         use crate::protocol::bep::BuildMetrics;
-        use crate::protocol::bep::build_metrics::TimingMetrics;
-
-        let f = Fixture::new();
-        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        receipt
-            .append(&f.ordered(
-                2,
-                bep::BuildEvent {
-                    payload: Some(Payload::BuildMetrics(BuildMetrics {
-                        timing_metrics: Some(TimingMetrics {
-                            analysis_phase_time_in_ms: 420,
-                            execution_phase_time_in_ms: 0,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                },
-            ))
-            .unwrap();
-        receipt.append(&f.ordered(3, f.finished())).unwrap();
-        receipt.finish().unwrap();
-
-        let (analysis_ms, execution_ms): (Option<i64>, Option<i64>) = Store::open(&f.data)
-            .unwrap()
-            .conn
-            .query_row(
-                "SELECT analysis_ms,execution_ms FROM invocation WHERE id=?1",
-                [&f.stream.invocation_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!((analysis_ms, execution_ms), (Some(420), None));
-    }
-
-    #[test]
-    fn combined_cache_runners_exclude_internal_and_keep_disk_hits() {
-        use crate::protocol::bep::BuildMetrics;
-        use crate::protocol::bep::build_metrics::ActionSummary;
         use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
+        use crate::protocol::bep::build_metrics::{ActionSummary, TimingMetrics};
+        use crate::protocol::generated::blaze::ActionCacheStatistics;
 
-        let f = Fixture::new();
-        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        #[allow(deprecated)]
-        let summary = ActionSummary {
-            actions_executed: 10,
-            remote_cache_hits: 3,
-            runner_count: vec![
-                RunnerCount {
-                    name: "total".into(),
-                    count: 15,
-                    exec_kind: String::new(),
-                },
-                RunnerCount {
-                    name: "internal".into(),
-                    count: 5,
-                    exec_kind: String::new(),
-                },
-                RunnerCount {
-                    name: "remote cache hit".into(),
-                    count: 3,
-                    exec_kind: String::new(),
-                },
-                RunnerCount {
-                    name: "disk cache hit".into(),
-                    count: 4,
-                    exec_kind: String::new(),
-                },
-                RunnerCount {
-                    name: "linux-sandbox".into(),
-                    count: 3,
-                    exec_kind: String::new(),
-                },
-            ],
+        let runner = |name: &str, count: i32| RunnerCount {
+            name: name.into(),
+            count,
             ..Default::default()
         };
-        receipt
-            .append(&f.ordered(
-                2,
-                bep::BuildEvent {
-                    payload: Some(Payload::BuildMetrics(BuildMetrics {
-                        action_summary: Some(summary),
+        let ingest = ingest_metrics;
+
+        // Local + remote cache hits and both phase durations persist.
+        assert_eq!(
+            ingest(BuildMetrics {
+                action_summary: Some(ActionSummary {
+                    actions_executed: 20,
+                    runner_count: vec![runner("remote cache hit", 15), runner("linux-sandbox", 5)],
+                    action_cache_statistics: Some(ActionCacheStatistics {
+                        hits: 80,
+                        misses: 20,
                         ..Default::default()
-                    })),
+                    }),
                     ..Default::default()
-                },
-            ))
-            .unwrap();
-        receipt.append(&f.ordered(3, f.finished())).unwrap();
-        receipt.finish().unwrap();
-
-        let (cache_hits, actions_total): (Option<i64>, Option<i64>) = Store::open(&f.data)
-            .unwrap()
-            .conn
-            .query_row(
-                "SELECT cache_hits,actions_total FROM invocation WHERE id=?1",
-                [&f.stream.invocation_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!((cache_hits, actions_total), (Some(7), Some(10)));
-    }
-
-    #[test]
-    fn local_cache_misses_count_when_actions_executed_is_zero() {
-        use crate::protocol::bep::BuildMetrics;
-        use crate::protocol::bep::build_metrics::ActionSummary;
-        use crate::protocol::generated::blaze::ActionCacheStatistics;
-
-        let f = Fixture::new();
-        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        receipt
-            .append(&f.ordered(
-                2,
-                bep::BuildEvent {
-                    payload: Some(Payload::BuildMetrics(BuildMetrics {
-                        action_summary: Some(ActionSummary {
-                            actions_executed: 0,
-                            action_cache_statistics: Some(ActionCacheStatistics {
-                                hits: 80,
-                                misses: 20,
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }),
+                }),
+                timing_metrics: Some(TimingMetrics {
+                    analysis_phase_time_in_ms: 420,
+                    execution_phase_time_in_ms: 1580,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            (Some(95), Some(100), Some(420), Some(1580)),
+        );
+        // Multi-spawn runner cache hits exclude synthetic total/internal rows.
+        assert_eq!(
+            ingest(BuildMetrics {
+                action_summary: Some(ActionSummary {
+                    actions_executed: 10,
+                    runner_count: vec![
+                        runner("total", 20),
+                        runner("internal", 5),
+                        runner("remote cache hit", 3),
+                        runner("disk cache hit", 4),
+                        runner("linux-sandbox", 3),
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            (Some(7), Some(10), None, None),
+        );
+        // Local cache misses count when actions_executed is zero.
+        assert_eq!(
+            ingest(BuildMetrics {
+                action_summary: Some(ActionSummary {
+                    action_cache_statistics: Some(ActionCacheStatistics {
+                        hits: 80,
+                        misses: 20,
                         ..Default::default()
-                    })),
+                    }),
                     ..Default::default()
-                },
-            ))
-            .unwrap();
-        receipt.append(&f.ordered(3, f.finished())).unwrap();
-        receipt.finish().unwrap();
-
-        let (cache_hits, actions_total): (Option<i64>, Option<i64>) = Store::open(&f.data)
-            .unwrap()
-            .conn
-            .query_row(
-                "SELECT cache_hits,actions_total FROM invocation WHERE id=?1",
-                [&f.stream.invocation_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!((cache_hits, actions_total), (Some(80), Some(100)));
-    }
-
-    #[test]
-    fn uncached_multi_spawn_action_uses_actions_executed_denominator() {
-        use crate::protocol::bep::BuildMetrics;
-        use crate::protocol::bep::build_metrics::ActionSummary;
-        use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
-        use crate::protocol::generated::blaze::ActionCacheStatistics;
-
-        let f = Fixture::new();
-        let mut receipt = Receipt::begin(&f.data, &f.stream).unwrap();
-        receipt.append(&f.ordered(1, f.started())).unwrap();
-        receipt
-            .append(&f.ordered(
-                2,
-                bep::BuildEvent {
-                    payload: Some(bep::build_event::Payload::BuildMetrics(BuildMetrics {
-                        action_summary: Some(ActionSummary {
-                            actions_executed: 1,
-                            action_cache_statistics: Some(ActionCacheStatistics {
-                                hits: 10,
-                                misses: 1,
-                                ..Default::default()
-                            }),
-                            runner_count: vec![
-                                RunnerCount {
-                                    name: "linux-sandbox".into(),
-                                    count: 2,
-                                    ..Default::default()
-                                },
-                                RunnerCount {
-                                    name: "total".into(),
-                                    count: 2,
-                                    ..Default::default()
-                                },
-                            ],
-                            ..Default::default()
-                        }),
+                }),
+                ..Default::default()
+            }),
+            (Some(80), Some(100), None, None),
+        );
+        // Uncached multi-spawn action uses actions_executed (not spawn count) as denominator.
+        assert_eq!(
+            ingest(BuildMetrics {
+                action_summary: Some(ActionSummary {
+                    actions_executed: 1,
+                    action_cache_statistics: Some(ActionCacheStatistics {
+                        hits: 10,
+                        misses: 1,
                         ..Default::default()
-                    })),
+                    }),
+                    runner_count: vec![runner("linux-sandbox", 2), runner("total", 2)],
                     ..Default::default()
-                },
-            ))
-            .unwrap();
-        receipt.append(&f.ordered(3, f.finished())).unwrap();
-        receipt.finish().unwrap();
-
-        let (cache_hits, actions_total): (Option<i64>, Option<i64>) = Store::open(&f.data)
-            .unwrap()
-            .conn
-            .query_row(
-                "SELECT cache_hits,actions_total FROM invocation WHERE id=?1",
-                [&f.stream.invocation_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        // 10 local hits + 1 executed action (2 local spawns, no runner cache hits) = 10/11
-        assert_eq!((cache_hits, actions_total), (Some(10), Some(11)));
+                }),
+                timing_metrics: Some(TimingMetrics {
+                    analysis_phase_time_in_ms: 420,
+                    execution_phase_time_in_ms: 0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            (Some(10), Some(11), Some(420), None),
+        );
     }
 }

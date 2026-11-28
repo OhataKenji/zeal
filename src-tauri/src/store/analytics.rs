@@ -1453,24 +1453,6 @@ mod tests {
         }
     }
 
-    fn seed_metrics(
-        f: &Fixture,
-        id: &str,
-        cache_hits: i64,
-        actions_total: i64,
-        analysis_ms: i64,
-        execution_ms: i64,
-    ) {
-        let store = Store::open(&f.data).unwrap();
-        store
-            .conn
-            .execute(
-                "UPDATE invocation SET cache_hits=?1,actions_total=?2,analysis_ms=?3,execution_ms=?4 WHERE id=?5",
-                params![cache_hits, actions_total, analysis_ms, execution_ms, id],
-            )
-            .unwrap();
-    }
-
     #[test]
     fn daily_aggregates_include_cache_and_phase_metrics() {
         let f = Fixture::new();
@@ -1481,16 +1463,13 @@ mod tests {
             "//app:fast",
             Some("2026-03-10 10:00:02"),
         );
-        let slow_failed = f.insert_at(
+        let slow = f.insert_at(
             "2026-03-10 11:00:00",
             "test",
             Some(1),
             "//app:slow",
             Some("2026-03-10 11:00:15"),
         );
-        seed_metrics(&f, &fast, 90, 100, 300, 1200);
-        seed_metrics(&f, &slow_failed, 10, 50, 4000, 10000);
-        // Analysis-only build (NULL execution_ms) must not dilute execution_ms average.
         let analysis_only = f.insert_at(
             "2026-03-10 12:00:00",
             "build",
@@ -1498,20 +1477,25 @@ mod tests {
             "//app:broken",
             Some("2026-03-10 12:00:01"),
         );
-        Store::open(&f.data)
-            .unwrap()
-            .conn
-            .execute(
-                "UPDATE invocation SET analysis_ms=?2 WHERE id=?1",
-                params![analysis_only, 500i64],
-            )
-            .unwrap();
-        let result = f.query(Filter {
-            start: Some("2026-03-10".into()),
-            end: Some("2026-03-10".into()),
-            ..Filter::default()
-        });
-        let day = &result.days[0];
+        let store = Store::open(&f.data).unwrap();
+        for (id, ch, at, an, ex) in [
+            (&fast, Some(90), Some(100), Some(300), Some(1200)),
+            (&slow, Some(10), Some(50), Some(4000), Some(10000)),
+            (&analysis_only, None, None, Some(500), None),
+        ] {
+            store.conn.execute(
+                "UPDATE invocation SET cache_hits=?1,actions_total=?2,analysis_ms=?3,execution_ms=?4 WHERE id=?5",
+                params![ch, at, an, ex, id],
+            ).unwrap();
+        }
+        drop(store);
+        let day = &f
+            .query(Filter {
+                start: Some("2026-03-10".into()),
+                end: Some("2026-03-10".into()),
+                ..Filter::default()
+            })
+            .days[0];
         assert_eq!(
             (day.cache_hits, day.actions_total, day.phase_timed),
             (100, 150, 3)
