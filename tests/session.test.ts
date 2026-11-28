@@ -13,8 +13,6 @@ import type {
   OpenWorkspaceResult,
   OwnedInvocation,
   ProcessDiagnostic,
-  Profile,
-  Section,
   TargetActions,
   TargetDetail,
   TargetIndex,
@@ -90,7 +88,6 @@ const COMPLETED: InvocationDetail = {
   log: { status: "ok", data: "same\nsame\n" },
   bep: { status: "missing" },
 };
-const PROFILE: Section<Profile> = { status: "ok", data: { phases: [], lanes: [] } };
 const OTHER_RECORD: InvocationRecord = { ...RECORD, id: "b-run", workspace: OTHER };
 const COMPLETED_RECORD: InvocationRecord = { ...RECORD, finishedAt: 2, exitCode: 0 };
 const PENDING_DETAIL: InvocationDetail = {
@@ -983,10 +980,6 @@ test("history refresh preserves a newly selected shared run through release", as
   assert.deepEqual(h.view.invocation?.record, record);
   assert.equal(h.view.invocation?.execution, undefined);
   assert.deepEqual(pendingRequest(h, "get_invocation").args, { workspace: WS, id: record.id });
-  assert.deepEqual(pendingRequest(h, "get_invocation_profile").args, {
-    workspace: WS,
-    id: record.id,
-  });
 });
 
 test("a sibling console with a reused id cannot take over a local record or diagnostic", async () => {
@@ -1109,7 +1102,6 @@ test("a diagnostic row fills the gap until saved history supersedes it", async (
   assert.equal(h.view.invocation?.execution, undefined);
   assert.equal(h.view.invocation?.record.exitCode, undefined);
   assert.equal(requestCount(h, "get_invocation"), 0);
-  assert.equal(requestCount(h, "get_invocation_profile"), 0);
   // The selection probe re-reads history for a late record; it is still absent.
   await loadHistory(h, [], [diagB]);
   assert.equal(h.view.invocation?.diagnostic, diagB);
@@ -1128,11 +1120,8 @@ test("a diagnostic row fills the gap until saved history supersedes it", async (
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, "b-run");
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, "b-run");
   assert.deepEqual(h.view.invocations, [{ ...RECORD, id: "b-run", finishedAt: 3, exitCode: 0 }]);
 });
 
@@ -1197,7 +1186,6 @@ test("a same-id record owned elsewhere cannot displace a local diagnostic", asyn
   await settle();
   assert.equal(h.view.invocation?.diagnostic?.id, "b-run");
   assert.equal(requestCount(h, "get_invocation"), 0);
-  assert.equal(requestCount(h, "get_invocation_profile"), 0);
   // Once a record owned by this workspace lands, it supersedes the
   // diagnostic and the saved readers take over.
   h.emit("invocations-changed", null);
@@ -1304,7 +1292,7 @@ test("scope change invalidates stale target results and readers name the workspa
   assert.equal(phaseRequests(h, "actions").length, 0);
 });
 
-test("late history/detail/profile replies cannot populate another workspace", async () => {
+test("late history/detail replies cannot populate another workspace", async () => {
   const h = harness();
   await initReady(h);
   pendingRequest(h, "list_invocations").reply.resolve(history([RECORD]));
@@ -1312,7 +1300,6 @@ test("late history/detail/profile replies cannot populate another workspace", as
   h.session.selectInvocation(RECORD.id);
   await settle();
   const detailReq = pendingRequest(h, "get_invocation");
-  const profileReq = pendingRequest(h, "get_invocation_profile");
   assert.equal(detailReq.args?.workspace, WS);
   // Switch to B before replies land.
   void h.session.openWorkspace(OTHER, { include: ["//..."] });
@@ -1325,10 +1312,8 @@ test("late history/detail/profile replies cannot populate another workspace", as
   });
   await settle();
   detailReq.reply.resolve(COMPLETED);
-  profileReq.reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail, null);
-  assert.equal(h.view.profile, null);
   assert.equal(h.view.selectedInvocationId, null);
 });
 
@@ -1393,29 +1378,22 @@ test("dispose removes listeners and ignores late reads", async () => {
   h.session.selectInvocation("run-a");
   await settle();
   const detailA = pendingRequest(h, "get_invocation");
-  const profileA = pendingRequest(h, "get_invocation_profile");
   h.session.selectInvocation("run-b");
   await settle();
   const detailB = lastPendingRequest(h, "get_invocation");
-  const profileB = lastPendingRequest(h, "get_invocation_profile");
-  // Each selection issued its own saved reads; A's were orphaned by B's.
+  // Each selection issued its own saved read; A's was orphaned by B's.
   assert.equal(requestCount(h, "get_invocation"), 2);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
   h.session.dispose();
   // Late replies cannot publish values or start further work.
   detailA.reply.resolve(COMPLETED);
-  profileA.reply.resolve(PROFILE);
   detailB.reply.resolve({
     ...COMPLETED,
     record: { ...COMPLETED.record, id: "run-b" },
   });
-  profileB.reply.resolve(PROFILE);
   await settle();
   assert.equal(h.listeners.size, 0);
   assert.equal(h.view.detail, null);
-  assert.equal(h.view.profile, null);
   assert.equal(requestCount(h, "get_invocation"), 2);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
 });
 
 test("unmount during listener registration immediately cleans the late subscription", async () => {
@@ -1665,11 +1643,8 @@ test("a start reply after release renders the saved result and reads for the sam
   assert.equal(h.view.invocation?.record.exitCode, 0);
   assert.equal(h.view.invocation?.execution, undefined);
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, "inv-x");
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, "inv-x");
 });
 
 test("a live Console suppresses saved reads until the entry is released", async () => {
@@ -1691,7 +1666,6 @@ test("a live Console suppresses saved reads until the entry is released", async 
   assert.equal(h.view.invocation?.execution?.console, true);
   // The BEP record exists, but the live Console keeps saved reads ineligible.
   assert.equal(requestCount(h, "get_invocation"), 0);
-  assert.equal(requestCount(h, "get_invocation_profile"), 0);
   h.emit("app-state", coreState({ revision: 3, invocations: [] }));
   await settle();
   assert.equal(h.view.invocation?.record.exitCode, 0);
@@ -1699,11 +1673,8 @@ test("a live Console suppresses saved reads until the entry is released", async 
   assert.equal(h.view.page, "history");
   assert.equal(h.view.selectedInvocationId, "a-run");
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, "a-run");
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, "a-run");
 });
 
 test("saved reads require the record in history, not just an owned entry", async () => {
@@ -1723,7 +1694,6 @@ test("saved reads require the record in history, not just an owned entry", async
   assert.equal(h.view.selectedInvocationId, "q-1");
   assert.equal(h.view.invocation?.execution?.id, "q-1");
   assert.equal(requestCount(h, "get_invocation"), 0);
-  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("releasing an invocation elsewhere never moves the current destination", async () => {
@@ -2147,53 +2117,37 @@ test("history notifications coalesce and owned-state pushes do not refetch", asy
   assert.equal(requestCount(h, "refresh"), refreshes);
 });
 
-test("a history record change refreshes saved readers; retries stay per-reader", async () => {
+test("a history record change refreshes the saved detail; retries stay scoped", async () => {
   const h = harness();
   await initReady(h);
   await loadHistory(h, [COMPLETED_RECORD]);
   h.session.selectInvocation(RECORD.id);
   await settle();
   pendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
-  assert.deepEqual(h.view.profile, PROFILE);
-  // The selected record changes: both saved readers refetch, targets do not.
+  // The selected record changes: the saved detail refetches, targets do not.
   h.emit("invocations-changed", null);
   await settle();
   await loadHistory(h, [{ ...COMPLETED_RECORD, exitCode: 1 }]);
   await settle();
   const detailRefresh = lastPendingRequest(h, "get_invocation");
-  const profileRefresh = lastPendingRequest(h, "get_invocation_profile");
   detailRefresh.reply.reject(new Error("detail refresh failed"));
-  profileRefresh.reply.reject(new Error("profile refresh failed"));
   await settle();
-  // Cached values stay visible alongside the new errors.
+  // The cached value stays visible alongside the new error.
   assert.equal(h.view.detail?.record.exitCode, 0);
   assert.match(h.view.detailError ?? "", /detail refresh failed/);
-  assert.deepEqual(h.view.profile, PROFILE);
-  assert.match(h.view.profileError ?? "", /profile refresh failed/);
-  // An unrelated push does not retry the failed readers.
+  // An unrelated push does not retry the failed read.
   h.emit("app-state", coreState({ revision: 2 }));
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 2);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
-  // Explicit retries hit only their own reader.
+  // An explicit retry hits only the detail reader.
   h.session.loadDetail();
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 3);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
   assert.equal(h.view.detailError, null);
-  assert.match(h.view.profileError ?? "", /profile refresh failed/);
-  h.session.loadProfile();
-  await settle();
-  assert.equal(requestCount(h, "get_invocation_profile"), 3);
-  assert.equal(requestCount(h, "get_invocation"), 3);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
-  assert.equal(h.view.detailError, null);
-  assert.equal(h.view.profileError, null);
 });
 
 test("an identical history row refreshes details as events arrive", async () => {
@@ -2206,7 +2160,6 @@ test("an identical history row refreshes details as events arrive", async () => 
   const partialDetail = { ...PARTIAL_DETAIL, record: COMPLETED_RECORD };
   const completeDetail = { ...COMPLETED, record: COMPLETED_RECORD };
   pendingRequest(h, "get_invocation").reply.resolve(pendingDetail);
-  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.log.status, "pending");
 
@@ -2223,7 +2176,6 @@ test("an identical history row refreshes details as events arrive", async () => 
     await settle();
     assert.equal(requestCount(h, "get_invocation"), reads + 1);
     lastPendingRequest(h, "get_invocation").reply.resolve(detail);
-    lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
     await settle();
     assert.equal(h.view.detail?.log.status, status);
   }
@@ -2249,7 +2201,6 @@ test("a history note orphans an in-flight detail read for a recorded result", as
   await loadHistory(h, [COMPLETED_RECORD]);
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 2);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
 
   // The superseded read's late reply is discarded; the fresh read wins.
   pendingRequest(h, "get_invocation").reply.resolve({
@@ -2263,7 +2214,6 @@ test("a history note orphans an in-flight detail read for a recorded result", as
     ...PARTIAL_DETAIL,
     record: COMPLETED_RECORD,
   });
-  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.log.status, "incomplete");
 });
@@ -2484,7 +2434,6 @@ test("returning to history reloads detail when the selected record changed off-p
   h.session.selectInvocation(RECORD.id);
   await settle();
   pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
-  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, undefined);
 
@@ -2495,14 +2444,11 @@ test("returning to history reloads detail when the selected record changed off-p
   lastPendingRequest(h, "list_invocations").reply.resolve(history([COMPLETED_RECORD]));
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 1);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
 
   h.session.showPage("history");
   await settle();
   assert.equal(requestCount(h, "get_invocation"), 2);
-  assert.equal(requestCount(h, "get_invocation_profile"), 2);
   lastPendingRequest(h, "get_invocation").reply.resolve(COMPLETED);
-  lastPendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
   assert.equal(h.view.detail?.record.exitCode, 0);
 });
@@ -2522,11 +2468,8 @@ test("selecting an off-window id pins it through a selected-id history read", as
   assert.equal(h.view.historyLoading, false);
   assert.equal(h.view.invocation?.record.id, OFF_WINDOW_ID);
   const detail = pendingRequest(h, "get_invocation");
-  const profile = pendingRequest(h, "get_invocation_profile");
   assert.equal(detail.args?.workspace, WS);
   assert.equal(detail.args?.id, OFF_WINDOW_ID);
-  assert.equal(profile.args?.workspace, WS);
-  assert.equal(profile.args?.id, OFF_WINDOW_ID);
 });
 
 test("an unknown off-window id converges without saved reads or extra fetches", async () => {
@@ -2542,7 +2485,6 @@ test("an unknown off-window id converges without saved reads or extra fetches", 
   assert.equal(h.view.invocation, null);
   assert.equal(h.view.selectedInvocationId, OFF_WINDOW_ID);
   assert.equal(requestCount(h, "get_invocation"), 0);
-  assert.equal(requestCount(h, "get_invocation_profile"), 0);
   assert.equal(requestCount(h, "list_invocations"), 2);
 });
 
@@ -2606,16 +2548,14 @@ test("showPage(history) auto-selects the first invocation row", async () => {
 
   assert.equal(h.view.page, "history");
   assert.equal(h.view.selectedInvocationId, RECORD.id);
-  // Eligibility started exactly one detail/profile read pair.
+  // Eligibility started exactly one saved detail read.
   assert.equal(requestCount(h, "get_invocation"), 1);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
 
   // A later state publish must not reselect or refetch.
   h.emit("app-state", coreState({ revision: 2 }));
   await settle();
   assert.equal(h.view.selectedInvocationId, RECORD.id);
   assert.equal(requestCount(h, "get_invocation"), 1);
-  assert.equal(requestCount(h, "get_invocation_profile"), 1);
 });
 
 test("history updates on the history page claim the first row once", async () => {
@@ -2630,7 +2570,6 @@ test("history updates on the history page claim the first row once", async () =>
   // A settled reader keeps the cached detail; only an in-flight or pending
   // read would be orphaned by the identical row below.
   pendingRequest(h, "get_invocation").reply.resolve({ ...COMPLETED, record: RECORD });
-  pendingRequest(h, "get_invocation_profile").reply.resolve(PROFILE);
   await settle();
 
   // A refreshed list keeps the existing selection and does not refetch.
@@ -2657,7 +2596,6 @@ test("a live invocation arriving on an empty history page is selected", async ()
   assert.equal(h.view.invocation?.record.id, "live-1");
   // A console execution is not saved-reader eligible, so nothing was fetched.
   assert.equal(requestCount(h, "get_invocation"), 0);
-  assert.equal(requestCount(h, "get_invocation_profile"), 0);
 });
 
 test("a modules load survives page navigation without a refetch", async () => {

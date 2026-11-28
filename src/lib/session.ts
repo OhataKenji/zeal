@@ -13,8 +13,6 @@ import type {
   OpenWorkspaceResult,
   OwnedInvocation,
   ProcessDiagnostic,
-  Profile,
-  Section,
   ConfigSummary,
   ConfiguredTarget,
   TargetActions,
@@ -78,11 +76,6 @@ interface Workspace {
   diagnostics: ProcessDiagnostic[];
 }
 
-interface Saved {
-  detail: Reader<InvocationDetail>;
-  profile: Reader<Section<Profile>>;
-}
-
 interface Initialization {
   phase:
     | "new"
@@ -103,7 +96,9 @@ interface SessionState {
   /** The pending start that may still open its Console in the current view. */
   startFeedback: object | null;
   error: string | null;
-  saved: Saved;
+  /** Saved detail for the selected history invocation; its identity is the
+   * race token that orphans in-flight reads on scope changes. */
+  saved: Reader<InvocationDetail>;
 }
 
 function cachedState<T>(value: T | null): ReadState<T> {
@@ -126,8 +121,8 @@ function targetSelection(selection: ExplorerSelection = null): TargetSelection {
   };
 }
 
-function savedReaders(): Saved {
-  return { detail: reader(), profile: reader() };
+function savedReader(): Reader<InvocationDetail> {
+  return reader<InvocationDetail>();
 }
 
 function initialState(page: Page): SessionState {
@@ -138,7 +133,7 @@ function initialState(page: Page): SessionState {
     selectedInvocationId: null,
     startFeedback: null,
     error: null,
-    saved: savedReaders(),
+    saved: savedReader(),
   };
 }
 
@@ -301,12 +296,9 @@ function sessionView(state: SessionState) {
     invocations: history,
     invocationsError: ws?.historyError ?? null,
     historyLoading: ws !== null && ws.historyRead !== "idle",
-    detail: saved.detail.state.value,
-    detailError: readError(saved.detail.state),
-    profile: saved.profile.state.value,
-    detailLoading: eligible && saved.detail.state.phase === "loading",
-    profileLoading: eligible && saved.profile.state.phase === "loading",
-    profileError: readError(saved.profile.state),
+    detail: saved.state.value,
+    detailError: readError(saved.state),
+    detailLoading: eligible && saved.state.phase === "loading",
   };
 }
 
@@ -589,7 +581,7 @@ export function createSession(
     }
     const previous = ws.history.find((record) => record.id === id);
     const changed = JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
-    const detail = state.saved.detail.state;
+    const detail = state.saved.state;
     const detailMismatch =
       next !== undefined &&
       detail.phase === "ready" &&
@@ -664,7 +656,7 @@ export function createSession(
     const ctx = savedContext();
     if (!ctx) return;
     void read(
-      ctx.saved.detail,
+      ctx.saved,
       () =>
         transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
           workspace: ctx.ws.path,
@@ -674,47 +666,28 @@ export function createSession(
     );
   }
 
-  function readSavedProfile() {
-    const ctx = savedContext();
-    if (!ctx) return;
-    void read(
-      ctx.saved.profile,
-      () =>
-        transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
-          workspace: ctx.ws.path,
-          id: ctx.id,
-        }),
-      ctx.current,
-    );
-  }
-
-  /** Starts each eligible saved reader that has never produced a value. */
+  /** Starts the saved reader once it has never produced a value. */
   function ensureSaved() {
     const ctx = savedContext();
     if (!ctx) return;
-    if (ctx.saved.detail.state.phase === "empty") readSavedDetail();
-    if (ctx.saved.profile.state.phase === "empty") readSavedProfile();
+    if (ctx.saved.state.phase === "empty") readSavedDetail();
   }
 
-  /** A history update re-reads saved results even when values are cached. */
+  /** A history update re-reads the saved detail even when its value is cached. */
   function refreshSavedFromHistory() {
     if (state.selectedInvocationId === null) return;
     if (state.page !== "history") {
-      state.saved = savedReaders();
+      state.saved = savedReader();
       return;
     }
     const saved = state.saved;
-    // Replacing the wrapper orphans any in-flight read; the retained values
-    // stay visible until the fresh pair lands or fails.
-    state.saved = {
-      detail: reader(saved.detail.state.value),
-      profile: reader(saved.profile.state.value),
-    };
+    // Replacing the reader orphans any in-flight read; the retained value
+    // stay visible until the fresh read lands or fails.
+    state.saved = reader(saved.state.value);
     readSavedDetail();
-    readSavedProfile();
   }
 
-  /** Eligibility flips replace the readers; a gain starts fresh reads. */
+  /** Eligibility flips replace the reader; a gain starts a fresh read. */
   function reconcileSaved(wasEligible: boolean) {
     const isEligible = savedEligible(state);
     if (wasEligible === isEligible) return;
@@ -722,7 +695,7 @@ export function createSession(
       ensureSaved();
       return;
     }
-    state.saved = savedReaders();
+    state.saved = savedReader();
   }
 
   function loadWorkspaceInfo() {
@@ -761,7 +734,7 @@ export function createSession(
     };
     state.selectedInvocationId = null;
     state.startFeedback = null;
-    state.saved = savedReaders();
+    state.saved = savedReader();
     publish();
     requestHistory();
     refreshSnapshot();
@@ -780,7 +753,7 @@ export function createSession(
     state.selectedInvocationId = id;
     state.startFeedback = null;
     if (previousId !== id) {
-      state.saved = savedReaders();
+      state.saved = savedReader();
     }
     publish();
     ensureSaved();
@@ -800,9 +773,8 @@ export function createSession(
       }
       return;
     }
-    // Re-selecting the same invocation only retries failed readers.
-    if (saved.detail.state.phase === "failed") readSavedDetail();
-    if (saved.profile.state.phase === "failed") readSavedProfile();
+    // Re-selecting the same invocation only retries a failed read.
+    if (saved.state.phase === "failed") readSavedDetail();
   }
 
   function selectInvocation(id: string) {
@@ -1093,7 +1065,6 @@ export function createSession(
     setInvocationTab,
     showPage,
     loadDetail: readSavedDetail,
-    loadProfile: readSavedProfile,
     loadInvocations: requestHistory,
     select,
     setTargetTab,

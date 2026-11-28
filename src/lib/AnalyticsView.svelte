@@ -472,8 +472,6 @@
     font-size: 11px;
   }
 
-  /* Shares the timeline trace palette (timeline.ts eventColors). */
-
   rect {
     fill: var(--chart-bar, #0891b2);
   }
