@@ -26,10 +26,12 @@
   let chartWidth = $state(0);
   let breakdown = $state<"result" | "workspace">("result");
   let dirty = $state(true);
+  let customDates = false;
   $effect(() => {
     // A workspace change discards both the filters and pending responses.
     void workspace;
     dirty = true;
+    customDates = false;
     const next = createAnalytics(workspace, { invoke }, (value) => (view = value));
     controller = next;
     return next.dispose;
@@ -41,7 +43,7 @@
   $effect(() => {
     if (active && dirty && controller) {
       dirty = false;
-      void controller.load();
+      reload();
     }
   });
   const dateError = $derived(analyticsDateError(view.filter));
@@ -99,8 +101,13 @@
       days[index] ? [{ index, day: days[index].day }] : [],
     );
   });
+  function reload() {
+    void controller?.load(customDates ? view.filter : { ...view.filter, start: null, end: null });
+  }
   function filter(patch: Partial<AnalyticsFilter>) {
-    void controller?.load({ ...view.filter, ...patch });
+    if ("start" in patch || "end" in patch) customDates = true;
+    const base = customDates ? view.filter : { ...view.filter, start: null, end: null };
+    void controller?.load({ ...base, ...patch });
   }
 </script>
 
@@ -189,7 +196,7 @@
           filter({ pattern: e.currentTarget.value || null })}
       /></label
     >
-    <button type="button" class="button" onclick={() => controller?.load()}
+    <button type="button" class="button" onclick={reload}
       >Refresh</button
     >
   </div>
