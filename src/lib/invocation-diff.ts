@@ -229,18 +229,16 @@ function isFailedTest(status: string | undefined): boolean {
   return status !== undefined && FAILED_TEST_STATUSES.has(status);
 }
 
-function isPassedTest(status: string | undefined): boolean {
-  return status === "PASSED" || status === "FLAKY";
-}
-
 function summarizeTests(tests: readonly { label: string; status: string }[]): string {
   if (tests.length === 0) return "No tests";
   const passed = tests.filter((t) => t.status === "PASSED").length;
   const failed = tests.filter((t) => isFailedTest(t.status)).length;
   const flaky = tests.filter((t) => t.status === "FLAKY").length;
+  const incomplete = tests.length - passed - failed - flaky;
   const details = [
     ...(failed > 0 ? [`${failed} failed`] : []),
     ...(flaky > 0 ? [`${flaky} flaky`] : []),
+    ...(incomplete > 0 ? [`${incomplete} incomplete`] : []),
   ];
   return details.length > 0
     ? `${passed}/${tests.length} passed (${details.join(", ")})`
@@ -257,7 +255,7 @@ function testChanges(
     .filter((t) => isFailedTest(t.status) && !isFailedTest(baseStatus.get(t.label)))
     .map((t) => t.label);
   const fixed = baseline
-    .filter((t) => isFailedTest(t.status) && isPassedTest(curStatus.get(t.label)))
+    .filter((t) => isFailedTest(t.status) && curStatus.get(t.label) === "PASSED")
     .map((t) => t.label);
   return { newlyFailed, fixed };
 }
@@ -288,9 +286,9 @@ function formatTestCell(
 
 function formatNewFailures(newlyFailed: readonly string[]): string {
   if (newlyFailed.length === 0) return "";
-  const shown = newlyFailed.slice(0, 5).join(", ");
-  const extra = newlyFailed.length > 5 ? ` (+${newlyFailed.length - 5} more)` : "";
-  return `\nNew failures: ${shown}${extra}`;
+  const shown = newlyFailed.slice(0, 5).join("\n");
+  const extra = newlyFailed.length > 5 ? `\n(+${newlyFailed.length - 5} more)` : "";
+  return `\nNew failures:\n${shown}${extra}`;
 }
 
 function bepTests(

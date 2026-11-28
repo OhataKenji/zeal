@@ -313,11 +313,11 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     "Tests",
   );
   assert.equal(regressed.left, "2/2 passed");
-  assert.equal(regressed.right, "1/2 passed (1 failed)\nNew failures: //app:b_test");
+  assert.equal(regressed.right, "1/2 passed (1 failed)\nNew failures:\n//app:b_test");
   assert.deepEqual(regressed.delta, { text: "+1 failed", tone: "worse" });
   assert.equal(regressed.status, "changed");
 
-  // Fixed test surfaced as better.
+  // Fixed test surfaced as better; FAILED -> FLAKY is not called fixed.
   const fixed = row(
     comparisonRows(
       invocation({ id: "base" }, withTests([{ label: "//app:b_test", status: "TIMEOUT" }])),
@@ -327,7 +327,17 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
   );
   assert.deepEqual(fixed.delta, { text: "1 fixed", tone: "better" });
 
-  // Skipped/halted tests are not treated as failures or fixes.
+  const flakyAfterFail = row(
+    comparisonRows(
+      invocation({ id: "base" }, withTests([{ label: "//app:b_test", status: "FAILED" }])),
+      invocation({ id: "cur" }, withTests([{ label: "//app:b_test", status: "FLAKY" }])),
+    ),
+    "Tests",
+  );
+  assert.equal(flakyAfterFail.delta, undefined);
+  assert.equal(flakyAfterFail.right, "0/1 passed (1 flaky)");
+
+  // Skipped/halted tests are counted as incomplete, not failures or fixes.
   const halted = row(
     comparisonRows(
       invocation({ id: "base" }, withTests([{ label: "//app:a_test", status: "PASSED" }])),
@@ -339,7 +349,7 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     "Tests",
   );
   assert.equal(halted.delta, undefined);
-  assert.equal(halted.right, "0/1 passed");
+  assert.equal(halted.right, "0/1 passed (1 incomplete)");
 });
 
 test("inline diff applies to options/text but not IDs or dates", () => {

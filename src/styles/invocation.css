@@ -394,7 +394,7 @@
   width: 32%;
 }
 
-.compare-delta-head {
+.compare-table .compare-delta-head {
   width: 18%;
   text-align: right;
 }
@@ -403,7 +403,7 @@
   font-weight: 500;
 }
 
-.compare-delta-cell {
+.compare-table .compare-delta-cell {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
