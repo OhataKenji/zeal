@@ -15,6 +15,8 @@ pnpm tauri dev    # run the app in dev mode
 pnpm tauri build -- --locked  # build a release bundle
 ```
 
+The first dev run or build needs internet access to download Perfetto. The bundled Timing viewer works offline.
+
 Commits are scanned for secrets by [gitleaks](https://github.com/gitleaks/gitleaks)
 via [lefthook](https://lefthook.dev) (installed on `pnpm install`).
 

@@ -12,16 +12,15 @@
   import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
   import Notice from "./Notice.svelte";
-  import ProfileView from "./ProfileView.svelte";
+  import PerfettoView from "./PerfettoView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { tabKeydown } from "./tabs";
   import { formatOptions, rerunOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
-  let { view, reload, reloadProfile, onstop, onrerun, onopenflags, onselecttarget }: {
+  let { view, reload, onstop, onrerun, onopenflags, onselecttarget }: {
     view: SessionView;
     reload: () => void;
-    reloadProfile: () => void;
     onstop: (id: string) => void;
     onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     onopenflags?: (cmd: BazelCommand, pattern: string, flags: string) => void;
@@ -31,7 +30,6 @@
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
   const execution = $derived(selected?.execution);
   const diagnostic = $derived(selected?.diagnostic ?? null);
-  const profile = $derived(sectionData(view.profile ?? undefined));
   const detail = $derived(view.detail?.record.id === shown?.id ? view.detail : undefined);
   const bep = $derived(sectionData(detail?.bep));
   const rerunFlags = $derived(formatOptions(rerunOptions(bep?.options?.explicitCmdLine)));
@@ -240,21 +238,23 @@
                     {/if}
                   </details>
                 {/if}
-              {:else}
+              {:else if section === "Timing"}
                 {#if execution}<p class="panel-empty">
                     Timing is available after the invocation finishes.
                   </p>
-                {:else if view.profileLoading}<p class="panel-empty" role="status">
-                    Loading profile…
+                {:else if active === "Timing" && view.state}
+                  {#key `${view.state.workspace}:${shown.id}`}
+                    <PerfettoView workspace={view.state.workspace} id={shown.id} />
+                  {/key}
+                {:else}
+                  <p class="panel-empty">
+                    Timing opens in its own tab.
+                    <button
+                      type="button"
+                      class="timing-open"
+                      onclick={() => (active = "Timing")}>Open Timing</button
+                    >
                   </p>
-                {:else if view.profileError}<Notice tone="error" onaction={reloadProfile}
-                    >Could not load timing data: {view.profileError}</Notice
-                  >
-                {:else if view.profile}
-                  {#if view.profile.status !== "ok"}<Notice tone={sectionNoticeTone(view.profile)}
-                      >{sectionMessage(view.profile)}</Notice
-                    >{/if}
-                  {#if profile}{#key profile}<ProfileView {profile} />{/key}{/if}
                 {/if}
               {/if}
             </section>

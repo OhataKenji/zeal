@@ -117,7 +117,7 @@ lifecycle unaryはBEPとは別の通知APIであり、保存せず成功応答�
 `get_invocation` は、DBのworkspace所属を確認して現在のattemptのfileを一度だけ逐次parseする。
 同じ走査でBEPの表示データとログを組み立て、全イベントや全ログをメモリへためない。
 Progressのログはstderr、stdoutの順に取り込む。
-任意のprofileは `get_invocation_profile` で別途読む。
+任意のprofileは `prepare_invocation_timing` でワンショットURLを発行して読む。
 
 #### 解析処理
 

@@ -13,7 +13,7 @@ export const COMMANDS = {
   refresh: "refresh",
   listInvocations: "list_invocations",
   getInvocation: "get_invocation",
-  getInvocationProfile: "get_invocation_profile",
+  prepareInvocationTiming: "prepare_invocation_timing",
   getAnalytics: "get_analytics",
   startInvocation: "start_invocation",
   stopInvocation: "stop_invocation",

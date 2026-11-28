@@ -282,15 +282,6 @@ export interface Bep {
   truncated: boolean;
 }
 
-/** Raw trace events stay intact; timeline geometry is a separate projection. */
-export type TraceEvent = Record<string, unknown>;
-
-/** Timing data returned for an invocation, before layout and viewport projection. */
-export interface Profile {
-  phases: Array<{ name: string; startUs: number; endUs: number }>;
-  lanes: Array<{ tid: number; name: string; events: TraceEvent[] }>;
-}
-
 /** Saved detail sections associated with an invocation record. */
 export interface InvocationDetail {
   record: InvocationRecord;
