@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatOptions, quoteShellArgument, rerunOptions } from "../src/lib/invocation/options.ts";
+import {
+  formatOptions,
+  parseExplicitOptions,
+  quoteShellArgument,
+  rerunOptions,
+} from "../src/lib/invocation/options.ts";
 
 test("quotes every argv token without changing its shell argument boundary", () => {
   assert.equal(
@@ -56,4 +61,20 @@ test("rerunOptions strips injected flags while preserving user options and overr
     ["--color=no", "--tool_tag=my-ci", "--target_pattern_file=", "--", "--invocation_id=app-arg"],
   );
   assert.deepEqual(rerunOptions(undefined), []);
+});
+
+test("parseExplicitOptions respects bareFlags and splits trailing residual args at --", () => {
+  const bare = new Set(["--keep_going"]);
+  const parsed = parseExplicitOptions(
+    ["--keep_going", "-c", "opt", "--config=asan", "--", "--arg"],
+    bare,
+  );
+  assert.deepEqual(parsed, {
+    entries: [
+      { name: "--keep_going", tokens: ["--keep_going"] },
+      { name: "-c", value: "opt", tokens: ["-c", "opt"] },
+      { name: "--config", value: "asan", tokens: ["--config=asan"] },
+    ],
+    residual: ["--", "--arg"],
+  });
 });
