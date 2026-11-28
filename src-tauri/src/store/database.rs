@@ -204,7 +204,9 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,w.canonical_path FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 WHERE (w.id=current.id OR w.repo_url=current.repo_url)";
+const RECORD_COLS: &str =
+    "r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,w.canonical_path";
+const WORKSPACE_SCOPE: &str = "FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 WHERE (w.id=current.id OR w.repo_url=current.repo_url)";
 /// Number of recent records returned by [`list`], before any pinned records.
 pub const LIST_LIMIT: usize = 100;
 fn row_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRecord> {
@@ -236,7 +238,7 @@ pub fn read_record(
     let ws = workspace_path(ws)?;
     let store = Store::open(data)?;
     Ok(store.conn.query_row(
-        &format!("{SELECT} AND r.id=?2"),
+        &format!("SELECT {RECORD_COLS} {WORKSPACE_SCOPE} AND r.id=?2"),
         params![ws.as_os_str().as_bytes(), id(invocation_id)?],
         row_record,
     )?)
@@ -253,9 +255,9 @@ pub fn list(
     Ok(store
         .conn
         .prepare(&format!(
-            "WITH recent AS ({SELECT} ORDER BY r.started_at_ms DESC,r.id LIMIT {LIST_LIMIT})
+            "WITH recent AS (SELECT {RECORD_COLS} {WORKSPACE_SCOPE} ORDER BY r.started_at_ms DESC,r.id LIMIT {LIST_LIMIT})
              SELECT * FROM recent
-             UNION {SELECT} AND r.id IN (SELECT value FROM json_each(?2))
+             UNION SELECT {RECORD_COLS} {WORKSPACE_SCOPE} AND r.id IN (SELECT value FROM json_each(?2))
              ORDER BY started_at_ms DESC,id"
         ))?
         .query_map(params![ws.as_os_str().as_bytes(), pinned_ids], row_record)?
@@ -335,18 +337,19 @@ fn attempt_artifact(
     if !matches!(name, "bep.binpb.zst" | "profile.json.gz") {
         return Err(fail(ErrorKind::Invalid));
     }
-    read_record(data, ws, invocation_id)?;
+    let ws = workspace_path(ws)?;
+    let invocation_id = id(invocation_id)?;
     let store = Store::open(data)?;
     let (attempt, complete): (i64, bool) = store.conn.query_row(
-        "SELECT attempt,received_complete FROM invocation WHERE id=?1",
-        [id(invocation_id)?],
+        &format!("SELECT r.attempt,r.received_complete {WORKSPACE_SCOPE} AND r.id=?2"),
+        params![ws.as_os_str().as_bytes(), &invocation_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     if attempt == 0 || (name == "profile.json.gz" && !complete) {
         return Err(fail(ErrorKind::Missing));
     }
     let file = store
-        .invocation_dir(invocation_id, false)?
+        .invocation_dir(&invocation_id, false)?
         .child("attempt", false)?
         .child(&attempt.to_string(), false)?
         .artifact(name)?;
