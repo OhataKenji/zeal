@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { COMMANDS } from "../commands";
   import {
     comparisonRows,
@@ -124,9 +124,13 @@
     if (!open) {
       open = true;
       activeIndex = delta > 0 ? 0 : options.length - 1;
-      return;
+    } else {
+      activeIndex = (clampedIndex + delta + options.length) % options.length;
     }
-    activeIndex = (clampedIndex + delta + options.length) % options.length;
+    const idx = activeIndex;
+    void tick().then(() => {
+      document.getElementById(`compare-baseline-opt-${idx}`)?.scrollIntoView({ block: "nearest" });
+    });
   }
 
   function handleKeydown(event: KeyboardEvent) {
