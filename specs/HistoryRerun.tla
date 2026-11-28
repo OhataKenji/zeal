@@ -68,13 +68,16 @@ UpdateRow(nextRow) ==
     /\ UNCHANGED <<id, runnable, trueFlags, launched, launchTick>>
 
 \* Retained refresh while viewing a saved invocation (e.g., BEP still arriving):
-\* detail cache stays visible, phase returns to "loading", Re-run disables.
-Refresh ==
+\* detail cache stays visible, phase returns to "loading", Re-run disables, and
+\* an initially missing BEP command line ("none") may now have arrived on disk.
+Refresh(arrived) ==
     /\ row = "saved"
     /\ detailPhase # "loading"
+    /\ arrived \in FlagValues
     /\ detailPhase' = "loading"
+    /\ trueFlags' = IF trueFlags[id] = "none" THEN [trueFlags EXCEPT ![id] = arrived] ELSE trueFlags
     /\ retired' = (retired \/ detailPhase = "loading")
-    /\ UNCHANGED <<id, row, runnable, detailId, detailFlags, trueFlags, launched, launchTick>>
+    /\ UNCHANGED <<id, row, runnable, detailId, detailFlags, launched, launchTick>>
 
 \* User clicks Retry after a detail load failure.
 Retry ==
@@ -116,7 +119,7 @@ ClickRerun ==
 Next ==
     \/ \E r \in Rows : Select(r)
     \/ \E r \in Rows : UpdateRow(r)
-    \/ Refresh
+    \/ \E f \in FlagValues : Refresh(f)
     \/ Retry
     \/ \E ok \in BOOLEAN : DetailReply(ok)
     \/ LateReply

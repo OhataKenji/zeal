@@ -894,6 +894,13 @@ mod tests {
                 &[OptionMetadataTag::Hidden],
             ),
             command_option("--client_cwd=/ws", "/ws", &[OptionMetadataTag::Hidden]),
+            // Leading Hidden option outside LAUNCHER_OPTIONS proves rerun_flags
+            // skips leading Hidden metadata before matching Zelith's prefix.
+            command_option(
+                "--unknown_launcher_hidden=1",
+                "1",
+                &[OptionMetadataTag::Hidden],
+            ),
             command_option("--internal_flag=1", "1", &[OptionMetadataTag::Internal]),
         ];
         for arg in &injected[2..] {
