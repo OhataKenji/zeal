@@ -38,16 +38,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
-async fn run_blocking<T, F>(label: &str, work: F) -> Result<T, String>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, String> + Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(work)
-        .await
-        .map_err(|_| format!("{label} worker failed"))?
-}
-
 async fn run_core_blocking<T, F>(
     app: AppHandle,
     core: &Arc<Core>,
@@ -71,27 +61,20 @@ where
     }
 }
 
-async fn read_saved_invocation<T, F>(
-    app: AppHandle,
+/// Validate the invocation UUID, registered workspace, and app data directory
+/// that every saved-invocation read command must pass identically.
+fn saved_invocation_scope(
+    app: &AppHandle,
     core: &Arc<Core>,
-    workspace: String,
-    id: String,
-    label: &str,
-    read: F,
-) -> Result<T, String>
-where
-    T: Send + 'static,
-    F: FnOnce(&Path, &Path, &str) -> std::io::Result<T> + Send + 'static,
-{
-    let id = uuid::Uuid::parse_str(&id)
+    workspace: &str,
+    id: &str,
+) -> Result<(PathBuf, PathBuf, String), String> {
+    let id = uuid::Uuid::parse_str(id)
         .map_err(|_| "invalid invocation id".to_string())?
         .to_string();
-    let ws = registered_workspace(core, &workspace)?;
+    let ws = registered_workspace(core, workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    run_blocking(label, move || {
-        read(&data, &ws, &id).map_err(|e| e.to_string())
-    })
-    .await
+    Ok((data, ws, id))
 }
 
 #[tauri::command]
@@ -112,10 +95,9 @@ async fn get_workspace_info(
         let bazel = st.bazel.clone().ok_or_else(|| "no bazel".to_string())?;
         (bazel, ws_path)
     };
-    run_blocking("workspace info", move || {
-        workspace::fetch_info(&bazel, &ws_path)
-    })
-    .await
+    tauri::async_runtime::spawn_blocking(move || workspace::fetch_info(&bazel, &ws_path))
+        .await
+        .map_err(|_| "workspace info worker failed".to_string())?
 }
 
 /// `bazel mod graph` for a registered workspace, under one per-workspace
@@ -127,7 +109,9 @@ async fn get_modules(
     workspace: String,
 ) -> Result<modules::ModulesSnapshot, String> {
     let op = modules::ModulesOperation::acquire(core.inner(), &workspace)?;
-    run_blocking("modules", move || op.snapshot()).await
+    tauri::async_runtime::spawn_blocking(move || op.snapshot())
+        .await
+        .map_err(|_| "modules worker failed".to_string())?
 }
 
 /// `bazel mod explain --verbose` for one module key in a registered
@@ -140,7 +124,9 @@ async fn explain_module(
     module_key: String,
 ) -> Result<modules::ModuleExplanation, String> {
     let op = modules::ModulesOperation::acquire(core.inner(), &workspace)?;
-    run_blocking("modules", move || op.explain(&module_key)).await
+    tauri::async_runtime::spawn_blocking(move || op.explain(&module_key))
+        .await
+        .map_err(|_| "modules worker failed".to_string())?
 }
 
 /// Load relationships for one target in `workspace`.
@@ -244,10 +230,11 @@ async fn list_workspaces(app: AppHandle) -> Result<Vec<PathBuf>, String> {
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
-    run_blocking("workspace list", move || {
+    tauri::async_runtime::spawn_blocking(move || {
         store::frequent_workspaces(&data).map_err(|error| error.to_string())
     })
     .await
+    .map_err(|_| "workspace list worker failed".to_string())?
 }
 
 /// Start `bazel build|test|run <target>` in `workspace`.
@@ -330,10 +317,11 @@ async fn read_console(
     offset: u64,
 ) -> Result<console::Output, String> {
     let core = core.inner().clone();
-    run_blocking("terminal read", move || {
+    tauri::async_runtime::spawn_blocking(move || {
         console::read(&core, &workspace, &id, offset).map_err(|e| e.to_string())
     })
     .await
+    .map_err(|_| "terminal read worker failed".to_string())?
 }
 
 /// The saved build-event history for one workspace plus the workspace's
@@ -451,10 +439,11 @@ async fn get_analytics(
 ) -> Result<store::analytics::Analytics, String> {
     let ws = registered_workspace(&core, &workspace)?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    run_blocking("analytics", move || {
+    tauri::async_runtime::spawn_blocking(move || {
         store::analytics::query(&data, &ws, filter).map_err(|e| e.to_string())
     })
     .await
+    .map_err(|_| "analytics worker failed".to_string())?
 }
 
 /// Return the saved record, log and build results.
@@ -470,15 +459,12 @@ async fn get_invocation(
     workspace: String,
     id: String,
 ) -> Result<InvocationDetail, String> {
-    read_saved_invocation(
-        app,
-        core.inner(),
-        workspace,
-        id,
-        "invocation detail",
-        detail::invocation_detail,
-    )
+    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        detail::invocation_detail(&data, &ws, &id).map_err(|e| e.to_string())
+    })
     .await
+    .map_err(|_| "invocation detail worker failed".to_string())?
 }
 
 /// Return the saved timing profile and its availability status.
@@ -494,15 +480,12 @@ async fn get_invocation_profile(
     workspace: String,
     id: String,
 ) -> Result<Section<Profile>, String> {
-    read_saved_invocation(
-        app,
-        core.inner(),
-        workspace,
-        id,
-        "profile",
-        detail::invocation_profile,
-    )
+    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        detail::invocation_profile(&data, &ws, &id).map_err(|e| e.to_string())
+    })
     .await
+    .map_err(|_| "profile worker failed".to_string())?
 }
 
 /// `~/...` in a typed path expands to the user's home directory.
