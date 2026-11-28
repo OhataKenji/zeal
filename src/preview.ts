@@ -227,7 +227,7 @@ function finishOwned(id: string) {
   emitState();
 }
 
-function startInvocation(workspace: string, cmd: string, pattern: string) {
+function startInvocation(workspace: string, cmd: string, pattern: string, flags = "") {
   wsEntry(workspace);
   const id = `preview-${crypto.randomUUID()}`;
   const now = Date.now();
@@ -243,6 +243,26 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
     exitCode: 0,
   };
   records.unshift(record);
+  const flagSuffix = flags ? ` ${flags}` : "";
+  captured.set(id, {
+    record: {
+      id,
+      cmd,
+      pattern,
+      startedAt: now,
+      finishedAt: now,
+      exitCode: 0,
+    },
+    log: `INFO: bazel ${cmd} ${pattern}${flagSuffix}\nBuild completed.\n`,
+    bep: {
+      targets: [],
+      tests: [],
+      originalCommandLine: `bazel ${cmd}${flagSuffix} ${pattern}`,
+      rerunFlags: flags,
+      truncated: false,
+    },
+    profile: { phases: [], lanes: [] },
+  });
   const owned: OwnedInvocation = {
     id,
     workspace,
@@ -256,7 +276,7 @@ function startInvocation(workspace: string, cmd: string, pattern: string) {
   state.invocations.unshift(owned);
   consoleOutput.set(
     id,
-    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}${flagSuffix}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
   );
   if (cmd !== "run") {
     // build/test finish on their own; `run` stays live until input or Stop.
@@ -582,6 +602,7 @@ export function installPreview() {
         String(payload?.workspace ?? ""),
         String(payload?.cmd),
         String(payload?.pattern),
+        typeof payload?.arguments === "string" ? payload.arguments : "",
       ),
     stop_invocation: (payload) =>
       stopInvocation(String(payload?.workspace ?? ""), String(payload?.id)),

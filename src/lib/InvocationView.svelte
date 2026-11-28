@@ -3,7 +3,7 @@
   import { canSend, type SessionView } from "./session";
   import {
     invocationStatus,
-    rerunArgs,
+    rerunState,
     sectionData,
     sectionMessage,
     sectionNoticeTone,
@@ -23,7 +23,7 @@
     reload: () => void;
     reloadProfile: () => void;
     onstop: (id: string) => void;
-    onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     onselecttarget?: (label: string) => void;
   } = $props();
   const selected = $derived(view.invocation);
@@ -31,7 +31,8 @@
   const execution = $derived(selected?.execution);
   const diagnostic = $derived(selected?.diagnostic ?? null);
   const profile = $derived(sectionData(view.profile ?? undefined));
-  const bep = $derived(sectionData(view.detail?.bep));
+  const detail = $derived(shown && view.detail?.record.id === shown.id ? view.detail : null);
+  const bep = $derived(sectionData(detail?.bep));
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
   const targetIndex = $derived(
@@ -40,11 +41,19 @@
       : null,
   );
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
-  const rerunCandidate = $derived(rerunArgs(shown));
-  const canRerun = $derived(
-    rerunCandidate !== null &&
-      shown?.workspace === view.state?.workspace &&
-      canSend(view, rerunCandidate.pattern),
+  const rerun = $derived(
+    rerunState({
+      record: shown,
+      execution,
+      diagnostic,
+      detail,
+      detailLoading: view.detailLoading,
+      detailError: view.detailError,
+      runnable:
+        shown?.workspace === view.state?.workspace &&
+        shown?.pattern !== undefined &&
+        canSend(view, shown.pattern),
+    }),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
@@ -60,7 +69,7 @@
 
 {#if diagnostic && shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {canRerun} {onstop} {onrerun} />
+    <InvocationHeader record={shown} {status} {rerun} {onstop} {onrerun} />
     <Notice tone="neutral">
       No build event record. Bazel process exit code: {diagnostic.processExitCode ??
         "unknown"}.
@@ -69,7 +78,7 @@
   </div>
 {:else if shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
+    <InvocationHeader record={shown} {status} {execution} {rerun} {onstop} {onrerun}>
       <div class="tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab}
           <button
@@ -105,7 +114,7 @@
       {#if active === "Compare"}
         {#key `${view.state?.workspace ?? ""}:${shown.id}`}
           <ComparisonPanel
-            left={view.detail?.record.id === shown.id ? view.detail : null}
+            left={detail}
             leftLoading={view.detailLoading}
             leftError={view.detailError}
             workspace={view.state?.workspace ?? ""}

@@ -1,6 +1,7 @@
 import { targetError } from "./target.ts";
 import type {
   BazelCommand,
+  InvocationDetail,
   InvocationRecord,
   OwnedInvocation,
   ProcessDiagnostic,
@@ -139,12 +140,32 @@ export function summarizeRunners(counts: RunnerCount[] | undefined): RunnerSumma
   };
 }
 
-/** Extracts a valid `(cmd, pattern)` pair when a finished invocation can be safely re-run. */
-export function rerunArgs(
-  record: InvocationRecord | undefined,
-): { cmd: BazelCommand; pattern: string } | null {
-  if (!record?.cmd || !record.pattern) return null;
-  if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") return null;
-  if (targetError(record.pattern) !== null) return null;
-  return { cmd: record.cmd, pattern: record.pattern };
+/** Explicit History Re-run readiness state (modeled in `specs/HistoryRerun.tla`). */
+export type RerunState =
+  | { kind: "unavailable" }
+  | { kind: "loading" }
+  | { kind: "ready"; cmd: BazelCommand; pattern: string; flags: string };
+
+/** Derives History Re-run readiness from the selected row and its detail state. */
+export function rerunState(input: {
+  record: InvocationRecord | undefined;
+  execution: OwnedInvocation | undefined;
+  diagnostic: ProcessDiagnostic | null;
+  detail: InvocationDetail | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  runnable: boolean;
+}): RerunState {
+  const { record, execution, diagnostic, detail, detailLoading, detailError, runnable } = input;
+  if (!runnable || execution || !record?.cmd || !record.pattern) return { kind: "unavailable" };
+  if (record.cmd !== "build" && record.cmd !== "test" && record.cmd !== "run") {
+    return { kind: "unavailable" };
+  }
+  if (targetError(record.pattern) !== null) return { kind: "unavailable" };
+  if (diagnostic) return { kind: "ready", cmd: record.cmd, pattern: record.pattern, flags: "" };
+  if (detailLoading) return { kind: "loading" };
+  if (detailError || !detail || detail.record.id !== record.id) return { kind: "unavailable" };
+  const bep = sectionData(detail.bep);
+  if (bep?.rerunFlags === undefined) return { kind: "unavailable" };
+  return { kind: "ready", cmd: record.cmd, pattern: record.pattern, flags: bep.rerunFlags };
 }

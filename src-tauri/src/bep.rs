@@ -11,6 +11,7 @@ use crate::protocol::generated::command_line::command_line_section::SectionType;
 use crate::protocol::generated::command_line::{
     CommandLine, CommandLineSection, Option as CommandLineOption,
 };
+use crate::protocol::generated::options::OptionMetadataTag;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -38,22 +39,44 @@ pub struct Bep {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_command_line: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun_flags: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_counts: Option<Vec<RunnerCount>>,
     pub truncated: bool,
 }
 
 /// Project Bazel's reported original or canonical command line in section order.
 pub(crate) fn project_command_line(command_line: &CommandLine, bep: &mut Bep) {
-    let destination = match command_line.command_line_label.as_str() {
-        "original" => &mut bep.original_command_line,
-        "canonical" => &mut bep.canonical_command_line,
+    let is_original = match command_line.command_line_label.as_str() {
+        "original" => true,
+        "canonical" => false,
         _ => return,
     };
     let mut parts = Vec::new();
+    let mut seen_command = false;
+    let mut raw_options: Vec<&CommandLineOption> = Vec::new();
     for section in &command_line.sections {
         append_command_line_section(section, &mut parts);
+        if !is_original {
+            continue;
+        }
+        if section.section_label == "command" {
+            seen_command = true;
+        } else if seen_command
+            && section.section_label == "command options"
+            && let Some(SectionType::OptionList(options)) = &section.section_type
+        {
+            raw_options.extend(options.option.iter());
+        }
     }
-    *destination = Some(parts.join(" "));
+    if is_original {
+        bep.original_command_line = Some(parts.join(" "));
+        if seen_command {
+            bep.rerun_flags = Some(rerun_flags(&raw_options));
+        }
+    } else {
+        bep.canonical_command_line = Some(parts.join(" "));
+    }
 }
 
 fn append_command_line_section(section: &CommandLineSection, parts: &mut Vec<String>) {
@@ -87,6 +110,72 @@ fn quote_argument(argument: &str) -> String {
     } else {
         format!("'{}'", argument.replace('\'', "'\\''"))
     }
+}
+
+fn is_option(option: &CommandLineOption, name: &str) -> bool {
+    option.option_name == name
+        || option
+            .combined_form
+            .strip_prefix("--")
+            .and_then(|rest| rest.strip_prefix(name))
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['=', ' ', '\t']))
+}
+
+fn is_zelith_prefix(options: &[&CommandLineOption]) -> bool {
+    options.len() >= 7
+        && is_option(options[0], "bes_backend")
+        && options[1].combined_form == "--bes_proxy="
+        && options[2].combined_form == "--bes_upload_mode=wait_for_upload_complete"
+        && is_option(options[3], "invocation_id")
+        && options[4].combined_form == "--tool_tag=zelith"
+        && options[5].combined_form == "--color=yes"
+        && options[6].combined_form == "--curses=no"
+}
+
+const LAUNCHER_OPTIONS: &[&str] = &[
+    "rc_source",
+    "default_override",
+    "startup_time",
+    "extract_data_time",
+    "command_wait_time",
+    "restart_reason",
+    "binary_path",
+    "client_env",
+    "client_cwd",
+];
+
+fn has_metadata(option: &CommandLineOption, tag: OptionMetadataTag) -> bool {
+    option.metadata_tags.contains(&(tag as i32))
+}
+
+fn is_launcher_or_internal(option: &CommandLineOption) -> bool {
+    has_metadata(option, OptionMetadataTag::Internal)
+        || LAUNCHER_OPTIONS.iter().any(|name| is_option(option, name))
+}
+
+fn rerun_flags(options: &[&CommandLineOption]) -> String {
+    let start = options
+        .iter()
+        .position(|option| {
+            !has_metadata(option, OptionMetadataTag::Hidden)
+                && !has_metadata(option, OptionMetadataTag::Internal)
+        })
+        .unwrap_or(options.len());
+    let rest = if is_zelith_prefix(&options[start..]) {
+        &options[start + 7..]
+    } else {
+        options
+    };
+    rest.iter()
+        .filter(|option| {
+            !is_launcher_or_internal(option)
+                && !is_option(option, "bes_backend")
+                && !is_option(option, "invocation_id")
+                && !is_option(option, "target_pattern_file")
+        })
+        .map(|option| format_option(option))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn format_option(option: &CommandLineOption) -> String {
@@ -350,6 +439,7 @@ fn merge_bounded(bep: &mut Bep, delta: Bep, size: &mut usize) {
         24,
         size,
     );
+    bep.truncated |= !replace(&mut bep.rerun_flags, delta.rerun_flags, 15, size);
     bep.truncated |= !replace(&mut bep.runner_counts, delta.runner_counts, 16, size);
 }
 fn append_tail(log: &mut String, value: &str) {
@@ -721,7 +811,15 @@ mod tests {
                 chunks("executable", &["bazel"]),
                 options(&[("--batch", "true")]),
                 chunks("command", &["test"]),
-                options(&[("--define=a=b c", "a=b c"), ("--define d=e", "d=e")]),
+                options(&[
+                    ("--rc_source=/workspace/.bazelrc", "/workspace/.bazelrc"),
+                    (
+                        "--default_override=0:test=--test_arg=--foo",
+                        "0:test=--test_arg=--foo",
+                    ),
+                    ("--define=a=b c", "a=b c"),
+                    ("--define d=e", "d=e"),
+                ]),
                 CommandLineSection::default(),
                 chunks("residual", &["//pkg:test", ""]),
             ],
@@ -734,7 +832,9 @@ mod tests {
         let parsed = parse(stream.as_slice());
         assert_eq!(
             parsed.original_command_line.as_deref(),
-            Some("bazel --batch test --define='a=b c' --define d=e //pkg:test ''")
+            Some(
+                "bazel --batch test --rc_source=/workspace/.bazelrc --default_override=0:test=--test_arg=--foo --define='a=b c' --define d=e //pkg:test ''"
+            )
         );
         assert_eq!(
             parsed.canonical_command_line.as_deref(),
@@ -743,6 +843,128 @@ mod tests {
         let json = serde_json::to_value(&parsed).unwrap();
         assert_eq!(json["canonicalCommandLine"], "bazel test //pkg:test");
         assert_eq!(serde_json::from_value::<Bep>(json).unwrap(), parsed);
+    }
+
+    fn command_option(form: &str, value: &str, tags: &[OptionMetadataTag]) -> CommandLineOption {
+        CommandLineOption {
+            combined_form: form.into(),
+            option_value: value.into(),
+            metadata_tags: tags.iter().map(|&tag| tag as i32).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn option_section(option: Vec<CommandLineOption>) -> CommandLineSection {
+        CommandLineSection {
+            section_label: "command options".into(),
+            section_type: Some(SectionType::OptionList(OptionList { option })),
+        }
+    }
+
+    #[test]
+    fn rerun_flags_match_zelith_argv_and_strip_launcher_options() {
+        let injected = crate::runargs::argv(
+            "build",
+            &["--color=yes".into(), "--curses=no".into()],
+            "grpc://127.0.0.1:4718",
+            "inv-1",
+        );
+        let mut base = vec![
+            command_option(
+                "--rc_source=/ws/.bazelrc",
+                "/ws/.bazelrc",
+                &[OptionMetadataTag::Hidden],
+            ),
+            command_option(
+                "--default_override=0:build=--jobs=4",
+                "0:build=--jobs=4",
+                &[OptionMetadataTag::Hidden],
+            ),
+            command_option("--startup_time=12", "12", &[OptionMetadataTag::Hidden]),
+            command_option("--extract_data_time=45", "45", &[OptionMetadataTag::Hidden]),
+            command_option("--command_wait_time=0", "0", &[OptionMetadataTag::Hidden]),
+            command_option(
+                "--binary_path=/usr/bin/bazel",
+                "/usr/bin/bazel",
+                &[OptionMetadataTag::Hidden],
+            ),
+            command_option(
+                "--client_env=FOO=bar",
+                "FOO=bar",
+                &[OptionMetadataTag::Hidden],
+            ),
+            command_option("--client_cwd=/ws", "/ws", &[OptionMetadataTag::Hidden]),
+            // Leading Hidden option outside LAUNCHER_OPTIONS proves rerun_flags
+            // skips leading Hidden metadata before matching Zelith's prefix.
+            command_option(
+                "--unknown_launcher_hidden=1",
+                "1",
+                &[OptionMetadataTag::Hidden],
+            ),
+            command_option("--internal_flag=1", "1", &[OptionMetadataTag::Internal]),
+        ];
+        for arg in &injected[2..] {
+            let value = arg.split_once('=').map_or("", |(_, v)| v);
+            base.push(command_option(arg, value, &[]));
+        }
+        let mut with_user = base.clone();
+        with_user.extend([
+            command_option("--//pkg:mode=prod", "prod", &[]),
+            command_option("--//pkg:msg=hello world", "hello world", &[]),
+            command_option("--nostart_end_lib", "0", &[OptionMetadataTag::Hidden]),
+            command_option("--color=no", "no", &[]),
+            command_option("--define=qa_mode=enabled", "qa_mode=enabled", &[]),
+        ]);
+        let parsed = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks("executable", &["bazel"]),
+                    chunks("command", &["build"]),
+                    option_section(with_user),
+                    chunks("residual", &["//:mode_sensitive"]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(
+            parsed.rerun_flags.as_deref(),
+            Some(
+                "--//pkg:mode=prod --//pkg:msg='hello world' --nostart_end_lib --color=no --define=qa_mode=enabled"
+            )
+        );
+        let no_user = parse(
+            event(command_line(
+                "original",
+                vec![chunks("command", &["build"]), option_section(base)],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(no_user.rerun_flags.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn rerun_flags_strip_external_identity_and_target_pattern_file() {
+        let external = parse(
+            event(command_line(
+                "original",
+                vec![
+                    chunks("command", &["build"]),
+                    options(&[
+                        (
+                            "--bes_backend=grpc://127.0.0.1:4718",
+                            "grpc://127.0.0.1:4718",
+                        ),
+                        ("--invocation_id ext", "ext"),
+                        ("--target_pattern_file=targets.txt", "targets.txt"),
+                        ("--target_pattern_file more.txt", "more.txt"),
+                        ("--config=opt", "opt"),
+                    ]),
+                ],
+            ))
+            .as_slice(),
+        );
+        assert_eq!(external.rerun_flags.as_deref(), Some("--config=opt"));
     }
 
     #[test]
