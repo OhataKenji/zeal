@@ -29,6 +29,11 @@ test("pattern selection limits daily counts but preserves the ranking and untime
       totalMs: 1000,
       p50Ms: 100,
       p95Ms: 900,
+      spawnCacheHits: 0,
+      spawnTotal: 0,
+      phaseTimed: 0,
+      analysisMs: 0,
+      executionMs: 0,
     },
     {
       day: "2026-03-31",
@@ -42,6 +47,11 @@ test("pattern selection limits daily counts but preserves the ranking and untime
       totalMs: 0,
       p50Ms: 0,
       p95Ms: 0,
+      spawnCacheHits: 0,
+      spawnTotal: 0,
+      phaseTimed: 0,
+      analysisMs: 0,
+      executionMs: 0,
     },
   ]);
   assert.deepEqual(result.patterns, [
@@ -204,4 +214,42 @@ test("workspace selection limits records to the chosen workspace", () => {
     () => previewAnalytics(records, { ...PERIOD, workspaceId: "/missing" }, NOW),
     /invalid analytics filter/,
   );
+});
+
+test("previewAnalytics averages analysis and execution phases independently per invocation", () => {
+  const result = previewAnalytics(
+    [
+      {
+        cmd: "build",
+        pattern: "//:a",
+        startedAt: NOW,
+        finishedAt: NOW + 5000,
+        exitCode: 0,
+        analysisMs: 300,
+        executionMs: 1200,
+      },
+      {
+        cmd: "build",
+        pattern: "//:a",
+        startedAt: NOW,
+        finishedAt: NOW + 14000,
+        exitCode: 0,
+        analysisMs: 4000,
+        executionMs: 10000,
+      },
+      {
+        cmd: "build",
+        pattern: "//:a",
+        startedAt: NOW,
+        finishedAt: NOW + 600,
+        exitCode: 1,
+        analysisMs: 500,
+      },
+    ],
+    { start: "2026-03-30", end: "2026-03-30" },
+    NOW,
+  );
+  assert.equal(result.days[0].phaseTimed, 3);
+  assert.equal(result.days[0].analysisMs, 1600);
+  assert.equal(result.days[0].executionMs, 5600);
 });

@@ -6,6 +6,10 @@ type AnalyticsRecord = Pick<InvocationRecord, "exitCode" | "finishedAt"> & {
   pattern: string;
   startedAt: number;
   workspace?: string;
+  spawnCacheHits?: number;
+  spawnTotal?: number;
+  analysisMs?: number;
+  executionMs?: number;
 };
 type ResolvedFilter = Partial<AnalyticsFilter> & { start: string; end: string };
 type Outcome = "ok" | "failed" | "interrupted" | "unknown";
@@ -17,6 +21,13 @@ interface DaySamples {
   unknown: number;
   workspaceCounts: Record<string, number>;
   durations: number[];
+  spawnCacheHits: number;
+  spawnTotal: number;
+  phaseTimed: number;
+  analysisSum: number;
+  analysisCount: number;
+  executionSum: number;
+  executionCount: number;
 }
 
 function dayString(date: Date): string {
@@ -107,9 +118,31 @@ function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
       unknown: 0,
       workspaceCounts: {},
       durations: [],
+      spawnCacheHits: 0,
+      spawnTotal: 0,
+      phaseTimed: 0,
+      analysisSum: 0,
+      analysisCount: 0,
+      executionSum: 0,
+      executionCount: 0,
     });
   }
   return days;
+}
+
+function recordMetrics(slot: DaySamples, inv: AnalyticsRecord) {
+  if (inv.spawnCacheHits !== undefined) slot.spawnCacheHits += inv.spawnCacheHits;
+  if (inv.spawnTotal !== undefined) slot.spawnTotal += inv.spawnTotal;
+  if (inv.analysisMs === undefined && inv.executionMs === undefined) return;
+  slot.phaseTimed += 1;
+  if (inv.analysisMs !== undefined) {
+    slot.analysisSum += inv.analysisMs;
+    slot.analysisCount += 1;
+  }
+  if (inv.executionMs !== undefined) {
+    slot.executionSum += inv.executionMs;
+    slot.executionCount += 1;
+  }
 }
 
 function recordInvocation(
@@ -127,6 +160,7 @@ function recordInvocation(
   slot[outcome(inv)] += 1;
   const elapsed = duration(inv);
   if (elapsed !== null) slot.durations.push(elapsed);
+  recordMetrics(slot, inv);
 }
 
 function dailyAnalytics(
@@ -148,6 +182,11 @@ function dailyAnalytics(
     interrupted: slot.interrupted,
     unknown: slot.unknown,
     workspaceCounts: slot.workspaceCounts,
+    spawnCacheHits: slot.spawnCacheHits,
+    spawnTotal: slot.spawnTotal,
+    phaseTimed: slot.phaseTimed,
+    analysisMs: slot.analysisCount > 0 ? Math.round(slot.analysisSum / slot.analysisCount) : 0,
+    executionMs: slot.executionCount > 0 ? Math.round(slot.executionSum / slot.executionCount) : 0,
     ...timing(slot.durations),
   }));
 }

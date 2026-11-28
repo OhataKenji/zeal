@@ -37,6 +37,16 @@ pub struct Day {
     /// Nearest-rank percentiles over the day's recorded durations.
     pub p50_ms: i64,
     pub p95_ms: i64,
+    /// Spawn cache hits across invocations with runner counts.
+    pub spawn_cache_hits: i64,
+    /// Total spawns across invocations with runner counts; 0 when none exist.
+    pub spawn_total: i64,
+    /// Invocations carrying at least one recorded phase duration.
+    pub phase_timed: i64,
+    /// Average analysis phase duration (ms) across invocations with analysis metrics.
+    pub analysis_ms: i64,
+    /// Average execution phase duration (ms) across invocations with execution metrics.
+    pub execution_ms: i64,
     pub workspace_counts: BTreeMap<String, i64>,
 }
 #[derive(Debug, Serialize)]
@@ -193,6 +203,11 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 total_ms: 0,
                 p50_ms: 0,
                 p95_ms: 0,
+                spawn_cache_hits: 0,
+                spawn_total: 0,
+                phase_timed: 0,
+                analysis_ms: 0,
+                execution_ms: 0,
                 workspace_counts: BTreeMap::new(),
             })
         })?
@@ -259,6 +274,11 @@ fn aggregate(
                 total_ms: r.get(7)?,
                 p50_ms: r.get(8)?,
                 p95_ms: r.get(9)?,
+                spawn_cache_hits: r.get(10)?,
+                spawn_total: r.get(11)?,
+                phase_timed: r.get(12)?,
+                analysis_ms: r.get(13)?,
+                execution_ms: r.get(14)?,
                 workspace_counts: BTreeMap::new(),
             })
         },
@@ -339,7 +359,8 @@ fn days_sql() -> String {
     format!(
         "WITH matched AS MATERIALIZED (
             SELECT date(started_at_ms / 1000,'unixepoch','localtime') AS day,exit_code,
-                MAX(finished_at_ms - started_at_ms,0) AS ms
+                MAX(finished_at_ms - started_at_ms,0) AS ms,
+                spawn_cache_hits,spawn_total,analysis_ms,execution_ms
             FROM invocation WHERE {SCOPE} AND {MATCH}
                 AND (:pattern IS NULL OR target_pattern=:pattern)
         ),
@@ -349,7 +370,12 @@ fn days_sql() -> String {
                 COUNT(*) FILTER (WHERE exit_code NOT IN (0,8)) AS failed,
                 COUNT(*) FILTER (WHERE exit_code=8) AS interrupted,
                 COUNT(*) FILTER (WHERE exit_code IS NULL) AS unknown,
-                COUNT(ms) AS timed,COALESCE(SUM(ms),0) AS total_ms
+                COUNT(ms) AS timed,COALESCE(SUM(ms),0) AS total_ms,
+                COALESCE(SUM(spawn_cache_hits),0) AS spawn_cache_hits,
+                COALESCE(SUM(spawn_total),0) AS spawn_total,
+                COUNT(COALESCE(analysis_ms,execution_ms)) AS phase_timed,
+                COALESCE(CAST(ROUND(AVG(analysis_ms)) AS INTEGER),0) AS analysis_ms,
+                COALESCE(CAST(ROUND(AVG(execution_ms)) AS INTEGER),0) AS execution_ms
             FROM matched GROUP BY day
         ),
         ranked AS (
@@ -365,7 +391,9 @@ fn days_sql() -> String {
         )
         SELECT daily.day,daily.count,daily.ok,daily.failed,daily.interrupted,
             daily.unknown,daily.timed,daily.total_ms,
-            COALESCE(ranked.p50,0),COALESCE(ranked.p95,0)
+            COALESCE(ranked.p50,0),COALESCE(ranked.p95,0),
+            daily.spawn_cache_hits,daily.spawn_total,
+            daily.phase_timed,daily.analysis_ms,daily.execution_ms
         FROM daily LEFT JOIN ranked USING(day)"
     )
 }
@@ -1414,5 +1442,56 @@ mod tests {
                 result.days.len()
             );
         }
+    }
+
+    #[test]
+    fn daily_aggregates_include_cache_and_phase_metrics() {
+        let f = Fixture::new();
+        let fast = f.insert_at(
+            "2026-03-10 10:00:00",
+            "build",
+            Some(0),
+            "//app:fast",
+            Some("2026-03-10 10:00:02"),
+        );
+        let slow = f.insert_at(
+            "2026-03-10 11:00:00",
+            "test",
+            Some(1),
+            "//app:slow",
+            Some("2026-03-10 11:00:15"),
+        );
+        let analysis_only = f.insert_at(
+            "2026-03-10 12:00:00",
+            "build",
+            Some(1),
+            "//app:broken",
+            Some("2026-03-10 12:00:01"),
+        );
+        let store = Store::open(&f.data).unwrap();
+        for (id, ch, at, an, ex) in [
+            (&fast, Some(90), Some(100), Some(300), Some(1200)),
+            (&slow, Some(10), Some(50), Some(4000), Some(10000)),
+            (&analysis_only, None, None, Some(500), None),
+        ] {
+            store.conn.execute(
+                "UPDATE invocation SET spawn_cache_hits=?1,spawn_total=?2,analysis_ms=?3,execution_ms=?4 WHERE id=?5",
+                params![ch, at, an, ex, id],
+            ).unwrap();
+        }
+        drop(store);
+        let day = &f
+            .query(Filter {
+                start: Some("2026-03-10".into()),
+                end: Some("2026-03-10".into()),
+                ..Filter::default()
+            })
+            .days[0];
+        assert_eq!(
+            (day.spawn_cache_hits, day.spawn_total, day.phase_timed),
+            (100, 150, 3)
+        );
+        // avg analysis = (300 + 4000 + 500) / 3 = 1600; avg execution = (1200 + 10000) / 2 = 5600
+        assert_eq!((day.analysis_ms, day.execution_ms), (1600, 5600));
     }
 }

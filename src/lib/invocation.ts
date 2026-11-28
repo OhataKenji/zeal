@@ -37,6 +37,16 @@ export function matchesHistoryFilter(row: InvocationRow, filter: HistoryFilter):
   return filter === "running" ? kind === "running" || kind === "stopping" : kind === "failed";
 }
 
+/** Formats a unix millisecond timestamp as a local YYYY-MM-DD calendar day. */
+export function localDay(ms: number | undefined): string | null {
+  if (ms === undefined || !Number.isFinite(ms)) return null;
+  const date = new Date(ms);
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 /** Labels a finished record: a `run` reports its build's BEP result, never
  * the program's exit. */
 function bepStatus(record: InvocationRecord): InvocationStatus {

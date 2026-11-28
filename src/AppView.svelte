@@ -12,6 +12,7 @@
   import { canSend } from "./lib/session";
   import type { createSession, SessionView } from "./lib/session";
   import {
+    localDay,
     matchesHistoryFilter,
     rowStatus,
     type HistoryFilter,
@@ -62,6 +63,7 @@
   let opening = $state(false);
   let switchError = $state<string | null>(null);
   let historyFilter = $state<HistoryFilter>("all");
+  let historyDay = $state<string | null>(null);
 
   // One surface owns the overlay layer at a time: the workspace prompt, the
   // command palette, or the run dialog. `opening` stays independent.
@@ -91,8 +93,28 @@
     analytics: ChartBar,
   } satisfies Record<Page, typeof Folders>;
 
+  function rowDuration(row: InvocationRow): number {
+    const { startedAt, finishedAt } = row.record;
+    return startedAt !== undefined && finishedAt !== undefined
+      ? Math.max(0, finishedAt - startedAt)
+      : -1;
+  }
+
+  function filterInvocations(
+    rows: InvocationRow[],
+    filter: HistoryFilter,
+    day: string | null,
+  ): InvocationRow[] {
+    const matching = rows.filter(
+      (row) =>
+        matchesHistoryFilter(row, filter) &&
+        (day === null || localDay(row.record.startedAt) === day),
+    );
+    return day === null ? matching : matching.toSorted((a, b) => rowDuration(b) - rowDuration(a));
+  }
+
   const filteredInvocations = $derived(
-    view.invocationRows.filter((row) => matchesHistoryFilter(row, historyFilter)),
+    filterInvocations(view.invocationRows, historyFilter, historyDay),
   );
 
   function openRunDialog(cmd: BazelCommand, pattern: string, flags = "") {
@@ -136,6 +158,7 @@
   $effect(() => {
     void workspacePath;
     switchError = null;
+    historyDay = null;
   });
 
   // ⌘K/Ctrl+K toggles only while the palette or nothing owns the keyboard.
@@ -203,11 +226,27 @@
         selectTarget(action.label);
         break;
       case "invocation":
-        if (!filteredInvocations.some((row) => row.record.id === action.id)) {
-          historyFilter = "all";
-        }
-        session.selectInvocation(action.id);
+        selectInvocation(action.id);
         break;
+    }
+  }
+
+  function selectInvocation(id: string) {
+    if (!filteredInvocations.some((row) => row.record.id === id)) {
+      historyFilter = "all";
+      historyDay = null;
+    }
+    session.selectInvocation(id);
+  }
+
+  function openHistoryDay(day: string, filter: HistoryFilter = "all") {
+    historyDay = day;
+    historyFilter = filter;
+    const slowest = filterInvocations(view.invocationRows, filter, day)[0];
+    if (slowest) {
+      session.selectInvocation(slowest.record.id);
+    } else {
+      session.showPage("history");
     }
   }
 
@@ -366,6 +405,15 @@
         <aside class="sidebar">
           <div class="sidebar-head">
             <span>Invocations</span>
+            {#if historyDay}
+              <button
+                type="button"
+                class="day-chip"
+                title="Clear day filter"
+                aria-label={`Clear day filter ${historyDay}`}
+                onclick={() => (historyDay = null)}>{historyDay} ×</button
+              >
+            {/if}
           </div>
           <div class="sidebar-filter">
             <span class="dim">Filter</span>
@@ -392,7 +440,11 @@
               {#each filteredInvocations as row (row.record.id)}
                 {@render invocationRow(row)}
               {:else}
-                <li class="dim empty-row">No invocations.</li>
+                <li class="dim empty-row">
+                  {historyDay
+                    ? `No ${historyFilter === "all" ? "" : `${historyFilter} `}invocations for ${historyDay} in recent history.`
+                    : `No ${historyFilter === "all" ? "" : `${historyFilter} `}invocations.`}
+                </li>
               {/each}
             </ul>
             {#if view.invocationsError}
@@ -524,7 +576,11 @@
         </div>
         <div class="page-center" hidden={view.page !== "analytics"}>
           {#key st.workspace}
-            <AnalyticsView workspace={st.workspace} invocations={view.invocations} />
+            <AnalyticsView
+              workspace={st.workspace}
+              invocations={view.invocations}
+              onselectday={openHistoryDay}
+            />
           {/key}
         </div>
       {/snippet}
