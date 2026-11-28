@@ -2659,7 +2659,6 @@ test("auto-selection never fires off the history page or over a selection", asyn
   // The pinned live execution outranks the older history record.
   assert.equal(h.view.selectedInvocationId, "live-1");
 });
-
 test("Invocation active tab survives page navigation and resets on workspace switch", async () => {
   const h = harness(
     Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
@@ -2688,4 +2687,31 @@ test("Invocation active tab survives page navigation and resets on workspace swi
   });
   await settle();
   assert.equal(h.view.invocationTab, "All");
+});
+
+test("select applies target tab and flags in one transition and reloads phase on re-pick", async () => {
+  const h = harness();
+  await initReady(h);
+  await loadSnapshot(h);
+  const label = SNAPSHOT.targets[0].label;
+
+  h.session.select({ kind: "target", label }, { tab: "actions", flags: "--config=asan" });
+  assert.equal(h.view.page, "targets");
+  assert.equal(h.view.targetTab, "actions");
+  assert.equal(h.view.targetFlags, "--config=asan");
+  pendingRequest(h, "get_target_detail").reply.resolve(targetDetail(label));
+  await settle();
+  const firstRead = pendingRequest(h, "read_target");
+  assert.equal(firstRead.args?.step, "actions");
+  assert.equal(firstRead.args?.flags, "--config=asan");
+  firstRead.reply.resolve({ actions: [], truncated: false });
+  await settle();
+
+  // Reselecting the same target with updated flags keeps detail cached and reloads the phase.
+  h.session.select({ kind: "target", label }, { tab: "actions", flags: "--compilation_mode=opt" });
+  await settle();
+  assert.equal(requestCount(h, "get_target_detail"), 1);
+  const secondRead = lastPendingRequest(h, "read_target");
+  assert.equal(secondRead.args?.step, "actions");
+  assert.equal(secondRead.args?.flags, "--compilation_mode=opt");
 });

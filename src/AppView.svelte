@@ -35,7 +35,7 @@
   import ModulesView from "./lib/ModulesView.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import RunDialog from "./lib/RunDialog.svelte";
-  import type { BazelCommand } from "./lib/types";
+  import type { BazelCommand, TargetTab } from "./lib/types";
 
   let consoleComponent: Promise<typeof import("./lib/ConsoleView.svelte")> | undefined;
   function loadConsole() {
@@ -216,8 +216,8 @@
     session.showPage(page);
   }
 
-  function selectTarget(label: string) {
-    session.select({ kind: "target", label });
+  function selectTarget(label: string, options?: { tab?: TargetTab; flags?: string }) {
+    session.select({ kind: "target", label }, options);
   }
 </script>
 

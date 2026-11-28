@@ -483,9 +483,17 @@ async fn get_invocation(
     .map_err(|_| "invocation detail worker failed".to_string())?
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InvocationTiming {
+    url: String,
+    critical_path: profile::CriticalPathSummary,
+}
+
 /// Timing-tab entry point: validate the saved artifact, confirm the bundled
-/// viewer is installed, then issue a one-shot grant and return the viewer
-/// URL carrying only its random token — never the workspace or invocation id.
+/// viewer is installed, extract the critical-path summary, then issue a
+/// one-shot grant and return the viewer URL carrying only its random token —
+/// never the workspace or invocation id.
 #[tauri::command]
 #[tracing::instrument(
     target = "zelith::operations",
@@ -498,29 +506,34 @@ async fn prepare_invocation_timing(
     pending: State<'_, perfetto::PendingTrace>,
     workspace: String,
     id: String,
-) -> Result<String, String> {
+) -> Result<InvocationTiming, String> {
     let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
     perfetto::asset_root(&app)?;
     // Reserve the grant before the first await so a newer selection can
     // supersede this one while the artifact is still opening.
     let token = pending.begin();
-    let file = tauri::async_runtime::spawn_blocking(move || {
-        profile::open(&data, &ws, &id).map_err(|e| match e.kind() {
+    let (file, critical_path) = tauri::async_runtime::spawn_blocking(move || {
+        let mut file = profile::open(&data, &ws, &id).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => {
                 "No saved timing profile is available for this invocation.".to_string()
             }
             _ => e.to_string(),
-        })
+        })?;
+        let summary = profile::critical_path(&mut file).map_err(|e| e.to_string())?;
+        Ok::<_, String>((file, summary))
     })
     .await
     .map_err(|_| "profile worker failed".to_string())??;
     if !pending.finish(token, file) {
         return Err("Timing selection changed.".into());
     }
-    Ok(format!(
-        "{}/embed.html#trace/{token}/profile.json.gz",
-        perfetto::VIEWER_ORIGIN
-    ))
+    Ok(InvocationTiming {
+        url: format!(
+            "{}/embed.html#trace/{token}/profile.json.gz",
+            perfetto::VIEWER_ORIGIN
+        ),
+        critical_path,
+    })
 }
 
 /// `~/...` in a typed path expands to the user's home directory.

@@ -838,7 +838,15 @@ export function createSession(
     reloadTargetPhase(ws);
   }
 
-  function select(selection: ExplorerSelection) {
+  function applyTargetOptions(ws: Workspace, options?: { tab?: TargetTab; flags?: string }) {
+    const tabChanged = options?.tab !== undefined && options.tab !== ws.targetTab;
+    const flagsChanged = options?.flags !== undefined && options.flags !== ws.targetFlags;
+    if (tabChanged) ws.targetTab = options.tab!;
+    if (flagsChanged) ws.targetFlags = options.flags!;
+    return tabChanged || flagsChanged;
+  }
+
+  function select(selection: ExplorerSelection, options?: { tab?: TargetTab; flags?: string }) {
     if (disposed) return;
     state.page = "targets";
     state.startFeedback = null;
@@ -847,15 +855,19 @@ export function createSession(
       publish();
       return;
     }
+    const phaseChanged = applyTargetOptions(ws, options);
     const target = ws.target;
     // A new selection always replaces the target context; reselecting the
-    // same target only retries a failed detail read. Either way the shared
-    // tail publishes and lets loadTarget kick any deferred phase read.
+    // same target only retries a failed detail read or reloads its phase
+    // when tab/flags changed. Either way the shared tail publishes and lets
+    // loadTarget kick any deferred phase read.
     if (
       !sameSelection(target.selection, selection) ||
       (selection?.kind === "target" && target.detail.state.phase === "failed")
     ) {
       ws.target = targetSelection(selection);
+    } else if (phaseChanged) {
+      ws.target = { selection, detail: target.detail, phase: reader() };
     } else {
       // Same pick again: hand the view a fresh selection object so its
       // effects observe the re-pick while the readers stay cached.

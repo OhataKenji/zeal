@@ -8,15 +8,21 @@
     actions,
     error,
     oninputclick,
+    canTraceInput,
     showHeading = true,
     showOwner = false,
   }: {
     actions: TargetActions | null;
     error: string | null;
     oninputclick?: (path: string, owner: string) => void;
+    canTraceInput?: (path: string, owner: string) => boolean;
     showHeading?: boolean;
     showOwner?: boolean;
   } = $props();
+
+  const produced = $derived(
+    new Set(actions?.actions.flatMap((action) => action.outputs) ?? []),
+  );
 
   let open = $state<boolean[]>([]);
   let highlighted = $state<number | null>(null);
@@ -59,14 +65,18 @@
 {#snippet inputList(action: TargetAction)}
   <ul class="action-paths">
     {#each action.inputs as path}
+      {@const inTarget = produced.has(path)}
+      {@const traceable =
+        inTarget ||
+        Boolean(oninputclick && (canTraceInput ? canTraceInput(path, action.owner) : showOwner))}
       <li>
-        {#if oninputclick}
+        {#if traceable}
           <button
             type="button"
-            class="button button-ghost action-input"
-            title="Trace producer"
+            class="link action-input"
+            title={`${inTarget ? "Jump to producing action" : "Open upstream target"} · ${path}`}
             onclick={() => trace(path, action.owner)}
-            ><code title={path}>{shortOutputPath(path)}</code></button
+            ><code>{shortOutputPath(path)}</code></button
           >
         {:else}
           <code title={path}>{shortOutputPath(path)}</code>
