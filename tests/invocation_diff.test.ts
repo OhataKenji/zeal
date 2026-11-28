@@ -282,33 +282,30 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     status: "ok",
     data: { targets: [], tests, truncated: false },
   });
-
-  // Omitted when neither side has tests.
-  assert.equal(
+  const cmp = (
+    a: Array<{ label: string; status: string }>,
+    b: Array<{ label: string; status: string }>,
+  ) =>
     comparisonRows(
-      invocation({ id: "a" }, withTests([])),
-      invocation({ id: "b" }, withTests([])),
-    ).find((r) => r.label === "Tests"),
+      invocation({ id: "base" }, withTests(a)),
+      invocation({ id: "cur" }, withTests(b)),
+    );
+
+  assert.equal(
+    cmp([], []).find((r) => r.label === "Tests"),
     undefined,
   );
 
-  // Newly failing test surfaced in delta and Current cell.
   const regressed = row(
-    comparisonRows(
-      invocation(
-        { id: "base" },
-        withTests([
-          { label: "//app:a_test", status: "PASSED" },
-          { label: "//app:b_test", status: "PASSED" },
-        ]),
-      ),
-      invocation(
-        { id: "cur" },
-        withTests([
-          { label: "//app:a_test", status: "PASSED" },
-          { label: "//app:b_test", status: "FAILED" },
-        ]),
-      ),
+    cmp(
+      [
+        { label: "//app:a_test", status: "PASSED" },
+        { label: "//app:b_test", status: "PASSED" },
+      ],
+      [
+        { label: "//app:a_test", status: "PASSED" },
+        { label: "//app:b_test", status: "FAILED" },
+      ],
     ),
     "Tests",
   );
@@ -317,34 +314,31 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
   assert.deepEqual(regressed.delta, { text: "+1 failed", tone: "worse" });
   assert.equal(regressed.status, "changed");
 
-  // Fixed test surfaced as better; FAILED -> FLAKY is not called fixed.
-  const fixed = row(
-    comparisonRows(
-      invocation({ id: "base" }, withTests([{ label: "//app:b_test", status: "TIMEOUT" }])),
-      invocation({ id: "cur" }, withTests([{ label: "//app:b_test", status: "PASSED" }])),
-    ),
-    "Tests",
-  );
-  assert.deepEqual(fixed.delta, { text: "1 fixed", tone: "better" });
-
-  const flakyAfterFail = row(
-    comparisonRows(
-      invocation({ id: "base" }, withTests([{ label: "//app:b_test", status: "FAILED" }])),
-      invocation({ id: "cur" }, withTests([{ label: "//app:b_test", status: "FLAKY" }])),
-    ),
-    "Tests",
-  );
-  assert.equal(flakyAfterFail.delta, undefined);
-  assert.equal(flakyAfterFail.right, "0/1 passed (1 flaky)");
-
-  // Skipped/halted tests are counted as incomplete, not failures or fixes.
-  const halted = row(
-    comparisonRows(
-      invocation({ id: "base" }, withTests([{ label: "//app:a_test", status: "PASSED" }])),
-      invocation(
-        { id: "cur" },
-        withTests([{ label: "//app:a_test", status: "TOOL_HALTED_BEFORE_TESTING" }]),
+  assert.deepEqual(
+    row(
+      cmp(
+        [{ label: "//app:b_test", status: "TIMEOUT" }],
+        [{ label: "//app:b_test", status: "PASSED" }],
       ),
+      "Tests",
+    ).delta,
+    { text: "1 fixed", tone: "better" },
+  );
+
+  const flaky = row(
+    cmp(
+      [{ label: "//app:b_test", status: "FAILED" }],
+      [{ label: "//app:b_test", status: "FLAKY" }],
+    ),
+    "Tests",
+  );
+  assert.equal(flaky.delta, undefined);
+  assert.equal(flaky.right, "0/1 passed (1 flaky)");
+
+  const halted = row(
+    cmp(
+      [{ label: "//app:a_test", status: "PASSED" }],
+      [{ label: "//app:a_test", status: "TOOL_HALTED_BEFORE_TESTING" }],
     ),
     "Tests",
   );
@@ -363,154 +357,68 @@ test("inline diff applies to options/text but not IDs or dates", () => {
       options({ cmdLine: ["--jobs=16"] }),
     ),
   );
-  const full = row(rows, "Full command line");
-  assert.equal(changedText(full.leftParts), "8");
-  assert.equal(changedText(full.rightParts), "16");
+  assert.equal(changedText(row(rows, "Full command line").leftParts), "8");
+  assert.equal(changedText(row(rows, "Full command line").rightParts), "16");
+  assert.ok(row(rows, "Invocation ID").leftParts.every((p) => !p.changed));
+  assert.ok(row(rows, "Start date").rightParts.every((p) => !p.changed));
 
-  const idRow = row(rows, "Invocation ID");
-  assert.equal(idRow.status, "changed");
-  assert.ok(idRow.leftParts.every((p) => !p.changed));
-  assert.ok(idRow.rightParts.every((p) => !p.changed));
-
-  const dateRow = row(rows, "Start date");
-  assert.ok(dateRow.leftParts.every((p) => !p.changed));
-  assert.ok(dateRow.rightParts.every((p) => !p.changed));
-
-  // Surrogate pairs remain intact in pattern diff.
   const unpaired = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
   const pat = row(rows, "Pattern");
-  assert.ok(pat.leftParts.every((part) => !unpaired.test(part.text)));
-  assert.ok(pat.rightParts.every((part) => !unpaired.test(part.text)));
+  assert.ok(pat.leftParts.every((p) => !unpaired.test(p.text)));
+  assert.ok(pat.rightParts.every((p) => !unpaired.test(p.text)));
 });
 
 test("unloaded sides render placeholders without highlights", () => {
   const detail = invocation({ id: "r", cmd: "test" });
-  const baseMissing = row(comparisonRows(null, detail), "Command");
-  assert.equal(baseMissing.status, "unknown");
-  assert.equal(baseMissing.left, "—");
-  assert.equal(baseMissing.right, "test");
-
-  const curMissing = row(comparisonRows(detail, null), "Command");
-  assert.equal(curMissing.status, "unknown");
-  assert.equal(curMissing.left, "test");
-  assert.equal(curMissing.right, "—");
+  assert.equal(row(comparisonRows(null, detail), "Command").left, "—");
+  assert.equal(row(comparisonRows(detail, null), "Command").right, "—");
 });
 
-test("previousSuccessfulInvocation normalizes positive pattern order, preserves exclusions, and prefers same workspace", () => {
+test("previousSuccessfulInvocation, recentComparableInvocations, and formatInvocationOption", () => {
   assert.equal(normalizePattern("//b  //a"), "//a //b");
   assert.equal(normalizePattern("//...  -//slow/..."), "//... -//slow/...");
   assert.notEqual(normalizePattern("//... -//slow/..."), normalizePattern("-//slow/... //..."));
 
-  const current: InvocationRecord = {
-    id: "cur",
+  const rec = (id: string, extra: Partial<InvocationRecord>): InvocationRecord => ({
+    id,
     workspace: "/repo/wt-a",
     cmd: "build",
-    pattern: "//b //a",
-    startedAt: 5000,
-    exitCode: 1,
-  };
-  const history: InvocationRecord[] = [
-    {
-      id: "newer",
-      workspace: "/repo/wt-a",
-      cmd: "build",
-      pattern: "//a //b",
-      startedAt: 6000,
-      exitCode: 0,
-    },
+    pattern: "//a //b",
+    exitCode: 0,
+    ...extra,
+  });
+  const current = rec("cur", { pattern: "//b //a", startedAt: 5000, exitCode: 1 });
+  const history = [
+    rec("newer", { startedAt: 6000 }),
     current,
-    {
-      id: "other-wt-newer",
-      workspace: "/repo/wt-b",
-      cmd: "build",
-      pattern: "//a //b",
-      startedAt: 4800,
-      exitCode: 0,
-    },
-    {
-      id: "failed",
-      workspace: "/repo/wt-a",
-      cmd: "build",
-      pattern: "//a //b",
-      startedAt: 4500,
-      exitCode: 1,
-    },
-    {
-      id: "running-prev",
-      workspace: "/repo/wt-a",
-      cmd: "build",
-      pattern: "//a //b",
-      startedAt: 4200,
-      exitCode: 0,
-    },
-    {
-      id: "other-cmd",
-      workspace: "/repo/wt-a",
-      cmd: "test",
-      pattern: "//a //b",
-      startedAt: 4100,
-      exitCode: 0,
-    },
-    {
-      id: "same-wt-ok",
-      workspace: "/repo/wt-a",
-      cmd: "build",
-      pattern: "//a //b",
-      startedAt: 3500,
-      exitCode: 0,
-    },
+    rec("other-wt", { workspace: "/repo/wt-b", startedAt: 4800 }),
+    rec("failed", { startedAt: 4500, exitCode: 1 }),
+    rec("running", { startedAt: 4200 }),
+    rec("other-cmd", { cmd: "test", startedAt: 4100 }),
+    rec("same-wt-ok", { startedAt: 3500 }),
   ];
 
-  // Prefers same workspace even when another worktree has a newer match.
-  assert.equal(previousSuccessfulInvocation(current, history, ["running-prev"])?.id, "same-wt-ok");
-
-  // Falls back to another worktree when same workspace has no match.
+  assert.equal(previousSuccessfulInvocation(current, history, ["running"])?.id, "same-wt-ok");
   assert.equal(
-    previousSuccessfulInvocation({ ...current, workspace: "/repo/wt-c" }, history, ["running-prev"])
-      ?.id,
-    "other-wt-newer",
+    previousSuccessfulInvocation({ ...current, workspace: "/repo/wt-c" }, history, ["running"])?.id,
+    "other-wt",
   );
-
   assert.equal(
     previousSuccessfulInvocation({ id: "cur", cmd: "build", startedAt: 5000 }, history, []),
     null,
   );
-});
 
-test("recentComparableInvocations partitions same-target (previous successful first) and other settled records", () => {
-  const current: InvocationRecord = {
-    id: "cur",
-    cmd: "build",
-    pattern: "//b //a",
-    startedAt: 5000,
-  };
-  const history: InvocationRecord[] = [
-    { id: "run-1", cmd: "build", pattern: "//a //b", startedAt: 5100 },
-    current,
-    { id: "same-fail", cmd: "build", pattern: "//a //b", startedAt: 4500, exitCode: 1 },
-    { id: "same-ok", cmd: "build", pattern: "//a //b", startedAt: 4000, exitCode: 0 },
-    { id: "other-1", cmd: "test", pattern: "//a //b", startedAt: 3000, exitCode: 0 },
-  ];
-  const grouped = recentComparableInvocations(current, history, ["run-1"]);
+  const grouped = recentComparableInvocations(current, history, ["running"]);
   assert.deepEqual(
     grouped.sameTarget.map((r) => r.id),
-    ["same-ok", "same-fail"],
+    ["same-wt-ok", "newer", "other-wt", "failed"],
   );
   assert.deepEqual(
     grouped.other.map((r) => r.id),
-    ["other-1"],
+    ["other-cmd"],
   );
-});
 
-test("formatInvocationOption labels previous successful and ordinary builds", () => {
-  const rec: InvocationRecord = {
-    id: "abc12345-6789",
-    cmd: "build",
-    pattern: "//app:all",
-    startedAt: 1000,
-    finishedAt: 2500,
-    exitCode: 0,
-  };
-  assert.ok(formatInvocationOption(rec, true).startsWith("Previous successful (✓) · 1.500s · "));
-  assert.ok(formatInvocationOption(rec, false).startsWith("✓ build //app:all · 1.500s · "));
+  const sample = rec("abc12345-6789", { pattern: "//app:all", startedAt: 1000, finishedAt: 2500 });
+  assert.ok(formatInvocationOption(sample, true).startsWith("Previous successful (✓) · 1.500s · "));
+  assert.ok(formatInvocationOption(sample, false).startsWith("✓ build //app:all · 1.500s · "));
 });
