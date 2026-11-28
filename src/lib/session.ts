@@ -657,21 +657,30 @@ export function createSession(
     return { ws, saved, id, current };
   }
 
-  function readSaved(kind: "detail" | "profile") {
+  function readSavedDetail() {
     const ctx = savedContext();
     if (!ctx) return;
-    const args = { workspace: ctx.ws.path, id: ctx.id };
-    if (kind === "detail") {
-      void read(
-        ctx.saved.detail,
-        () => transport.invoke<InvocationDetail>(COMMANDS.getInvocation, args),
-        ctx.current,
-      );
-      return;
-    }
+    void read(
+      ctx.saved.detail,
+      () =>
+        transport.invoke<InvocationDetail>(COMMANDS.getInvocation, {
+          workspace: ctx.ws.path,
+          id: ctx.id,
+        }),
+      ctx.current,
+    );
+  }
+
+  function readSavedProfile() {
+    const ctx = savedContext();
+    if (!ctx) return;
     void read(
       ctx.saved.profile,
-      () => transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, args),
+      () =>
+        transport.invoke<Section<Profile>>(COMMANDS.getInvocationProfile, {
+          workspace: ctx.ws.path,
+          id: ctx.id,
+        }),
       ctx.current,
     );
   }
@@ -680,8 +689,8 @@ export function createSession(
   function ensureSaved() {
     const ctx = savedContext();
     if (!ctx) return;
-    if (ctx.saved.detail.state.phase === "empty") readSaved("detail");
-    if (ctx.saved.profile.state.phase === "empty") readSaved("profile");
+    if (ctx.saved.detail.state.phase === "empty") readSavedDetail();
+    if (ctx.saved.profile.state.phase === "empty") readSavedProfile();
   }
 
   /** A history update re-reads saved results even when values are cached. */
@@ -698,8 +707,8 @@ export function createSession(
       detail: reader(saved.detail.state.value),
       profile: reader(saved.profile.state.value),
     };
-    readSaved("detail");
-    readSaved("profile");
+    readSavedDetail();
+    readSavedProfile();
   }
 
   /** Eligibility flips replace the readers; a gain starts fresh reads. */
@@ -783,8 +792,8 @@ export function createSession(
       return;
     }
     // Re-selecting the same invocation only retries failed readers.
-    if (saved.detail.state.phase === "failed") readSaved("detail");
-    if (saved.profile.state.phase === "failed") readSaved("profile");
+    if (saved.detail.state.phase === "failed") readSavedDetail();
+    if (saved.profile.state.phase === "failed") readSavedProfile();
   }
 
   function selectInvocation(id: string) {
@@ -1065,8 +1074,8 @@ export function createSession(
     explainModule: () => state.workspace?.modules.explain(),
     selectInvocation,
     showPage,
-    loadDetail: () => readSaved("detail"),
-    loadProfile: () => readSaved("profile"),
+    loadDetail: readSavedDetail,
+    loadProfile: readSavedProfile,
     loadInvocations: requestHistory,
     select,
     setTargetTab,
