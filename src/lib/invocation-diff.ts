@@ -223,15 +223,21 @@ function durationRow(
   };
 }
 
-function isFailedTest(status: string): boolean {
-  return status !== "PASSED" && status !== "FLAKY";
+const FAILED_TEST_STATUSES = new Set(["FAILED", "TIMEOUT", "FAILED_TO_BUILD", "REMOTE_FAILURE"]);
+
+function isFailedTest(status: string | undefined): boolean {
+  return status !== undefined && FAILED_TEST_STATUSES.has(status);
+}
+
+function isPassedTest(status: string | undefined): boolean {
+  return status === "PASSED" || status === "FLAKY";
 }
 
 function summarizeTests(tests: readonly { label: string; status: string }[]): string {
   if (tests.length === 0) return "No tests";
   const passed = tests.filter((t) => t.status === "PASSED").length;
   const failed = tests.filter((t) => isFailedTest(t.status)).length;
-  const flaky = tests.length - passed - failed;
+  const flaky = tests.filter((t) => t.status === "FLAKY").length;
   const details = [
     ...(failed > 0 ? [`${failed} failed`] : []),
     ...(flaky > 0 ? [`${flaky} flaky`] : []),
@@ -248,17 +254,10 @@ function testChanges(
   const baseStatus = new Map(baseline.map((t) => [t.label, t.status]));
   const curStatus = new Map(current.map((t) => [t.label, t.status]));
   const newlyFailed = current
-    .filter(
-      (t) =>
-        isFailedTest(t.status) &&
-        (!baseStatus.has(t.label) || !isFailedTest(baseStatus.get(t.label)!)),
-    )
+    .filter((t) => isFailedTest(t.status) && !isFailedTest(baseStatus.get(t.label)))
     .map((t) => t.label);
   const fixed = baseline
-    .filter(
-      (t) =>
-        isFailedTest(t.status) && curStatus.has(t.label) && !isFailedTest(curStatus.get(t.label)!),
-    )
+    .filter((t) => isFailedTest(t.status) && isPassedTest(curStatus.get(t.label)))
     .map((t) => t.label);
   return { newlyFailed, fixed };
 }

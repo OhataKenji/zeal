@@ -326,6 +326,20 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     "Tests",
   );
   assert.deepEqual(fixed.delta, { text: "1 fixed", tone: "better" });
+
+  // Skipped/halted tests are not treated as failures or fixes.
+  const halted = row(
+    comparisonRows(
+      invocation({ id: "base" }, withTests([{ label: "//app:a_test", status: "PASSED" }])),
+      invocation(
+        { id: "cur" },
+        withTests([{ label: "//app:a_test", status: "TOOL_HALTED_BEFORE_TESTING" }]),
+      ),
+    ),
+    "Tests",
+  );
+  assert.equal(halted.delta, undefined);
+  assert.equal(halted.right, "0/1 passed");
 });
 
 test("inline diff applies to options/text but not IDs or dates", () => {
