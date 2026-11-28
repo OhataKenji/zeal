@@ -292,8 +292,10 @@ test("unloaded sides render placeholders without highlights", () => {
   assert.equal(curMissing.right, "—");
 });
 
-test("previousSuccessfulInvocation normalizes pattern order and prefers same workspace", () => {
+test("previousSuccessfulInvocation normalizes positive pattern order, preserves exclusions, and prefers same workspace", () => {
   assert.equal(normalizePattern("//b  //a"), "//a //b");
+  assert.equal(normalizePattern("//...  -//slow/..."), "//... -//slow/...");
+  assert.notEqual(normalizePattern("//... -//slow/..."), normalizePattern("-//slow/... //..."));
 
   const current: InvocationRecord = {
     id: "cur",

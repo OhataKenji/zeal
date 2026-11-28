@@ -234,10 +234,11 @@ function spawnCacheRow(
   };
 }
 
-/** Normalizes whitespace-separated target patterns so token order differences still match. */
+/** Normalizes whitespace-separated target patterns; preserves order when exclusions (`-...`) exist. */
 export function normalizePattern(pattern: string | undefined): string {
   if (!pattern) return "";
-  return pattern.trim().split(/\s+/).filter(Boolean).sort().join(" ");
+  const tokens = pattern.trim().split(/\s+/).filter(Boolean);
+  return tokens.some((token) => token.startsWith("-")) ? tokens.join(" ") : tokens.sort().join(" ");
 }
 
 function sameTargetKey(current: InvocationRecord, candidate: InvocationRecord): boolean {
