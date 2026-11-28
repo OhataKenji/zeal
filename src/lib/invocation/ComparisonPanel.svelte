@@ -191,6 +191,7 @@
           open = true;
           query = event.currentTarget.value;
           activeIndex = 0;
+          document.getElementById("compare-baseline-listbox")?.scrollTo({ top: 0 });
         }}
         onkeydown={handleKeydown}
       />
