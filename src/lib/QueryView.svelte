@@ -539,15 +539,15 @@
                 <p class="query-empty">{kind === "aquery" ? "No actions matched." : "No targets matched."}</p>
               {:else}
                 <div class="query-raw-wrap">
+                  <CopyButton
+                    text={stored.stdout}
+                    label="Copy output"
+                  />
                   {#if kind === "query" && onselecttarget}
                     <pre class="query-raw">{#each rawShown as line, i}{#if i > 0}{"\n"}{/if}{@const key = resolveTargetLink(line)}{#if key}<button type="button" class="table-link mono query-raw-link" onclick={() => onselecttarget?.(key)}>{line}</button>{:else}{line}{/if}{/each}</pre>
                   {:else}
                     <pre class="query-raw">{rawShown.join("\n")}</pre>
                   {/if}
-                  <CopyButton
-                    text={stored.stdout}
-                    label="Copy output"
-                  />
                 </div>
                 {#if rawMore > 0}
                   <p class="query-empty">

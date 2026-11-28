@@ -519,7 +519,7 @@
                 {targetIndex}
                 bazelAvailable={core !== null && core.bazel !== null}
                 query={view.query}
-                initialDraft={view.queryDraft}
+                initialDraft={session.getQueryDraft()}
                 ondraftchange={session.saveQueryDraft}
                 onselectquery={session.selectQuery}
                 onrunquery={session.runQuery}

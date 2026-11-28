@@ -2784,6 +2784,9 @@ test("Query draft and results survive target inspection and reset on workspace s
   // Remounting QueryView calls selectQuery with the same inputs; it must keep the result.
   h.session.selectQuery(req);
   assert.deepEqual(h.view.query.result, QUERY_OUTPUT);
+  // Draft-only changes without publish remain live via getQueryDraft (e.g. closing Workspace Prompt).
+  h.session.saveQueryDraft({ ...customDraft, resultView: "graph" });
+  assert.equal(h.session.getQueryDraft().resultView, "graph");
 
   // Switching workspaces resets both draft and result.
   void h.session.openWorkspace(OTHER, { include: ["//..."] });
@@ -2858,6 +2861,14 @@ test("Analytics filters, breakdown, and data survive page switches and refresh w
   assert.equal(h.view.analytics.breakdown, "result");
   assert.equal(h.view.analytics.filter.cmd, null);
   assert.equal(lastPendingRequest(h, "get_analytics").args?.workspace, OTHER);
+  // Initial history hydration for the new workspace must not fire a duplicate analytics load.
+  const otherRecord: InvocationRecord = { ...RECORD, id: "inv-other", workspace: OTHER };
+  lastPendingRequest(h, "list_invocations").reply.resolve({
+    saved: { Ok: [otherRecord] },
+    diagnostics: [],
+  });
+  await settle();
+  assert.equal(requestCount(h, "get_analytics"), 4);
 });
 
 test("Invocation active tab survives page navigation and resets on workspace switch", async () => {

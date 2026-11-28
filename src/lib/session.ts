@@ -91,6 +91,7 @@ interface Workspace {
   /** Set when analytics has not loaded yet or history changed while away. */
   analyticsStale: boolean;
   history: InvocationRecord[];
+  historyLoaded: boolean;
   historyError: string | null;
   historyRead: "idle" | "reading" | "queued";
   /** This workspace's local diagnostics from the last history reply. */
@@ -633,7 +634,9 @@ export function createSession(
       detail.value?.log.status === "pending" ||
       detail.value?.log.status === "incomplete" ||
       (detail.phase === "loading" && detail.value === null);
-    const historyChanged = JSON.stringify(ws.history) !== JSON.stringify(records);
+    const historyChanged =
+      ws.historyLoaded && JSON.stringify(ws.history) !== JSON.stringify(records);
+    ws.historyLoaded = true;
     ws.diagnostics = result.diagnostics;
     ws.history = records;
     ws.historyError = null;
@@ -795,6 +798,7 @@ export function createSession(
       analytics: createAnalytics(path, transport, publish),
       analyticsStale: true,
       history: [],
+      historyLoaded: false,
       historyError: null,
       historyRead: "idle",
       diagnostics: [],
@@ -1154,6 +1158,7 @@ export function createSession(
     explainModule: () => state.workspace?.modules.explain(),
     selectInvocation,
     setInvocationTab,
+    getQueryDraft: () => state.workspace?.queryDraft ?? EMPTY_QUERY_DRAFT,
     saveQueryDraft,
     selectQuery: (args: QueryInputs) => state.workspace?.query.select(args),
     runQuery: (args: QueryInputs) => void state.workspace?.query.run(args),
