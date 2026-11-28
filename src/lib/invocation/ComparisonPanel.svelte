@@ -113,9 +113,19 @@
     void loadBaseline(id);
   }
 
+  function openPicker() {
+    open = true;
+    query = "";
+    activeIndex = 0;
+  }
+
   function stepActive(delta: number) {
     if (options.length === 0) return;
-    open = true;
+    if (!open) {
+      open = true;
+      activeIndex = delta > 0 ? 0 : options.length - 1;
+      return;
+    }
     activeIndex = (clampedIndex + delta + options.length) % options.length;
   }
 
@@ -123,14 +133,17 @@
     if (event.key === "Escape") {
       open = false;
       query = "";
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       stepActive(event.key === "ArrowDown" ? 1 : -1);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const target = (open ? options[clampedIndex]?.id : undefined) || query.trim();
-      if (target) pickBaseline(target);
+      return;
     }
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const target = options[clampedIndex]?.id;
+    if (target) pickBaseline(target);
   }
 
   $effect(() => {
@@ -142,75 +155,81 @@
 {#if currentActive}
   <p class="panel-empty">Comparison is available after the invocation finishes.</p>
 {:else}
-  <div class="compare-scroll">
-    <div class="compare-toolbar">
-      <label class="compare-toolbar-label" for="compare-baseline-input">Baseline</label>
-      <div class="compare-picker">
-        <input
-          id="compare-baseline-input"
-          type="text"
-          role="combobox"
-          class="input compare-select"
-          autocomplete="off"
-          spellcheck="false"
-          aria-expanded={open}
-          aria-controls="compare-baseline-listbox"
-          aria-autocomplete="list"
-          placeholder="Search baseline or paste invocation ID…"
-          disabled={!currentReady || comparison.kind === "loading"}
-          value={open ? query : activeBaselineLabel}
-          onfocus={() => {
-            open = true;
-            query = "";
-            activeIndex = 0;
-          }}
-          onblur={() => {
-            open = false;
-            query = "";
-          }}
-          oninput={(event) => {
-            open = true;
-            query = event.currentTarget.value;
-            activeIndex = 0;
-          }}
-          onkeydown={handleKeydown}
-        />
-        {#if open && options.length > 0}
-          <ul id="compare-baseline-listbox" class="compare-listbox" role="listbox">
-            {#each options as option, index (`${option.group}:${option.id}`)}
-              {#if index === 0 || options[index - 1]?.group !== option.group}
-                <li class="compare-listbox-group" role="presentation">{option.group}</li>
-              {/if}
-              <li
-                role="option"
-                class="compare-listbox-option"
-                class:is-active={index === clampedIndex}
-                aria-selected={index === clampedIndex}
-                onmousedown={(event) => {
-                  event.preventDefault();
-                  pickBaseline(option.id);
-                }}
-              >
-                {option.label}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-      {#if comparison.kind === "loading"}
-        <span class="compare-status" role="status">Loading…</span>
-      {:else if currentReady && !previousSuccess && comparison.kind === "idle"}
-        <span class="compare-status">No previous successful build in recent history.</span>
+  <div class="compare-toolbar">
+    <label class="compare-toolbar-label" for="compare-baseline-input">Baseline</label>
+    <div class="compare-picker">
+      <input
+        id="compare-baseline-input"
+        type="text"
+        role="combobox"
+        class="input compare-select"
+        autocomplete="off"
+        spellcheck="false"
+        aria-expanded={open}
+        aria-controls="compare-baseline-listbox"
+        aria-activedescendant={open && clampedIndex >= 0
+          ? `compare-baseline-opt-${clampedIndex}`
+          : undefined}
+        aria-autocomplete="list"
+        placeholder="Search baseline or paste invocation ID…"
+        disabled={!currentReady || comparison.kind === "loading"}
+        value={open ? query : activeBaselineLabel}
+        onfocus={openPicker}
+        onclick={() => {
+          if (!open) openPicker();
+        }}
+        onblur={() => {
+          open = false;
+          query = "";
+        }}
+        oninput={(event) => {
+          open = true;
+          query = event.currentTarget.value;
+          activeIndex = 0;
+        }}
+        onkeydown={handleKeydown}
+      />
+      {#if open && options.length > 0}
+        <ul id="compare-baseline-listbox" class="compare-listbox" role="listbox">
+          {#each options as option, index (`${option.group}:${option.id}`)}
+            {#if index === 0 || options[index - 1]?.group !== option.group}
+              <li class="compare-listbox-group" role="presentation">{option.group}</li>
+            {/if}
+            <li
+              id={`compare-baseline-opt-${index}`}
+              role="option"
+              class="compare-listbox-option"
+              class:is-active={index === clampedIndex}
+              aria-selected={index === clampedIndex}
+              onmouseenter={() => {
+                activeIndex = index;
+              }}
+              onmousedown={(event) => {
+                event.preventDefault();
+                pickBaseline(option.id);
+              }}
+            >
+              {option.label}
+            </li>
+          {/each}
+        </ul>
       {/if}
     </div>
-
-    {#if comparison.kind === "failed"}
-      <Notice tone="error">{comparison.error}</Notice>
+    {#if comparison.kind === "loading"}
+      <span class="compare-status" role="status">Loading…</span>
+    {:else if currentReady && !previousSuccess && comparison.kind === "idle"}
+      <span class="compare-status">No previous successful build in recent history.</span>
     {/if}
-    {#if baselineActive}
-      <p class="compare-status">Comparison is available after the invocation finishes.</p>
-    {/if}
+  </div>
 
+  {#if comparison.kind === "failed"}
+    <Notice tone="error">{comparison.error}</Notice>
+  {/if}
+  {#if baselineActive}
+    <p class="compare-status">Comparison is available after the invocation finishes.</p>
+  {/if}
+
+  <div class="compare-scroll">
     <table class="compare-table" aria-label="Invocation comparison">
       <thead>
         <tr>

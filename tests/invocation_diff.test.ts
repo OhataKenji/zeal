@@ -424,7 +424,10 @@ test("previousSuccessfulInvocation, recentComparableInvocations, and formatInvoc
     [["Other recent", "other-cmd"]],
   );
   assert.deepEqual(
-    filterBaselineOptions("deadbeef-0000", grouped, "same-wt-ok").map((o) => [o.group, o.id]),
-    [["Direct ID", "deadbeef-0000"]],
+    filterBaselineOptions("00000000-0000-4000-8000-0000000000AB", grouped, "same-wt-ok").map(
+      (o) => [o.group, o.id],
+    ),
+    [["Direct ID", "00000000-0000-4000-8000-0000000000ab"]],
   );
+  assert.deepEqual(filterBaselineOptions("//no/such:target", grouped, "same-wt-ok"), []);
 });

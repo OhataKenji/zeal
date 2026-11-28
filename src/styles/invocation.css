@@ -371,9 +371,9 @@
   max-height: 260px;
   overflow-y: auto;
   list-style: none;
-  background: var(--popover, var(--card));
+  background: var(--surface-panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
 }
 
@@ -395,7 +395,6 @@
   text-overflow: ellipsis;
 }
 
-.compare-listbox-option:hover,
 .compare-listbox-option.is-active {
   background: var(--accent);
 }
@@ -456,7 +455,7 @@ tr.compare-changed > * {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.compare-scroll > .notice {
+.compare-toolbar + .notice {
   margin-bottom: 12px;
 }
 

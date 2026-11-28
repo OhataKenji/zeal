@@ -355,7 +355,9 @@ export interface BaselineOption {
   group: "Same target" | "Other recent" | "Direct ID";
 }
 
-/** Fuzzy-filters recent invocations by target, command, workspace, or ID, and appends a direct-ID fallback. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Fuzzy-filters recent invocations by target, command, workspace, or ID, and appends a direct-UUID option. */
 export function filterBaselineOptions(
   query: string,
   recent: { sameTarget: readonly InvocationRecord[]; other: readonly InvocationRecord[] },
@@ -368,19 +370,24 @@ export function filterBaselineOptions(
     group,
     haystack: `${rec.cmd ?? ""} ${rec.pattern ?? ""} ${rec.workspace ?? ""} ${rec.id}`,
   });
-  const all = [
-    ...recent.sameTarget.map((rec) => toOption(rec, "Same target")),
-    ...recent.other.map((rec) => toOption(rec, "Other recent")),
-  ];
+  const same = recent.sameTarget.map((rec) => toOption(rec, "Same target"));
+  const other = recent.other.map((rec) => toOption(rec, "Other recent"));
   const trimmed = query.trim();
-  const matched: BaselineOption[] =
-    trimmed === ""
-      ? all.slice(0, limit).map(({ id, label, group }) => ({ id, label, group }))
-      : fuzzysort
-          .go(trimmed, all, { key: "haystack", limit, threshold: 0 })
-          .map(({ obj: { id, label, group } }) => ({ id, label, group }));
-  if (trimmed !== "" && !matched.some((opt) => opt.id === trimmed)) {
-    matched.push({ id: trimmed, label: `Compare ID: ${trimmed}`, group: "Direct ID" });
+  const match = (items: typeof same, max: number): BaselineOption[] =>
+    max <= 0
+      ? []
+      : trimmed === ""
+        ? items.slice(0, max).map(({ id, label, group }) => ({ id, label, group }))
+        : fuzzysort
+            .go(trimmed, items, { key: "haystack", limit: max, threshold: 0 })
+            .map(({ obj: { id, label, group } }) => ({ id, label, group }));
+  const matched = match(same, limit);
+  matched.push(...match(other, limit - matched.length));
+  if (UUID_RE.test(trimmed)) {
+    const normalized = trimmed.toLowerCase();
+    if (!matched.some((opt) => opt.id.toLowerCase() === normalized)) {
+      matched.push({ id: normalized, label: `Compare ID: ${normalized}`, group: "Direct ID" });
+    }
   }
   return matched;
 }
