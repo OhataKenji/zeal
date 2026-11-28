@@ -223,6 +223,121 @@ function durationRow(
   };
 }
 
+function isFailedTest(status: string): boolean {
+  return status !== "PASSED" && status !== "FLAKY";
+}
+
+function summarizeTests(tests: readonly { label: string; status: string }[]): string {
+  if (tests.length === 0) return "No tests";
+  const passed = tests.filter((t) => t.status === "PASSED").length;
+  const failed = tests.filter((t) => isFailedTest(t.status)).length;
+  const flaky = tests.length - passed - failed;
+  const details = [
+    ...(failed > 0 ? [`${failed} failed`] : []),
+    ...(flaky > 0 ? [`${flaky} flaky`] : []),
+  ];
+  return details.length > 0
+    ? `${passed}/${tests.length} passed (${details.join(", ")})`
+    : `${passed}/${tests.length} passed`;
+}
+
+function testChanges(
+  baseline: readonly { label: string; status: string }[],
+  current: readonly { label: string; status: string }[],
+): { newlyFailed: string[]; fixed: string[] } {
+  const baseStatus = new Map(baseline.map((t) => [t.label, t.status]));
+  const curStatus = new Map(current.map((t) => [t.label, t.status]));
+  const newlyFailed = current
+    .filter(
+      (t) =>
+        isFailedTest(t.status) &&
+        (!baseStatus.has(t.label) || !isFailedTest(baseStatus.get(t.label)!)),
+    )
+    .map((t) => t.label);
+  const fixed = baseline
+    .filter(
+      (t) =>
+        isFailedTest(t.status) && curStatus.has(t.label) && !isFailedTest(curStatus.get(t.label)!),
+    )
+    .map((t) => t.label);
+  return { newlyFailed, fixed };
+}
+
+function testDelta(
+  newlyFailed: readonly string[],
+  fixed: readonly string[],
+): ComparisonDelta | undefined {
+  if (newlyFailed.length > 0 && fixed.length > 0) {
+    return { text: `+${newlyFailed.length} failed, ${fixed.length} fixed`, tone: "worse" };
+  }
+  if (newlyFailed.length > 0) {
+    return { text: `+${newlyFailed.length} failed`, tone: "worse" };
+  }
+  if (fixed.length > 0) {
+    return { text: `${fixed.length} fixed`, tone: "better" };
+  }
+  return undefined;
+}
+
+function formatTestCell(
+  tests: readonly { label: string; status: string }[] | null | undefined,
+): string {
+  if (tests === null) return EMPTY;
+  if (tests === undefined) return MISSING;
+  return summarizeTests(tests);
+}
+
+function formatNewFailures(newlyFailed: readonly string[]): string {
+  if (newlyFailed.length === 0) return "";
+  const shown = newlyFailed.slice(0, 5).join(", ");
+  const extra = newlyFailed.length > 5 ? ` (+${newlyFailed.length - 5} more)` : "";
+  return `\nNew failures: ${shown}${extra}`;
+}
+
+function bepTests(
+  invocation: ComparisonInvocation | null,
+): readonly { label: string; status: string }[] | null | undefined {
+  if (invocation === null) return null;
+  return invocation.bep.status === "ok" ? invocation.bep.data.tests : undefined;
+}
+
+function testRowStatus(
+  bothKnown: boolean,
+  leftText: string,
+  rightText: string,
+  changes: { newlyFailed: readonly string[]; fixed: readonly string[] },
+): ComparisonRow["status"] {
+  if (!bothKnown) return "unknown";
+  return leftText === rightText && changes.newlyFailed.length === 0 && changes.fixed.length === 0
+    ? "same"
+    : "changed";
+}
+
+function testsRow(
+  baseline: ComparisonInvocation | null,
+  current: ComparisonInvocation | null,
+): ComparisonRow | null {
+  const baseTests = bepTests(baseline);
+  const curTests = bepTests(current);
+  if (!baseTests?.length && !curTests?.length) return null;
+  const leftText = formatTestCell(baseTests);
+  const baseRightText = formatTestCell(curTests);
+  const bothKnown = baseTests != null && curTests != null;
+  const changes = bothKnown ? testChanges(baseTests, curTests) : { newlyFailed: [], fixed: [] };
+  const rightText = `${baseRightText}${formatNewFailures(changes.newlyFailed)}`;
+  const status = testRowStatus(bothKnown, leftText, baseRightText, changes);
+  const delta = bothKnown ? testDelta(changes.newlyFailed, changes.fixed) : undefined;
+  return {
+    label: "Tests",
+    left: leftText,
+    right: rightText,
+    leftParts: plainParts(leftText),
+    rightParts: plainParts(rightText),
+    status,
+    ...(delta ? { delta } : {}),
+  };
+}
+
 function exitCodeRow(
   baseline: ComparisonInvocation | null,
   current: ComparisonInvocation | null,
@@ -356,10 +471,12 @@ export function comparisonRows(
   baseline: ComparisonInvocation | null,
   current: ComparisonInvocation | null,
 ): ComparisonRow[] {
+  const tests = testsRow(baseline, current);
   return [
     durationRow(baseline, current),
     spawnCacheRow(baseline, current),
     exitCodeRow(baseline, current),
+    ...(tests ? [tests] : []),
     row("Command", (invocation) => invocation.record.cmd, baseline, current),
     row("Pattern", (invocation) => invocation.record.pattern, baseline, current),
     row("Workspace", (invocation) => invocation.record.workspace, baseline, current),

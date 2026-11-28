@@ -277,6 +277,57 @@ test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op b
   assert.equal(absent.delta, undefined);
 });
 
+test("tests row summarizes pass/fail counts, lists new failures, and omits non-test builds", () => {
+  const withTests = (tests: Array<{ label: string; status: string }>): Section<Bep> => ({
+    status: "ok",
+    data: { targets: [], tests, truncated: false },
+  });
+
+  // Omitted when neither side has tests.
+  assert.equal(
+    comparisonRows(
+      invocation({ id: "a" }, withTests([])),
+      invocation({ id: "b" }, withTests([])),
+    ).find((r) => r.label === "Tests"),
+    undefined,
+  );
+
+  // Newly failing test surfaced in delta and Current cell.
+  const regressed = row(
+    comparisonRows(
+      invocation(
+        { id: "base" },
+        withTests([
+          { label: "//app:a_test", status: "PASSED" },
+          { label: "//app:b_test", status: "PASSED" },
+        ]),
+      ),
+      invocation(
+        { id: "cur" },
+        withTests([
+          { label: "//app:a_test", status: "PASSED" },
+          { label: "//app:b_test", status: "FAILED" },
+        ]),
+      ),
+    ),
+    "Tests",
+  );
+  assert.equal(regressed.left, "2/2 passed");
+  assert.equal(regressed.right, "1/2 passed (1 failed)\nNew failures: //app:b_test");
+  assert.deepEqual(regressed.delta, { text: "+1 failed", tone: "worse" });
+  assert.equal(regressed.status, "changed");
+
+  // Fixed test surfaced as better.
+  const fixed = row(
+    comparisonRows(
+      invocation({ id: "base" }, withTests([{ label: "//app:b_test", status: "TIMEOUT" }])),
+      invocation({ id: "cur" }, withTests([{ label: "//app:b_test", status: "PASSED" }])),
+    ),
+    "Tests",
+  );
+  assert.deepEqual(fixed.delta, { text: "1 fixed", tone: "better" });
+});
+
 test("inline diff applies to options/text but not IDs or dates", () => {
   const rows = comparisonRows(
     invocation(

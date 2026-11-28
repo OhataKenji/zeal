@@ -57,7 +57,8 @@ flowchart LR
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) + 差分 (`current - baseline`)                                                                |
 | Spawn cache hits         | `bep.runnerCounts` の spawn キャッシュヒット率 (`hitPct% (cached/total)` / 0 件時は `0 spawns`) + 差分（分母一致時のみ色付け、異時は中立で spawn 数差を併記） |
-| Exit code                | `record.exitCode`                                                                                                                                             |
+| Exit code                | `record.exitCode` + 差分 (`Failed` / `Fixed`)                                                                                                                 |
+| Tests                    | `bep.tests` の合否集計 + 新規失敗・修正テストの差分（どちらか一方にテストがあるときのみ表示）                                                                 |
 | Command                  | `record.cmd`                                                                                                                                                  |
 | Pattern                  | `record.pattern`                                                                                                                                              |
 | Workspace                | `record.workspace`                                                                                                                                            |
