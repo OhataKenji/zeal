@@ -183,6 +183,13 @@ function spawnCacheRow(
   return plainRow("Spawn cache hits", fmt(left), `${fmt(right)}${delta}`, "changed");
 }
 
+function exitCodeTag(baseCode: number, curCode: number): string {
+  if (curCode === 8) return " (Interrupted)";
+  if (baseCode === 0) return " (Failed)";
+  if (curCode === 0 && baseCode !== 8) return " (Fixed)";
+  return "";
+}
+
 function exitCodeRow(
   baseline: ComparisonInvocation | null,
   current: ComparisonInvocation | null,
@@ -193,15 +200,7 @@ function exitCodeRow(
   const rightBase = display(curCode);
   if (baseCode == null || curCode == null) return plainRow("Exit code", left, rightBase, "unknown");
   if (baseCode === curCode) return plainRow("Exit code", left, rightBase, "same");
-  const tag =
-    curCode === 8
-      ? " (Interrupted)"
-      : baseCode === 0
-        ? " (Failed)"
-        : curCode === 0 && baseCode !== 8
-          ? " (Fixed)"
-          : "";
-  return plainRow("Exit code", left, `${rightBase}${tag}`, "changed");
+  return plainRow("Exit code", left, `${rightBase}${exitCodeTag(baseCode, curCode)}`, "changed");
 }
 
 const isFailedTest = (status: string | undefined) =>
