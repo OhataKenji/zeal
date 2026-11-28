@@ -4,7 +4,6 @@
   import { COMMANDS } from "../commands";
   import { comparisonRows, type ComparisonInvocation } from "../invocation-diff";
   import { sectionMessage, sectionNoticeTone } from "../invocation";
-  import { createRequest, idleRequest, type RequestState } from "../request";
   import type { InvocationDetail } from "../types";
   import Notice from "../Notice.svelte";
 
@@ -28,18 +27,22 @@
   );
 
   let input = $state("");
-  let comparison = $state.raw<RequestState<ComparisonInvocation>>(idleRequest());
-  const request = createRequest<ComparisonInvocation>((next) => (comparison = next));
+  type Comparison =
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "failed"; error: string }
+    | { kind: "ready"; right: ComparisonInvocation }
+    | { kind: "disposed" };
+  let comparison = $state.raw<Comparison>({ kind: "idle" });
   onDestroy(() => {
-    request.dispose();
-    comparison = request.state;
+    comparison = { kind: "disposed" };
   });
 
   const leftReady = $derived(
     !!left && !leftLoading && !leftError && !runningIds.includes(left.record.id),
   );
   const leftActive = $derived(!!left && runningIds.includes(left.record.id));
-  const right = $derived(comparison.kind === "ready" ? comparison.value : null);
+  const right = $derived(comparison.kind === "ready" ? comparison.right : null);
   const rightReady = $derived(right !== null && !runningIds.includes(right.record.id));
   const rightActive = $derived(right !== null && runningIds.includes(right.record.id));
   const rows = $derived(comparisonRows(leftReady ? left : null, rightReady ? right : null));
@@ -51,13 +54,22 @@
       return;
     }
     if (runningIds.includes(id)) {
-      request.fail("Comparison is available after the invocation finishes.");
+      comparison = {
+        kind: "failed",
+        error: "Comparison is available after the invocation finishes.",
+      };
       return;
     }
-    await request.run(async () => {
+    const request = { kind: "loading" } as const;
+    comparison = request;
+    try {
       const detail = await fetchDetail(id);
-      return { record: detail.record, bep: detail.bep };
-    });
+      if (comparison === request) {
+        comparison = { kind: "ready", right: { record: detail.record, bep: detail.bep } };
+      }
+    } catch (cause) {
+      if (comparison === request) comparison = { kind: "failed", error: String(cause) };
+    }
   }
 </script>
 

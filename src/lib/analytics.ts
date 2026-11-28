@@ -1,5 +1,4 @@
 import { COMMANDS } from "./commands.ts";
-import { createRequest } from "./request.ts";
 import type { Transport } from "./session.ts";
 
 /** Date and optional invocation filters sent to the core analytics query. */
@@ -77,39 +76,41 @@ export function createAnalytics(
   transport: Pick<Transport, "invoke">,
   changed: (view: AnalyticsView) => void,
 ) {
-  let currentFilter = emptyAnalytics().filter;
-  const request = createRequest<DailyAnalytics>((state) => {
-    if (state.kind === "ready") currentFilter = state.value.filter;
-    changed({
-      filter: currentFilter,
-      data: state.value,
-      loading: state.kind === "loading",
-      error: state.error,
-    });
-  });
-
-  async function load(filter = currentFilter) {
-    if (request.state.kind === "disposed") return;
-    currentFilter = { ...filter };
-    if (analyticsDateError(currentFilter)) {
-      request.invalidate();
+  let view = emptyAnalytics();
+  let owner: object | "disposed" | null = null;
+  async function load(filter = view.filter) {
+    if (owner === "disposed") return;
+    if (analyticsDateError(filter)) {
+      owner = null;
+      view = { filter: { ...filter }, data: null, loading: false, error: null };
+      changed(view);
       return;
     }
-    const queryFilter = currentFilter;
+    const request = {};
+    owner = request;
     // Keep the previous charts visible while the reload runs; an error
     // still drops stale data so it never sits next to an error banner.
-    await request.run(
-      () =>
-        transport.invoke<DailyAnalytics>(COMMANDS.getAnalytics, {
-          workspace,
-          filter: queryFilter,
-        }),
-      { retainValue: true },
-    );
+    view = { filter: { ...filter }, data: view.data, loading: true, error: null };
+    changed(view);
+    try {
+      const data = await transport.invoke<DailyAnalytics>(COMMANDS.getAnalytics, {
+        workspace,
+        filter: view.filter,
+      });
+      if (request !== owner) return;
+      view = { filter: data.filter, data, loading: false, error: null };
+    } catch (error) {
+      if (request !== owner) return;
+      view = { ...view, data: null, loading: false, error: String(error) };
+    }
+    owner = null;
+    changed(view);
   }
   return {
     load,
-    dispose: request.dispose,
+    dispose: () => {
+      owner = "disposed";
+    },
   };
 }
 

@@ -38,29 +38,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
-async fn run_core_blocking<T, F>(
-    app: AppHandle,
-    core: &Arc<Core>,
-    label: &str,
-    work: F,
-) -> Result<T, String>
-where
-    T: Send + 'static,
-    F: FnOnce(AppHandle, Arc<Core>) -> Result<T, String> + Send + 'static,
-{
-    let work_core = core.clone();
-    let work_app = app.clone();
-    match tauri::async_runtime::spawn_blocking(move || work(work_app, work_core)).await {
-        Ok(result) => result,
-        // A panicked worker released its slot without emitting (Drop skips
-        // emit while unwinding); tell the UI the state changed here.
-        Err(_) => {
-            core.emit(&app);
-            Err(format!("{label} worker failed"))
-        }
-    }
-}
-
 /// Validate the invocation UUID, registered workspace, and app data directory
 /// that every saved-invocation read command must pass identically.
 fn saved_invocation_scope(
@@ -142,10 +119,20 @@ async fn get_target_detail(
     workspace: String,
     label: String,
 ) -> Result<snapshot::TargetDetail, String> {
-    run_core_blocking(app, core.inner(), "target detail", move |app, core| {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
         ingest::target_detail(app, core, &workspace, &label)
     })
     .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("target detail worker failed".to_string())
+        }
+    }
 }
 
 /// One inspector read step (configuration, transitions, outputs, or
@@ -161,10 +148,20 @@ async fn read_target(
     flags: String,
     step: ingest::TargetRead,
 ) -> Result<ingest::TargetReadData, String> {
-    run_core_blocking(app, core.inner(), "target read", move |app, core| {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
         ingest::read_target(app, core, &workspace, &label, &flags, step)
     })
     .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("target read worker failed".to_string())
+        }
+    }
 }
 
 /// Register a directory as a Bazel workspace: validate it, canonicalize it,
@@ -218,10 +215,20 @@ async fn refresh(
     workspace: String,
     scope: scope::Scope,
 ) -> Result<ingest::TargetLoad, String> {
-    run_core_blocking(app, core.inner(), "target list", move |app, core| {
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
         ingest::request(app, core, &workspace, scope)
     })
     .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("target list worker failed".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -282,10 +289,18 @@ async fn run_query(
     core: State<'_, Arc<Core>>,
     request: query::QueryRequest,
 ) -> Result<QueryOutput, String> {
-    run_core_blocking(app, core.inner(), "query", move |app, core| {
-        query::run(app, core, &request)
-    })
-    .await
+    let core = core.inner().clone();
+    let emit_core = core.clone();
+    let emit_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || query::run(app, core, &request)).await {
+        Ok(result) => result,
+        // A panicked worker released its slot without emitting (Drop skips
+        // emit while unwinding); tell the UI the query state changed here.
+        Err(_) => {
+            emit_core.emit(&emit_app);
+            Err("query worker failed".to_string())
+        }
+    }
 }
 
 #[tauri::command]
