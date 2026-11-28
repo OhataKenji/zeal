@@ -15,7 +15,7 @@
   import PerfettoView from "./PerfettoView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { tabKeydown } from "./tabs";
-  import { formatOptions, rerunOptions } from "./invocation/options";
+  import { formatOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
   let { view, reload, onstop, onrerun, onopenflags, onselecttarget }: {
@@ -32,7 +32,7 @@
   const diagnostic = $derived(selected?.diagnostic ?? null);
   const detail = $derived(view.detail?.record.id === shown?.id ? view.detail : undefined);
   const bep = $derived(sectionData(detail?.bep));
-  const rerunFlags = $derived(formatOptions(rerunOptions(bep?.options?.explicitCmdLine)));
+  const rerunFlags = $derived(formatOptions(bep?.options?.explicitCmdLine ?? []));
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
   const sameWorkspace = $derived(Boolean(shown?.workspace && shown.workspace === view.state?.workspace));

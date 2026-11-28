@@ -1612,9 +1612,7 @@ mod tests {
         ] {
             assert!(validate_pattern(pattern).is_ok(), "{pattern:?}");
             assert_eq!(
-                argv("build", &[pattern.into()], "grpc://127.0.0.1:12345", "abc")
-                    .last()
-                    .unwrap(),
+                argv("build", &[pattern.into()], "grpc://127.0.0.1:12345", "abc")[2],
                 pattern
             );
         }

@@ -17,19 +17,24 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
     shlex::split(input).ok_or_else(|| "Unclosed quote or trailing escape in arguments".to_string())
 }
 
-/// Ordinary Bazel defaults, not an invocation policy: caller arguments
-/// follow and may override them.
+/// Places Zelith's BES and invocation identity flags after caller arguments
+/// (and before any `--` separator) so re-runs carrying raw BEP
+/// `explicit_cmd_line` still stream to the live receiver under a fresh id.
 pub fn argv(cmd: &str, arguments: &[String], endpoint: &str, id: &str) -> Vec<String> {
-    let mut args = vec![
-        "--noblock_for_lock".into(),
-        cmd.into(),
+    let split = arguments
+        .iter()
+        .position(|a| a == "--")
+        .unwrap_or(arguments.len());
+    let mut args = vec!["--noblock_for_lock".into(), cmd.into()];
+    args.extend_from_slice(&arguments[..split]);
+    args.extend([
         format!("--bes_backend={endpoint}"),
         "--bes_proxy=".into(),
         "--bes_upload_mode=wait_for_upload_complete".into(),
         format!("--invocation_id={id}"),
         "--tool_tag=zelith".into(),
-    ];
-    args.extend_from_slice(arguments);
+    ]);
+    args.extend_from_slice(&arguments[split..]);
     args
 }
 
@@ -128,24 +133,28 @@ mod tests {
     }
 
     #[test]
-    fn invocation_defaults_precede_verbatim_arguments() {
+    fn observation_flags_override_caller_arguments_before_separator() {
         let arguments =
             parse_arguments("--invocation_id=app //:app --config dev -- 'two words'").unwrap();
         let args = argv("run", &arguments, "grpc://127.0.0.1:12345", "id");
-        let first_argument = args.len() - arguments.len();
         assert_eq!(
-            args[..first_argument],
+            args,
             [
                 "--noblock_for_lock",
                 "run",
+                "--invocation_id=app",
+                "//:app",
+                "--config",
+                "dev",
                 "--bes_backend=grpc://127.0.0.1:12345",
                 "--bes_proxy=",
                 "--bes_upload_mode=wait_for_upload_complete",
                 "--invocation_id=id",
                 "--tool_tag=zelith",
+                "--",
+                "two words",
             ]
         );
-        assert_eq!(args[first_argument..], arguments);
     }
 
     #[test]
