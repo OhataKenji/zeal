@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   comparisonRows,
+  filterBaselineOptions,
   formatInvocationOption,
   normalizePattern,
   previousSuccessfulInvocation,
@@ -407,4 +408,23 @@ test("previousSuccessfulInvocation, recentComparableInvocations, and formatInvoc
   const sample = rec("abc12345-6789", { pattern: "//app:all", startedAt: 1000, finishedAt: 2500 });
   assert.ok(formatInvocationOption(sample, true).startsWith("Previous successful (✓) · 1.500s · "));
   assert.ok(formatInvocationOption(sample, false).startsWith("✓ build //app:all · 1.500s · "));
+
+  assert.deepEqual(
+    filterBaselineOptions("", grouped, "same-wt-ok").map((o) => [o.group, o.id]),
+    [
+      ["Same target", "same-wt-ok"],
+      ["Same target", "newer"],
+      ["Same target", "other-wt"],
+      ["Same target", "failed"],
+      ["Other recent", "other-cmd"],
+    ],
+  );
+  assert.deepEqual(
+    filterBaselineOptions("other-cmd", grouped, "same-wt-ok").map((o) => [o.group, o.id]),
+    [["Other recent", "other-cmd"]],
+  );
+  assert.deepEqual(
+    filterBaselineOptions("deadbeef-0000", grouped, "same-wt-ok").map((o) => [o.group, o.id]),
+    [["Direct ID", "deadbeef-0000"]],
+  );
 });

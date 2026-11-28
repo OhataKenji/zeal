@@ -349,9 +349,55 @@
   color: var(--muted-foreground);
 }
 
+.compare-picker {
+  position: relative;
+  flex: 0 1 380px;
+  min-width: 240px;
+}
+
 .compare-select {
-  max-width: 360px;
+  width: 100%;
   font-size: 12px;
+}
+
+.compare-listbox {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 260px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--popover, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+.compare-listbox-group {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.compare-listbox-option {
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compare-listbox-option:hover,
+.compare-listbox-option.is-active {
+  background: var(--accent);
 }
 
 .compare-table {

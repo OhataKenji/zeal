@@ -1,4 +1,5 @@
 import DiffMatchPatch from "diff-match-patch";
+import fuzzysort from "fuzzysort";
 import type { InvocationDetail, InvocationRecord } from "./types.ts";
 import { summarizeRunners } from "./invocation.ts";
 import { quoteShellArgument } from "./invocation/options.ts";
@@ -345,6 +346,43 @@ export function formatInvocationOption(
   return [head, ms !== undefined ? formatDuration(ms) : undefined, date]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** One selectable baseline entry in the combobox dropdown. */
+export interface BaselineOption {
+  id: string;
+  label: string;
+  group: "Same target" | "Other recent" | "Direct ID";
+}
+
+/** Fuzzy-filters recent invocations by target, command, workspace, or ID, and appends a direct-ID fallback. */
+export function filterBaselineOptions(
+  query: string,
+  recent: { sameTarget: readonly InvocationRecord[]; other: readonly InvocationRecord[] },
+  previousSuccessId?: string,
+  limit = 20,
+): BaselineOption[] {
+  const toOption = (rec: InvocationRecord, group: "Same target" | "Other recent") => ({
+    id: rec.id,
+    label: formatInvocationOption(rec, rec.id === previousSuccessId),
+    group,
+    haystack: `${rec.cmd ?? ""} ${rec.pattern ?? ""} ${rec.workspace ?? ""} ${rec.id}`,
+  });
+  const all = [
+    ...recent.sameTarget.map((rec) => toOption(rec, "Same target")),
+    ...recent.other.map((rec) => toOption(rec, "Other recent")),
+  ];
+  const trimmed = query.trim();
+  const matched: BaselineOption[] =
+    trimmed === ""
+      ? all.slice(0, limit).map(({ id, label, group }) => ({ id, label, group }))
+      : fuzzysort
+          .go(trimmed, all, { key: "haystack", limit, threshold: 0 })
+          .map(({ obj: { id, label, group } }) => ({ id, label, group }));
+  if (trimmed !== "" && !matched.some((opt) => opt.id === trimmed)) {
+    matched.push({ id: trimmed, label: `Compare ID: ${trimmed}`, group: "Direct ID" });
+  }
+  return matched;
 }
 
 /** Builds comparison rows ordered left = baseline, right = current. */

@@ -45,7 +45,7 @@ flowchart LR
 ### Baseline の選択と読込
 
 - 履歴 (`view.invocations`) から、現在の invocation より前に開始された同じ正規化 `pattern`（および `cmd`）の直前の成功ビルド (`exitCode === 0`、同一 `workspace` 優先) を特定し、Compare タブを開いて現在側が準備できた時点で `idle` から一度だけ自動的に読み込む。
-- テーブル上の 1 行ツールバーに Baseline `<select>`（`Same target` / `Other recent` で分割、先頭に直前成功ビルド）を置き、UUID 手入力欄は設けない。
+- テーブル上の 1 行ツールバーに Baseline コンボボックスを置き、1 つの入力欄で直近履歴の fuzzy find（`fuzzysort` による target / command / workspace / ID 検索、`Same target` / `Other recent` で分割・先頭に直前成功ビルド）と任意の invocation ID 直接入力（Enter / `Compare ID:`）の両方に対応する。
 - 選択で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず現在の選択を維持し、workspace の一致は既存 backend が保証する。
 - 送信中は選択を無効にして in-flight を一件に絞り、現在側の detail 読込中も待たせる。失敗は inline error として出し、利用者が選び直して再試行する。自動 retry、polling、queue、新しい backend は設けない。
 

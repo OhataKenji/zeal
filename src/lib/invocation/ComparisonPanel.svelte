@@ -4,6 +4,7 @@
   import { COMMANDS } from "../commands";
   import {
     comparisonRows,
+    filterBaselineOptions,
     formatInvocationOption,
     previousSuccessfulInvocation,
     recentComparableInvocations,
@@ -41,6 +42,9 @@
     | { kind: "ready"; id: string; baseline: ComparisonInvocation }
     | { kind: "disposed" };
   let comparison = $state.raw<Comparison>({ kind: "idle" });
+  let query = $state("");
+  let open = $state(false);
+  let activeIndex = $state(0);
   onDestroy(() => {
     comparison = { kind: "disposed" };
   });
@@ -58,8 +62,17 @@
       ? recentComparableInvocations(current.record, history, runningIds)
       : { sameTarget: [], other: [] },
   );
-  const hasRecent = $derived(recent.sameTarget.length > 0 || recent.other.length > 0);
-  const activeBaselineId = $derived("id" in comparison ? comparison.id : "");
+  const options = $derived(filterBaselineOptions(query, recent, previousSuccess?.id));
+  const clampedIndex = $derived(
+    options.length > 0 ? Math.min(activeIndex, options.length - 1) : -1,
+  );
+  const activeBaselineLabel = $derived(
+    baseline
+      ? formatInvocationOption(baseline.record, baseline.record.id === previousSuccess?.id)
+      : "id" in comparison
+        ? comparison.id
+        : "",
+  );
   const rows = $derived(
     comparisonRows(baselineReady ? baseline : null, currentReady ? current : null),
   );
@@ -93,6 +106,33 @@
     }
   }
 
+  function pickBaseline(id: string) {
+    open = false;
+    query = "";
+    activeIndex = 0;
+    void loadBaseline(id);
+  }
+
+  function stepActive(delta: number) {
+    if (options.length === 0) return;
+    open = true;
+    activeIndex = (clampedIndex + delta + options.length) % options.length;
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      open = false;
+      query = "";
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      stepActive(event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const target = (open ? options[clampedIndex]?.id : undefined) || query.trim();
+      if (target) pickBaseline(target);
+    }
+  }
+
   $effect(() => {
     if (!currentReady || !previousSuccess || comparison.kind !== "idle") return;
     void loadBaseline(previousSuccess.id);
@@ -104,40 +144,59 @@
 {:else}
   <div class="compare-scroll">
     <div class="compare-toolbar">
-      {#if hasRecent}
-        <label class="compare-toolbar-label" for="compare-baseline-select">Baseline</label>
-        <select
-          id="compare-baseline-select"
+      <label class="compare-toolbar-label" for="compare-baseline-input">Baseline</label>
+      <div class="compare-picker">
+        <input
+          id="compare-baseline-input"
+          type="text"
+          role="combobox"
           class="input compare-select"
+          autocomplete="off"
+          spellcheck="false"
+          aria-expanded={open}
+          aria-controls="compare-baseline-listbox"
+          aria-autocomplete="list"
+          placeholder="Search baseline or paste invocation ID…"
           disabled={!currentReady || comparison.kind === "loading"}
-          value={recent.sameTarget.some((e) => e.id === activeBaselineId) ||
-          recent.other.some((e) => e.id === activeBaselineId)
-            ? activeBaselineId
-            : ""}
-          onchange={(event) => {
-            const id = event.currentTarget.value;
-            if (id) void loadBaseline(id);
+          value={open ? query : activeBaselineLabel}
+          onfocus={() => {
+            open = true;
+            query = "";
+            activeIndex = 0;
           }}
-        >
-          <option value="">Select a baseline…</option>
-          {#if recent.sameTarget.length > 0}
-            <optgroup label="Same target">
-              {#each recent.sameTarget as rec (rec.id)}
-                <option value={rec.id}
-                  >{formatInvocationOption(rec, rec.id === previousSuccess?.id)}</option
-                >
-              {/each}
-            </optgroup>
-          {/if}
-          {#if recent.other.length > 0}
-            <optgroup label="Other recent">
-              {#each recent.other as rec (rec.id)}
-                <option value={rec.id}>{formatInvocationOption(rec)}</option>
-              {/each}
-            </optgroup>
-          {/if}
-        </select>
-      {/if}
+          onblur={() => {
+            open = false;
+            query = "";
+          }}
+          oninput={(event) => {
+            open = true;
+            query = event.currentTarget.value;
+            activeIndex = 0;
+          }}
+          onkeydown={handleKeydown}
+        />
+        {#if open && options.length > 0}
+          <ul id="compare-baseline-listbox" class="compare-listbox" role="listbox">
+            {#each options as option, index (`${option.group}:${option.id}`)}
+              {#if index === 0 || options[index - 1]?.group !== option.group}
+                <li class="compare-listbox-group" role="presentation">{option.group}</li>
+              {/if}
+              <li
+                role="option"
+                class="compare-listbox-option"
+                class:is-active={index === clampedIndex}
+                aria-selected={index === clampedIndex}
+                onmousedown={(event) => {
+                  event.preventDefault();
+                  pickBaseline(option.id);
+                }}
+              >
+                {option.label}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
       {#if comparison.kind === "loading"}
         <span class="compare-status" role="status">Loading…</span>
       {:else if currentReady && !previousSuccess && comparison.kind === "idle"}

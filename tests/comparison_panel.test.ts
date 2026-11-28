@@ -31,10 +31,10 @@ test("ComparisonPanel renders the baseline toolbar and 3-column comparison table
     }).body.replace(/<!--[\s\S]*?-->/g, "");
   }
 
-  function selectTag(html: string): string {
-    const select = html.match(/<select[^>]*id="compare-baseline-select"[^>]*>/)?.[0];
-    assert.ok(select, "baseline select is missing");
-    return select;
+  function inputTag(html: string): string {
+    const input = html.match(/<input[^>]*id="compare-baseline-input"[^>]*>/)?.[0];
+    assert.ok(input, "baseline combobox input is missing");
+    return input;
   }
 
   const sampleHistory: InvocationRecord[] = [
@@ -49,24 +49,25 @@ test("ComparisonPanel renders the baseline toolbar and 3-column comparison table
     },
   ];
 
-  await t.test("shows 3-column Baseline | Current table without UUID text input", () => {
+  await t.test("shows 3-column Baseline | Current table with baseline combobox", () => {
     const html = output();
     assert.ok(html.includes("current-id"));
     assert.match(html, /<table[^>]*aria-label="Invocation comparison"/);
     assert.match(html, /<th[^>]*>\s*Baseline/);
     assert.match(html, /<th[^>]*>\s*Current/);
-    assert.ok(!html.includes("compare-invocation-id"));
+    assert.match(inputTag(html), /role="combobox"/);
     assert.ok(html.includes("No previous successful build in recent history."));
   });
 
-  await t.test("disables baseline selector while current detail is loading", () => {
+  await t.test("disables baseline combobox while current detail is loading", () => {
     const html = output({ current: null, currentLoading: true, history: sampleHistory });
+    assert.match(inputTag(html), /\bdisabled\b/);
     assert.match(html, /Loading…/);
   });
 
-  await t.test("disables baseline selector when current detail failed", () => {
+  await t.test("disables baseline combobox when current detail failed", () => {
     const html = output({ currentError: "read failed", history: sampleHistory });
-    assert.match(selectTag(html), /\bdisabled\b/);
+    assert.match(inputTag(html), /\bdisabled\b/);
     assert.ok(html.includes("read failed"));
   });
 
@@ -79,9 +80,9 @@ test("ComparisonPanel renders the baseline toolbar and 3-column comparison table
     },
   );
 
-  await t.test("keeps baseline selector enabled when a different invocation is running", () => {
+  await t.test("keeps baseline combobox enabled when a different invocation is running", () => {
     const html = output({ runningIds: ["other-id"], history: sampleHistory });
-    assert.doesNotMatch(selectTag(html), /\bdisabled\b/);
+    assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
   });
 
   await t.test("escapes option values in the rendered HTML", () => {
@@ -122,7 +123,7 @@ test("ComparisonPanel renders the baseline toolbar and 3-column comparison table
     assert.ok(html.includes("saved prefix missing"));
   });
 
-  await t.test("groups recent invocations into Same target and Other recent optgroups", () => {
+  await t.test("omits empty-history notice when a previous successful build exists", () => {
     const html = output({
       current: detail({
         id: "cur",
@@ -161,10 +162,7 @@ test("ComparisonPanel renders the baseline toolbar and 3-column comparison table
         },
       ],
     });
-    assert.match(html, /<select[^>]*id="compare-baseline-select"/);
-    assert.ok(html.includes('label="Same target"'));
-    assert.ok(html.includes('label="Other recent"'));
-    assert.ok(html.includes("Previous successful (✓)"));
+    assert.match(inputTag(html), /role="combobox"/);
     assert.ok(!html.includes("No previous successful build in recent history."));
   });
 
