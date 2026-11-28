@@ -173,22 +173,21 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
   });
 
   await t.test(
-    "InvocationView disables Re-run while detail is loading and enables it once loaded",
+    "InvocationView enables Re-run only for Zelith-launched invocations with trusted arguments",
     async () => {
       const { emptyView } = await load("/src/lib/session.ts");
       const { default: InvocationView } = await load("/src/lib/InvocationView.svelte");
-      const left = detail(
-        { cmd: "build", pattern: "//app:server", workspace: "/workspace" },
-        {
-          status: "ok",
-          data: {
-            targets: [],
-            tests: [],
-            rerunFlags: "--define=qa_mode=enabled",
-            truncated: false,
-          },
-        },
-      );
+      const trusted = detail({
+        cmd: "build",
+        pattern: "//app:server",
+        workspace: "/workspace",
+        arguments: "--define=qa_mode=enabled",
+      });
+      const untrusted = detail({
+        cmd: "build",
+        pattern: "//app:server",
+        workspace: "/workspace",
+      });
       const base = {
         ...emptyView(),
         core: {
@@ -196,36 +195,46 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
           besError: null,
           besEndpoint: "grpc://127.0.0.1:4718",
           bazel: "/usr/bin/bazel",
-          lastWorkspace: left.record.workspace!,
-          workspaces: [{ workspace: left.record.workspace!, scope: { include: ["//..."] } }],
+          lastWorkspace: "/workspace",
+          workspaces: [{ workspace: "/workspace", scope: { include: ["//..."] } }],
           invocations: [],
         },
-        state: { workspace: left.record.workspace!, scope: { include: ["//..."] } },
-        invocations: [left.record],
-        invocation: { record: left.record },
+        state: { workspace: "/workspace", scope: { include: ["//..."] } },
       };
 
-      const loadingHtml = render(InvocationView, {
+      const untrustedHtml = render(InvocationView, {
         props: {
-          view: { ...base, detail: null, detailLoading: true },
+          view: {
+            ...base,
+            invocations: [untrusted.record],
+            invocation: { record: untrusted.record },
+            detail: untrusted,
+            detailLoading: false,
+          },
           reload: () => {},
           reloadProfile: () => {},
           onstop: () => {},
           onrerun: () => {},
         },
       }).body;
-      assert.match(loadingHtml, /<button[^>]*disabled[^>]*>\s*Re-run\s*<\/button>/);
+      assert.match(untrustedHtml, /<button[^>]*disabled[^>]*>\s*Re-run\s*<\/button>/);
 
-      const readyHtml = render(InvocationView, {
+      const trustedHtml = render(InvocationView, {
         props: {
-          view: { ...base, detail: left, detailLoading: false },
+          view: {
+            ...base,
+            invocations: [trusted.record],
+            invocation: { record: trusted.record },
+            detail: trusted,
+            detailLoading: false,
+          },
           reload: () => {},
           reloadProfile: () => {},
           onstop: () => {},
           onrerun: () => {},
         },
       }).body;
-      assert.match(readyHtml, /<button(?![^>]*disabled)[^>]*>\s*Re-run\s*<\/button>/);
+      assert.match(trustedHtml, /<button(?![^>]*disabled)[^>]*>\s*Re-run\s*<\/button>/);
     },
   );
 });

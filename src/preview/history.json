@@ -6,7 +6,8 @@
       "pattern": "//...",
       "startedAt": 20934,
       "finishedAt": 24202,
-      "exitCode": 0
+      "exitCode": 0,
+      "arguments": "--jobs=8 --per_file_copt=^rates/.*@-DPARCEL_DESK_PROFILE --experimental_build_event_upload_strategy=local --bes_timeout=5s"
     },
     "profile": {
       "lanes": [
@@ -1178,8 +1179,7 @@
         }
       ],
       "tests": [],
-      "truncated": false,
-      "rerunFlags": "--jobs=8 --per_file_copt=^rates/.*@-DPARCEL_DESK_PROFILE --experimental_build_event_upload_strategy=local --bes_timeout=5s"
+      "truncated": false
     },
     "log": "Computing main repo mapping: \nLoading: \nLoading: 0 packages loaded\nWARNING: Build option --per_file_copt has changed, discarding analysis cache (this can be expensive, see https://bazel.build/advanced/performance/iteration-speed).\nAnalyzing: 12 targets (0 packages loaded, 0 targets configured)\nAnalyzing: 12 targets (0 packages loaded, 0 targets configured)\n\nAnalyzing: 12 targets (0 packages loaded, 16623 targets configured)\n[967 / 969] Compiling rates/tariff.cc; 0s darwin-sandbox\nINFO: Analyzed 12 targets (0 packages loaded, 16873 targets configured).\n[6,887 / 6,889] Compiling rates/rate_server.cc; 1s darwin-sandbox\nINFO: Found 12 targets...\nINFO: Elapsed time: 3.268s, Critical Path: 1.51s\nINFO: 8 processes: 5 internal, 3 darwin-sandbox.\nINFO: Build completed successfully, 8 total actions\nINFO: \n"
   },
@@ -1190,7 +1190,8 @@
       "pattern": "//dispatch:quote_contract_test",
       "startedAt": 17936,
       "finishedAt": 20878,
-      "exitCode": 0
+      "exitCode": 0,
+      "arguments": "--jobs=8 --cache_test_results=no --experimental_build_event_upload_strategy=local --bes_timeout=5s"
     },
     "profile": {
       "lanes": [
@@ -1804,8 +1805,7 @@
           "status": "PASSED"
         }
       ],
-      "truncated": false,
-      "rerunFlags": "--jobs=8 --cache_test_results=no --experimental_build_event_upload_strategy=local --bes_timeout=5s"
+      "truncated": false
     },
     "log": "Computing main repo mapping: \nLoading: \nLoading: 0 packages loaded\nAnalyzing: target //dispatch:quote_contract_test (1 packages loaded, 0 targets configured)\nAnalyzing: target //dispatch:quote_contract_test (1 packages loaded, 0 targets configured)\n\nINFO: Analyzed target //dispatch:quote_contract_test (21 packages loaded, 2403 targets configured).\n[6,887 / 6,888] Testing //dispatch:quote_contract_test; 0s darwin-sandbox\nINFO: Found 1 test target...\nTarget //dispatch:quote_contract_test up-to-date:\n  bazel-bin/dispatch/quote_contract_test\nINFO: Elapsed time: 2.942s, Critical Path: 2.13s\nINFO: 8 processes: 4 internal, 4 darwin-sandbox.\nINFO: Build completed successfully, 8 total actions\nINFO: \n//dispatch:quote_contract_test                                           PASSED in 1.5s\n\nExecuted 1 out of 1 test: 1 test passes.\nThere were tests whose specified size is too big. Use the --test_verbose_timeout_warnings command line option to see which ones these are.\n"
   },
@@ -1816,7 +1816,8 @@
       "pattern": "//rates:rate_server",
       "startedAt": 0,
       "finishedAt": 17824,
-      "exitCode": 0
+      "exitCode": 0,
+      "arguments": "--jobs=8 --experimental_build_event_upload_strategy=local --bes_timeout=5s"
     },
     "profile": {
       "lanes": [
@@ -9862,8 +9863,7 @@
         }
       ],
       "tests": [],
-      "truncated": false,
-      "rerunFlags": "--jobs=8 --experimental_build_event_upload_strategy=local --bes_timeout=5s"
+      "truncated": false
     },
     "log": "Computing main repo mapping: \nComputing main repo mapping: \nComputing main repo mapping: \nComputing main repo mapping: \nComputing main repo mapping: \nComputing main repo mapping: \nComputing main repo mapping: \nComputing main repo mapping: \nLoading: \nLoading: 0 packages loaded\nAnalyzing: target //rates:rate_server (1 packages loaded, 0 targets configured)\nAnalyzing: target //rates:rate_server (1 packages loaded, 0 targets configured)\n\nWARNING: external/grpc~/src/compiler/BUILD:87:18: target 'grpc_cpp_plugin' is both a rule and a file; please choose another name for the rule\nWARNING: external/grpc~/src/compiler/BUILD:93:18: target 'grpc_csharp_plugin' is both a rule and a file; please choose another name for the rule\nWARNING: external/grpc~/src/compiler/BUILD:99:18: target 'grpc_node_plugin' is both a rule and a file; please choose another name for the rule\nWARNING: external/grpc~/src/compiler/BUILD:105:18: target 'grpc_objective_c_plugin' is both a rule and a file; please choose another name for the rule\nWARNING: external/grpc~/src/compiler/BUILD:111:18: target 'grpc_php_plugin' is both a rule and a file; please choose another name for the rule\nWARNING: external/grpc~/src/compiler/BUILD:117:18: target 'grpc_python_plugin' is both a rule and a file; please choose another name for the rule\nWARNING: external/grpc~/src/compiler/BUILD:123:18: target 'grpc_ruby_plugin' is both a rule and a file; please choose another name for the rule\nAnalyzing: target //rates:rate_server (119 packages loaded, 3735 targets configured)\n\nAnalyzing: target //rates:rate_server (236 packages loaded, 11647 targets configured)\n\nAnalyzing: target //rates:rate_server (246 packages loaded, 13730 targets configured)\n\nAnalyzing: target //rates:rate_server (250 packages loaded, 14468 targets configured)\n\nINFO: Analyzed target //rates:rate_server (250 packages loaded, 14468 targets configured).\n[4,331 / 6,799] checking cached actions\n[6,716 / 6,799] Compiling rates/tariff.cc; 0s darwin-sandbox ... (3 actions running)\n[6,791 / 6,799] Compiling rates/tariff.cc; 1s darwin-sandbox ... (4 actions running)\n[6,797 / 6,799] Compiling rates/rate_server.cc; 1s darwin-sandbox\nINFO: Found 1 target...\nTarget //rates:rate_server up-to-date:\n  bazel-bin/rates/rate_server\nINFO: Elapsed time: 17.824s, Critical Path: 3.36s\nINFO: 18 processes: 8 internal, 10 darwin-sandbox.\nINFO: Build completed successfully, 18 total actions\nINFO: \n"
   }

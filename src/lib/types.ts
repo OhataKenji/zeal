@@ -195,6 +195,7 @@ export interface ProcessDiagnostic {
   workspace: string;
   cmd: string;
   pattern: string;
+  arguments?: string;
   startedAt: number;
   processExitCode: number | null;
   output: string;
@@ -239,6 +240,8 @@ export interface InvocationRecord {
   startedAt?: number;
   finishedAt?: number;
   exitCode?: number;
+  /** User-supplied flags recorded by Zelith when it launched this invocation. */
+  arguments?: string;
 }
 
 /** A section result that distinguishes missing, partial, and failed data. */
@@ -272,7 +275,6 @@ export interface Bep {
   tests: Array<{ label: string; status: string }>;
   originalCommandLine?: string;
   canonicalCommandLine?: string;
-  rerunFlags?: string;
   options?: {
     startupOptions: string[];
     explicitStartupOptions: string[];

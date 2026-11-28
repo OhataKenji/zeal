@@ -46,9 +46,6 @@
       record: shown,
       execution,
       diagnostic,
-      detail,
-      detailLoading: view.detailLoading,
-      detailError: view.detailError,
       runnable:
         shown?.workspace === view.state?.workspace &&
         shown?.pattern !== undefined &&

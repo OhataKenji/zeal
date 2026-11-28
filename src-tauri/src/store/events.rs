@@ -1040,7 +1040,7 @@ mod tests {
         Store::open(&f.data)
             .unwrap()
             .conn
-            .pragma_update(None, "user_version", 4)
+            .pragma_update(None, "user_version", 6)
             .unwrap();
         assert_eq!(retry.finish().unwrap_err().kind, ErrorKind::NewerSchema);
         assert!(

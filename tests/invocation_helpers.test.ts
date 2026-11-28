@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { rerunState, summarizeRunners } from "../src/lib/invocation.ts";
-import type { InvocationDetail } from "../src/lib/types.ts";
 
 test("summarizeRunners excludes total row and computes cache hit percentage", () => {
   assert.deepEqual(
@@ -33,22 +32,16 @@ test("summarizeRunners excludes total row and computes cache hit percentage", ()
   assert.equal(summarizeRunners(undefined), null);
 });
 
-function savedDetail(id: string, rerunFlags?: string): InvocationDetail {
-  return {
-    record: { id, cmd: "build", pattern: "//:mode_sensitive" },
-    bep: { status: "ok", data: { targets: [], tests: [], rerunFlags, truncated: false } },
-    log: { status: "ok", data: "" },
-  };
-}
-
-test("rerunState models History Re-run transitions explicitly", () => {
+test("rerunState enforces trusted launch provenance and row readiness", () => {
   const base = {
-    record: { id: "1", cmd: "build", pattern: "//:mode_sensitive" },
+    record: {
+      id: "1",
+      cmd: "build",
+      pattern: "//:mode_sensitive",
+      arguments: "--define=qa_mode=enabled",
+    },
     execution: undefined,
     diagnostic: null,
-    detail: savedDetail("1", "--define=qa_mode=enabled"),
-    detailLoading: false,
-    detailError: null,
     runnable: true,
   };
 
@@ -58,26 +51,26 @@ test("rerunState models History Re-run transitions explicitly", () => {
     pattern: "//:mode_sensitive",
     flags: "--define=qa_mode=enabled",
   });
-  assert.deepEqual(rerunState({ ...base, detail: savedDetail("1", "") }), {
+  assert.deepEqual(rerunState({ ...base, record: { ...base.record, arguments: "" } }), {
     kind: "ready",
     cmd: "build",
     pattern: "//:mode_sensitive",
     flags: "",
   });
-  assert.deepEqual(rerunState({ ...base, detailLoading: true }), { kind: "loading" });
-  assert.deepEqual(rerunState({ ...base, detailError: "read failed" }), { kind: "unavailable" });
-  assert.deepEqual(rerunState({ ...base, detail: savedDetail("other", "--foo") }), {
-    kind: "unavailable",
-  });
-  assert.deepEqual(rerunState({ ...base, detail: savedDetail("1", undefined) }), {
+  // External or forged BES invocations carry no Zelith launch record.
+  assert.deepEqual(rerunState({ ...base, record: { ...base.record, arguments: undefined } }), {
     kind: "unavailable",
   });
   assert.deepEqual(rerunState({ ...base, runnable: false }), { kind: "unavailable" });
-  assert.deepEqual(rerunState({ ...base, record: { id: "1", cmd: "query", pattern: "//..." } }), {
-    kind: "unavailable",
-  });
   assert.deepEqual(
-    rerunState({ ...base, record: { id: "1", cmd: "build", pattern: "-//app:bad" } }),
+    rerunState({ ...base, record: { id: "1", cmd: "query", pattern: "//...", arguments: "" } }),
+    { kind: "unavailable" },
+  );
+  assert.deepEqual(
+    rerunState({
+      ...base,
+      record: { id: "1", cmd: "build", pattern: "-//app:bad", arguments: "" },
+    }),
     { kind: "unavailable" },
   );
   assert.deepEqual(
@@ -99,17 +92,23 @@ test("rerunState models History Re-run transitions explicitly", () => {
   assert.deepEqual(
     rerunState({
       ...base,
-      detail: null,
+      record: { id: "1", cmd: "build", pattern: "//:mode_sensitive" },
       diagnostic: {
         id: "1",
         workspace: "/ws",
         cmd: "build",
         pattern: "//:mode_sensitive",
+        arguments: "--define=qa_mode=enabled",
         startedAt: 1,
         processExitCode: 1,
         output: "",
       },
     }),
-    { kind: "ready", cmd: "build", pattern: "//:mode_sensitive", flags: "" },
+    {
+      kind: "ready",
+      cmd: "build",
+      pattern: "//:mode_sensitive",
+      flags: "--define=qa_mode=enabled",
+    },
   );
 });

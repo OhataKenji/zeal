@@ -69,6 +69,7 @@ fn spawn_bazel(
     pattern: &str,
     args: &[String],
     output: Output,
+    id: String,
 ) -> Result<(Child, Option<crate::terminal::Capture>, String), String> {
     let mut state = core.state.lock().expect("application state lock poisoned");
     if !state.workspaces.contains_key(workspace) {
@@ -76,7 +77,6 @@ fn spawn_bazel(
     }
     let bazel = state.bazel.as_ref().ok_or("no bazel")?;
     let endpoint = receiver_endpoint(&state)?;
-    let id = uuid::Uuid::new_v4().to_string();
     let mut command = Command::new(bazel);
     command
         .current_dir(workspace)
@@ -104,7 +104,8 @@ pub(crate) fn spawn_query(
     expr: &str,
     args: &[String],
 ) -> Result<(Child, String), String> {
-    let (child, _, id) = spawn_bazel(core, Path::new(ws), cmd, expr, args, Output::Pipes)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let (child, _, id) = spawn_bazel(core, Path::new(ws), cmd, expr, args, Output::Pipes, id)?;
     Ok((child, id))
 }
 
@@ -178,12 +179,22 @@ pub fn start(
     let mut args = vec!["--color=yes".into(), "--curses=no".into(), pattern.into()];
     args.extend(parse_arguments(arguments)?);
     let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    // Record trusted launch flags before spawning Bazel so BES events for this
+    // invocation always find their launch record and forged BES streams cannot
+    // forge re-run flags.
+    if let Ok(data) = app.path().app_data_dir()
+        && let Err(error) = crate::store::record_launch(&data, &id, arguments)
+    {
+        log::warn!("Failed to record launch arguments: {error}");
+    }
     // Its own process group: a stop reaches bazel and whatever it started.
     let (mut child, capture, id) =
-        spawn_bazel(&core, ws, cmd, pattern, &args, Output::Terminal(log))?;
+        spawn_bazel(&core, ws, cmd, pattern, &args, Output::Terminal(log), id)?;
     let capture = capture.expect("terminal output capture");
     core.emit(&app);
     let result = id.clone();
+    let launch_arguments = arguments.to_string();
 
     thread::spawn(move || {
         let _guard = InvocationGuard {
@@ -202,7 +213,13 @@ pub fn start(
             log::warn!("Failed to capture terminal output: {error}");
         }
         let data = app.path().app_data_dir().ok();
-        match remember_diagnostic(&core, data.as_deref(), &id, retain_wait_result(&waited)) {
+        match remember_diagnostic(
+            &core,
+            data.as_deref(),
+            &id,
+            &launch_arguments,
+            retain_wait_result(&waited),
+        ) {
             Ok(true) => crate::emit_invocations_changed(&app),
             Ok(false) => {}
             Err(error) => log::warn!("Failed to retain invocation diagnostics: {error}"),
@@ -228,6 +245,7 @@ fn remember_diagnostic(
     core: &Core,
     data: Option<&Path>,
     id: &str,
+    arguments: &str,
     process_exit_code: Option<i32>,
 ) -> io::Result<bool> {
     let (mut diagnostic, file) = {
@@ -244,6 +262,7 @@ fn remember_diagnostic(
                 workspace: invocation.workspace.to_string_lossy().into_owned(),
                 cmd: invocation.cmd.clone(),
                 pattern: invocation.pattern.clone(),
+                arguments: arguments.to_string(),
                 started_at: invocation.started_at,
                 process_exit_code,
                 output: String::new(),
@@ -608,7 +627,7 @@ mod tests {
             i32::MAX,
             log,
         );
-        let retained = remember_diagnostic(core, data, id, Some(9)).unwrap();
+        let retained = remember_diagnostic(core, data, id, "", Some(9)).unwrap();
         release_process(core, id);
         retained
     }
@@ -1542,7 +1561,7 @@ mod tests {
             STOP_CONFIRM,
         );
         capture.finish().unwrap();
-        remember_diagnostic(&core, data.as_deref(), &id, retain_wait_result(&waited))
+        remember_diagnostic(&core, data.as_deref(), &id, "", retain_wait_result(&waited))
             .expect("diagnostic retention");
         release_process(&core, &id);
         waited.unwrap()
