@@ -41,7 +41,6 @@
     | { kind: "ready"; id: string; baseline: ComparisonInvocation }
     | { kind: "disposed" };
   let comparison = $state.raw<Comparison>({ kind: "idle" });
-  let manualId = $state("");
   onDestroy(() => {
     comparison = { kind: "disposed" };
   });
@@ -98,11 +97,6 @@
     if (!currentReady || !previousSuccess || comparison.kind !== "idle") return;
     void loadBaseline(previousSuccess.id);
   });
-
-  async function submitManual(event: SubmitEvent) {
-    event.preventDefault();
-    await loadBaseline(manualId);
-  }
 </script>
 
 {#if currentActive}
@@ -144,22 +138,6 @@
           {/if}
         </select>
       {/if}
-      <details class="compare-by-id">
-        <summary>By ID</summary>
-        <form class="compare-form" onsubmit={submitManual}>
-          <label class="sr-only" for="compare-invocation-id">Comparison invocation</label>
-          <input
-            id="compare-invocation-id"
-            class="input compare-id-input"
-            type="text"
-            bind:value={manualId}
-            disabled={comparison.kind === "loading" || !currentReady}
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="Enter invocation ID and press Enter."
-          />
-        </form>
-      </details>
       {#if comparison.kind === "loading"}
         <span class="compare-status" role="status">Loading…</span>
       {:else if currentReady && !previousSuccess && comparison.kind === "idle"}
@@ -195,7 +173,6 @@
               <Notice tone={sectionNoticeTone(current.bep)}>{sectionMessage(current.bep)}</Notice>
             {/if}
           </th>
-          <th scope="col" class="compare-delta-head">Delta</th>
         </tr>
       </thead>
       <tbody>
@@ -214,15 +191,6 @@
                     >{part.text}</ins
                   >{:else}{part.text}{/if}{/each}</code
               ></td>
-            <td class="compare-delta-cell mono">
-              {#if compareRow.delta}
-                <span
-                  class="compare-delta"
-                  class:compare-delta-better={compareRow.delta.tone === "better"}
-                  class:compare-delta-worse={compareRow.delta.tone === "worse"}
-                >{compareRow.delta.text}</span>
-              {/if}
-            </td>
           </tr>
         {/each}
       </tbody>

@@ -126,7 +126,6 @@ test("incomplete BEP data leaves option and spawn cache rows unknown", () => {
   const cache = row(rows, "Spawn cache hits");
   assert.equal(cache.status, "unknown");
   assert.equal(cache.right, "Not recorded");
-  assert.equal(cache.delta, undefined);
 });
 
 test("option arrays preserve order, duplicates, and empty vs absent distinction", () => {
@@ -159,7 +158,7 @@ test("option arrays preserve order, duplicates, and empty vs absent distinction"
   ]);
 });
 
-test("duration row reports current - baseline delta and keeps early-fail neutral", () => {
+test("duration and exit code rows format inline deltas", () => {
   const slower = row(
     comparisonRows(
       invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 3500 }),
@@ -168,33 +167,23 @@ test("duration row reports current - baseline delta and keeps early-fail neutral
     "Duration",
   );
   assert.equal(slower.left, "2.500s");
-  assert.equal(slower.right, "5.000s");
-  assert.deepEqual(slower.delta, { text: "+2.500s", tone: "worse" });
-  assert.ok(slower.leftParts.every((p) => !p.changed));
-  assert.ok(slower.rightParts.every((p) => !p.changed));
-
-  const faster = row(
-    comparisonRows(
-      invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 3500 }),
-      invocation({ id: "cur", exitCode: 0, startedAt: 1000, finishedAt: 2000 }),
-    ),
-    "Duration",
+  assert.equal(slower.right, "5.000s (+2.500s)");
+  assert.ok(
+    slower.leftParts.every((p) => !p.changed) && slower.rightParts.every((p) => !p.changed),
   );
-  assert.deepEqual(faster.delta, { text: "-1.500s", tone: "better" });
 
-  // Early-failing build is faster only because it crashed; keep duration neutral and mark Exit code Failed.
-  const earlyFailRows = comparisonRows(
+  const earlyFail = comparisonRows(
     invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 16000 }),
     invocation({ id: "cur", exitCode: 1, startedAt: 1000, finishedAt: 1500 }),
   );
-  assert.deepEqual(row(earlyFailRows, "Duration").delta, { text: "-14.500s", tone: "same" });
-  assert.deepEqual(row(earlyFailRows, "Exit code").delta, { text: "Failed", tone: "worse" });
+  assert.equal(row(earlyFail, "Duration").right, "0.500s (-14.500s)");
+  assert.equal(row(earlyFail, "Exit code").right, "1 (Failed)");
 
-  const fixedRows = comparisonRows(
+  const fixed = comparisonRows(
     invocation({ id: "base", exitCode: 1, startedAt: 1000, finishedAt: 2000 }),
     invocation({ id: "cur", exitCode: 0, startedAt: 1000, finishedAt: 5000 }),
   );
-  assert.deepEqual(row(fixedRows, "Exit code").delta, { text: "Fixed", tone: "better" });
+  assert.equal(row(fixed, "Exit code").right, "0 (Fixed)");
 
   const same = row(
     comparisonRows(
@@ -203,7 +192,8 @@ test("duration row reports current - baseline delta and keeps early-fail neutral
     ),
     "Duration",
   );
-  assert.deepEqual(same.delta, { text: "0.000s", tone: "same" });
+  assert.equal(same.right, "1.000s");
+  assert.equal(same.status, "same");
 
   const missing = row(
     comparisonRows(
@@ -213,33 +203,20 @@ test("duration row reports current - baseline delta and keeps early-fail neutral
     "Duration",
   );
   assert.equal(missing.status, "unknown");
-  assert.equal(missing.delta, undefined);
 });
 
-test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op builds", () => {
-  const sameTotalDrop = row(
+test("spawn cache hits handles equal totals, changed totals, 0-spawn, and absent runnerCounts", () => {
+  const drop = row(
     comparisonRows(
       invocation({ id: "base" }, withRunners(9, 1)),
       invocation({ id: "cur" }, withRunners(2, 8)),
     ),
     "Spawn cache hits",
   );
-  assert.equal(sameTotalDrop.left, "90% (9/10)");
-  assert.equal(sameTotalDrop.right, "20% (2/10)");
-  assert.deepEqual(sameTotalDrop.delta, { text: "-70 pp", tone: "worse" });
-  assert.ok(sameTotalDrop.leftParts.every((p) => !p.changed));
-  assert.ok(sameTotalDrop.rightParts.every((p) => !p.changed));
+  assert.equal(drop.left, "90% (9/10)");
+  assert.equal(drop.right, "20% (2/10) (-70 pp)");
+  assert.ok(drop.leftParts.every((p) => !p.changed) && drop.rightParts.every((p) => !p.changed));
 
-  const sameTotalGain = row(
-    comparisonRows(
-      invocation({ id: "base" }, withRunners(5, 5)),
-      invocation({ id: "cur" }, withRunners(10, 0)),
-    ),
-    "Spawn cache hits",
-  );
-  assert.deepEqual(sameTotalGain.delta, { text: "+50 pp", tone: "better" });
-
-  // Incremental build (0/2) vs clean cached build (95/100) must stay neutral and show spawn diff.
   const incremental = row(
     comparisonRows(
       invocation({ id: "base" }, withRunners(95, 5)),
@@ -247,9 +224,8 @@ test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op b
     ),
     "Spawn cache hits",
   );
-  assert.deepEqual(incremental.delta, { text: "-95 pp (-98 spawns)", tone: "same" });
+  assert.equal(incremental.right, "0% (0/2) (-95 pp, -98 spawns)");
 
-  // No-op build (explicit empty runnerCounts) is known, not "Not recorded".
   const noop = row(
     comparisonRows(
       invocation({ id: "base" }, withRunners(9, 1)),
@@ -257,11 +233,9 @@ test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op b
     ),
     "Spawn cache hits",
   );
-  assert.equal(noop.right, "0 spawns");
+  assert.equal(noop.right, "0 spawns (-10 spawns)");
   assert.equal(noop.status, "changed");
-  assert.deepEqual(noop.delta, { text: "-10 spawns", tone: "same" });
 
-  // Absent runnerCounts in an ok BEP stays unknown ("Not recorded"), not 0 spawns.
   const absent = row(
     comparisonRows(
       invocation({ id: "base" }, withRunners(9, 1)),
@@ -274,7 +248,6 @@ test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op b
   );
   assert.equal(absent.right, "Not recorded");
   assert.equal(absent.status, "unknown");
-  assert.equal(absent.delta, undefined);
 });
 
 test("tests row summarizes pass/fail counts, lists new failures, and omits non-test builds", () => {
@@ -310,19 +283,18 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     "Tests",
   );
   assert.equal(regressed.left, "2/2 passed");
-  assert.equal(regressed.right, "1/2 passed (1 failed)\nNew failures:\n//app:b_test");
-  assert.deepEqual(regressed.delta, { text: "+1 failed", tone: "worse" });
+  assert.equal(regressed.right, "1/2 passed (1 failed) [+1 failed]\nNew failures:\n//app:b_test");
   assert.equal(regressed.status, "changed");
 
-  assert.deepEqual(
+  assert.equal(
     row(
       cmp(
         [{ label: "//app:b_test", status: "TIMEOUT" }],
         [{ label: "//app:b_test", status: "PASSED" }],
       ),
       "Tests",
-    ).delta,
-    { text: "1 fixed", tone: "better" },
+    ).right,
+    "1/1 passed [1 fixed]",
   );
 
   const flaky = row(
@@ -332,7 +304,6 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     ),
     "Tests",
   );
-  assert.equal(flaky.delta, undefined);
   assert.equal(flaky.right, "0/1 passed (1 flaky)");
 
   const halted = row(
@@ -342,7 +313,6 @@ test("tests row summarizes pass/fail counts, lists new failures, and omits non-t
     ),
     "Tests",
   );
-  assert.equal(halted.delta, undefined);
   assert.equal(halted.right, "0/1 passed (1 incomplete)");
 });
 

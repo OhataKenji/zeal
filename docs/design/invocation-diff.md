@@ -45,36 +45,36 @@ flowchart LR
 ### Baseline の選択と読込
 
 - 履歴 (`view.invocations`) から、現在の invocation より前に開始された同じ正規化 `pattern`（および `cmd`）の直前の成功ビルド (`exitCode === 0`、同一 `workspace` 優先) を特定し、Compare タブを開いて現在側が準備できた時点で `idle` から一度だけ自動的に読み込む。
-- テーブル上の 1 行ツールバーに Baseline `<select>`（`Same target` / `Other recent` で分割、先頭に直前成功ビルド）と折りたたみ `<details>` の `By ID` 入力欄を置く。
-- 選択・submit で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず現在の選択を維持し、workspace の一致は既存 backend が保証する。同一 ID の指定も許可する。
-- 送信中は入力を無効にして in-flight を一件に絞り、現在側の detail 読込中も待たせる。失敗(未知の ID、別 workspace、不正、busy)は inline error として出し、利用者が修正して再試行する。自動 retry、polling、queue、新しい backend は設けない。
+- テーブル上の 1 行ツールバーに Baseline `<select>`（`Same target` / `Other recent` で分割、先頭に直前成功ビルド）を置き、UUID 手入力欄は設けない。
+- 選択で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず現在の選択を維持し、workspace の一致は既存 backend が保証する。
+- 送信中は選択を無効にして in-flight を一件に絞り、現在側の detail 読込中も待たせる。失敗は inline error として出し、利用者が選び直して再試行する。自動 retry、polling、queue、新しい backend は設けない。
 
 ### 比較項目
 
-比較表は **Item | Baseline | Current | Delta** の 4 列で構成し、診断で先に見る所要時間・spawn キャッシュヒット率・終了コードを先頭に並べる。
+比較表は **Item | Baseline | Current** の 3 列で構成し、所要時間・spawn キャッシュヒット率・終了コード・テスト成否の差分は Current セル内にインライン表示する。
 
-| 項目                     | 値の由来                                                                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) + 差分 (`current - baseline`)                                                                |
-| Spawn cache hits         | `bep.runnerCounts` の spawn キャッシュヒット率 (`hitPct% (cached/total)` / 0 件時は `0 spawns`) + 差分（分母一致時のみ色付け、異時は中立で spawn 数差を併記） |
-| Exit code                | `record.exitCode` + 差分 (`Failed` / `Fixed`)                                                                                                                 |
-| Tests                    | `bep.tests` の合否集計 + 新規失敗・修正テストの差分（どちらか一方にテストがあるときのみ表示）                                                                 |
-| Command                  | `record.cmd`                                                                                                                                                  |
-| Pattern                  | `record.pattern`                                                                                                                                              |
-| Workspace                | `record.workspace`                                                                                                                                            |
-| Explicit command line    | `bep.options.explicitCmdLine`                                                                                                                                 |
-| Full command line        | `bep.options.cmdLine`                                                                                                                                         |
-| Explicit startup options | `bep.options.explicitStartupOptions`                                                                                                                          |
-| Full startup options     | `bep.options.startupOptions`                                                                                                                                  |
-| Start date               | `record.startedAt`                                                                                                                                            |
-| Invocation ID            | `record.id`                                                                                                                                                   |
+| 項目                     | 値の由来                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) + インライン差分 (`current - baseline`)         |
+| Spawn cache hits         | `bep.runnerCounts` の spawn キャッシュヒット率 (`hitPct% (cached/total)` / 0 件時は `0 spawns`) + インライン差分 |
+| Exit code                | `record.exitCode` + インライン状態 (`Failed` / `Fixed`)                                                          |
+| Tests                    | `bep.tests` の合否集計 + 新規失敗・修正テストのインライン差分（どちらか一方にテストがあるときのみ表示）          |
+| Command                  | `record.cmd`                                                                                                     |
+| Pattern                  | `record.pattern`                                                                                                 |
+| Workspace                | `record.workspace`                                                                                               |
+| Explicit command line    | `bep.options.explicitCmdLine`                                                                                    |
+| Full command line        | `bep.options.cmdLine`                                                                                            |
+| Explicit startup options | `bep.options.explicitStartupOptions`                                                                             |
+| Full startup options     | `bep.options.startupOptions`                                                                                     |
+| Start date               | `record.startedAt`                                                                                               |
+| Invocation ID            | `record.id`                                                                                                      |
 
 `originalCommandLine` と `canonicalCommandLine` は explicit/full の options 配列とは別の文字列で、対応する facet がないため行に出さない。
-Host、Git、remote execution など Zelith の現在の projection にない項目は対象外とし、target/test の件数も Non Goals のままとする。
+Host、Git、remote execution など Zelith の現在の projection にない項目は対象外とする。
 
 ### 表示と欠損
 
-- 表は項目名、Baseline(左)、Current(右)、Delta の四列で全行を表示し、値が変わった行を薄く強調する。Command・Pattern・Workspace・options の既知の値どうしには diff-match-patch で項目内の文字列 diff を示し(左=削除赤、右=追加緑)、数値・ID・日時行には文字 diff を当てず Delta 列の色と分離する。
+- 表は項目名、Baseline(左)、Current(右) の 3 列で全行を表示し、値が変わった行を薄く強調する。Command・Pattern・Workspace・options の既知の値どうしには diff-match-patch で項目内の文字列 diff を示し(左=削除赤、右=追加緑)、数値・ID・日時行には文字 diff を当てない。
 - 等価は raw な値で比較し、map 化や sort などの正規化はしない。
 - 値がない項目は「Not recorded」と表示し、その行の比較は unknown とする。空の options 配列は既知の空として扱う。`bep.status === "ok"` で `runnerCounts` が明示的に空のときは `0 spawns` として既知扱いし、`runnerCounts` が未記録のときは unknown (`Not recorded`) とする。
 - BEP section が ok 以外のときは options 由来の行を比較不可とし、section の状態を併記する(record 由来の行は独立して比較する)。右側の request 全体の失敗は右側の error であり、欠損項目を捏造しない。

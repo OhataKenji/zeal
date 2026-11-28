@@ -14,7 +14,7 @@ function detail(
   };
 }
 
-test("ComparisonPanel renders the baseline toolbar and 4-column comparison table", async (t) => {
+test("ComparisonPanel renders the baseline toolbar and 3-column comparison table", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: ComparisonPanel } = await load("/src/lib/invocation/ComparisonPanel.svelte");
 
@@ -31,33 +31,42 @@ test("ComparisonPanel renders the baseline toolbar and 4-column comparison table
     }).body.replace(/<!--[\s\S]*?-->/g, "");
   }
 
-  function inputTag(html: string): string {
-    const input = html.match(/<input[^>]*id="compare-invocation-id"[^>]*>/)?.[0];
-    assert.ok(input, "comparison input is missing");
-    return input;
+  function selectTag(html: string): string {
+    const select = html.match(/<select[^>]*id="compare-baseline-select"[^>]*>/)?.[0];
+    assert.ok(select, "baseline select is missing");
+    return select;
   }
 
-  await t.test("shows 4-column Baseline | Current | Delta table and collapsed By ID input", () => {
+  const sampleHistory: InvocationRecord[] = [
+    {
+      id: "prev-ok",
+      workspace: "/workspace",
+      cmd: "build",
+      pattern: "//app:all",
+      startedAt: 3000,
+      finishedAt: 4200,
+      exitCode: 0,
+    },
+  ];
+
+  await t.test("shows 3-column Baseline | Current table without UUID text input", () => {
     const html = output();
     assert.ok(html.includes("current-id"));
     assert.match(html, /<table[^>]*aria-label="Invocation comparison"/);
     assert.match(html, /<th[^>]*>\s*Baseline/);
     assert.match(html, /<th[^>]*>\s*Current/);
-    assert.match(html, /<th[^>]*>\s*Delta\s*<\/th>/);
-    assert.match(html, /<details[^>]*compare-by-id/);
-    assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
+    assert.ok(!html.includes("compare-invocation-id"));
     assert.ok(html.includes("No previous successful build in recent history."));
   });
 
-  await t.test("disables controls while current detail is loading", () => {
-    const html = output({ current: null, currentLoading: true });
-    assert.match(inputTag(html), /\bdisabled\b/);
+  await t.test("disables baseline selector while current detail is loading", () => {
+    const html = output({ current: null, currentLoading: true, history: sampleHistory });
     assert.match(html, /Loading…/);
   });
 
-  await t.test("disables controls when current detail failed", () => {
-    const html = output({ currentError: "read failed" });
-    assert.match(inputTag(html), /\bdisabled\b/);
+  await t.test("disables baseline selector when current detail failed", () => {
+    const html = output({ currentError: "read failed", history: sampleHistory });
+    assert.match(selectTag(html), /\bdisabled\b/);
     assert.ok(html.includes("read failed"));
   });
 
@@ -70,9 +79,9 @@ test("ComparisonPanel renders the baseline toolbar and 4-column comparison table
     },
   );
 
-  await t.test("keeps controls enabled when a different invocation is running", () => {
-    const html = output({ runningIds: ["other-id"] });
-    assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
+  await t.test("keeps baseline selector enabled when a different invocation is running", () => {
+    const html = output({ runningIds: ["other-id"], history: sampleHistory });
+    assert.doesNotMatch(selectTag(html), /\bdisabled\b/);
   });
 
   await t.test("escapes option values in the rendered HTML", () => {

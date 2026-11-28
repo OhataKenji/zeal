@@ -10,11 +10,6 @@ export interface ComparisonPart {
   changed: boolean;
 }
 
-export interface ComparisonDelta {
-  text: string;
-  tone: "better" | "worse" | "same";
-}
-
 export interface ComparisonRow {
   label: string;
   left: string;
@@ -22,7 +17,6 @@ export interface ComparisonRow {
   leftParts: ComparisonPart[];
   rightParts: ComparisonPart[];
   status: "same" | "changed" | "unknown";
-  delta?: ComparisonDelta;
 }
 
 type Value = string | number | string[] | undefined;
@@ -98,22 +92,13 @@ function display(value: Cell, format?: Format): string {
   return typeof value === "number" && format ? format(value) : String(value);
 }
 
-function metricRow(
+function plainRow(
   label: string,
   left: string,
   right: string,
   status: ComparisonRow["status"],
-  delta?: ComparisonDelta,
 ): ComparisonRow {
-  return {
-    label,
-    left,
-    right,
-    leftParts: plain(left),
-    rightParts: plain(right),
-    status,
-    ...(delta ? { delta } : {}),
-  };
+  return { label, left, right, leftParts: plain(left), rightParts: plain(right), status };
 }
 
 function row(
@@ -133,33 +118,27 @@ function row(
       : sameValue(leftValue, rightValue)
         ? "same"
         : "changed";
-  if (options.inlineDiff === false) return metricRow(label, left, right, status);
+  if (options.inlineDiff === false) return plainRow(label, left, right, status);
   const isEmpty = (v: Cell) => v === "" || (Array.isArray(v) && v.length === 0);
   const parts = diffParts(left, right, status, isEmpty(leftValue), isEmpty(rightValue));
   return { label, left, right, ...parts, status };
-}
-
-function deltaTone(delta: number, higherIsBetter: boolean): ComparisonDelta["tone"] {
-  if (delta === 0) return "same";
-  return delta > 0 === higherIsBetter ? "better" : "worse";
 }
 
 function durationRow(
   baseline: ComparisonInvocation | null,
   current: ComparisonInvocation | null,
 ): ComparisonRow {
-  const base = row("Duration", (inv) => duration(inv.record), baseline, current, {
-    format: formatDuration,
-    inlineDiff: false,
-  });
-  const baseMs = baseline ? duration(baseline.record) : undefined;
-  const curMs = current ? duration(current.record) : undefined;
-  if (baseMs === undefined || curMs === undefined) return base;
+  const baseMs = baseline === null ? null : duration(baseline.record);
+  const curMs = current === null ? null : duration(current.record);
+  const left = display(baseMs, formatDuration);
+  const rightBase = display(curMs, formatDuration);
+  if (baseMs == null || curMs == null) return plainRow("Duration", left, rightBase, "unknown");
   const deltaMs = curMs - baseMs;
-  const ok = baseline?.record.exitCode === 0 && current?.record.exitCode === 0;
-  const text =
-    deltaMs === 0 ? "0.000s" : `${deltaMs > 0 ? "+" : "-"}${formatDuration(Math.abs(deltaMs))}`;
-  return { ...base, delta: { text, tone: ok ? deltaTone(deltaMs, false) : "same" } };
+  const right =
+    deltaMs === 0
+      ? rightBase
+      : `${rightBase} (${deltaMs > 0 ? "+" : "-"}${formatDuration(Math.abs(deltaMs))})`;
+  return plainRow("Duration", left, right, deltaMs === 0 ? "same" : "changed");
 }
 
 function cacheStats(inv: ComparisonInvocation | null) {
@@ -170,21 +149,6 @@ function cacheStats(inv: ComparisonInvocation | null) {
   return summary
     ? { total: summary.total, cached: summary.cached, hitPct: summary.hitPct }
     : { total: 0, cached: 0, hitPct: null as number | null };
-}
-
-function cacheDelta(
-  left: NonNullable<ReturnType<typeof cacheStats>>,
-  right: NonNullable<ReturnType<typeof cacheStats>>,
-): ComparisonDelta {
-  const spawnDiff = right.total - left.total;
-  if (left.hitPct === null || right.hitPct === null) {
-    return { text: spawnDiff === 0 ? "0 spawns" : `${signed(spawnDiff)} spawns`, tone: "same" };
-  }
-  const pctDiff = right.hitPct - left.hitPct;
-  const pctText = `${signed(pctDiff)} pp`;
-  return spawnDiff === 0
-    ? { text: pctText, tone: deltaTone(pctDiff, true) }
-    : { text: `${pctText} (${signed(spawnDiff)} spawns)`, tone: "same" };
 }
 
 function spawnCacheRow(
@@ -202,16 +166,24 @@ function spawnCacheRow(
           ? "0 spawns"
           : `${s.hitPct}% (${s.cached}/${s.total})`;
   if (left == null || right == null) {
-    return metricRow("Spawn cache hits", fmt(left), fmt(right), "unknown");
+    return plainRow("Spawn cache hits", fmt(left), fmt(right), "unknown");
   }
   const same =
     left.total === right.total && left.cached === right.cached && left.hitPct === right.hitPct;
-  return metricRow(
+  const spawnDiff = right.total - left.total;
+  const delta =
+    left.hitPct === null || right.hitPct === null
+      ? spawnDiff === 0
+        ? ""
+        : ` (${signed(spawnDiff)} spawns)`
+      : spawnDiff === 0
+        ? ` (${signed(right.hitPct - left.hitPct)} pp)`
+        : ` (${signed(right.hitPct - left.hitPct)} pp, ${signed(spawnDiff)} spawns)`;
+  return plainRow(
     "Spawn cache hits",
     fmt(left),
-    fmt(right),
+    `${fmt(right)}${delta}`,
     same ? "same" : "changed",
-    cacheDelta(left, right),
   );
 }
 
@@ -219,15 +191,14 @@ function exitCodeRow(
   baseline: ComparisonInvocation | null,
   current: ComparisonInvocation | null,
 ): ComparisonRow {
-  const base = row("Exit code", (inv) => inv.record.exitCode, baseline, current, {
-    inlineDiff: false,
-  });
-  const baseCode = baseline?.record.exitCode;
-  const curCode = current?.record.exitCode;
-  if (baseCode === undefined || curCode === undefined || baseCode === curCode) return base;
-  if (baseCode === 0) return { ...base, delta: { text: "Failed", tone: "worse" } };
-  if (curCode === 0) return { ...base, delta: { text: "Fixed", tone: "better" } };
-  return base;
+  const baseCode = baseline === null ? null : baseline.record.exitCode;
+  const curCode = current === null ? null : current.record.exitCode;
+  const left = display(baseCode);
+  const rightBase = display(curCode);
+  if (baseCode == null || curCode == null) return plainRow("Exit code", left, rightBase, "unknown");
+  if (baseCode === curCode) return plainRow("Exit code", left, rightBase, "same");
+  const tag = baseCode === 0 ? " (Failed)" : curCode === 0 ? " (Fixed)" : "";
+  return plainRow("Exit code", left, `${rightBase}${tag}`, "changed");
 }
 
 const isFailedTest = (status: string | undefined) =>
@@ -251,29 +222,25 @@ function summarizeTests(tests: readonly TestItem[] | null | undefined): string {
     : `${passed}/${tests.length} passed`;
 }
 
-function testDiff(baseline: readonly TestItem[], current: readonly TestItem[]) {
+function formatTestDiff(baseline: readonly TestItem[], current: readonly TestItem[]) {
   const baseMap = new Map(baseline.map((t) => [t.label, t.status]));
   const curMap = new Map(current.map((t) => [t.label, t.status]));
   const newlyFailed = current
     .filter((t) => isFailedTest(t.status) && !isFailedTest(baseMap.get(t.label)))
     .map((t) => t.label);
-  const fixed = baseline
-    .filter((t) => isFailedTest(t.status) && curMap.get(t.label) === "PASSED")
-    .map((t) => t.label);
-  const parts = [
+  const fixed = baseline.filter(
+    (t) => isFailedTest(t.status) && curMap.get(t.label) === "PASSED",
+  ).length;
+  const deltaParts = [
     ...(newlyFailed.length ? [`+${newlyFailed.length} failed`] : []),
-    ...(fixed.length ? [`${fixed.length} fixed`] : []),
+    ...(fixed ? [`${fixed} fixed`] : []),
   ];
-  const delta: ComparisonDelta | undefined = parts.length
-    ? { text: parts.join(", "), tone: newlyFailed.length ? "worse" : "better" }
-    : undefined;
-  return { newlyFailed, fixed, delta };
-}
-
-function formatFailureSuffix(newlyFailed: readonly string[]): string {
-  if (newlyFailed.length === 0) return "";
+  const suffix = deltaParts.length ? ` [${deltaParts.join(", ")}]` : "";
   const extra = newlyFailed.length > 5 ? `\n(+${newlyFailed.length - 5} more)` : "";
-  return `\nNew failures:\n${newlyFailed.slice(0, 5).join("\n")}${extra}`;
+  const failList = newlyFailed.length
+    ? `\nNew failures:\n${newlyFailed.slice(0, 5).join("\n")}${extra}`
+    : "";
+  return { changed: newlyFailed.length > 0 || fixed > 0, suffix: `${suffix}${failList}` };
 }
 
 function testsRow(
@@ -284,14 +251,15 @@ function testsRow(
   const curTests = current === null ? null : bepData(current)?.tests;
   if (!baseTests?.length && !curTests?.length) return null;
   const left = summarizeTests(baseTests);
-  const rightSummary = summarizeTests(curTests);
-  if (baseTests == null || curTests == null) {
-    return metricRow("Tests", left, rightSummary, "unknown");
-  }
-  const { newlyFailed, fixed, delta } = testDiff(baseTests, curTests);
-  const right = `${rightSummary}${formatFailureSuffix(newlyFailed)}`;
-  const status = left === rightSummary && !newlyFailed.length && !fixed.length ? "same" : "changed";
-  return metricRow("Tests", left, right, status, delta);
+  const rightBase = summarizeTests(curTests);
+  if (baseTests == null || curTests == null) return plainRow("Tests", left, rightBase, "unknown");
+  const diff = formatTestDiff(baseTests, curTests);
+  return plainRow(
+    "Tests",
+    left,
+    `${rightBase}${diff.suffix}`,
+    left === rightBase && !diff.changed ? "same" : "changed",
+  );
 }
 
 /** Normalizes whitespace-separated target patterns; preserves order when exclusions (`-...`) exist. */
