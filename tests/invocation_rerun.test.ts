@@ -104,11 +104,8 @@ test("InvocationView and InvocationHeader carry explicitCmdLine into Re-run cont
     const html = renderView(detail, true);
     assert.match(
       html,
-      /<button(?=[^>]*class="button button-primary")(?=[^>]*disabled)[^>]*>\s*Re-run\s*<\/button>/,
+      /<button(?=[^>]*class="button button-primary")(?=[^>]*disabled)(?![^>]*title=)[^>]*>\s*Re-run\s*<\/button>/,
     );
-    assert.match(
-      html,
-      /<button(?=[^>]*class="menu-item")(?=[^>]*disabled)[^>]*>\s*Re-run with flags…\s*<\/button>/,
-    );
+    assert.doesNotMatch(html, /Re-run with flags…/);
   });
 });

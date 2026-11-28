@@ -85,7 +85,7 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
     );
     assert.match(
       html,
-      /<button(?=[^>]*aria-label="Re-run \/\/pkg:slow_test")(?=[^>]*title="Re-run: bazel test \/\/pkg:slow_test --config=asan --test_env=FOO=1")(?=[^>]*disabled)[^>]*>\s*Re-run\s*<\/button>/,
+      /<button(?=[^>]*aria-label="Re-run \/\/pkg:slow_test")(?=[^>]*disabled)(?![^>]*title=)[^>]*>\s*Re-run\s*<\/button>/,
     );
   });
 });

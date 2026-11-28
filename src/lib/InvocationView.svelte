@@ -140,7 +140,7 @@
                   {rerunFlags}
                   {canRerunTest}
                   {onselecttarget}
-                  onreruntest={!execution && onrerun
+                  onreruntest={!execution && sameWorkspace && shown?.cmd === "test" && onrerun
                     ? (pattern, flags) => onrerun("test", pattern, flags)
                     : undefined}
                 />

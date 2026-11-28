@@ -275,10 +275,11 @@
 
 .result-list li {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
+  min-height: 40px;
   border-bottom: 1px solid var(--border);
-  padding: 10px 0;
+  padding: 8px 0;
   font-size: 12px;
 }
 
@@ -294,6 +295,13 @@
 .result-status {
   color: var(--muted-foreground);
   font-size: 11px;
+}
+
+.result-action-slot {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 60px;
+  flex-shrink: 0;
 }
 
 .result-action {

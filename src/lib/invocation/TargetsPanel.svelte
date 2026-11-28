@@ -66,23 +66,33 @@
 <h3 class="panel-subheading">Tests {#if bep}<span>{bep.tests.length}</span>{/if}</h3>
 {#if bep}
   {#if bep.tests.length}
+    {@const hasFailedRerun = Boolean(
+      onreruntest && bep.tests.some((test) => isFailedTestStatus(test.status)),
+    )}
     <ul class="result-list">
       {#each bep.tests as test}
         {@const pattern = normalizeTargetLabel(test.label)}
+        {@const disabled = canRerunTest ? !canRerunTest(pattern) : false}
         <li>
           <div class="result-identity">{@render targetLabel(test.label)}</div>
           <span class="result-status">{test.status}</span>
-          {#if onreruntest && isFailedTestStatus(test.status)}
-            <button
-              type="button"
-              class="button button-ghost result-action"
-              disabled={canRerunTest ? !canRerunTest(pattern) : false}
-              aria-label={`Re-run ${test.label}`}
-              title={`Re-run: bazel test ${pattern}${rerunFlags ? ` ${rerunFlags}` : ""}`}
-              onclick={() => onreruntest(pattern, rerunFlags)}
-            >
-              Re-run
-            </button>
+          {#if hasFailedRerun}
+            <span class="result-action-slot">
+              {#if onreruntest && isFailedTestStatus(test.status)}
+                <button
+                  type="button"
+                  class="button result-action"
+                  {disabled}
+                  aria-label={`Re-run ${test.label}`}
+                  title={disabled
+                    ? undefined
+                    : `Re-run: bazel test ${pattern}${rerunFlags ? ` ${rerunFlags}` : ""}`}
+                  onclick={() => onreruntest(pattern, rerunFlags)}
+                >
+                  Re-run
+                </button>
+              {/if}
+            </span>
           {/if}
         </li>
       {/each}
