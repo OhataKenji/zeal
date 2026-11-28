@@ -97,7 +97,7 @@ DB が読めない間も、所有元の workspace ではプロセスを停止で
 
 SQLite は workspace、コマンド、対象パターン、時刻、ビルド終了コードを保存します。
 詳細は要求時に BEP と profile を読み、解析結果を永続化しません。
-profile の原本は gzip で 512 MiB まで保存します。内蔵ビューは gzip 64 MiB、展開後 256 MiB、50 万イベント、IPC 予算 64 MiB のいずれかを超えると、タイムラインを表示しません。
+profile の原本は gzip で 512 MiB まで保存します。同梱の Perfetto ビューアは gzip 64 MiB までを直接読み込みます。
 DB は WAL と `PRAGMA user_version` を使い、未対応の schema や破損は利用不能として表示します。
 破損時に DB を再作成せず、履歴や成果物の自動整理を行いません。
 履歴と成果物の保存規則は [M4](./m4-invocation-history.md) を参照してください。
