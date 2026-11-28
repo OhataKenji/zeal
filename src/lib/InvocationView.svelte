@@ -15,15 +15,16 @@
   import ProfileView from "./ProfileView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { tabKeydown } from "./tabs";
-  import { formatOptions } from "./invocation/options";
+  import { formatOptions, rerunOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
-  let { view, reload, reloadProfile, onstop, onrerun, onselecttarget }: {
+  let { view, reload, reloadProfile, onstop, onrerun, onopenflags, onselecttarget }: {
     view: SessionView;
     reload: () => void;
     reloadProfile: () => void;
     onstop: (id: string) => void;
-    onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
+    onopenflags?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     onselecttarget?: (label: string) => void;
   } = $props();
   const selected = $derived(view.invocation);
@@ -31,20 +32,24 @@
   const execution = $derived(selected?.execution);
   const diagnostic = $derived(selected?.diagnostic ?? null);
   const profile = $derived(sectionData(view.profile ?? undefined));
-  const bep = $derived(sectionData(view.detail?.bep));
+  const detail = $derived(view.detail?.record.id === shown?.id ? view.detail : undefined);
+  const bep = $derived(sectionData(detail?.bep));
+  const explicitCmdLine = $derived(bep?.options?.explicitCmdLine);
+  const rerunFlags = $derived(formatOptions(rerunOptions(explicitCmdLine)));
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
-  const targetIndex = $derived(
-    shown?.workspace && shown.workspace === view.state?.workspace && view.core?.bazel
-      ? view.snapshot
-      : null,
-  );
+  const sameWorkspace = $derived(Boolean(shown?.workspace && shown.workspace === view.state?.workspace));
+  const targetIndex = $derived(sameWorkspace && view.core?.bazel ? view.snapshot : null);
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
-  const rerunCandidate = $derived(rerunArgs(shown));
+  const rerunCandidate = $derived(rerunArgs(shown, explicitCmdLine));
   const canRerun = $derived(
     rerunCandidate !== null &&
-      shown?.workspace === view.state?.workspace &&
+      sameWorkspace &&
+      (diagnostic !== null || !view.detailLoading) &&
       canSend(view, rerunCandidate.pattern),
+  );
+  const canRerunTest = $derived(
+    (pattern: string) => !execution && sameWorkspace && !view.detailLoading && canSend(view, pattern),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
   const sections = ["Targets", "Details", "Logs", "Timing"] as const;
@@ -60,7 +65,7 @@
 
 {#if diagnostic && shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {canRerun} {onstop} {onrerun} />
+    <InvocationHeader record={shown} {status} {canRerun} {onstop} {onrerun} {onopenflags} />
     <Notice tone="neutral">
       No build event record. Bazel process exit code: {diagnostic.processExitCode ??
         "unknown"}.
@@ -69,7 +74,16 @@
   </div>
 {:else if shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
+    <InvocationHeader
+      record={shown}
+      {status}
+      {execution}
+      {explicitCmdLine}
+      {canRerun}
+      {onstop}
+      {onrerun}
+      {onopenflags}
+    >
       <div class="tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab}
           <button
@@ -120,7 +134,16 @@
             <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
               {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
               {#if section === "Targets"}
-                <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
+                <TargetsPanel
+                  section={view.detail?.bep}
+                  index={targetIndex}
+                  {rerunFlags}
+                  {canRerunTest}
+                  {onselecttarget}
+                  onreruntest={!execution && onrerun
+                    ? (pattern, flags) => onrerun("test", pattern, flags)
+                    : undefined}
+                />
               {:else if section === "Logs"}
                 <LogPanel section={view.detail?.log} loading={view.detailLoading} />
               {:else if section === "Details"}

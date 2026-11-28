@@ -290,8 +290,15 @@
   flex: 1;
 }
 
-.result-list li > span:last-child {
+.result-list li > span:last-child,
+.result-status {
   color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.result-action {
+  height: 24px;
+  padding: 0 8px;
   font-size: 11px;
 }
 

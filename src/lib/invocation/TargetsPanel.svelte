@@ -1,23 +1,35 @@
 <script lang="ts">
   import type { Bep, Section, TargetIndex } from "../types";
-  import { sectionData, sectionMessage, sectionNoticeTone } from "../invocation";
+  import {
+    isFailedTestStatus,
+    normalizeTargetLabel,
+    sectionData,
+    sectionMessage,
+    sectionNoticeTone,
+  } from "../invocation";
   import Notice from "../Notice.svelte";
 
   let {
     section,
     index = null,
+    rerunFlags = "",
+    canRerunTest,
     onselecttarget,
+    onreruntest,
   }: {
     section: Section<Bep> | undefined;
     index?: TargetIndex | null;
+    rerunFlags?: string;
+    canRerunTest?: (pattern: string) => boolean;
     onselecttarget?: (label: string) => void;
+    onreruntest?: (pattern: string, flags: string) => void;
   } = $props();
   const bep = $derived(sectionData(section));
   const labels = $derived(new Set((index?.targets ?? []).map((t) => t.label)));
 </script>
 
 {#snippet targetLabel(label: string)}
-  {@const key = label.startsWith("@@//") ? label.slice(2) : label}
+  {@const key = normalizeTargetLabel(label)}
   {#if onselecttarget && labels.has(key)}
     <button type="button" class="table-link mono" onclick={() => onselecttarget?.(key)}
       >{label}</button
@@ -55,7 +67,25 @@
 {#if bep}
   {#if bep.tests.length}
     <ul class="result-list">
-      {#each bep.tests as test}<li>{@render targetLabel(test.label)}<span>{test.status}</span></li>{/each}
+      {#each bep.tests as test}
+        {@const pattern = normalizeTargetLabel(test.label)}
+        <li>
+          <div class="result-identity">{@render targetLabel(test.label)}</div>
+          <span class="result-status">{test.status}</span>
+          {#if onreruntest && isFailedTestStatus(test.status)}
+            <button
+              type="button"
+              class="button button-ghost result-action"
+              disabled={canRerunTest ? !canRerunTest(pattern) : false}
+              aria-label={`Re-run ${test.label}`}
+              title={`Re-run: bazel test ${pattern}${rerunFlags ? ` ${rerunFlags}` : ""}`}
+              onclick={() => onreruntest(pattern, rerunFlags)}
+            >
+              Re-run
+            </button>
+          {/if}
+        </li>
+      {/each}
     </ul>
   {:else}
     <p class="panel-empty">No results recorded.</p>

@@ -8,23 +8,44 @@
     record,
     status,
     execution,
+    explicitCmdLine,
     canRerun = false,
     onstop,
     onrerun,
+    onopenflags,
     children,
   }: {
     record: InvocationRecord;
     status: Status;
     execution?: OwnedInvocation;
+    explicitCmdLine?: readonly string[];
     canRerun?: boolean;
     onstop: (id: string) => void;
-    onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
+    onopenflags?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     children?: Snippet;
   } = $props();
 
-  const rerun = $derived(rerunArgs(record));
+  let menu = $state<HTMLDetailsElement>();
+  const rerun = $derived(rerunArgs(record, explicitCmdLine));
+  const rerunDisabled = $derived(!rerun || !canRerun);
+  const rerunTitle = $derived(
+    rerun
+      ? `Re-run: bazel ${rerun.cmd} ${rerun.pattern}${rerun.flags ? ` ${rerun.flags}` : ""}`
+      : undefined,
+  );
   const titleText = $derived(`${record.cmd ? `${record.cmd} ` : ""}${record.pattern ?? record.id}`);
+
+  function closeMenu() {
+    if (menu) menu.open = false;
+  }
+
+  function onWindowPointerDown(event: PointerEvent) {
+    if (menu?.open && !menu.contains(event.target as Node)) closeMenu();
+  }
 </script>
+
+<svelte:window onpointerdown={onWindowPointerDown} />
 
 <div class="invocation-header">
   <div class="invocation-head-row">
@@ -46,14 +67,35 @@
           </svg>
         </button>
       {:else if !execution && onrerun}
-        <button
-          type="button"
-          class="button button-primary"
-          disabled={!rerun || !canRerun}
-          onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern)}
-        >
-          Re-run
-        </button>
+        <div class="action-pair">
+          <button
+            type="button"
+            class="button button-primary"
+            disabled={rerunDisabled}
+            title={rerunTitle}
+            onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern, rerun.flags)}
+          >
+            Re-run
+          </button>
+          {#if onopenflags}
+            <details class="dd" bind:this={menu}>
+              <summary class="button button-ghost" aria-label="More re-run actions">⋯</summary>
+              <div class="dd-menu dd-menu-right dd-menu-compact">
+                <button
+                  type="button"
+                  class="menu-item"
+                  disabled={rerunDisabled}
+                  onclick={() => {
+                    closeMenu();
+                    if (rerun) onopenflags(rerun.cmd, rerun.pattern, rerun.flags);
+                  }}
+                >
+                  Re-run with flags…
+                </button>
+              </div>
+            </details>
+          {/if}
+        </div>
       {/if}
     </div>
   </div>
