@@ -18,8 +18,8 @@
   import PerfettoView from "./PerfettoView.svelte";
   import TargetsPanel from "./invocation/TargetsPanel.svelte";
   import { tabKeydown } from "./tabs";
-  import { formatOptions } from "./invocation/options";
-  import type { BazelCommand } from "./types";
+  import { formatOptions, invocationTargetFlags } from "./invocation/options";
+  import type { BazelCommand, TargetTab } from "./types";
 
   let { view, reload, onstop, onrerun, onopenflags, onselecttarget, ontab }: {
     view: SessionView;
@@ -27,7 +27,7 @@
     onstop: (id: string) => void;
     onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     onopenflags?: (cmd: BazelCommand, pattern: string, flags: string) => void;
-    onselecttarget?: (label: string) => void;
+    onselecttarget?: (label: string, options?: { tab?: TargetTab; flags?: string }) => void;
     ontab?: (tab: InvocationTab) => void;
   } = $props();
   const selected = $derived(view.invocation);
@@ -37,6 +37,10 @@
   const detail = $derived(view.detail?.record.id === shown?.id ? view.detail : undefined);
   const bep = $derived(sectionData(detail?.bep));
   const rerunFlags = $derived(formatOptions(bep?.options?.explicitCmdLine ?? []));
+  const targetFlags = $derived(invocationTargetFlags(bep?.options?.explicitCmdLine));
+  function selectTarget(label: string, tab?: TargetTab) {
+    onselecttarget?.(label, { tab, flags: targetFlags });
+  }
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
   const sameWorkspace = $derived(Boolean(shown?.workspace && shown.workspace === view.state?.workspace));
@@ -140,7 +144,7 @@
                   index={targetIndex}
                   {rerunFlags}
                   {canRerunTest}
-                  {onselecttarget}
+                  onselecttarget={onselecttarget ? (label) => selectTarget(label) : undefined}
                   onreruntest={!execution && sameWorkspace && shown?.cmd === "test" && onrerun
                     ? (pattern, flags) => onrerun("test", pattern, flags)
                     : undefined}
@@ -248,7 +252,12 @@
                   </p>
                 {:else if active === "Timing" && view.state}
                   {#key `${view.state.workspace}:${shown.id}`}
-                    <PerfettoView workspace={view.state.workspace} id={shown.id} />
+                    <PerfettoView
+                      workspace={view.state.workspace}
+                      id={shown.id}
+                      targets={targetIndex?.targets}
+                      onselecttarget={targetIndex && onselecttarget ? selectTarget : undefined}
+                    />
                   {/key}
                 {:else}
                   <p class="panel-empty">

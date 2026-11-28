@@ -288,3 +288,23 @@ export interface InvocationDetail {
   log: Section<string>;
   bep: Section<Bep>;
 }
+
+/** One ranked critical-path component extracted from `profile.json.gz`. */
+export interface CriticalPathStep {
+  name: string;
+  durationUs: number;
+  target?: string;
+  out?: string;
+}
+
+/** Top critical-path steps and total critical-path time for an invocation. */
+export interface CriticalPathSummary {
+  totalUs: number;
+  steps: CriticalPathStep[];
+}
+
+/** Payload returned by `prepare_invocation_timing`. */
+export interface InvocationTiming {
+  url: string;
+  criticalPath: CriticalPathSummary;
+}

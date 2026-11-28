@@ -41,6 +41,11 @@ interface CapturedInvocation {
   };
   log: string;
   bep: Bep;
+  profile?: {
+    lanes: Array<{
+      events: Array<{ name: string; cat?: string; ts?: number; dur?: number }>;
+    }>;
+  };
 }
 
 /** The captured workspace: real `bazel query`/`mod graph`/`aquery`/`cquery`
@@ -545,7 +550,24 @@ export function installPreview() {
       const item = record && captured.get(record.id);
       // Mirrors the native missing-profile error so the viewer words it the same.
       if (!item) throw new Error("No saved timing profile is available for this invocation.");
-      return `${location.origin}/__perfetto/embed.html#trace/${item.record.id}/profile.json.gz`;
+      const raw = (item.profile?.lanes ?? []).flatMap((lane) =>
+        lane.events
+          .filter((ev) => ev.cat === "critical path component" && (ev.dur ?? 0) > 0)
+          .map((ev) => ({
+            name: ev.name.replace(/^action '(.+)'$/, "$1"),
+            durationUs: ev.dur ?? 0,
+            ts: ev.ts ?? 0,
+          })),
+      );
+      const totalUs = raw.reduce((sum, step) => sum + step.durationUs, 0);
+      raw.sort((a, b) => b.durationUs - a.durationUs || a.ts - b.ts);
+      return {
+        url: `${location.origin}/__perfetto/embed.html#trace/${item.record.id}/profile.json.gz`,
+        criticalPath: {
+          totalUs,
+          steps: raw.slice(0, 5).map(({ name, durationUs }) => ({ name, durationUs })),
+        },
+      };
     },
     // The app sends this command with the AnalyticsFilter shape.
     get_analytics: (payload) => {

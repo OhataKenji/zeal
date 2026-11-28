@@ -15,6 +15,7 @@
     relations,
     shortOutputPath,
   } from "./model";
+  import { targetForArtifactPath } from "./critical_path";
   import { tabKeydown } from "./tabs";
   import ActionPair from "./ActionPair.svelte";
   import ActionsSection from "./TargetActions.svelte";
@@ -92,6 +93,12 @@
       event.preventDefault();
       flagsDraft = null;
     }
+  }
+  function resolveInputTarget(path: string, owner: string): string | null {
+    if (owner && owner !== target.label && targets.has(owner)) return owner;
+    if (!path.startsWith("bazel-out/")) return null;
+    const producer = targetForArtifactPath(path, index.targets);
+    return producer && producer !== target.label ? producer : null;
   }
 </script>
 
@@ -355,7 +362,16 @@
           </section>
         {/if}
       {:else}
-        <ActionsSection actions={actions} error={phaseError} showHeading={false} />
+        <ActionsSection
+          actions={actions}
+          error={phaseError}
+          showHeading={false}
+          canTraceInput={(path, owner) => resolveInputTarget(path, owner) !== null}
+          oninputclick={(path, owner) => {
+            const upstream = resolveInputTarget(path, owner);
+            if (upstream) onselect(upstream);
+          }}
+        />
       {/if}
     {/if}
   </div>
