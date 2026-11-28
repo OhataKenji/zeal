@@ -10,22 +10,21 @@
     type ComparisonInvocation,
   } from "../invocation-diff";
   import { sectionMessage, sectionNoticeTone } from "../invocation";
-  import { createRequest, idleRequest, type RequestState } from "../request";
   import type { InvocationDetail, InvocationRecord } from "../types";
   import Notice from "../Notice.svelte";
 
   let {
-    left,
-    leftLoading,
-    leftError,
+    current,
+    currentLoading,
+    currentError,
     workspace,
     runningIds,
     history = [],
     load,
   }: {
-    left: InvocationDetail | null;
-    leftLoading: boolean;
-    leftError: string | null;
+    current: InvocationDetail | null;
+    currentLoading: boolean;
+    currentError: string | null;
     workspace: string;
     runningIds: readonly string[];
     history?: readonly InvocationRecord[];
@@ -35,192 +34,198 @@
     load ?? ((id: string) => invoke<InvocationDetail>(COMMANDS.getInvocation, { workspace, id })),
   );
 
-  let input = $state("");
-  let comparison = $state.raw<RequestState<ComparisonInvocation>>(idleRequest());
-  let autoAttempted = false;
-  const request = createRequest<ComparisonInvocation>((next) => (comparison = next));
+  type Comparison =
+    | { kind: "idle" }
+    | { kind: "loading"; id: string }
+    | { kind: "failed"; id: string; error: string }
+    | { kind: "ready"; id: string; baseline: ComparisonInvocation }
+    | { kind: "disposed" };
+  let comparison = $state.raw<Comparison>({ kind: "idle" });
+  let manualId = $state("");
   onDestroy(() => {
-    request.dispose();
-    comparison = request.state;
+    comparison = { kind: "disposed" };
   });
 
-  const leftReady = $derived(
-    !!left && !leftLoading && !leftError && !runningIds.includes(left.record.id),
-  );
-  const leftActive = $derived(!!left && runningIds.includes(left.record.id));
-  const right = $derived(comparison.kind === "ready" ? comparison.value : null);
-  const rightReady = $derived(right !== null && !runningIds.includes(right.record.id));
-  const rightActive = $derived(right !== null && runningIds.includes(right.record.id));
+  const currentActive = $derived(!!current && runningIds.includes(current.record.id));
+  const currentReady = $derived(!!current && !currentLoading && !currentError && !currentActive);
+  const baseline = $derived(comparison.kind === "ready" ? comparison.baseline : null);
+  const baselineActive = $derived(baseline !== null && runningIds.includes(baseline.record.id));
+  const baselineReady = $derived(baseline !== null && !baselineActive);
   const previousSuccess = $derived(
-    left ? previousSuccessfulInvocation(left.record, history, runningIds) : null,
+    current ? previousSuccessfulInvocation(current.record, history, runningIds) : null,
   );
-  const recentOptions = $derived(
-    left ? recentComparableInvocations(left.record.id, history, runningIds) : [],
+  const recent = $derived(
+    current
+      ? recentComparableInvocations(current.record, history, runningIds)
+      : { sameTarget: [], other: [] },
   );
-  const rows = $derived(comparisonRows(leftReady ? left : null, rightReady ? right : null));
-  const summaryRows = $derived(
-    rows.filter((candidate) => candidate.label === "Duration" || candidate.label === "Cache hit rate"),
-  );
-  const selectedRecent = $derived(
-    recentOptions.some((entry) => entry.id === input.trim()) ? input.trim() : "",
+  const hasRecent = $derived(recent.sameTarget.length > 0 || recent.other.length > 0);
+  const activeBaselineId = $derived("id" in comparison ? comparison.id : "");
+  const rows = $derived(
+    comparisonRows(baselineReady ? baseline : null, currentReady ? current : null),
   );
 
-  async function loadComparison(rawId: string) {
+  async function loadBaseline(rawId: string) {
     const id = rawId.trim();
-    if (!id || !leftReady || comparison.kind === "loading" || comparison.kind === "disposed") {
+    if (!id || !currentReady || comparison.kind === "loading" || comparison.kind === "disposed") {
       return;
     }
-    autoAttempted = true;
-    input = id;
     if (runningIds.includes(id)) {
-      request.fail("Comparison is available after the invocation finishes.");
+      comparison = {
+        kind: "failed",
+        id,
+        error: "Comparison is available after the invocation finishes.",
+      };
       return;
     }
-    await request.run(async () => {
+    const request: Comparison = { kind: "loading", id };
+    comparison = request;
+    try {
       const detail = await fetchDetail(id);
-      return { record: detail.record, bep: detail.bep };
-    });
+      if (comparison !== request) return;
+      comparison = {
+        kind: "ready",
+        id,
+        baseline: { record: detail.record, bep: detail.bep },
+      };
+    } catch (error) {
+      if (comparison !== request) return;
+      comparison = { kind: "failed", id, error: String(error) };
+    }
   }
 
   $effect(() => {
-    if (autoAttempted || !leftReady || !previousSuccess || comparison.kind !== "idle") {
-      return;
-    }
-    void loadComparison(previousSuccess.id);
+    if (!currentReady || !previousSuccess || comparison.kind !== "idle") return;
+    void loadBaseline(previousSuccess.id);
   });
 
-  async function submit(event: SubmitEvent) {
+  async function submitManual(event: SubmitEvent) {
     event.preventDefault();
-    await loadComparison(input);
+    await loadBaseline(manualId);
   }
 </script>
 
-<div class="compare-scroll">
-  {#if leftReady && rightReady}
-    <div class="compare-summary" aria-label="Comparison summary">
-      {#each summaryRows as metric (metric.label)}
-        <div class="compare-metric">
-          <span class="compare-metric-label">{metric.label}</span>
-          <span class="compare-metric-values mono">
-            {metric.left} <span class="compare-vs">vs</span> {metric.right}
-          </span>
-          {#if metric.delta}
-            <span
-              class="compare-delta mono"
-              class:compare-delta-better={metric.delta.tone === "better"}
-              class:compare-delta-worse={metric.delta.tone === "worse"}
-            >{metric.delta.text}</span>
+{#if currentActive}
+  <p class="panel-empty">Comparison is available after the invocation finishes.</p>
+{:else}
+  <div class="compare-scroll">
+    <div class="compare-toolbar">
+      <label class="compare-toolbar-label" for="compare-baseline-select">Baseline</label>
+      {#if hasRecent}
+        <select
+          id="compare-baseline-select"
+          class="input compare-select"
+          disabled={!currentReady || comparison.kind === "loading"}
+          value={recent.sameTarget.some((e) => e.id === activeBaselineId) ||
+          recent.other.some((e) => e.id === activeBaselineId)
+            ? activeBaselineId
+            : ""}
+          onchange={(event) => {
+            const id = event.currentTarget.value;
+            if (id) void loadBaseline(id);
+          }}
+        >
+          <option value="">Select a baseline…</option>
+          {#if recent.sameTarget.length > 0}
+            <optgroup label="Same target">
+              {#each recent.sameTarget as rec (rec.id)}
+                <option value={rec.id}
+                  >{formatInvocationOption(rec, rec.id === previousSuccess?.id)}</option
+                >
+              {/each}
+            </optgroup>
           {/if}
-        </div>
-      {/each}
+          {#if recent.other.length > 0}
+            <optgroup label="Other recent">
+              {#each recent.other as rec (rec.id)}
+                <option value={rec.id}>{formatInvocationOption(rec)}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
+      {/if}
+      <details class="compare-by-id">
+        <summary>By ID</summary>
+        <form class="compare-form" onsubmit={submitManual}>
+          <label class="sr-only" for="compare-invocation-id">Comparison invocation</label>
+          <input
+            id="compare-invocation-id"
+            class="input compare-id-input"
+            type="text"
+            bind:value={manualId}
+            disabled={comparison.kind === "loading" || !currentReady}
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Enter invocation ID and press Enter."
+          />
+        </form>
+      </details>
+      {#if comparison.kind === "loading"}
+        <span class="compare-status" role="status">Loading…</span>
+      {:else if currentReady && !previousSuccess && comparison.kind === "idle"}
+        <span class="compare-status">No previous successful build in recent history.</span>
+      {/if}
     </div>
-  {/if}
-  <table class="compare-table" aria-label="Invocation comparison">
-    <thead>
-      <tr>
-        <td class="compare-item-head"></td>
-        <th scope="col" class="compare-side-head">
-          Current invocation
-          {#if leftLoading}
-            <p class="compare-status" role="status">Loading…</p>
-          {:else if leftError}
-            <p class="field-error">{leftError}</p>
-          {:else if leftActive}
-            <p class="compare-status">
-              Comparison is available after the invocation finishes.
-            </p>
-          {/if}
-          {#if left && left.bep.status !== "ok"}
-            <Notice tone={sectionNoticeTone(left.bep)}>{sectionMessage(left.bep)}</Notice>
-          {/if}
-        </th>
-        <th scope="col" class="compare-side-head">
-          <div class="compare-controls">
-            <button
-              type="button"
-              class="button button-primary compare-prev-btn"
-              disabled={!leftReady || !previousSuccess || comparison.kind === "loading"}
-              onclick={() => previousSuccess && void loadComparison(previousSuccess.id)}
-            >
-              Compare with previous successful
-            </button>
-            {#if leftReady && !previousSuccess}
-              <p class="compare-status">No previous successful build for this target pattern.</p>
-            {/if}
-            {#if recentOptions.length > 0}
-              <select
-                class="input compare-select"
-                aria-label="Recent invocations"
-                disabled={!leftReady || comparison.kind === "loading"}
-                value={selectedRecent}
-                onchange={(event) => {
-                  const id = event.currentTarget.value;
-                  if (id) void loadComparison(id);
-                }}
-              >
-                <option value="">Select a recent invocation…</option>
-                {#each recentOptions as rec (rec.id)}
-                  <option value={rec.id}>{formatInvocationOption(rec)}</option>
-                {/each}
-              </select>
-            {/if}
-            <form class="compare-form" onsubmit={submit}>
-              <label for="compare-invocation-id">Comparison invocation</label>
-              <input
-                id="compare-invocation-id"
-                class="input compare-id-input"
-                type="text"
-                bind:value={input}
-                disabled={comparison.kind === "loading" || !leftReady}
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="Enter an invocation ID and press Enter."
-              />
-            </form>
-          </div>
-          {#if comparison.kind === "loading"}
-            <p class="compare-status" role="status">Loading…</p>
-          {:else if comparison.kind === "failed" && comparison.error}
-            <Notice tone="error">{comparison.error}</Notice>
-          {/if}
-          {#if rightActive}
-            <p class="compare-status">
-              Comparison is available after the invocation finishes.
-            </p>
-          {/if}
-          {#if right && right.bep.status !== "ok"}
-            <Notice tone={sectionNoticeTone(right.bep)}>{sectionMessage(right.bep)}</Notice>
-          {/if}
-        </th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each rows as compareRow (compareRow.label)}
-        <tr class:compare-changed={compareRow.status === "changed"}>
-          <th scope="row" class="compare-item">
-            <span>{compareRow.label}</span>
-            {#if compareRow.delta}
-              <span
-                class="compare-delta mono"
-                class:compare-delta-better={compareRow.delta.tone === "better"}
-                class:compare-delta-worse={compareRow.delta.tone === "worse"}
-              >{compareRow.delta.text}</span>
+
+    {#if comparison.kind === "failed"}
+      <Notice tone="error">{comparison.error}</Notice>
+    {/if}
+    {#if baselineActive}
+      <p class="compare-status">Comparison is available after the invocation finishes.</p>
+    {/if}
+
+    <table class="compare-table" aria-label="Invocation comparison">
+      <thead>
+        <tr>
+          <td class="compare-item-head"></td>
+          <th scope="col" class="compare-side-head">
+            Baseline
+            {#if baseline && baseline.bep.status !== "ok"}
+              <Notice tone={sectionNoticeTone(baseline.bep)}>{sectionMessage(baseline.bep)}</Notice>
             {/if}
           </th>
-          <td class="compare-value"
-            ><code
-              >{#each compareRow.leftParts as part}{#if part.changed}<del class="compare-removed"
-                  >{part.text}</del
-                >{:else}{part.text}{/if}{/each}</code
-            ></td>
-          <td class="compare-value"
-            ><code
-              >{#each compareRow.rightParts as part}{#if part.changed}<ins class="compare-added"
-                  >{part.text}</ins
-                >{:else}{part.text}{/if}{/each}</code
-            ></td>
+          <th scope="col" class="compare-side-head">
+            Current
+            {#if currentLoading}
+              <p class="compare-status" role="status">Loading…</p>
+            {:else if currentError}
+              <p class="field-error">{currentError}</p>
+            {/if}
+            {#if current && current.bep.status !== "ok"}
+              <Notice tone={sectionNoticeTone(current.bep)}>{sectionMessage(current.bep)}</Notice>
+            {/if}
+          </th>
+          <th scope="col" class="compare-delta-head">Delta</th>
         </tr>
-      {/each}
-    </tbody>
-  </table>
-</div>
+      </thead>
+      <tbody>
+        {#each rows as compareRow (compareRow.label)}
+          <tr class:compare-changed={compareRow.status === "changed"}>
+            <th scope="row" class="compare-item">{compareRow.label}</th>
+            <td class="compare-value"
+              ><code
+                >{#each compareRow.leftParts as part}{#if part.changed}<del class="compare-removed"
+                    >{part.text}</del
+                  >{:else}{part.text}{/if}{/each}</code
+              ></td>
+            <td class="compare-value"
+              ><code
+                >{#each compareRow.rightParts as part}{#if part.changed}<ins class="compare-added"
+                    >{part.text}</ins
+                  >{:else}{part.text}{/if}{/each}</code
+              ></td>
+            <td class="compare-delta-cell mono">
+              {#if compareRow.delta}
+                <span
+                  class="compare-delta"
+                  class:compare-delta-better={compareRow.delta.tone === "better"}
+                  class:compare-delta-worse={compareRow.delta.tone === "worse"}
+                >{compareRow.delta.text}</span>
+              {/if}
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+{/if}

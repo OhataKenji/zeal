@@ -30,6 +30,12 @@ type Cell = Value | null;
 type Facet = (invocation: ComparisonInvocation) => Value;
 type Format = (value: number) => string;
 
+interface CacheStats {
+  total: number;
+  cached: number;
+  hitPct: number | null;
+}
+
 const MISSING = "Not recorded";
 const NO_OPTIONS = "No options";
 const EMPTY = "—";
@@ -99,31 +105,40 @@ function display(value: Cell, format?: Format): string {
   return value;
 }
 
+function isEmptyCell(value: Cell): boolean {
+  return value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+function rowStatus(leftValue: Cell, rightValue: Cell): ComparisonRow["status"] {
+  if (leftValue == null || rightValue == null) return "unknown";
+  return sameValue(leftValue, rightValue) ? "same" : "changed";
+}
+
 function row(
   label: string,
   facet: Facet,
-  left: ComparisonInvocation | null,
-  right: ComparisonInvocation | null,
-  format?: Format,
+  baseline: ComparisonInvocation | null,
+  current: ComparisonInvocation | null,
+  options: { format?: Format; inlineDiff?: boolean } = {},
 ): ComparisonRow {
-  const leftValue: Cell = left === null ? null : facet(left);
-  const rightValue: Cell = right === null ? null : facet(right);
-  const leftText = display(leftValue, format);
-  const rightText = display(rightValue, format);
-  const status: ComparisonRow["status"] =
-    leftValue !== null && rightValue !== null && leftValue !== undefined && rightValue !== undefined
-      ? sameValue(leftValue, rightValue)
-        ? "same"
-        : "changed"
-      : "unknown";
-  const leftEmpty = leftValue === "" || (Array.isArray(leftValue) && leftValue.length === 0);
-  const rightEmpty = rightValue === "" || (Array.isArray(rightValue) && rightValue.length === 0);
-  const { leftParts, rightParts } = diffParts(leftText, rightText, status, leftEmpty, rightEmpty);
+  const leftValue: Cell = baseline === null ? null : facet(baseline);
+  const rightValue: Cell = current === null ? null : facet(current);
+  const leftText = display(leftValue, options.format);
+  const rightText = display(rightValue, options.format);
+  const status = rowStatus(leftValue, rightValue);
+  const { leftParts, rightParts } =
+    options.inlineDiff === false
+      ? { leftParts: plainParts(leftText), rightParts: plainParts(rightText) }
+      : diffParts(leftText, rightText, status, isEmptyCell(leftValue), isEmptyCell(rightValue));
   return { label, left: leftText, right: rightText, leftParts, rightParts, status };
 }
 
 const formatDate = (value: number) => new Date(value).toLocaleString();
 const formatDuration = (value: number) => `${(value / 1000).toFixed(3)}s`;
+
+function formatSignedInt(value: number): string {
+  return value > 0 ? `+${value}` : String(value);
+}
 
 function formatDurationDelta(deltaMs: number): string {
   if (deltaMs === 0) return "0.000s";
@@ -135,156 +150,204 @@ function formatPctDelta(deltaPct: number): string {
   return `${deltaPct > 0 ? "+" : ""}${deltaPct} pp`;
 }
 
-function cacheSummary(invocation: ComparisonInvocation): RunnerSummary | undefined {
-  if (invocation.bep.status !== "ok") return undefined;
-  return summarizeRunners(invocation.bep.data.runnerCounts) ?? undefined;
-}
-
-function formatCacheCell(summary: RunnerSummary | null | undefined): string {
-  if (summary === null) return EMPTY;
-  if (summary === undefined) return MISSING;
-  return `${summary.hitPct}% (${summary.cached}/${summary.total})`;
-}
-
-function sameCache(left: RunnerSummary, right: RunnerSummary): boolean {
-  return left.hitPct === right.hitPct && left.cached === right.cached && left.total === right.total;
-}
-
 function deltaTone(delta: number, higherIsBetter: boolean): ComparisonDelta["tone"] {
   if (delta === 0) return "same";
   return delta > 0 === higherIsBetter ? "better" : "worse";
 }
 
+function cacheStats(invocation: ComparisonInvocation): CacheStats | undefined {
+  if (invocation.bep.status !== "ok") return undefined;
+  const summary: RunnerSummary | null = summarizeRunners(invocation.bep.data.runnerCounts);
+  if (summary === null) return { total: 0, cached: 0, hitPct: null };
+  return { total: summary.total, cached: summary.cached, hitPct: summary.hitPct };
+}
+
+function formatCacheCell(stats: CacheStats | null | undefined): string {
+  if (stats === null) return EMPTY;
+  if (stats === undefined) return MISSING;
+  if (stats.total === 0) return "0 spawns";
+  return `${stats.hitPct}% (${stats.cached}/${stats.total})`;
+}
+
+function sameCache(left: CacheStats, right: CacheStats): boolean {
+  return left.total === right.total && left.cached === right.cached && left.hitPct === right.hitPct;
+}
+
+function cacheDelta(baseline: CacheStats, current: CacheStats): ComparisonDelta {
+  const spawnDiff = current.total - baseline.total;
+  if (baseline.hitPct === null || current.hitPct === null) {
+    return {
+      text: spawnDiff === 0 ? "0 spawns" : `${formatSignedInt(spawnDiff)} spawns`,
+      tone: "same",
+    };
+  }
+  const pctDiff = current.hitPct - baseline.hitPct;
+  if (spawnDiff === 0) {
+    return { text: formatPctDelta(pctDiff), tone: deltaTone(pctDiff, true) };
+  }
+  return {
+    text: `${formatPctDelta(pctDiff)} (${formatSignedInt(spawnDiff)} spawns)`,
+    tone: "same",
+  };
+}
+
 function durationRow(
-  left: ComparisonInvocation | null,
-  right: ComparisonInvocation | null,
+  baseline: ComparisonInvocation | null,
+  current: ComparisonInvocation | null,
 ): ComparisonRow {
-  const base = row(
-    "Duration",
-    (invocation) => duration(invocation.record),
-    left,
-    right,
-    formatDuration,
-  );
-  const leftMs = left ? duration(left.record) : undefined;
-  const rightMs = right ? duration(right.record) : undefined;
-  if (leftMs === undefined || rightMs === undefined) return base;
-  const deltaMs = leftMs - rightMs;
+  const base = row("Duration", (invocation) => duration(invocation.record), baseline, current, {
+    format: formatDuration,
+    inlineDiff: false,
+  });
+  const baseMs = baseline ? duration(baseline.record) : undefined;
+  const curMs = current ? duration(current.record) : undefined;
+  if (baseMs === undefined || curMs === undefined) return base;
+  const deltaMs = curMs - baseMs;
   return {
     ...base,
     delta: { text: formatDurationDelta(deltaMs), tone: deltaTone(deltaMs, false) },
   };
 }
 
-function cacheHitRateRow(
-  left: ComparisonInvocation | null,
-  right: ComparisonInvocation | null,
+function spawnCacheRow(
+  baseline: ComparisonInvocation | null,
+  current: ComparisonInvocation | null,
 ): ComparisonRow {
-  const leftCache = left === null ? null : cacheSummary(left);
-  const rightCache = right === null ? null : cacheSummary(right);
-  const leftText = formatCacheCell(leftCache);
-  const rightText = formatCacheCell(rightCache);
-  const bothKnown = leftCache != null && rightCache != null;
+  const leftStats = baseline === null ? null : cacheStats(baseline);
+  const rightStats = current === null ? null : cacheStats(current);
+  const leftText = formatCacheCell(leftStats);
+  const rightText = formatCacheCell(rightStats);
+  const bothKnown = leftStats != null && rightStats != null;
   const status: ComparisonRow["status"] = bothKnown
-    ? sameCache(leftCache, rightCache)
+    ? sameCache(leftStats, rightStats)
       ? "same"
       : "changed"
     : "unknown";
-  const { leftParts, rightParts } = diffParts(leftText, rightText, status, false, false);
-  const delta = bothKnown
-    ? {
-        text: formatPctDelta(leftCache.hitPct - rightCache.hitPct),
-        tone: deltaTone(leftCache.hitPct - rightCache.hitPct, true),
-      }
-    : undefined;
   return {
-    label: "Cache hit rate",
+    label: "Spawn cache hits",
     left: leftText,
     right: rightText,
-    leftParts,
-    rightParts,
+    leftParts: plainParts(leftText),
+    rightParts: plainParts(rightText),
     status,
-    ...(delta ? { delta } : {}),
+    ...(bothKnown ? { delta: cacheDelta(leftStats, rightStats) } : {}),
   };
 }
 
-function isPreviousSuccessCandidate(
-  current: InvocationRecord,
-  candidate: InvocationRecord,
-  running: ReadonlySet<string>,
-): boolean {
-  if (candidate.id === current.id || running.has(candidate.id)) return false;
-  if (candidate.exitCode !== 0 || candidate.pattern !== current.pattern) return false;
-  if (current.cmd !== undefined && candidate.cmd !== current.cmd) return false;
-  return candidate.startedAt !== undefined && candidate.startedAt < current.startedAt!;
+/** Normalizes whitespace-separated target patterns so token order differences still match. */
+export function normalizePattern(pattern: string | undefined): string {
+  if (!pattern) return "";
+  return pattern.trim().split(/\s+/).filter(Boolean).sort().join(" ");
 }
 
-/** Finds the latest settled successful invocation before `current` with the same target pattern. */
-export function previousSuccessfulInvocation(
-  current: InvocationRecord,
-  history: readonly InvocationRecord[],
-  runningIds: readonly string[],
-): InvocationRecord | null {
-  if (!current.pattern || current.startedAt === undefined) return null;
-  const running = new Set(runningIds);
-  const candidates = history.filter((entry) => isPreviousSuccessCandidate(current, entry, running));
-  return candidates.reduce<InvocationRecord | null>(
+function sameTargetKey(current: InvocationRecord, candidate: InvocationRecord): boolean {
+  const curPattern = normalizePattern(current.pattern);
+  if (!curPattern || normalizePattern(candidate.pattern) !== curPattern) return false;
+  return current.cmd === undefined || candidate.cmd === current.cmd;
+}
+
+function pickLatest(records: readonly InvocationRecord[]): InvocationRecord | null {
+  return records.reduce<InvocationRecord | null>(
     (best, candidate) =>
       best === null || candidate.startedAt! > best.startedAt! ? candidate : best,
     null,
   );
 }
 
-/** Lists settled history invocations eligible to compare against `currentId`. */
-export function recentComparableInvocations(
-  currentId: string,
+/** Finds the latest earlier settled successful invocation matching pattern/cmd, preferring same workspace. */
+export function previousSuccessfulInvocation(
+  current: InvocationRecord,
   history: readonly InvocationRecord[],
   runningIds: readonly string[],
-): InvocationRecord[] {
-  return history.filter((entry) => entry.id !== currentId && !runningIds.includes(entry.id));
+): InvocationRecord | null {
+  if (!normalizePattern(current.pattern) || current.startedAt === undefined) return null;
+  const running = new Set(runningIds);
+  const matches = history.filter(
+    (entry) =>
+      entry.id !== current.id &&
+      !running.has(entry.id) &&
+      entry.exitCode === 0 &&
+      entry.startedAt !== undefined &&
+      entry.startedAt < current.startedAt! &&
+      sameTargetKey(current, entry),
+  );
+  const sameWorkspace = matches.filter(
+    (entry) => current.workspace !== undefined && entry.workspace === current.workspace,
+  );
+  return pickLatest(sameWorkspace.length > 0 ? sameWorkspace : matches);
 }
 
-/** Formats a compact one-line label for an invocation in the comparison picker. */
-export function formatInvocationOption(record: InvocationRecord): string {
+/** Splits settled history invocations into same-target and other candidates for the baseline picker. */
+export function recentComparableInvocations(
+  current: InvocationRecord,
+  history: readonly InvocationRecord[],
+  runningIds: readonly string[],
+): { sameTarget: InvocationRecord[]; other: InvocationRecord[] } {
+  const running = new Set(runningIds);
+  const sameTarget: InvocationRecord[] = [];
+  const other: InvocationRecord[] = [];
+  for (const entry of history) {
+    if (entry.id === current.id || running.has(entry.id)) continue;
+    (sameTargetKey(current, entry) ? sameTarget : other).push(entry);
+  }
+  return { sameTarget, other };
+}
+
+/** Formats a compact one-line label for an invocation in the baseline picker. */
+export function formatInvocationOption(
+  record: InvocationRecord,
+  isPreviousSuccess = false,
+): string {
   const icon = record.exitCode === 0 ? "✓" : record.exitCode === undefined ? "?" : "✗";
-  const head = [record.cmd, record.pattern].filter(Boolean).join(" ") || record.id.slice(0, 8);
-  const parts = [`${icon} ${head}`];
+  const head = isPreviousSuccess
+    ? `Previous successful (${icon})`
+    : `${icon} ${[record.cmd, record.pattern].filter(Boolean).join(" ") || record.id.slice(0, 8)}`;
+  const parts = [head];
   const ms = duration(record);
   if (ms !== undefined) parts.push(formatDuration(ms));
   if (record.startedAt !== undefined) parts.push(formatDate(record.startedAt));
   return parts.join(" · ");
 }
 
+/** Builds comparison rows ordered left = baseline, right = current. */
 export function comparisonRows(
-  left: ComparisonInvocation | null,
-  right: ComparisonInvocation | null,
+  baseline: ComparisonInvocation | null,
+  current: ComparisonInvocation | null,
 ): ComparisonRow[] {
   return [
-    row("Invocation ID", (invocation) => invocation.record.id, left, right),
-    row("Command", (invocation) => invocation.record.cmd, left, right),
-    row("Pattern", (invocation) => invocation.record.pattern, left, right),
-    row("Exit code", (invocation) => invocation.record.exitCode, left, right),
-    row("Start date", (invocation) => invocation.record.startedAt, left, right, formatDate),
-    durationRow(left, right),
-    cacheHitRateRow(left, right),
+    durationRow(baseline, current),
+    spawnCacheRow(baseline, current),
+    row("Exit code", (invocation) => invocation.record.exitCode, baseline, current, {
+      inlineDiff: false,
+    }),
+    row("Command", (invocation) => invocation.record.cmd, baseline, current),
+    row("Pattern", (invocation) => invocation.record.pattern, baseline, current),
+    row("Workspace", (invocation) => invocation.record.workspace, baseline, current),
     row(
       "Explicit command line",
       (invocation) => bepOptions(invocation)?.explicitCmdLine,
-      left,
-      right,
+      baseline,
+      current,
     ),
-    row("Full command line", (invocation) => bepOptions(invocation)?.cmdLine, left, right),
+    row("Full command line", (invocation) => bepOptions(invocation)?.cmdLine, baseline, current),
     row(
       "Explicit startup options",
       (invocation) => bepOptions(invocation)?.explicitStartupOptions,
-      left,
-      right,
+      baseline,
+      current,
     ),
     row(
       "Full startup options",
       (invocation) => bepOptions(invocation)?.startupOptions,
-      left,
-      right,
+      baseline,
+      current,
     ),
+    row("Start date", (invocation) => invocation.record.startedAt, baseline, current, {
+      format: formatDate,
+      inlineDiff: false,
+    }),
+    row("Invocation ID", (invocation) => invocation.record.id, baseline, current, {
+      inlineDiff: false,
+    }),
   ];
 }

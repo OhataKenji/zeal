@@ -8,22 +8,22 @@ function detail(
   bep: Section<Bep> = { status: "ok", data: { targets: [], tests: [], truncated: false } },
 ): InvocationDetail {
   return {
-    record: { id: "left-id", ...record },
+    record: { id: "current-id", ...record },
     log: { status: "missing" },
     bep,
   };
 }
 
-test("ComparisonPanel renders the comparison form for the selected invocation", async (t) => {
+test("ComparisonPanel renders the baseline toolbar and 4-column comparison table", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: ComparisonPanel } = await load("/src/lib/invocation/ComparisonPanel.svelte");
 
   function output(overrides: Record<string, unknown> = {}): string {
     return render(ComparisonPanel, {
       props: {
-        left: detail(),
-        leftLoading: false,
-        leftError: null,
+        current: detail(),
+        currentLoading: false,
+        currentError: null,
         workspace: "/workspace",
         runningIds: [],
         ...overrides,
@@ -37,45 +37,47 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     return input;
   }
 
-  await t.test("shows the selected ID with a labeled, enabled input", () => {
+  await t.test("shows 4-column Baseline | Current | Delta table and collapsed By ID input", () => {
     const html = output();
-    assert.ok(html.includes("left-id"));
+    assert.ok(html.includes("current-id"));
     assert.match(html, /<table[^>]*aria-label="Invocation comparison"/);
-    assert.ok(!html.includes("<caption>"));
-    assert.match(
-      html,
-      /<label[^>]*for="compare-invocation-id"[^>]*>\s*Comparison invocation\s*<\/label>/,
-    );
+    assert.match(html, /<th[^>]*>\s*Baseline/);
+    assert.match(html, /<th[^>]*>\s*Current/);
+    assert.match(html, /<th[^>]*>\s*Delta\s*<\/th>/);
+    assert.match(html, /<details[^>]*compare-by-id/);
     assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
-    assert.match(inputTag(html), /placeholder="[^"]+"/);
+    assert.ok(html.includes("No previous successful build in recent history."));
   });
 
-  await t.test("disables the input while the left detail is loading", () => {
-    const html = output({ left: null, leftLoading: true });
+  await t.test("disables controls while current detail is loading", () => {
+    const html = output({ current: null, currentLoading: true });
     assert.match(inputTag(html), /\bdisabled\b/);
     assert.match(html, /Loading…/);
   });
 
-  await t.test("disables the input when the left detail failed", () => {
-    const html = output({ leftError: "read failed" });
+  await t.test("disables controls when current detail failed", () => {
+    const html = output({ currentError: "read failed" });
     assert.match(inputTag(html), /\bdisabled\b/);
     assert.ok(html.includes("read failed"));
   });
 
-  await t.test("disables the input while the compared invocation is running", () => {
-    const html = output({ runningIds: ["left-id"] });
-    assert.match(inputTag(html), /\bdisabled\b/);
-    assert.ok(html.includes("Comparison is available"));
-  });
+  await t.test(
+    "shows a single message without empty table while current invocation is running",
+    () => {
+      const html = output({ runningIds: ["current-id"] });
+      assert.ok(html.includes("Comparison is available after the invocation finishes."));
+      assert.ok(!html.includes("<table"));
+    },
+  );
 
-  await t.test("keeps the input enabled when a different invocation is running", () => {
+  await t.test("keeps controls enabled when a different invocation is running", () => {
     const html = output({ runningIds: ["other-id"] });
     assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
   });
 
   await t.test("escapes option values in the rendered HTML", () => {
     const html = output({
-      left: detail(
+      current: detail(
         {},
         {
           status: "ok",
@@ -99,7 +101,7 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
 
   await t.test("surfaces a non-ok BEP section as a notice", () => {
     const html = output({
-      left: detail(
+      current: detail(
         {},
         {
           status: "incomplete",
@@ -111,38 +113,50 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     assert.ok(html.includes("saved prefix missing"));
   });
 
-  await t.test("enables one-click compare button when a previous successful build exists", () => {
+  await t.test("groups recent invocations into Same target and Other recent optgroups", () => {
     const html = output({
-      left: detail({ id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 1 }),
+      current: detail({
+        id: "cur",
+        workspace: "/workspace",
+        cmd: "build",
+        pattern: "//app:all",
+        startedAt: 5000,
+        exitCode: 1,
+      }),
       history: [
-        { id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 1 },
+        {
+          id: "cur",
+          workspace: "/workspace",
+          cmd: "build",
+          pattern: "//app:all",
+          startedAt: 5000,
+          exitCode: 1,
+        },
         {
           id: "prev-ok",
+          workspace: "/workspace",
           cmd: "build",
           pattern: "//app:all",
           startedAt: 3000,
           finishedAt: 4200,
           exitCode: 0,
         },
+        {
+          id: "other-pat",
+          workspace: "/workspace",
+          cmd: "test",
+          pattern: "//lib:all",
+          startedAt: 2000,
+          finishedAt: 3000,
+          exitCode: 0,
+        },
       ],
     });
-    const button = html.match(/<button[^>]*compare-prev-btn[^>]*>/)?.[0];
-    assert.ok(button, "previous successful button is missing");
-    assert.doesNotMatch(button, /\bdisabled\b/);
-    assert.ok(!html.includes("No previous successful build for this target pattern."));
-    assert.match(html, /<select[^>]*aria-label="Recent invocations"/);
-    assert.ok(html.includes('value="prev-ok"'));
-  });
-
-  await t.test("disables one-click compare button when no previous successful build exists", () => {
-    const html = output({
-      left: detail({ id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 0 }),
-      history: [{ id: "cur", cmd: "build", pattern: "//app:all", startedAt: 5000, exitCode: 0 }],
-    });
-    const button = html.match(/<button[^>]*compare-prev-btn[^>]*>/)?.[0];
-    assert.ok(button, "previous successful button is missing");
-    assert.match(button, /\bdisabled\b/);
-    assert.ok(html.includes("No previous successful build for this target pattern."));
+    assert.match(html, /<select[^>]*id="compare-baseline-select"/);
+    assert.ok(html.includes('label="Same target"'));
+    assert.ok(html.includes('label="Other recent"'));
+    assert.ok(html.includes("Previous successful (✓)"));
+    assert.ok(!html.includes("No previous successful build in recent history."));
   });
 
   await t.test("InvocationView shows the Compare tab without the form on All", async () => {
@@ -151,7 +165,7 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     const left = detail();
     const view = {
       ...emptyView(),
-      content: { kind: "invocation" as const, id: "left-id", page: "targets" as const },
+      content: { kind: "invocation" as const, id: "current-id", page: "targets" as const },
       invocations: [left.record],
       invocation: { record: left.record },
       detail: left,

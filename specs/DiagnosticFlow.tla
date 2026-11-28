@@ -29,10 +29,9 @@ VARIABLES
   profile,
   compare,
   compareTarget,
-  autoCompared,
   running
 
-vars == <<page, selected, tab, detail, profile, compare, compareTarget, autoCompared, running>>
+vars == <<page, selected, tab, detail, profile, compare, compareTarget, running>>
 
 TypeOK ==
   /\ page \in Pages
@@ -42,7 +41,6 @@ TypeOK ==
   /\ profile \in ReaderPhases
   /\ compare \in ComparePhases
   /\ compareTarget \in Inv \cup {None}
-  /\ autoCompared \in BOOLEAN
   /\ running \subseteq Inv
 
 Init ==
@@ -53,13 +51,11 @@ Init ==
   /\ profile = "empty"
   /\ compare = "idle"
   /\ compareTarget = None
-  /\ autoCompared = FALSE
   /\ running = {}
 
 ResetCompare ==
   /\ compare' = "idle"
   /\ compareTarget' = None
-  /\ autoCompared' = FALSE
 
 OpenPage(p) ==
   /\ p \in Pages
@@ -67,7 +63,7 @@ OpenPage(p) ==
   /\ page' = p
   /\ IF p # "history"
      THEN ResetCompare
-     ELSE UNCHANGED <<compare, compareTarget, autoCompared>>
+     ELSE UNCHANGED <<compare, compareTarget>>
   /\ UNCHANGED <<selected, tab, detail, profile, running>>
 
 SelectInvocation(i) ==
@@ -81,7 +77,7 @@ SelectInvocation(i) ==
           /\ tab' = "all"
           /\ ResetCompare
      ELSE /\ UNCHANGED <<detail, profile, tab>>
-          /\ IF page # "history" THEN ResetCompare ELSE UNCHANGED <<compare, compareTarget, autoCompared>>
+          /\ IF page # "history" THEN ResetCompare ELSE UNCHANGED <<compare, compareTarget>>
   /\ UNCHANGED running
 
 SelectTab(t) ==
@@ -92,7 +88,7 @@ SelectTab(t) ==
   /\ tab' = t
   /\ IF t # "compare"
      THEN ResetCompare
-     ELSE UNCHANGED <<compare, compareTarget, autoCompared>>
+     ELSE UNCHANGED <<compare, compareTarget>>
   /\ UNCHANGED <<page, selected, detail, profile, running>>
 
 StartDetail ==
@@ -101,12 +97,12 @@ StartDetail ==
   /\ selected \notin running
   /\ detail \in {"empty", "failed"}
   /\ detail' = "loading"
-  /\ UNCHANGED <<page, selected, tab, profile, compare, compareTarget, autoCompared, running>>
+  /\ UNCHANGED <<page, selected, tab, profile, compare, compareTarget, running>>
 
 FinishDetail(ok) ==
   /\ detail = "loading"
   /\ detail' = IF ok THEN "ready" ELSE "failed"
-  /\ UNCHANGED <<page, selected, tab, profile, compare, compareTarget, autoCompared, running>>
+  /\ UNCHANGED <<page, selected, tab, profile, compare, compareTarget, running>>
 
 StartProfile ==
   /\ page = "history"
@@ -114,12 +110,12 @@ StartProfile ==
   /\ selected \notin running
   /\ profile \in {"empty", "failed"}
   /\ profile' = "loading"
-  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, autoCompared, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
 
 FinishProfile(ok) ==
   /\ profile = "loading"
   /\ profile' = IF ok THEN "ready" ELSE "failed"
-  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, autoCompared, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
 
 AutoCompare(other) ==
   /\ page = "history"
@@ -128,13 +124,11 @@ AutoCompare(other) ==
   /\ selected \notin running
   /\ detail = "ready"
   /\ compare = "idle"
-  /\ ~autoCompared
   /\ other \in Inv
   /\ other # selected
   /\ other \notin running
   /\ compare' = "loading"
   /\ compareTarget' = other
-  /\ autoCompared' = TRUE
   /\ UNCHANGED <<page, selected, tab, detail, profile, running>>
 
 StartCompare(other) ==
@@ -145,7 +139,6 @@ StartCompare(other) ==
   /\ detail = "ready"
   /\ compare # "loading"
   /\ other \in Inv
-  /\ autoCompared' = TRUE
   /\ IF other \in running
      THEN /\ compare' = "failed"
           /\ compareTarget' = None
@@ -160,7 +153,7 @@ FinishCompare(ok) ==
           /\ UNCHANGED compareTarget
      ELSE /\ compare' = "failed"
           /\ compareTarget' = None
-  /\ UNCHANGED <<page, selected, tab, detail, profile, autoCompared, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, profile, running>>
 
 StartRun(i) ==
   /\ i \in Inv
@@ -173,13 +166,13 @@ StartRun(i) ==
      ELSE IF compareTarget = i
      THEN /\ ResetCompare
           /\ UNCHANGED <<detail, profile>>
-     ELSE UNCHANGED <<detail, profile, compare, compareTarget, autoCompared>>
+     ELSE UNCHANGED <<detail, profile, compare, compareTarget>>
   /\ UNCHANGED <<page, selected, tab>>
 
 FinishRun(i) ==
   /\ i \in running
   /\ running' = running \ {i}
-  /\ UNCHANGED <<page, selected, tab, detail, profile, compare, compareTarget, autoCompared>>
+  /\ UNCHANGED <<page, selected, tab, detail, profile, compare, compareTarget>>
 
 Next ==
   \/ \E p \in Pages : OpenPage(p)
@@ -215,5 +208,5 @@ CompareTargetSettled ==
 
 ComparisonMountedOnlyOnCompareTab ==
   (page # "history" \/ tab # "compare") =>
-    (compare = "idle" /\ compareTarget = None /\ ~autoCompared)
+    (compare = "idle" /\ compareTarget = None)
 =============================================================================
