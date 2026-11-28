@@ -156,7 +156,9 @@ function deltaTone(delta: number, higherIsBetter: boolean): ComparisonDelta["ton
 }
 
 function cacheStats(invocation: ComparisonInvocation): CacheStats | undefined {
-  if (invocation.bep.status !== "ok") return undefined;
+  if (invocation.bep.status !== "ok" || invocation.bep.data.runnerCounts === undefined) {
+    return undefined;
+  }
   const summary: RunnerSummary | null = summarizeRunners(invocation.bep.data.runnerCounts);
   if (summary === null) return { total: 0, cached: 0, hitPct: null };
   return { total: summary.total, cached: summary.cached, hitPct: summary.hitPct };

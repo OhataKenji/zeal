@@ -27,7 +27,7 @@ function options(overrides: Partial<NonNullable<Bep["options"]>> = {}) {
   };
   return {
     status: "ok" as const,
-    data: { targets: [], tests: [], truncated: false, options: merged },
+    data: { targets: [], tests: [], truncated: false, options: merged, runnerCounts: [] },
   };
 }
 
@@ -235,7 +235,7 @@ test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op b
   );
   assert.deepEqual(incremental.delta, { text: "-95 pp (-98 spawns)", tone: "same" });
 
-  // No-op build (0 spawns) is known, not "Not recorded".
+  // No-op build (explicit empty runnerCounts) is known, not "Not recorded".
   const noop = row(
     comparisonRows(
       invocation({ id: "base" }, withRunners(9, 1)),
@@ -246,6 +246,21 @@ test("spawn cache hits handles equal totals, changed totals, and 0-spawn no-op b
   assert.equal(noop.right, "0 spawns");
   assert.equal(noop.status, "changed");
   assert.deepEqual(noop.delta, { text: "-10 spawns", tone: "same" });
+
+  // Absent runnerCounts in an ok BEP stays unknown ("Not recorded"), not 0 spawns.
+  const absent = row(
+    comparisonRows(
+      invocation({ id: "base" }, withRunners(9, 1)),
+      invocation(
+        { id: "cur" },
+        { status: "ok", data: { targets: [], tests: [], truncated: false } },
+      ),
+    ),
+    "Spawn cache hits",
+  );
+  assert.equal(absent.right, "Not recorded");
+  assert.equal(absent.status, "unknown");
+  assert.equal(absent.delta, undefined);
 });
 
 test("inline diff applies to options/text but not IDs or dates", () => {

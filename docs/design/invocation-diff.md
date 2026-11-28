@@ -75,7 +75,7 @@ Host、Git、remote execution など Zelith の現在の projection にない項
 
 - 表は項目名、Baseline(左)、Current(右)、Delta の四列で全行を表示し、値が変わった行を薄く強調する。Command・Pattern・Workspace・options の既知の値どうしには diff-match-patch で項目内の文字列 diff を示し(左=削除赤、右=追加緑)、数値・ID・日時行には文字 diff を当てず Delta 列の色と分離する。
 - 等価は raw な値で比較し、map 化や sort などの正規化はしない。
-- 値がない項目は「Not recorded」と表示し、その行の比較は unknown とする。空の options 配列は既知の空として扱う。`bep.status === "ok"` で spawn 実行が 0 件のときは `0 spawns` として既知扱いする。
+- 値がない項目は「Not recorded」と表示し、その行の比較は unknown とする。空の options 配列は既知の空として扱う。`bep.status === "ok"` で `runnerCounts` が明示的に空のときは `0 spawns` として既知扱いし、`runnerCounts` が未記録のときは unknown (`Not recorded`) とする。
 - BEP section が ok 以外のときは options 由来の行を比較不可とし、section の状態を併記する(record 由来の行は独立して比較する)。右側の request 全体の失敗は右側の error であり、欠損項目を捏造しない。
 
 ### 状態と寿命
