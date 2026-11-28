@@ -41,7 +41,6 @@ interface CapturedInvocation {
     startedAt: number;
     finishedAt: number;
     exitCode: number;
-    arguments?: string;
   };
   log: string;
   bep: Bep;
@@ -228,7 +227,7 @@ function finishOwned(id: string) {
   emitState();
 }
 
-function startInvocation(workspace: string, cmd: string, pattern: string, flags = "") {
+function startInvocation(workspace: string, cmd: string, pattern: string) {
   wsEntry(workspace);
   const id = `preview-${crypto.randomUUID()}`;
   const now = Date.now();
@@ -242,7 +241,6 @@ function startInvocation(workspace: string, cmd: string, pattern: string, flags 
     startedAt: now,
     finishedAt: now,
     exitCode: 0,
-    arguments: flags,
   };
   records.unshift(record);
   const owned: OwnedInvocation = {
@@ -256,10 +254,9 @@ function startInvocation(workspace: string, cmd: string, pattern: string, flags 
     console: true,
   };
   state.invocations.unshift(owned);
-  const flagSuffix = flags ? ` ${flags}` : "";
   consoleOutput.set(
     id,
-    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}${flagSuffix}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
+    `\x1b[32mINFO:\x1b[0m bazel ${record.cmd} ${record.pattern}\r\nPreview Console — sample data\r\n${record.cmd === "run" ? "Number: " : "Build completed.\r\n"}`,
   );
   if (cmd !== "run") {
     // build/test finish on their own; `run` stays live until input or Stop.
@@ -585,7 +582,6 @@ export function installPreview() {
         String(payload?.workspace ?? ""),
         String(payload?.cmd),
         String(payload?.pattern),
-        typeof payload?.arguments === "string" ? payload.arguments : "",
       ),
     stop_invocation: (payload) =>
       stopInvocation(String(payload?.workspace ?? ""), String(payload?.id)),

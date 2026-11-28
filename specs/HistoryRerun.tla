@@ -1,94 +1,125 @@
 --------------------------- MODULE HistoryRerun ---------------------------
-\* Explicit state model for History Re-run provenance and readiness across
-\* runner.rs (launch table written before spawn), bes.rs (unauthenticated BES
-\* stream), and InvocationView.svelte / invocation.ts (rerunState).
+\* Explicit state model for History Re-run readiness in InvocationView.svelte
+\* downstream of SavedSelection. Two selectable invocation IDs ("A", "B") each
+\* carry their own ground-truth saved flags on disk ("none" when the BEP file
+\* is missing, unreadable, or lacks an original command line; "emptyFlags" when
+\* no user flags were passed; "customFlags" when user flags were passed).
 \*
-\* Two invocation IDs ("A", "B") may either be launched by Zelith (which writes
-\* its trusted launch flags to SQLite before spawning Bazel) or arrive from an
-\* external / forged local BES client (which can write BEP events with arbitrary
-\* flags, including late-arriving flags during Refresh, but can never write the
-\* launch table).
-\*
-\* RerunState is derived solely from selection, row kind, runnability, and the
-\* trusted launch record (or Zelith-owned diagnostic). Unauthenticated BES
-\* events can never make Re-run ready or influence launched flags.
+\* RerunState is derived solely from current selection, row kind, runnability,
+\* and the detail reader's phase/identity/flags. Clicking Re-run is enabled
+\* only in state "ready".
 
 Ids == {"A", "B"}
 Rows == {"missing", "live", "diagnostic", "savedConsole", "saved"}
-LaunchFlags == {"none", "emptyFlags", "customFlags"}
-BesFlags == {"none", "emptyFlags", "customFlags", "forgedFlags"}
+DetailPhases == {"empty", "loading", "ready", "failed"}
+FlagValues == {"none", "emptyFlags", "customFlags"}
 NoLaunch == [id |-> "none", flags |-> "none"]
 
-VARIABLES id, row, runnable, launch, besFlags, launched, launchTick
-vars == <<id, row, runnable, launch, besFlags, launched, launchTick>>
+VARIABLES id, row, runnable, detailId, detailPhase, detailFlags, trueFlags, retired, launched, launchTick
+vars == <<id, row, runnable, detailId, detailPhase, detailFlags, trueFlags, retired, launched, launchTick>>
 
 RerunState ==
-    IF ~runnable \/ row[id] \in {"missing", "live", "savedConsole"} THEN "unavailable"
-    ELSE IF row[id] = "diagnostic" /\ launch[id] # "none" THEN "ready"
-    ELSE IF row[id] = "saved" /\ launch[id] # "none" THEN "ready"
+    IF ~runnable \/ row \in {"missing", "live", "savedConsole"} THEN "unavailable"
+    ELSE IF row = "diagnostic" THEN "ready"
+    ELSE IF detailPhase = "loading" THEN "loading"
+    ELSE IF detailPhase = "ready" /\ detailId = id /\ detailFlags # "none" THEN "ready"
     ELSE "unavailable"
 
-RerunFlags == launch[id]
+RerunFlags ==
+    IF row = "diagnostic" THEN "emptyFlags"
+    ELSE detailFlags
 
 Init ==
     /\ id = "A"
-    /\ row = [i \in Ids |-> "missing"]
+    /\ row = "missing"
     /\ runnable \in BOOLEAN
-    /\ launch = [i \in Ids |-> "none"]
-    /\ besFlags = [i \in Ids |-> "none"]
+    /\ detailId = "none"
+    /\ detailPhase = "empty"
+    /\ detailFlags = "none"
+    /\ trueFlags \in [Ids -> FlagValues]
+    /\ retired = FALSE
     /\ launched = NoLaunch
     /\ launchTick = FALSE
 
-\* Zelith runner::start records trusted launch flags in SQLite BEFORE spawning
-\* Bazel as a live invocation.
-LaunchZelith(i, f) ==
-    /\ row[i] = "missing"
-    /\ launch[i] = "none"
-    /\ f \in {"emptyFlags", "customFlags"}
-    /\ launch' = [launch EXCEPT ![i] = f]
-    /\ row' = [row EXCEPT ![i] = "live"]
-    /\ UNCHANGED <<id, runnable, besFlags, launched, launchTick>>
+Select(nextRow) ==
+    /\ id' = IF id = "A" THEN "B" ELSE "A"
+    /\ row' = nextRow
+    /\ detailId' = "none"
+    /\ detailFlags' = "none"
+    /\ detailPhase' = IF nextRow = "saved" THEN "loading" ELSE "empty"
+    /\ retired' = (retired \/ detailPhase = "loading")
+    /\ UNCHANGED <<runnable, trueFlags, launched, launchTick>>
 
-\* A BES stream (from Bazel or a forged local client) arrives or refreshes with
-\* late-arriving BEP flags. BES never modifies the trusted launch table.
-ReceiveBes(i, bf) ==
-    /\ bf \in {"none", "emptyFlags", "customFlags", "forgedFlags"}
-    /\ besFlags' = [besFlags EXCEPT ![i] = bf]
-    /\ row' = [row EXCEPT ![i] =
-         IF row[i] = "live" THEN "savedConsole"
-         ELSE "saved"]
-    /\ UNCHANGED <<id, runnable, launch, launched, launchTick>>
+UpdateRow(nextRow) ==
+    /\ nextRow # row
+    /\ row' = nextRow
+    /\ IF row = "saved" /\ nextRow # "saved" THEN
+         /\ detailId' = "none"
+         /\ detailFlags' = "none"
+         /\ detailPhase' = "empty"
+         /\ retired' = (retired \/ detailPhase = "loading")
+       ELSE IF row # "saved" /\ nextRow = "saved" THEN
+         /\ detailId' = "none"
+         /\ detailFlags' = "none"
+         /\ detailPhase' = "loading"
+         /\ retired' = (retired \/ detailPhase = "loading")
+       ELSE
+         UNCHANGED <<detailId, detailFlags, detailPhase, retired>>
+    /\ UNCHANGED <<id, runnable, trueFlags, launched, launchTick>>
 
-\* A Zelith-launched live invocation finishes: if BES already recorded it,
-\* savedConsole becomes saved; otherwise it becomes a Zelith-owned diagnostic.
-FinishZelith(i) ==
-    /\ row[i] \in {"live", "savedConsole"}
-    /\ launch[i] # "none"
-    /\ row' = [row EXCEPT ![i] =
-         IF row[i] = "savedConsole" THEN "saved"
-         ELSE "diagnostic"]
-    /\ UNCHANGED <<id, runnable, launch, besFlags, launched, launchTick>>
+\* Retained refresh while viewing a saved invocation (e.g., BEP still arriving):
+\* detail cache stays visible, phase returns to "loading", Re-run disables.
+Refresh ==
+    /\ row = "saved"
+    /\ detailPhase # "loading"
+    /\ detailPhase' = "loading"
+    /\ retired' = (retired \/ detailPhase = "loading")
+    /\ UNCHANGED <<id, row, runnable, detailId, detailFlags, trueFlags, launched, launchTick>>
 
-Select(nextId) ==
-    /\ nextId # id
-    /\ id' = nextId
-    /\ UNCHANGED <<row, runnable, launch, besFlags, launched, launchTick>>
+\* User clicks Retry after a detail load failure.
+Retry ==
+    /\ row = "saved"
+    /\ detailPhase = "failed"
+    /\ detailPhase' = "loading"
+    /\ UNCHANGED <<id, row, runnable, detailId, detailFlags, trueFlags, retired, launched, launchTick>>
+
+DetailReply(ok) ==
+    /\ detailPhase = "loading"
+    /\ IF row # "saved" THEN
+         /\ detailPhase' = "empty"
+         /\ detailId' = "none"
+         /\ detailFlags' = "none"
+       ELSE IF ok THEN
+         /\ detailPhase' = "ready"
+         /\ detailId' = id
+         /\ detailFlags' = trueFlags[id]
+       ELSE
+         /\ detailPhase' = "failed"
+         /\ UNCHANGED <<detailId, detailFlags>>
+    /\ UNCHANGED <<id, row, runnable, trueFlags, retired, launched, launchTick>>
+
+LateReply ==
+    /\ retired
+    /\ retired' = FALSE
+    /\ UNCHANGED <<id, row, runnable, detailId, detailPhase, detailFlags, trueFlags, launched, launchTick>>
 
 ToggleRunnable ==
     /\ runnable' = ~runnable
-    /\ UNCHANGED <<id, row, launch, besFlags, launched, launchTick>>
+    /\ UNCHANGED <<id, row, detailId, detailPhase, detailFlags, trueFlags, retired, launched, launchTick>>
 
 ClickRerun ==
     /\ RerunState = "ready"
     /\ launched' = [id |-> id, flags |-> RerunFlags]
     /\ launchTick' = ~launchTick
-    /\ UNCHANGED <<id, row, runnable, launch, besFlags>>
+    /\ UNCHANGED <<id, row, runnable, detailId, detailPhase, detailFlags, trueFlags, retired>>
 
 Next ==
-    \/ \E i \in Ids, f \in {"emptyFlags", "customFlags"} : LaunchZelith(i, f)
-    \/ \E i \in Ids, bf \in BesFlags : ReceiveBes(i, bf)
-    \/ \E i \in Ids : FinishZelith(i)
-    \/ \E i \in Ids : Select(i)
+    \/ \E r \in Rows : Select(r)
+    \/ \E r \in Rows : UpdateRow(r)
+    \/ Refresh
+    \/ Retry
+    \/ \E ok \in BOOLEAN : DetailReply(ok)
+    \/ LateReply
     \/ ToggleRunnable
     \/ ClickRerun
 
@@ -96,46 +127,38 @@ Spec == Init /\ [][Next]_vars
 
 TypeOK ==
     /\ id \in Ids
-    /\ row \in [Ids -> Rows]
+    /\ row \in Rows
     /\ runnable \in BOOLEAN
-    /\ launch \in [Ids -> LaunchFlags]
-    /\ besFlags \in [Ids -> BesFlags]
-    /\ launched \in ({NoLaunch} \cup [id : Ids, flags : {"emptyFlags", "customFlags"}])
+    /\ detailId \in Ids \cup {"none"}
+    /\ detailPhase \in DetailPhases
+    /\ detailFlags \in FlagValues
+    /\ trueFlags \in [Ids -> FlagValues]
+    /\ retired \in BOOLEAN
+    /\ launched \in [id: Ids \cup {"none"}, flags: FlagValues]
     /\ launchTick \in BOOLEAN
+    /\ RerunState \in {"unavailable", "loading", "ready"}
 
-\* An external or forged BES invocation (no Zelith launch record) is never ready.
-ExternalNeverReady ==
-    launch[id] = "none" => RerunState = "unavailable"
+LoadingDisablesRerun ==
+    (row = "saved" /\ detailPhase = "loading") =>
+        RerunState = IF runnable THEN "loading" ELSE "unavailable"
 
-\* A live or savedConsole row is never ready for Re-run.
-LiveNeverReady ==
-    row[id] \in {"live", "savedConsole"} => RerunState = "unavailable"
+FailedDisablesRerun ==
+    (row = "saved" /\ detailPhase = "failed") => RerunState = "unavailable"
 
-\* Unrunnable workspace/selection is never ready.
-UnrunnableNeverReady ==
-    ~runnable => RerunState = "unavailable"
+MissingBepDisablesRerun ==
+    (row = "saved" /\ detailPhase = "ready" /\ detailFlags = "none") => RerunState = "unavailable"
 
-\* A Zelith-launched diagnostic or saved row is ready whenever runnable.
-TrustedSavedOrDiagnosticReady ==
-    (runnable /\ row[id] \in {"saved", "diagnostic"} /\ launch[id] # "none")
-        => RerunState = "ready"
+ReadyDetailMatchesSelection ==
+    (row = "saved" /\ RerunState = "ready") =>
+        (detailId = id /\ detailFlags = trueFlags[id] /\ detailFlags # "none")
 
-\* Re-run never launches for an external/forged invocation, a live/console row,
-\* or an unrunnable selection, and never replays forged BES flags.
-NeverLaunchExternalOrLive ==
-    [][launchTick' # launchTick =>
-        runnable
-        /\ row[id] \in {"saved", "diagnostic"}
-        /\ launch[id] # "none"
-        /\ launched'.flags # "forgedFlags"]_vars
+NeverLaunchUnrunnableOrLive ==
+    [][launchTick' # launchTick => runnable /\ row \in {"diagnostic", "saved"}]_vars
 
-\* Every Re-run launches with the exact trusted launch flags recorded by Zelith,
-\* regardless of what (or when) BES events reported.
-LaunchedFlagsMatchLaunchRecord ==
-    [][launchTick' # launchTick =>
-        launched'.id = id /\ launched'.flags = launch[id]]_vars
+SavedFlagsMatchTruth ==
+    [][launchTick' # launchTick /\ row = "saved" =>
+        launched'.id = id /\ launched'.flags = trueFlags[id] /\ launched'.flags # "none"]_vars
 
-\* Late-arriving or forged BES events never mutate trusted launch flags.
-BesNeverMutatesLaunch ==
-    [][(\E i \in Ids, bf \in BesFlags : ReceiveBes(i, bf)) => launch' = launch]_vars
+LateReplySilent ==
+    [][retired /\ ~retired' => UNCHANGED <<detailId, detailPhase, detailFlags, launched, launchTick>>]_vars
 =============================================================================

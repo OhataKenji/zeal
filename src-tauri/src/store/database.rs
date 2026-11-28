@@ -111,10 +111,6 @@ pub struct InvocationRecord {
     pub finished_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    /// User-supplied flags recorded by Zelith when it launched this invocation.
-    /// Absent for external or unauthenticated BES streams.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<String>,
 }
 
 pub(super) fn id(value: &str) -> Result<String, StoreError> {
@@ -151,11 +147,11 @@ impl Store {
         )?;
         conn.busy_timeout(Duration::from_secs(2))?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 5 {
+        if version > 3 {
             return Err(fail(ErrorKind::NewerSchema));
         }
         // Refuse old databases before changing journal mode or their schema.
-        if exists && version != 5 {
+        if exists && version != 3 {
             return Err(fail(ErrorKind::Corrupt));
         }
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
@@ -168,16 +164,13 @@ impl Store {
                     attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt>=0),
                     received_complete INTEGER NOT NULL DEFAULT 0 CHECK(received_complete IN (0,1)));
                 CREATE INDEX invocation_workspace_started ON invocation(workspace_id,started_at_ms DESC,id);
-                CREATE TABLE launch(id TEXT NOT NULL PRIMARY KEY,arguments TEXT NOT NULL);
-                PRAGMA user_version=5;")?;
+                PRAGMA user_version=3;")?;
             tx.commit()?;
             db.sync_all()?;
             root.sync()?;
         }
         conn.prepare("SELECT id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code,attempt,received_complete FROM invocation LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
         conn.prepare("SELECT id,canonical_path,repo_url FROM workspace LIMIT 0")
-            .map_err(|_| fail(ErrorKind::Corrupt))?;
-        conn.prepare("SELECT id,arguments FROM launch LIMIT 0")
             .map_err(|_| fail(ErrorKind::Corrupt))?;
         Ok(Self {
             conn,
@@ -211,7 +204,7 @@ fn validate_sidecars(root: &Dir, exists: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,w.canonical_path,l.arguments FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 LEFT JOIN launch l ON l.id=r.id WHERE (w.id=current.id OR w.repo_url=current.repo_url)";
+const SELECT: &str = "SELECT r.id,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,w.canonical_path FROM invocation r JOIN workspace w ON w.id=r.workspace_id JOIN workspace current ON current.canonical_path=?1 WHERE (w.id=current.id OR w.repo_url=current.repo_url)";
 /// Number of recent records returned by [`list`], before any pinned records.
 pub const LIST_LIMIT: usize = 100;
 fn row_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRecord> {
@@ -233,19 +226,7 @@ fn row_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRecord> {
         started_at: time(row, 3)?,
         finished_at: time(row, 4)?,
         exit_code: row.get(5)?,
-        arguments: row.get(7)?,
     })
-}
-
-/// Record the user-supplied flags for an invocation launched by Zelith.
-pub fn record_launch(data: &Path, invocation_id: &str, arguments: &str) -> Result<(), StoreError> {
-    let invocation_id = id(invocation_id)?;
-    let store = Store::open(data)?;
-    store.conn.execute(
-        "INSERT OR IGNORE INTO launch(id,arguments) VALUES(?1,?2)",
-        params![invocation_id, arguments],
-    )?;
-    Ok(())
 }
 pub fn read_record(
     data: &Path,
@@ -473,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_is_three_tables_and_old_schema_is_refused_without_modification() {
+    fn schema_is_two_tables_and_old_schema_is_refused_without_modification() {
         let f = Fixture::new();
         {
             let store = Store::open(&f.data).unwrap();
@@ -485,12 +466,12 @@ mod tests {
                 .unwrap()
                 .collect::<Result<_, _>>()
                 .unwrap();
-            assert_eq!(tables, ["invocation", "launch", "workspace"]);
+            assert_eq!(tables, ["invocation", "workspace"]);
             store
                 .conn
                 .pragma_update(None, "journal_mode", "DELETE")
                 .unwrap();
-            store.conn.pragma_update(None, "user_version", 4).unwrap();
+            store.conn.pragma_update(None, "user_version", 2).unwrap();
         }
         let path = f.data.join("zelith.db");
         let bytes = fs::read(&path).unwrap();
@@ -510,7 +491,7 @@ mod tests {
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);
         fs::remove_file(f.data.join("zelith.db")).unwrap();
         let store = Store::open(&f.data).unwrap();
-        store.conn.pragma_update(None, "user_version", 6).unwrap();
+        store.conn.pragma_update(None, "user_version", 4).unwrap();
         drop(store);
         assert_eq!(
             Store::open(&f.data).err().unwrap().kind,
@@ -605,7 +586,6 @@ mod tests {
                 workspace: ws.to_string_lossy().into_owned(),
                 cmd: "build".into(),
                 pattern: "//:app".into(),
-                arguments: String::new(),
                 started_at: 1,
                 process_exit_code: Some(9),
                 output: "tail".into(),
@@ -850,24 +830,6 @@ mod tests {
         store.conn.execute_batch("DROP TABLE workspace").unwrap();
         drop(store);
         assert_eq!(Store::open(&f.data).err().unwrap().kind, ErrorKind::Corrupt);
-    }
-
-    #[test]
-    fn launch_arguments_only_appear_for_zelith_recorded_invocations() {
-        let f = Fixture::new();
-        record_launch(&f.data, &f.stream.invocation_id, "--define=qa_mode=enabled").unwrap();
-        f.complete();
-        let trusted = read_record(&f.data, &f.ws, &f.stream.invocation_id).unwrap();
-        assert_eq!(
-            trusted.arguments.as_deref(),
-            Some("--define=qa_mode=enabled")
-        );
-
-        let forged = Fixture::new();
-        forged.complete();
-        let untrusted =
-            read_record(&forged.data, &forged.ws, &forged.stream.invocation_id).unwrap();
-        assert_eq!(untrusted.arguments, None);
     }
 
     fn read_history_repeatedly(f: &Fixture) {

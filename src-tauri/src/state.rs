@@ -82,7 +82,6 @@ pub struct ProcessDiagnostic {
     pub workspace: String,
     pub cmd: String,
     pub pattern: String,
-    pub arguments: String,
     /// Milliseconds since the Unix epoch, the store's timestamp convention.
     pub started_at: i64,
     /// The owned process's own exit; `None` when it was never confirmed. This
