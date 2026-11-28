@@ -355,9 +355,6 @@
 }
 
 .compare-by-id {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: 12px;
   color: var(--muted-foreground);
 }
@@ -366,9 +363,8 @@
   cursor: pointer;
 }
 
-.compare-by-id[open] {
-  display: inline-flex;
-  flex-wrap: wrap;
+.compare-by-id .compare-form {
+  margin-top: 6px;
 }
 
 .compare-table {
@@ -395,11 +391,12 @@
 }
 
 .compare-side-head {
-  width: 33%;
+  width: 32%;
 }
 
 .compare-delta-head {
-  width: 16%;
+  width: 18%;
+  text-align: right;
 }
 
 .compare-item {
@@ -408,7 +405,7 @@
 
 .compare-delta-cell {
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  text-align: right;
 }
 
 .compare-delta {

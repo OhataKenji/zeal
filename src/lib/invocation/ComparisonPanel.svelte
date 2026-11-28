@@ -110,8 +110,8 @@
 {:else}
   <div class="compare-scroll">
     <div class="compare-toolbar">
-      <label class="compare-toolbar-label" for="compare-baseline-select">Baseline</label>
       {#if hasRecent}
+        <label class="compare-toolbar-label" for="compare-baseline-select">Baseline</label>
         <select
           id="compare-baseline-select"
           class="input compare-select"

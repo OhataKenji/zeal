@@ -134,6 +134,13 @@ function row(
 }
 
 const formatDate = (value: number) => new Date(value).toLocaleString();
+const formatShortDate = (value: number) =>
+  new Date(value).toLocaleString(undefined, {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 const formatDuration = (value: number) => `${(value / 1000).toFixed(3)}s`;
 
 function formatSignedInt(value: number): string {
@@ -205,10 +212,34 @@ function durationRow(
   const curMs = current ? duration(current.record) : undefined;
   if (baseMs === undefined || curMs === undefined) return base;
   const deltaMs = curMs - baseMs;
+  const comparableOutcome =
+    baseline?.record.exitCode === current?.record.exitCode && current?.record.exitCode === 0;
   return {
     ...base,
-    delta: { text: formatDurationDelta(deltaMs), tone: deltaTone(deltaMs, false) },
+    delta: {
+      text: formatDurationDelta(deltaMs),
+      tone: comparableOutcome ? deltaTone(deltaMs, false) : "same",
+    },
   };
+}
+
+function exitCodeRow(
+  baseline: ComparisonInvocation | null,
+  current: ComparisonInvocation | null,
+): ComparisonRow {
+  const base = row("Exit code", (invocation) => invocation.record.exitCode, baseline, current, {
+    inlineDiff: false,
+  });
+  const baseCode = baseline?.record.exitCode;
+  const curCode = current?.record.exitCode;
+  if (baseCode === undefined || curCode === undefined || baseCode === curCode) return base;
+  if (baseCode === 0 && curCode !== 0) {
+    return { ...base, delta: { text: "Failed", tone: "worse" } };
+  }
+  if (baseCode !== 0 && curCode === 0) {
+    return { ...base, delta: { text: "Fixed", tone: "better" } };
+  }
+  return base;
 }
 
 function spawnCacheRow(
@@ -280,7 +311,7 @@ export function previousSuccessfulInvocation(
   return pickLatest(sameWorkspace.length > 0 ? sameWorkspace : matches);
 }
 
-/** Splits settled history invocations into same-target and other candidates for the baseline picker. */
+/** Splits settled history invocations into same-target (previous successful first) and other candidates. */
 export function recentComparableInvocations(
   current: InvocationRecord,
   history: readonly InvocationRecord[],
@@ -292,6 +323,14 @@ export function recentComparableInvocations(
   for (const entry of history) {
     if (entry.id === current.id || running.has(entry.id)) continue;
     (sameTargetKey(current, entry) ? sameTarget : other).push(entry);
+  }
+  const prev = previousSuccessfulInvocation(current, history, runningIds);
+  if (prev) {
+    const idx = sameTarget.findIndex((entry) => entry.id === prev.id);
+    if (idx > 0) {
+      sameTarget.splice(idx, 1);
+      sameTarget.unshift(prev);
+    }
   }
   return { sameTarget, other };
 }
@@ -308,7 +347,7 @@ export function formatInvocationOption(
   const parts = [head];
   const ms = duration(record);
   if (ms !== undefined) parts.push(formatDuration(ms));
-  if (record.startedAt !== undefined) parts.push(formatDate(record.startedAt));
+  if (record.startedAt !== undefined) parts.push(formatShortDate(record.startedAt));
   return parts.join(" · ");
 }
 
@@ -320,9 +359,7 @@ export function comparisonRows(
   return [
     durationRow(baseline, current),
     spawnCacheRow(baseline, current),
-    row("Exit code", (invocation) => invocation.record.exitCode, baseline, current, {
-      inlineDiff: false,
-    }),
+    exitCodeRow(baseline, current),
     row("Command", (invocation) => invocation.record.cmd, baseline, current),
     row("Pattern", (invocation) => invocation.record.pattern, baseline, current),
     row("Workspace", (invocation) => invocation.record.workspace, baseline, current),

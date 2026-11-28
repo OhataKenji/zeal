@@ -159,11 +159,11 @@ test("option arrays preserve order, duplicates, and empty vs absent distinction"
   ]);
 });
 
-test("duration row reports current - baseline delta and keeps cells plain", () => {
+test("duration row reports current - baseline delta and keeps early-fail neutral", () => {
   const slower = row(
     comparisonRows(
-      invocation({ id: "base", startedAt: 1000, finishedAt: 3500 }),
-      invocation({ id: "cur", startedAt: 1000, finishedAt: 6000 }),
+      invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 3500 }),
+      invocation({ id: "cur", exitCode: 0, startedAt: 1000, finishedAt: 6000 }),
     ),
     "Duration",
   );
@@ -175,17 +175,31 @@ test("duration row reports current - baseline delta and keeps cells plain", () =
 
   const faster = row(
     comparisonRows(
-      invocation({ id: "base", startedAt: 1000, finishedAt: 3500 }),
-      invocation({ id: "cur", startedAt: 1000, finishedAt: 2000 }),
+      invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 3500 }),
+      invocation({ id: "cur", exitCode: 0, startedAt: 1000, finishedAt: 2000 }),
     ),
     "Duration",
   );
   assert.deepEqual(faster.delta, { text: "-1.500s", tone: "better" });
 
+  // Early-failing build is faster only because it crashed; keep duration neutral and mark Exit code Failed.
+  const earlyFailRows = comparisonRows(
+    invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 16000 }),
+    invocation({ id: "cur", exitCode: 1, startedAt: 1000, finishedAt: 1500 }),
+  );
+  assert.deepEqual(row(earlyFailRows, "Duration").delta, { text: "-14.500s", tone: "same" });
+  assert.deepEqual(row(earlyFailRows, "Exit code").delta, { text: "Failed", tone: "worse" });
+
+  const fixedRows = comparisonRows(
+    invocation({ id: "base", exitCode: 1, startedAt: 1000, finishedAt: 2000 }),
+    invocation({ id: "cur", exitCode: 0, startedAt: 1000, finishedAt: 5000 }),
+  );
+  assert.deepEqual(row(fixedRows, "Exit code").delta, { text: "Fixed", tone: "better" });
+
   const same = row(
     comparisonRows(
-      invocation({ id: "base", startedAt: 5000, finishedAt: 6000 }),
-      invocation({ id: "cur", startedAt: 1000, finishedAt: 2000 }),
+      invocation({ id: "base", exitCode: 0, startedAt: 5000, finishedAt: 6000 }),
+      invocation({ id: "cur", exitCode: 0, startedAt: 1000, finishedAt: 2000 }),
     ),
     "Duration",
   );
@@ -388,18 +402,24 @@ test("previousSuccessfulInvocation normalizes positive pattern order, preserves 
   );
 });
 
-test("recentComparableInvocations partitions same-target and other settled records", () => {
-  const current: InvocationRecord = { id: "cur", cmd: "build", pattern: "//b //a" };
+test("recentComparableInvocations partitions same-target (previous successful first) and other settled records", () => {
+  const current: InvocationRecord = {
+    id: "cur",
+    cmd: "build",
+    pattern: "//b //a",
+    startedAt: 5000,
+  };
   const history: InvocationRecord[] = [
-    { id: "run-1", cmd: "build", pattern: "//a //b" },
+    { id: "run-1", cmd: "build", pattern: "//a //b", startedAt: 5100 },
     current,
-    { id: "same-1", cmd: "build", pattern: "//a //b" },
-    { id: "other-1", cmd: "test", pattern: "//a //b" },
+    { id: "same-fail", cmd: "build", pattern: "//a //b", startedAt: 4500, exitCode: 1 },
+    { id: "same-ok", cmd: "build", pattern: "//a //b", startedAt: 4000, exitCode: 0 },
+    { id: "other-1", cmd: "test", pattern: "//a //b", startedAt: 3000, exitCode: 0 },
   ];
   const grouped = recentComparableInvocations(current, history, ["run-1"]);
   assert.deepEqual(
     grouped.sameTarget.map((r) => r.id),
-    ["same-1"],
+    ["same-ok", "same-fail"],
   );
   assert.deepEqual(
     grouped.other.map((r) => r.id),

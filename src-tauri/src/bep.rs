@@ -437,9 +437,7 @@ fn project(event: BuildEvent, bep: &mut Bep) {
                 })
             })
             .collect();
-        if !counts.is_empty() {
-            bep.runner_counts = Some(counts);
-        }
+        bep.runner_counts = Some(counts);
     }
     let Some(id) = event.id.and_then(|id| id.id) else {
         return;
@@ -1169,5 +1167,16 @@ mod zstd_tests {
                 },
             ])
         );
+
+        let empty_event = BuildEvent {
+            payload: Some(Payload::BuildMetrics(BuildMetrics {
+                action_summary: Some(ActionSummary::default()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut empty_raw = Vec::new();
+        empty_event.encode_length_delimited(&mut empty_raw).unwrap();
+        assert_eq!(parse(empty_raw.as_slice()).runner_counts, Some(vec![]));
     }
 }
