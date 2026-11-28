@@ -1,16 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSvelteHarness } from "./svelte.ts";
-import {
-  defaultQueryDraft,
-  emptyQueryState,
-  makeCall,
-  target,
-  validate,
-  type QueryDraft,
-  type QueryState,
-} from "../src/lib/query.ts";
-import { createIndex } from "../src/lib/search.ts";
+import { makeCall, target, validate } from "../src/lib/query.ts";
 
 test("QueryView blocks Execute only on Bazel availability", async (t) => {
   const { load, render } = await createSvelteHarness(t);
@@ -18,12 +9,7 @@ test("QueryView blocks Execute only on Bazel availability", async (t) => {
 
   function output(bazelAvailable: boolean): string {
     return render(QueryView, {
-      props: {
-        targetIndex: null,
-        bazelAvailable,
-        query: emptyQueryState(),
-        initialDraft: defaultQueryDraft(),
-      },
+      props: { targetIndex: null, workspace: "/workspace", bazelAvailable },
     }).body;
   }
 
@@ -45,90 +31,6 @@ test("QueryView blocks Execute only on Bazel availability", async (t) => {
     for (const kind of ["query", "cquery", "aquery"]) {
       assert.match(html, new RegExp(`role="tab"[^>]*>${kind}</button>`));
     }
-  });
-});
-
-test("QueryView restores draft and links known workspace targets in query and cquery results", async (t) => {
-  const { load, render } = await createSvelteHarness(t);
-  const { default: QueryView } = await load("/src/lib/QueryView.svelte");
-  const targetIndex = createIndex([
-    { label: "//app:server", ruleClass: "cc_binary", pkg: "app", name: "server", location: null },
-    { label: "//lib:util", ruleClass: "cc_library", pkg: "lib", name: "util", location: null },
-  ]);
-
-  await t.test("query raw output links known targets and keeps external labels plain", () => {
-    const draft: QueryDraft = {
-      ...defaultQueryDraft(),
-      mode: "code",
-      draft: "rdeps(//..., //lib:util)",
-    };
-    const query: QueryState = {
-      running: false,
-      error: null,
-      result: {
-        exitCode: 0,
-        stdout: "//app:server\n@@//lib:util\n@rules_go//go:def.bzl\n",
-        stdoutTruncated: false,
-        truncated: false,
-        stderrTail: "",
-        actions: null,
-      },
-    };
-    const html = render(QueryView, {
-      props: {
-        targetIndex,
-        bazelAvailable: true,
-        query,
-        initialDraft: draft,
-        onselecttarget: () => {},
-      },
-    }).body.replace(/<!--[\s\S]*?-->/g, "");
-    assert.match(html, /rdeps\(\/\/\.\.\., \/\/lib:util\)/);
-    assert.match(
-      html,
-      /<button[^>]*class="table-link mono query-raw-link"[^>]*>\/\/app:server<\/button>/,
-    );
-    assert.match(
-      html,
-      /<button[^>]*class="table-link mono query-raw-link"[^>]*>@@\/\/lib:util<\/button>/,
-    );
-    assert.doesNotMatch(html, /<button[^>]*>@rules_go\/\/go:def\.bzl<\/button>/);
-    assert.ok(html.includes("@rules_go//go:def.bzl"));
-  });
-
-  await t.test("cquery table links known targets and falls back to code for unknown ones", () => {
-    const draft: QueryDraft = {
-      ...defaultQueryDraft(),
-      kind: "cquery",
-      mode: "code",
-      draft: "deps(//app:server)",
-      buildFlags: "--config=opt",
-      resultView: "table",
-    };
-    const query: QueryState = {
-      running: false,
-      error: null,
-      result: {
-        exitCode: 0,
-        stdout: "//app:server (abc123)\n@ext//pkg:lib (def456)\n",
-        stdoutTruncated: false,
-        truncated: false,
-        stderrTail: "",
-        actions: null,
-      },
-    };
-    const html = render(QueryView, {
-      props: {
-        targetIndex,
-        bazelAvailable: true,
-        query,
-        initialDraft: draft,
-        onselecttarget: () => {},
-      },
-    }).body.replace(/<!--[\s\S]*?-->/g, "");
-    assert.match(html, /<button[^>]*class="table-link mono"[^>]*>\/\/app:server<\/button>/);
-    assert.ok(html.includes("<code>@ext//pkg:lib</code>"));
-    assert.ok(html.includes("--config=opt"));
   });
 });
 

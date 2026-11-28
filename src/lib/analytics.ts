@@ -36,12 +36,9 @@ export interface DailyAnalytics {
   }>;
   workspaces: Array<{ id: string; path: string }>;
 }
-export type AnalyticsBreakdown = "result" | "workspace";
-
 /** Query state shown by the analytics view. */
 export interface AnalyticsView {
   filter: AnalyticsFilter;
-  breakdown: AnalyticsBreakdown;
   data: DailyAnalytics | null;
   loading: boolean;
   error: string | null;
@@ -57,7 +54,6 @@ export function emptyAnalytics(): AnalyticsView {
       pattern: null,
       workspaceId: null,
     },
-    breakdown: "result",
     data: null,
     loading: false,
     error: null,
@@ -86,7 +82,7 @@ export function createAnalytics(
     if (owner === "disposed") return;
     if (analyticsDateError(filter)) {
       owner = null;
-      view = { ...view, filter: { ...filter }, data: null, loading: false, error: null };
+      view = { filter: { ...filter }, data: null, loading: false, error: null };
       changed(view);
       return;
     }
@@ -94,7 +90,7 @@ export function createAnalytics(
     owner = request;
     // Keep the previous charts visible while the reload runs; an error
     // still drops stale data so it never sits next to an error banner.
-    view = { ...view, filter: { ...filter }, data: view.data, loading: true, error: null };
+    view = { filter: { ...filter }, data: view.data, loading: true, error: null };
     changed(view);
     try {
       const data = await transport.invoke<DailyAnalytics>(COMMANDS.getAnalytics, {
@@ -102,7 +98,7 @@ export function createAnalytics(
         filter: view.filter,
       });
       if (request !== owner) return;
-      view = { ...view, filter: data.filter, data, loading: false, error: null };
+      view = { filter: data.filter, data, loading: false, error: null };
     } catch (error) {
       if (request !== owner) return;
       view = { ...view, data: null, loading: false, error: String(error) };
@@ -110,17 +106,8 @@ export function createAnalytics(
     owner = null;
     changed(view);
   }
-  function setBreakdown(breakdown: AnalyticsBreakdown) {
-    if (owner === "disposed" || view.breakdown === breakdown) return;
-    view = { ...view, breakdown };
-    changed(view);
-  }
   return {
     load,
-    setBreakdown,
-    get state() {
-      return view;
-    },
     dispose: () => {
       owner = "disposed";
     },

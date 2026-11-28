@@ -306,22 +306,3 @@ test("workspace selection is sent, retained on refresh, and candidates survive r
   next.calls[0].resolve({ ...RESULT, workspaces });
   await fresh;
 });
-
-test("breakdown persists across reloads, validation errors, and ignores disposed updates", async () => {
-  const h = harness();
-  assert.equal(h.view.breakdown, "result");
-  h.model.setBreakdown("workspace");
-  assert.equal(h.view.breakdown, "workspace");
-
-  const loaded = h.model.load();
-  h.calls[0].resolve(RESULT);
-  await loaded;
-  assert.equal(h.view.breakdown, "workspace");
-
-  await h.model.load({ ...RESULT.filter, start: "2026-04-02", end: "2026-04-01" });
-  assert.equal(h.view.breakdown, "workspace");
-
-  h.model.dispose();
-  h.model.setBreakdown("result");
-  assert.equal(h.view.breakdown, "workspace");
-});

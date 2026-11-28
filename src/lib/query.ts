@@ -428,7 +428,7 @@ export function queryInputs(
   };
 }
 
-export type QueryInputs = ReturnType<typeof queryInputs>;
+type QueryInputs = ReturnType<typeof queryInputs>;
 export type QueryRequest = QueryInputs & { workspace: string };
 
 interface Token {
@@ -965,36 +965,6 @@ export interface Transport {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
-/** Workspace-scoped query editor state preserved across page navigation. */
-export interface QueryDraft {
-  kind: QueryKind;
-  root: Expr;
-  mode: "builder" | "code";
-  draft: string;
-  codeError: string | null;
-  noImplicit: boolean;
-  noTool: boolean;
-  buildFlags: string;
-  transitions: boolean;
-  resultView: ResultView;
-}
-
-/** Default editor state for a freshly opened workspace. */
-export function defaultQueryDraft(): QueryDraft {
-  return {
-    kind: "query",
-    root: parseQuery(EXAMPLES.query.Dependencies[0].expr, "query"),
-    mode: "builder",
-    draft: "",
-    codeError: null,
-    noImplicit: DEFAULT_FLAGS.noImplicit,
-    noTool: DEFAULT_FLAGS.noTool,
-    buildFlags: "",
-    transitions: false,
-    resultView: "raw",
-  };
-}
-
 /**
  * Execution state pushed to the view on every change: whether a run is in
  * flight, the last error, and the current result. The controller owns the
@@ -1024,7 +994,6 @@ type QueryExecution =
  */
 export function createQuery(workspace: string, t: Transport, changed: (s: QueryState) => void) {
   let state: QueryExecution = { phase: "idle" };
-  let snapshot: QueryState = emptyQueryState();
   let selected: QueryInputs | null = null;
   function inFlight() {
     return state.phase === "running" || state.phase === "draining";
@@ -1032,12 +1001,11 @@ export function createQuery(workspace: string, t: Transport, changed: (s: QueryS
   function update(next: QueryExecution) {
     if (state.phase === "disposed") return;
     state = next;
-    snapshot = {
+    changed({
       running: inFlight(),
       error: next.phase === "failed" ? next.error : null,
       result: next.phase === "ready" ? next.result : null,
-    };
-    changed(snapshot);
+    });
   }
   function select(args: QueryInputs) {
     if (state.phase === "disposed") return;
@@ -1066,12 +1034,5 @@ export function createQuery(workspace: string, t: Transport, changed: (s: QueryS
   function dispose() {
     state = { phase: "disposed" };
   }
-  return {
-    select,
-    run,
-    dispose,
-    get state() {
-      return snapshot;
-    },
-  };
+  return { select, run, dispose };
 }

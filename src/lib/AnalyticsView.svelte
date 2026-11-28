@@ -1,30 +1,49 @@
 <script lang="ts">
   import Notice from "./Notice.svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import {
     analyticsDateError,
+    createAnalytics,
+    emptyAnalytics,
     fmtMs,
     PLOT,
     segments,
-    type AnalyticsBreakdown,
     type AnalyticsFilter,
-    type AnalyticsView as AnalyticsState,
   } from "./analytics";
+  import type { InvocationRecord } from "./types";
 
   const OUTCOMES = ["ok", "failed", "interrupted", "unknown"] satisfies readonly NonNullable<
     AnalyticsFilter["outcome"]
   >[];
 
-  let {
-    view,
-    onload,
-    onbreakdown,
-  }: {
-    view: AnalyticsState;
-    onload: (filter?: AnalyticsFilter) => void;
-    onbreakdown: (breakdown: AnalyticsBreakdown) => void;
+  let { workspace, invocations, active = true }: {
+    workspace: string;
+    invocations: InvocationRecord[];
+    active?: boolean;
   } = $props();
+  let view = $state.raw(emptyAnalytics());
+  let controller = $state<ReturnType<typeof createAnalytics> | null>(null);
   let chartWidth = $state(0);
-  const breakdown = $derived(view.breakdown);
+  let breakdown = $state<"result" | "workspace">("result");
+  let dirty = $state(true);
+  $effect(() => {
+    // A workspace change discards both the filters and pending responses.
+    void workspace;
+    dirty = true;
+    const next = createAnalytics(workspace, { invoke }, (value) => (view = value));
+    controller = next;
+    return next.dispose;
+  });
+  $effect(() => {
+    void invocations;
+    dirty = true;
+  });
+  $effect(() => {
+    if (active && dirty && controller) {
+      dirty = false;
+      void controller.load();
+    }
+  });
   const dateError = $derived(analyticsDateError(view.filter));
   const data = $derived(view.data);
   const max = $derived(Math.max(1, ...(data?.days.map((d) => d.count) ?? [])));
@@ -81,7 +100,7 @@
     );
   });
   function filter(patch: Partial<AnalyticsFilter>) {
-    onload({ ...view.filter, ...patch });
+    void controller?.load({ ...view.filter, ...patch });
   }
 </script>
 
@@ -170,7 +189,7 @@
           filter({ pattern: e.currentTarget.value || null })}
       /></label
     >
-    <button type="button" class="button" onclick={() => onload()}
+    <button type="button" class="button" onclick={() => controller?.load()}
       >Refresh</button
     >
   </div>
@@ -183,10 +202,7 @@
       <h2>Invocations</h2>
       <p class="dim">{data.filter.start} to {data.filter.end} · Invocations without a recorded start time are excluded.</p>
       <label class="breakdown"
-        >Breakdown <select
-          value={breakdown}
-          aria-label="Breakdown"
-          onchange={(e) => onbreakdown(e.currentTarget.value as AnalyticsBreakdown)}
+        >Breakdown <select bind:value={breakdown} aria-label="Breakdown"
           ><option value="result">Result</option><option value="workspace">Workspace</option></select
         ></label
       >
