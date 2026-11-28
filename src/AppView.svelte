@@ -234,7 +234,14 @@
   function openHistoryDay(day: string) {
     historyDay = day;
     historyFilter = "all";
-    session.showPage("history");
+    const slowest = view.invocationRows
+      .filter((row) => localDay(row.record.startedAt) === day)
+      .toSorted((a, b) => rowDuration(b) - rowDuration(a))[0];
+    if (slowest) {
+      session.selectInvocation(slowest.record.id);
+    } else {
+      session.showPage("history");
+    }
   }
 
   function selectPage(page: Page) {
@@ -395,7 +402,7 @@
             {#if historyDay}
               <button
                 type="button"
-                class="button button-ghost"
+                class="day-chip"
                 title="Clear day filter"
                 aria-label={`Clear day filter ${historyDay}`}
                 onclick={() => (historyDay = null)}>{historyDay} ×</button
@@ -427,7 +434,11 @@
               {#each filteredInvocations as row (row.record.id)}
                 {@render invocationRow(row)}
               {:else}
-                <li class="dim empty-row">No invocations.</li>
+                <li class="dim empty-row">
+                  {historyDay
+                    ? `No invocations for ${historyDay} in recent history.`
+                    : "No invocations."}
+                </li>
               {/each}
             </ul>
             {#if view.invocationsError}
@@ -616,3 +627,22 @@
     {/if}
   {/if}
 </div>
+
+<style>
+  .day-chip {
+    height: 20px;
+    padding: 0 6px;
+    font: 500 11px var(--mono);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--primary);
+    background: var(--info-muted);
+    border: 0;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+
+  .day-chip:hover {
+    filter: brightness(1.1);
+  }
+</style>

@@ -178,6 +178,7 @@
 <section class="analytics">
   <div class="view-head">
     <h1 class="view-title">Analytics</h1>
+    <p class="hint">Click any day to inspect its slowest invocations in History.</p>
   </div>
   <div class="filters">
     <div class="date-filters">
@@ -504,7 +505,7 @@
             </thead>
             <tbody>
               {#each data.patterns as row (row.pattern)}
-                <tr>
+                <tr class:active={view.filter.pattern === row.pattern}>
                   <td
                     ><button
                       type="button"
@@ -545,6 +546,18 @@
     background: transparent;
   }
 
+  .analytics > section h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .hint {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+
   .filters {
     display: flex;
     gap: 10px;
@@ -574,10 +587,11 @@
   .filters input,
   .filters select,
   .breakdown select {
+    height: 32px;
     background: var(--background);
     color: var(--foreground);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 4px 8px;
   }
 
@@ -625,57 +639,61 @@
 
   .line-p50 {
     fill: none;
-    stroke: var(--chart-bar, #0891b2);
+    stroke: var(--success);
     stroke-width: 2;
   }
 
   .line-p95 {
     fill: none;
-    stroke: var(--destructive);
-    stroke-width: 2;
+    stroke: var(--warning);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
   }
 
   .dot-p50 {
-    fill: var(--chart-bar, #0891b2);
+    fill: var(--success);
   }
 
   .dot-p95 {
-    fill: var(--destructive);
+    fill: var(--warning);
   }
 
   .legend {
     display: flex;
-    gap: 14px;
     flex-wrap: wrap;
-    font-size: 12px;
-    margin: 4px 0 0;
+    gap: 6px 14px;
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--muted-foreground);
   }
 
   .legend span {
     display: inline-flex;
+    gap: 4px;
     align-items: center;
-    gap: 6px;
+    overflow-wrap: anywhere;
   }
 
   .sw {
     display: inline-block;
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
     border-radius: 2px;
   }
 
   .sw-p50 {
-    background: var(--chart-bar, #0891b2);
+    background: var(--success);
   }
 
   .sw-p95 {
-    background: var(--destructive);
+    background: var(--warning);
   }
 
   .patterns {
     width: 100%;
+    min-width: 560px;
     border-collapse: collapse;
-    margin-top: 8px;
+    margin-top: 10px;
   }
 
   .patterns th,
@@ -683,6 +701,16 @@
     padding: 4px 8px;
     font-size: 12px;
     text-align: right;
+  }
+
+  .patterns thead th {
+    color: var(--muted-foreground);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .patterns tr.active td {
+    background: var(--accent);
   }
 
   .patterns td {
@@ -699,9 +727,13 @@
     border: none;
     color: inherit;
     font: inherit;
+    font-family: var(--mono);
     padding: 0;
     cursor: pointer;
     text-align: left;
+  }
+
+  .target-link:hover {
     text-decoration: underline;
   }
 
