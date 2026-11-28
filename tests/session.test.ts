@@ -2845,11 +2845,36 @@ test("Analytics filters, breakdown, and data survive page switches and refresh w
   h.session.showPage("analytics");
   await settle();
   assert.equal(requestCount(h, "get_analytics"), 3);
+  // Untouched default dates stay null on refresh so a new calendar day is not clipped.
   assert.deepEqual(lastPendingRequest(h, "get_analytics").args, {
     workspace: WS,
-    filter: filtered,
+    filter: { ...filtered, start: null, end: null },
   });
   assert.equal(h.view.analytics.breakdown, "workspace");
+
+  // Explicit custom dates are preserved across stale refreshes.
+  const customDates = { ...filtered, start: "2026-03-10", end: "2026-03-20" };
+  h.session.loadAnalytics(customDates);
+  lastPendingRequest(h, "get_analytics").reply.resolve({
+    ...ANALYTICS_RESULT,
+    filter: customDates,
+  });
+  await settle();
+  h.session.showPage("history");
+  h.emit("invocations-changed", undefined);
+  await settle();
+  lastPendingRequest(h, "list_invocations").reply.resolve({
+    saved: { Ok: [{ ...RECORD, id: "inv-3", startedAt: 3_000 }, nextRecord, RECORD] },
+    diagnostics: [],
+  });
+  await settle();
+  h.session.showPage("analytics");
+  await settle();
+  assert.equal(requestCount(h, "get_analytics"), 5);
+  assert.deepEqual(lastPendingRequest(h, "get_analytics").args, {
+    workspace: WS,
+    filter: customDates,
+  });
 
   // Switching workspaces discards analytics state and triggers a fresh load on the analytics page.
   void h.session.openWorkspace(OTHER, { include: ["//..."] });
@@ -2868,7 +2893,7 @@ test("Analytics filters, breakdown, and data survive page switches and refresh w
     diagnostics: [],
   });
   await settle();
-  assert.equal(requestCount(h, "get_analytics"), 4);
+  assert.equal(requestCount(h, "get_analytics"), 6);
 });
 
 test("Invocation active tab survives page navigation and resets on workspace switch", async () => {

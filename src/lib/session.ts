@@ -90,6 +90,8 @@ interface Workspace {
   analytics: ReturnType<typeof createAnalytics>;
   /** Set when analytics has not loaded yet or history changed while away. */
   analyticsStale: boolean;
+  /** True only after the user explicitly edits start or end dates. */
+  analyticsCustomDates: boolean;
   history: InvocationRecord[];
   historyLoaded: boolean;
   historyError: string | null;
@@ -595,9 +597,14 @@ export function createSession(
     state.selectedInvocationId = invocationRows(state)[0]?.record.id ?? null;
   }
 
+  function analyticsRefreshFilter(ws: Workspace): AnalyticsFilter {
+    const filter = ws.analytics.state.filter;
+    return ws.analyticsCustomDates ? filter : { ...filter, start: null, end: null };
+  }
+
   function syncAnalyticsAfterHistory(ws: Workspace, historyChanged: boolean) {
     if (!historyChanged || ws.analyticsStale) return;
-    if (state.page === "analytics") void ws.analytics.load();
+    if (state.page === "analytics") void ws.analytics.load(analyticsRefreshFilter(ws));
     else ws.analyticsStale = true;
   }
 
@@ -797,6 +804,7 @@ export function createSession(
       queryDraft: defaultQueryDraft(),
       analytics: createAnalytics(path, transport, publish),
       analyticsStale: true,
+      analyticsCustomDates: false,
       history: [],
       historyLoaded: false,
       historyError: null,
@@ -858,14 +866,24 @@ export function createSession(
     const ws = state.workspace;
     if (disposed || !ws || !ws.analyticsStale) return;
     ws.analyticsStale = false;
-    void ws.analytics.load();
+    void ws.analytics.load(analyticsRefreshFilter(ws));
   }
 
   function loadAnalytics(filter?: AnalyticsFilter) {
     const ws = state.workspace;
     if (disposed || !ws) return;
     ws.analyticsStale = false;
-    void ws.analytics.load(filter);
+    if (filter !== undefined) {
+      const current = ws.analytics.state.filter;
+      if (filter.start !== current.start || filter.end !== current.end) {
+        ws.analyticsCustomDates = filter.start !== null || filter.end !== null;
+      }
+      void ws.analytics.load(
+        ws.analyticsCustomDates ? filter : { ...filter, start: null, end: null },
+      );
+      return;
+    }
+    void ws.analytics.load(analyticsRefreshFilter(ws));
   }
 
   function setAnalyticsBreakdown(breakdown: AnalyticsBreakdown) {
