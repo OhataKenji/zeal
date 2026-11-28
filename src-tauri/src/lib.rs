@@ -8,6 +8,7 @@ mod detail;
 mod ingest;
 mod label;
 mod modules;
+mod perfetto;
 mod profile;
 mod protocol;
 mod query;
@@ -30,10 +31,10 @@ pub use store::{
     list as list_invocation_records, read_record as read_invocation_record,
 };
 
-use detail::{InvocationDetail, Section};
-use profile::Profile;
+use detail::InvocationDetail;
 use query::QueryOutput;
 use state::{AppStateDto, Core, OpenWorkspaceResult, RegisteredWorkspace};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -482,25 +483,44 @@ async fn get_invocation(
     .map_err(|_| "invocation detail worker failed".to_string())?
 }
 
-/// Return the saved timing profile and its availability status.
+/// Timing-tab entry point: validate the saved artifact, confirm the bundled
+/// viewer is installed, then issue a one-shot grant and return the viewer
+/// URL carrying only its random token — never the workspace or invocation id.
 #[tauri::command]
 #[tracing::instrument(
     target = "zelith::operations",
-    name = "invocation.profile.request",
+    name = "invocation.timing.request",
     skip_all
 )]
-async fn get_invocation_profile(
+async fn prepare_invocation_timing(
     app: AppHandle,
     core: State<'_, Arc<Core>>,
+    pending: State<'_, perfetto::PendingTrace>,
     workspace: String,
     id: String,
-) -> Result<Section<Profile>, String> {
+) -> Result<String, String> {
     let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        detail::invocation_profile(&data, &ws, &id).map_err(|e| e.to_string())
+    perfetto::asset_root(&app)?;
+    // Reserve the grant before the first await so a newer selection can
+    // supersede this one while the artifact is still opening.
+    let token = pending.begin();
+    let file = tauri::async_runtime::spawn_blocking(move || {
+        profile::open(&data, &ws, &id).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => {
+                "No saved timing profile is available for this invocation.".to_string()
+            }
+            _ => e.to_string(),
+        })
     })
     .await
-    .map_err(|_| "profile worker failed".to_string())?
+    .map_err(|_| "profile worker failed".to_string())??;
+    if !pending.finish(token, file) {
+        return Err("Timing selection changed.".into());
+    }
+    Ok(format!(
+        "{}/embed.html#trace/{token}/profile.json.gz",
+        perfetto::VIEWER_ORIGIN
+    ))
 }
 
 /// `~/...` in a typed path expands to the user's home directory.
@@ -572,6 +592,13 @@ fn emit_invocations_changed(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("perfetto", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let main_webview = context.webview_label() == "main";
+            tauri::async_runtime::spawn(async move {
+                responder.respond(perfetto::handle(&app, main_webview, &request).await);
+            });
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -583,6 +610,7 @@ pub fn run() {
             telemetry::init(app);
             let core = Arc::new(Core::new());
             app.manage(core.clone());
+            app.manage(perfetto::PendingTrace::default());
             let data = app.path().app_data_dir().map_err(|error| error.to_string());
             let receiver_core = core.clone();
             let handle = app.handle().clone();
@@ -618,7 +646,7 @@ pub fn run() {
             list_invocations,
             get_analytics,
             get_invocation,
-            get_invocation_profile
+            prepare_invocation_timing
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

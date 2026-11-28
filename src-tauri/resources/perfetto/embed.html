@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Opening Perfetto</title>
+<script>
+  try {
+    const key = "perfettoSettings";
+    const saved = JSON.parse(localStorage.getItem(key) ?? "{}");
+    localStorage.setItem(
+      key,
+      JSON.stringify({ theme: "dark", timestampFormat: "seconds", ...saved }),
+    );
+  } catch {
+    /* A settings failure must not prevent opening the trace. */
+  }
+  // The grant token travels in the hash so it never reaches server logs;
+  // `./` keeps the resolved trace URL on this origin.
+  const trace = new URL("./" + location.hash.slice(1), location.href);
+  location.replace("./#!/?" + new URLSearchParams({ mode: "embedded", url: trace.href }));
+</script>

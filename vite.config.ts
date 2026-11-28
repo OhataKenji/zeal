@@ -1,9 +1,10 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
+import { perfettoPreview } from "./scripts/vite-perfetto-preview.ts";
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), perfettoPreview()],
   // Pre-bundle lazy Console dependencies so its first open does not reload the app.
   optimizeDeps: {
     include: ["@xterm/addon-fit", "@xterm/xterm"],

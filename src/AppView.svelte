@@ -502,7 +502,6 @@
               <InvocationView
                 {view}
                 reload={session.loadDetail}
-                reloadProfile={session.loadProfile}
                 onstop={session.stop}
                 onrerun={(cmd, pattern) => session.start(cmd, pattern)}
                 onselecttarget={selectTarget}

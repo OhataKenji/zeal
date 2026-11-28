@@ -211,6 +211,11 @@
   height: clamp(180px, 32vh, 320px);
 }
 
+.invocation-timing .perfetto-view {
+  flex: 1;
+  min-height: 0;
+}
+
 .panel-empty {
   color: var(--muted-foreground);
   font-size: 13px;
