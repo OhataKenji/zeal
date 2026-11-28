@@ -304,6 +304,11 @@
   text-decoration: underline;
 }
 
+.table-link:focus-visible {
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
 .scope-form {
   display: flex;
   flex-direction: column;

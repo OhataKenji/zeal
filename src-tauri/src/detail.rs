@@ -1,13 +1,11 @@
 //! Read-side views of a saved invocation: the record plus each observation it
-//! left behind (log, build results, timing profile). Every observation is
-//! wrapped
+//! left behind (log, build results). Every observation is wrapped
 //! in [`Section`] so a missing or unreadable artifact never hides the record
 //! or another observation.
 //!
 //! The BES receiver writes these artifacts; this module only reads.
 
 use crate::bep::{self, Bep};
-use crate::profile::{self, Profile};
 use crate::store::{self, InvocationRecord};
 use serde::Serialize;
 use std::fs::File;
@@ -116,38 +114,6 @@ fn observation<T>(data: T, incomplete: bool, note: &str) -> Section<T> {
     }
 }
 
-/// Read a saved profile, reporting artifact failures as section statuses.
-/// Optional artifacts are independent of invocation result and origin.
-pub fn invocation_profile(data: &Path, workspace: &Path, id: &str) -> io::Result<Section<Profile>> {
-    store::read_record(data, workspace, id)?;
-    Ok({
-        match store::artifact(data, workspace, id, "profile.json.gz") {
-            Err(e) => read_error(e),
-            Ok(f) => match profile::parse_bounded(f, profile::IPC_LIMIT) {
-                Ok(data) => Section::Ok { data },
-                Err(profile::ProfileError::Incomplete(note)) => Section::Incomplete {
-                    data: Profile {
-                        phases: Vec::new(),
-                        lanes: Vec::new(),
-                    },
-                    note,
-                },
-                Err(profile::ProfileError::Parse(note)) => Section::ParseError { note },
-            },
-        }
-    })
-}
-
-fn read_error<T>(error: io::Error) -> Section<T> {
-    if error.kind() == io::ErrorKind::NotFound {
-        Section::Missing
-    } else {
-        Section::ReadError {
-            note: error.to_string(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,10 +128,6 @@ mod tests {
         assert_eq!(detail.record.exit_code, Some(0));
         assert!(matches!(detail.log, Section::Ok { .. }));
         assert!(matches!(detail.bep, Section::Ok { .. }));
-        assert!(matches!(
-            invocation_profile(&f.data, &f.ws, id).unwrap(),
-            Section::Missing
-        ));
     }
 
     #[test]
@@ -238,24 +200,12 @@ mod tests {
         assert!(matches!(detail.bep, Section::ParseError { .. }));
     }
     #[test]
-    fn malformed_profile_reports_its_own_parse_error() {
-        let f = Fixture::new();
-        f.complete();
-        let id = &f.stream.invocation_id;
-        fs::write(f.dir().join("attempt/1/profile.json.gz"), b"invalid gzip").unwrap();
-        assert!(matches!(
-            invocation_profile(&f.data, &f.ws, id).unwrap(),
-            Section::ParseError { .. }
-        ));
-    }
-    #[test]
-    fn unknown_workspace_fails_detail_and_profile() {
+    fn unknown_workspace_fails_detail() {
         let f = Fixture::new();
         f.complete();
         let id = &f.stream.invocation_id;
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
         assert!(invocation_detail(&f.data, &other, id).is_err());
-        assert!(invocation_profile(&f.data, &other, id).is_err());
     }
 }

@@ -181,7 +181,6 @@ test("ComparisonPanel renders the baseline toolbar and 3-column comparison table
       props: {
         view,
         reload: () => {},
-        reloadProfile: () => {},
         onstop: () => {},
         onconsole: () => {},
       },

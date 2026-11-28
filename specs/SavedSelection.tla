@@ -5,7 +5,7 @@
 \* Only the selected row is stored. "savedConsole" is in history but its
 \* console wins; "live" is not the actual history record, even if non-console.
 \* "saved" includes records with an attached non-console execution.
-Kinds == {"detail", "profile"}
+Kinds == {"detail"}
 Rows == {"missing", "live", "diagnostic", "savedConsole", "saved"}
 LogValues == {"pending", "incomplete", "settled"}
 Empty == [k \in Kinds |-> "none"]

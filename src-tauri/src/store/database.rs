@@ -754,8 +754,6 @@ mod tests {
 
         let detail = crate::detail::invocation_detail(&f.data, &f.ws, &sibling_id).unwrap();
         assert!(matches!(detail.bep, crate::detail::Section::Ok { .. }));
-        let profile = crate::detail::invocation_profile(&f.data, &f.ws, &sibling_id).unwrap();
-        assert!(matches!(profile, crate::detail::Section::Missing));
     }
 
     #[test]
@@ -777,7 +775,6 @@ mod tests {
         );
         assert!(artifact(&f.data, &f.ws, &other_id, "bep.binpb.zst").is_err());
         assert!(crate::detail::invocation_detail(&f.data, &f.ws, &other_id).is_err());
-        assert!(crate::detail::invocation_profile(&f.data, &f.ws, &other_id).is_err());
     }
 
     #[test]

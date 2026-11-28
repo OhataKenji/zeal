@@ -30,27 +30,6 @@ prove that the right row is highlighted or that focus returned to a dialog.
   kind at delivery; a queued palette close after native reopen cannot clear it.
   The `dialog.open` observation is an input. Neither a DOM queue nor per-instance
   identity for two successive run dialogs is modeled.
-- [`TimelineInteraction`](TimelineInteraction.tla) follows
-  [`ProfileView`](../src/lib/ProfileView.svelte) (`pointerDown`, `pointerMove`,
-  `pointerUp`, `cancelDrag`, `moveEvent`). Two pointer IDs compete for one saved
-  drag. Only a primary-button down in the plot requests capture; another such
-  down can replace the drag. A matching move exceeding the threshold latches
-  pan until drag ends; a matching up selects a hit only before that latch,
-  clears the drag, and requests release only if capture still exists. A foreign
-  move/up cannot pan/select/release on its behalf. **Cancel/lost capture is
-  different:** the handler unconditionally clears the saved drag; there is no
-  per-ID cancel guard. `CaptureOnPlot`, `PanOnlyAfterDrag` and `ReleaseOrIgnore`
-  check handler effects, not successful delivery by the browser.
-- Unmodified canvas arrows (no Ctrl/Meta/Alt) clamp the event index in the
-  selected lane, expand a collapsed lane in the implementation, then await
-  `tick()`. `KeyboardSelection` checks the index; `OwnedReveal` checks the
-  later scroll/pan belongs to the **current `(tid,index)`**, including after
-  Escape, another arrow or a pointer selection. Identity is by value: A→B→A
-  need not reject an A reveal. Two lanes with two indices exercise same-index
-  collisions; at most two distinct pending destinations may resume in either
-  order. Identical destinations are coalesced. Availability of the viewport,
-  geometry and need for movement are one input. No fairness, timing or
-  eventual painting is asserted.
 
 ## Inventory by owner
 
@@ -72,7 +51,7 @@ describes what changes and, separately, how much is covered.
 | `InvocationView.svelte`; `InvocationHeader.svelte`; `InvocationStatus.svelte`; `Notice.svelte` | **HistoryRow/SavedSelection/Reader** abstract row eligibility and saved reads. **Unverified:** active All/Targets/Details/Logs/Timing/Compare tab, roving tab focus, scroll-to-top on tab change, diagnostic vs ordinary panel, option/runner disclosures. Header delegates stop/rerun under capability/owner gates; status and notices project props and optional actions, without their own async phases.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `invocation/ComparisonPanel.svelte`; `invocation/TargetsPanel.svelte`                          | **DiagnosticFlow / Interaction** cover comparison request ownership (`idle`/`loading`/`ready`/`failed`/`disposed`), one-shot `AutoCompare` from `idle`, running gates, tab teardown, and late reply suppression. **Unverified:** baseline picker grouping, inline metric delta formatting, both sides' section/active messages, and row display as running IDs change. Comparison rows are derived from eligible details, not independently mutable. Targets panel gates navigable links by availability in the workspace index; no separate selection store.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `invocation/LogPanel.svelte`; `ConsoleView.svelte`                                             | **Unverified:** log viewport height/scrollTop, focus, overscan/spacers and section/empty/loading display. ANSI spans and visible row bounds derive from text and viewport. Console owns terminal/stream references, error, focus, fit-on-resize, visibility refresh, poll timer, text/binary subscriptions and teardown. **ConsoleInput/ConsoleOutput** concern stream ownership, not xterm rendering, focus or DOM observer delivery.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `ProfileView.svelte`                                                                           | **TimelineInteraction** covers saved drag, pan vs select, clamped keyboard selection, Escape and post-tick reveal ownership as above. **Unverified:** actual capture/focus/release, hover anchor, collapsed thread set, fit/zoom/pan window, selection details, viewport dimensions and vertical scroll, native horizontal scrollbar feedback, hit list after redraw, pinch/gesture scale vs Ctrl+wheel suppression and listener cleanup (`timeline_gestures.ts`). Layout, tick labels, hit geometry, ruler and canvas pixels are computed from inputs, not additional protocol states.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PerfettoView.svelte`                                                                          | **Unverified:** keyed by `workspace:id` on the Timing tab; requests a one-shot trace URL via `prepare_invocation_timing` on mount and manual retry (`attempt`), rendering the bundled Perfetto iframe or an error notice.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ## Remount and scope
 

@@ -1,12 +1,12 @@
 ---------------------------- MODULE DiagnosticFlow ----------------------------
 \* Explicit end-to-end state model for Zelith's build-diagnostic navigation
-\* across workspace pages, invocation selection, saved detail/profile readers,
+\* across workspace pages, invocation selection, saved detail reader,
 \* and invocation comparison:
 \*   Analytics -> History (selected invocation) -> Targets / Timing / Compare
 \*
 \* Models a finite set of invocations `Inv` where each invocation may be
 \* running or settled, and verifies that:
-\*   - saved detail/profile reads only exist for settled invocations,
+\*   - saved detail reads only exist for settled invocations,
 \*   - comparison only loads/displays when the left invocation is settled and
 \*     ready on the Compare tab,
 \*   - leaving History or the Compare tab tears down comparison state cleanly,
@@ -26,19 +26,17 @@ VARIABLES
   selected,
   tab,
   detail,
-  profile,
   compare,
   compareTarget,
   running
 
-vars == <<page, selected, tab, detail, profile, compare, compareTarget, running>>
+vars == <<page, selected, tab, detail, compare, compareTarget, running>>
 
 TypeOK ==
   /\ page \in Pages
   /\ selected \in Inv \cup {None}
   /\ tab \in Tabs
   /\ detail \in ReaderPhases
-  /\ profile \in ReaderPhases
   /\ compare \in ComparePhases
   /\ compareTarget \in Inv \cup {None}
   /\ running \subseteq Inv
@@ -48,7 +46,6 @@ Init ==
   /\ selected = None
   /\ tab = "all"
   /\ detail = "empty"
-  /\ profile = "empty"
   /\ compare = "idle"
   /\ compareTarget = None
   /\ running = {}
@@ -64,7 +61,7 @@ OpenPage(p) ==
   /\ IF p # "history"
      THEN ResetCompare
      ELSE UNCHANGED <<compare, compareTarget>>
-  /\ UNCHANGED <<selected, tab, detail, profile, running>>
+  /\ UNCHANGED <<selected, tab, detail, running>>
 
 SelectInvocation(i) ==
   /\ i \in Inv
@@ -73,10 +70,9 @@ SelectInvocation(i) ==
   /\ selected' = i
   /\ IF selected # i
      THEN /\ detail' = "empty"
-          /\ profile' = "empty"
           /\ tab' = "all"
           /\ ResetCompare
-     ELSE /\ UNCHANGED <<detail, profile, tab>>
+     ELSE /\ UNCHANGED <<detail, tab>>
           /\ IF page # "history" THEN ResetCompare ELSE UNCHANGED <<compare, compareTarget>>
   /\ UNCHANGED running
 
@@ -89,7 +85,7 @@ SelectTab(t) ==
   /\ IF t # "compare"
      THEN ResetCompare
      ELSE UNCHANGED <<compare, compareTarget>>
-  /\ UNCHANGED <<page, selected, detail, profile, running>>
+  /\ UNCHANGED <<page, selected, detail, running>>
 
 StartDetail ==
   /\ page = "history"
@@ -97,25 +93,12 @@ StartDetail ==
   /\ selected \notin running
   /\ detail \in {"empty", "failed"}
   /\ detail' = "loading"
-  /\ UNCHANGED <<page, selected, tab, profile, compare, compareTarget, running>>
+  /\ UNCHANGED <<page, selected, tab, compare, compareTarget, running>>
 
 FinishDetail(ok) ==
   /\ detail = "loading"
   /\ detail' = IF ok THEN "ready" ELSE "failed"
-  /\ UNCHANGED <<page, selected, tab, profile, compare, compareTarget, running>>
-
-StartProfile ==
-  /\ page = "history"
-  /\ selected # None
-  /\ selected \notin running
-  /\ profile \in {"empty", "failed"}
-  /\ profile' = "loading"
-  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
-
-FinishProfile(ok) ==
-  /\ profile = "loading"
-  /\ profile' = IF ok THEN "ready" ELSE "failed"
-  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
+  /\ UNCHANGED <<page, selected, tab, compare, compareTarget, running>>
 
 AutoCompare(other) ==
   /\ page = "history"
@@ -129,7 +112,7 @@ AutoCompare(other) ==
   /\ other \notin running
   /\ compare' = "loading"
   /\ compareTarget' = other
-  /\ UNCHANGED <<page, selected, tab, detail, profile, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, running>>
 
 StartCompare(other) ==
   /\ page = "history"
@@ -144,7 +127,7 @@ StartCompare(other) ==
           /\ compareTarget' = None
      ELSE /\ compare' = "loading"
           /\ compareTarget' = other
-  /\ UNCHANGED <<page, selected, tab, detail, profile, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, running>>
 
 FinishCompare(ok) ==
   /\ compare = "loading"
@@ -153,7 +136,7 @@ FinishCompare(ok) ==
           /\ UNCHANGED compareTarget
      ELSE /\ compare' = "failed"
           /\ compareTarget' = None
-  /\ UNCHANGED <<page, selected, tab, detail, profile, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, running>>
 
 StartRun(i) ==
   /\ i \in Inv
@@ -161,18 +144,17 @@ StartRun(i) ==
   /\ running' = running \cup {i}
   /\ IF selected = i
      THEN /\ detail' = "empty"
-          /\ profile' = "empty"
           /\ ResetCompare
      ELSE IF compareTarget = i
      THEN /\ ResetCompare
-          /\ UNCHANGED <<detail, profile>>
-     ELSE UNCHANGED <<detail, profile, compare, compareTarget>>
+          /\ UNCHANGED detail
+     ELSE UNCHANGED <<detail, compare, compareTarget>>
   /\ UNCHANGED <<page, selected, tab>>
 
 FinishRun(i) ==
   /\ i \in running
   /\ running' = running \ {i}
-  /\ UNCHANGED <<page, selected, tab, detail, profile, compare, compareTarget>>
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget>>
 
 Next ==
   \/ \E p \in Pages : OpenPage(p)
@@ -181,9 +163,6 @@ Next ==
   \/ StartDetail
   \/ FinishDetail(TRUE)
   \/ FinishDetail(FALSE)
-  \/ StartProfile
-  \/ FinishProfile(TRUE)
-  \/ FinishProfile(FALSE)
   \/ \E i \in Inv : AutoCompare(i)
   \/ \E i \in Inv : StartCompare(i)
   \/ FinishCompare(TRUE)
@@ -195,7 +174,7 @@ Spec == Init /\ [][Next]_vars
 
 \* Safety invariants
 SavedReadsOnlyWhenSettled ==
-  (detail # "empty" \/ profile # "empty") =>
+  detail # "empty" =>
     (selected # None /\ selected \notin running)
 
 CompareRequiresReadyLeft ==
