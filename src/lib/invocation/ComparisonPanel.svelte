@@ -206,7 +206,7 @@
               class="compare-listbox-option"
               class:is-active={index === clampedIndex}
               aria-selected={index === clampedIndex}
-              onmouseenter={() => {
+              onmousemove={() => {
                 activeIndex = index;
               }}
               onmousedown={(event) => {
