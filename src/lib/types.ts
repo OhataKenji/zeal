@@ -266,10 +266,22 @@ export interface RunnerCount {
   count: number;
 }
 
+export interface TestSummary {
+  label: string;
+  configuration?: string;
+  status: string;
+  hasLog?: boolean;
+}
+
+export interface TestLogQuery {
+  label: string;
+  configuration?: string;
+}
+
 /** Parsed build-event data retained for inspection in the invocation view. */
 export interface Bep {
   targets: Array<{ label: string; ok: boolean; aspect?: string; configuration?: string }>;
-  tests: Array<{ label: string; status: string }>;
+  tests: TestSummary[];
   originalCommandLine?: string;
   canonicalCommandLine?: string;
   options?: {

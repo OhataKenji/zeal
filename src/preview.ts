@@ -209,10 +209,16 @@ function getInvocation(workspace: string, id: unknown) {
   const record = records.find((inv) => inv.id === id && inv.workspace === workspace);
   if (!record) throw new Error("Preview invocation not found");
   const item = captured.get(record.id);
+  const bep = item
+    ? {
+        ...item.bep,
+        tests: item.bep.tests.map((test) => ({ ...test, hasLog: test.hasLog ?? true })),
+      }
+    : null;
   return {
     record,
     log: item ? { status: "ok" as const, data: item.log } : { status: "missing" as const },
-    bep: item ? { status: "ok" as const, data: item.bep } : { status: "missing" as const },
+    bep: bep ? { status: "ok" as const, data: bep } : { status: "missing" as const },
   };
 }
 
@@ -546,6 +552,30 @@ export function installPreview() {
       // Mirrors the native missing-profile error so the viewer words it the same.
       if (!item) throw new Error("No saved timing profile is available for this invocation.");
       return `${location.origin}/__perfetto/embed.html#trace/${item.record.id}/profile.json.gz`;
+    },
+    get_test_log: (payload) => {
+      const workspace = String(payload?.workspace ?? "");
+      wsEntry(workspace);
+      const record = records.find((inv) => inv.id === payload?.id && inv.workspace === workspace);
+      if (!record) throw new Error("Preview invocation not found");
+      const query = (payload?.query ?? {}) as {
+        label?: string;
+        run?: number;
+        shard?: number;
+        attempt?: number;
+      };
+      const label = String(query.label ?? "");
+      const item = captured.get(record.id);
+      const test = item?.bep.tests.find((entry) => entry.label === label);
+      if (!test) return { status: "missing" as const };
+      const runInfo =
+        query.shard !== undefined || query.run !== undefined || query.attempt !== undefined
+          ? ` (Run ${query.run ?? 1}, Shard ${query.shard ?? 1}, Attempt ${query.attempt ?? 1})`
+          : "";
+      return {
+        status: "ok" as const,
+        data: `exec \${PAGER:-/usr/bin/less} "$0" || exit 1\n-----------------------------------------------------------------------------\n${test.label}${runInfo}: ${test.status}\n`,
+      };
     },
     // The app sends this command with the AnalyticsFilter shape.
     get_analytics: (payload) => {

@@ -300,6 +300,76 @@
   font-size: 11px;
 }
 
+.test-result-list li {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.test-row .warning {
+  color: var(--warning);
+}
+
+.test-status {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.test-status-pass {
+  background: var(--success-muted);
+  color: var(--success);
+}
+
+.test-status-fail {
+  background: var(--destructive-muted);
+  color: var(--destructive);
+}
+
+.test-status-warn {
+  background: var(--warning-muted);
+  color: var(--warning);
+}
+
+.test-log-toggle {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.test-log-toggle[aria-expanded="true"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.test-log-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel);
+}
+
+.test-log-drawer .log-panel {
+  height: 280px;
+  border: 1px solid var(--border);
+}
+
+.test-log-drawer .invocation-log {
+  padding: 6px 8px;
+}
+
 .result-identity {
   display: flex;
   flex: 1;

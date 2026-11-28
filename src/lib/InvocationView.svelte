@@ -122,7 +122,15 @@
             <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
               {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
               {#if section === "Targets"}
-                <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
+                {#key `${view.state?.workspace ?? ""}:${shown.id}`}
+                  <TargetsPanel
+                    section={view.detail?.bep}
+                    index={targetIndex}
+                    workspace={view.state?.workspace ?? ""}
+                    invocationId={shown.id}
+                    {onselecttarget}
+                  />
+                {/key}
               {:else if section === "Logs"}
                 <LogPanel section={view.detail?.log} loading={view.detailLoading} />
               {:else if section === "Details"}

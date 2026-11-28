@@ -14,6 +14,7 @@ export const COMMANDS = {
   listInvocations: "list_invocations",
   getInvocation: "get_invocation",
   prepareInvocationTiming: "prepare_invocation_timing",
+  getTestLog: "get_test_log",
   getAnalytics: "get_analytics",
   startInvocation: "start_invocation",
   stopInvocation: "stop_invocation",

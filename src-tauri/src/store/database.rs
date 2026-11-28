@@ -327,6 +327,68 @@ pub(crate) fn event_artifact(
     attempt_artifact(data, ws, invocation_id, "bep.binpb.zst")
 }
 
+/// Deterministic artifact name for one test target's zstd-compressed `test.log`.
+pub fn test_log_artifact_name(label: &str, configuration: Option<&str>) -> String {
+    let mut hash: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    for byte in label
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(std::iter::once(0))
+        .chain(configuration.unwrap_or("").as_bytes().iter().copied())
+    {
+        hash ^= u128::from(byte);
+        hash = hash.wrapping_mul(0x0000_0000_0100_0000_0000_0000_0000_013b);
+    }
+    format!("testlog-{hash:032x}.zst")
+}
+
+fn is_test_log_artifact(name: &str) -> bool {
+    name.strip_prefix("testlog-")
+        .and_then(|s| s.strip_suffix(".zst"))
+        .is_some_and(|hex| {
+            hex.len() == 32 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+}
+
+/// Return the subset of candidate `testlog-*.zst` names that exist for one completed invocation.
+pub fn existing_test_logs<'a>(
+    data: &Path,
+    ws: &Path,
+    invocation_id: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    let Ok(dir) = completed_attempt_dir(data, ws, invocation_id) else {
+        return found;
+    };
+    for name in names {
+        if is_test_log_artifact(name) && dir.exists(name).unwrap_or(false) {
+            found.insert(name.to_string());
+        }
+    }
+    found
+}
+
+fn completed_attempt_dir(data: &Path, ws: &Path, invocation_id: &str) -> Result<Dir, StoreError> {
+    let ws = workspace_path(ws)?;
+    let invocation_id = id(invocation_id)?;
+    let store = Store::open(data)?;
+    let (attempt, complete): (i64, bool) = store.conn.query_row(
+        &format!("SELECT r.attempt,r.received_complete {WORKSPACE_SCOPE} AND r.id=?2"),
+        params![ws.as_os_str().as_bytes(), &invocation_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if attempt == 0 || !complete {
+        return Err(fail(ErrorKind::Missing));
+    }
+    store
+        .invocation_dir(&invocation_id, false)?
+        .child("attempt", false)?
+        .child(&attempt.to_string(), false)
+        .map_err(Into::into)
+}
+
 /// Snapshot the current receipt and its checked FD before doing any parsing.
 fn attempt_artifact(
     data: &Path,
@@ -334,7 +396,7 @@ fn attempt_artifact(
     invocation_id: &str,
     name: &str,
 ) -> Result<(File, bool), StoreError> {
-    if !matches!(name, "bep.binpb.zst" | "profile.json.gz") {
+    if !matches!(name, "bep.binpb.zst" | "profile.json.gz") && !is_test_log_artifact(name) {
         return Err(fail(ErrorKind::Invalid));
     }
     let ws = workspace_path(ws)?;
@@ -345,7 +407,7 @@ fn attempt_artifact(
         params![ws.as_os_str().as_bytes(), &invocation_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    if attempt == 0 || (name == "profile.json.gz" && !complete) {
+    if attempt == 0 || ((name == "profile.json.gz" || is_test_log_artifact(name)) && !complete) {
         return Err(fail(ErrorKind::Missing));
     }
     let file = store

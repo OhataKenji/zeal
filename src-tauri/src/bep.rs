@@ -17,7 +17,7 @@ use std::io::{self, Read};
 
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 // Bound decompression memory: the decoder may reference 8 MiB of history.
-const MAX_WINDOW_LOG: u32 = 23;
+pub const MAX_WINDOW_LOG: u32 = 23;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,11 +129,20 @@ pub struct TargetResult {
     pub configuration: Option<String>,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TestSummary {
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
     /// `overall_status` as Bazel names it, e.g. `PASSED` or `FAILED`.
     pub status: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_log: bool,
 }
 
 pub const DISPLAY_LIMIT: usize = 8 * 1024 * 1024;
@@ -146,6 +155,12 @@ pub struct Parsed {
     pub invalid: bool,
     pub read_error: bool,
     pub events: usize,
+}
+
+#[derive(Default)]
+struct ScanStatus {
+    invalid: bool,
+    read_error: bool,
 }
 
 /// Decode only the saved snapshot into the bounded BEP display.
@@ -180,8 +195,9 @@ pub fn parse_zstd<R: Read>(input: R, length: u64) -> Parsed {
 #[tracing::instrument(target = "zelith::operations", name = "detail.bep_parse", skip_all)]
 pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
     let mut parsed = Parsed::default();
+    let mut status = ScanStatus::default();
     let mut display_size = json_size(&parsed.bep);
-    while let Some(event) = next_event(&mut input, &mut remaining, &mut parsed) {
+    while let Some(event) = next_event(&mut input, &mut remaining, &mut status) {
         parsed.events += 1;
         if let Some(Payload::Progress(progress)) = &event.payload {
             append_tail(&mut parsed.log, &progress.stderr);
@@ -191,40 +207,50 @@ pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
         project(event, &mut delta);
         merge_bounded(&mut parsed.bep, delta, &mut display_size);
     }
+    parsed
+        .bep
+        .tests
+        .sort_by_key(|test| test_status_sort_rank(&test.status));
+    parsed.invalid = status.invalid;
+    parsed.read_error = status.read_error;
     parsed.bep.truncated |= parsed.invalid;
     parsed
 }
 
 /// The next frame's event. `None` ends the scan: a clean end of stream
-/// leaves `parsed.invalid` clear, anything else sets it.
+/// leaves `status.invalid` clear, anything else sets it.
 fn next_event<R: Read>(
     input: &mut R,
     remaining: &mut u64,
-    parsed: &mut Parsed,
+    status: &mut ScanStatus,
 ) -> Option<BuildEvent> {
-    let length = declared_len(input, remaining, parsed)?;
+    let length = declared_len(input, remaining, status)?;
     if length > u64::from(MAX_FRAME_SIZE) || length > *remaining {
-        parsed.invalid = true;
+        status.invalid = true;
         return None;
     }
     let mut bytes = vec![0; length as usize];
     if let Err(error) = input.read_exact(&mut bytes) {
-        parsed.invalid = true;
-        parsed.read_error = error.kind() != io::ErrorKind::UnexpectedEof;
+        status.invalid = true;
+        status.read_error = error.kind() != io::ErrorKind::UnexpectedEof;
         return None;
     }
     *remaining -= length;
     if let Ok(event) = BuildEvent::decode(bytes.as_slice()) {
         Some(event)
     } else {
-        parsed.invalid = true;
+        status.invalid = true;
         None
     }
 }
 
 /// The next frame's declared length, its bytes charged to `remaining`.
 /// `None` ends the scan as in [`next_event`].
-fn declared_len<R: Read>(input: &mut R, remaining: &mut u64, parsed: &mut Parsed) -> Option<u64> {
+fn declared_len<R: Read>(
+    input: &mut R,
+    remaining: &mut u64,
+    status: &mut ScanStatus,
+) -> Option<u64> {
     let mut first = [0];
     loop {
         match input.read(&mut first) {
@@ -232,14 +258,14 @@ fn declared_len<R: Read>(input: &mut R, remaining: &mut u64, parsed: &mut Parsed
             Ok(_) => break,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => {
-                parsed.invalid = true;
-                parsed.read_error = true;
+                status.invalid = true;
+                status.read_error = true;
                 return None;
             }
         }
     }
     let Some(rest) = remaining.checked_sub(1) else {
-        parsed.invalid = true;
+        status.invalid = true;
         return None;
     };
     *remaining = rest;
@@ -249,14 +275,14 @@ fn declared_len<R: Read>(input: &mut R, remaining: &mut u64, parsed: &mut Parsed
         failed: false,
     };
     let length = frame_length(&mut delimiter, first[0]);
-    parsed.read_error = delimiter.failed;
+    status.read_error = delimiter.failed;
     let Some(rest) = remaining.checked_sub(delimiter.count) else {
-        parsed.invalid = true;
+        status.invalid = true;
         return None;
     };
     *remaining = rest;
     if length.is_none() {
-        parsed.invalid = true;
+        status.invalid = true;
     }
     length
 }
@@ -411,6 +437,26 @@ pub(crate) fn test_status(status: i32) -> &'static str {
     }
 }
 
+fn config_id(
+    configuration: Option<crate::protocol::bep::build_event_id::ConfigurationId>,
+) -> Option<String> {
+    configuration.map(|c| c.id).filter(|id| !id.is_empty())
+}
+
+fn test_status_sort_rank(status: &str) -> u8 {
+    match status {
+        "FAILED"
+        | "TIMEOUT"
+        | "REMOTE_FAILURE"
+        | "FAILED_TO_BUILD"
+        | "INCOMPLETE"
+        | "TOOL_HALTED_BEFORE_TESTING" => 0,
+        "FLAKY" => 1,
+        "PASSED" => 3,
+        _ => 2,
+    }
+}
+
 fn project(event: BuildEvent, bep: &mut Bep) {
     if let Some(Payload::StructuredCommandLine(command_line)) = &event.payload {
         project_command_line(command_line, bep);
@@ -467,7 +513,9 @@ fn project(event: BuildEvent, bep: &mut Bep) {
         (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
             bep.tests.push(TestSummary {
                 label: id.label,
+                configuration: config_id(id.configuration),
                 status: test_status(summary.overall_status).to_string(),
+                has_log: false,
             });
         }
         _ => {}
@@ -620,7 +668,9 @@ mod tests {
             parsed.tests,
             [TestSummary {
                 label: "//pkg:test".into(),
-                status: "FAILED".into()
+                configuration: None,
+                status: "FAILED".into(),
+                has_log: false,
             }]
         );
         assert!(!parsed.truncated);
@@ -844,7 +894,9 @@ mod tests {
             parsed.tests,
             [TestSummary {
                 label: "//pkg:t".into(),
+                configuration: None,
                 status: "PASSED".into(),
+                has_log: false,
             }]
         );
         assert!(!parsed.truncated);
@@ -1034,6 +1086,35 @@ mod tests {
                 "TOOL_HALTED_BEFORE_TESTING",
             ]
         );
+    }
+
+    fn test_summary_ev(label: &str, overall_status: i32) -> Vec<u8> {
+        event(BuildEvent {
+            id: Some(BuildEventId {
+                id: Some(Id::TestSummary(TestSummaryId {
+                    label: label.into(),
+                    ..Default::default()
+                })),
+            }),
+            payload: Some(Payload::TestSummary(ProtoTestSummary {
+                overall_status,
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn test_summaries_sort_failures_first() {
+        let stream: Vec<u8> = [
+            test_summary_ev("//pkg:a_pass", 1),
+            test_summary_ev("//pkg:b_flaky", 2),
+            test_summary_ev("//pkg:c_fail", 4),
+        ]
+        .concat();
+        let parsed = parse(stream.as_slice());
+        let labels: Vec<_> = parsed.tests.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(labels, ["//pkg:c_fail", "//pkg:b_flaky", "//pkg:a_pass"]);
     }
 }
 
