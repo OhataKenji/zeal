@@ -38,6 +38,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
+/// Validate the invocation UUID, registered workspace, and app data directory
+/// that every saved-invocation read command must pass identically.
+fn saved_invocation_scope(
+    app: &AppHandle,
+    core: &Arc<Core>,
+    workspace: &str,
+    id: &str,
+) -> Result<(PathBuf, PathBuf, String), String> {
+    let id = uuid::Uuid::parse_str(id)
+        .map_err(|_| "invalid invocation id".to_string())?
+        .to_string();
+    let ws = registered_workspace(core, workspace)?;
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok((data, ws, id))
+}
+
 #[tauri::command]
 fn get_state(core: State<Arc<Core>>) -> AppStateDto {
     core.dto()
@@ -458,11 +474,7 @@ async fn get_invocation(
     workspace: String,
     id: String,
 ) -> Result<InvocationDetail, String> {
-    let id = uuid::Uuid::parse_str(&id)
-        .map_err(|_| "invalid invocation id".to_string())?
-        .to_string();
-    let ws = registered_workspace(&core, &workspace)?;
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
     tauri::async_runtime::spawn_blocking(move || {
         detail::invocation_detail(&data, &ws, &id).map_err(|e| e.to_string())
     })
@@ -483,11 +495,7 @@ async fn get_invocation_profile(
     workspace: String,
     id: String,
 ) -> Result<Section<Profile>, String> {
-    let id = uuid::Uuid::parse_str(&id)
-        .map_err(|_| "invalid invocation id".to_string())?
-        .to_string();
-    let ws = registered_workspace(&core, &workspace)?;
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
     tauri::async_runtime::spawn_blocking(move || {
         detail::invocation_profile(&data, &ws, &id).map_err(|e| e.to_string())
     })
