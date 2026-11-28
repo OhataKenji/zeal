@@ -1,5 +1,5 @@
 import { COMMANDS } from "./commands.ts";
-import type { InvocationRow } from "./invocation.ts";
+import type { InvocationRow, InvocationTab } from "./invocation.ts";
 import { createModules } from "./modules.ts";
 import type { Page } from "./pages.ts";
 import { targetError } from "./target.ts";
@@ -67,6 +67,8 @@ interface Workspace {
   /** Applied build flags for the configured/actions reads; "" is default. */
   targetFlags: string;
   modules: ReturnType<typeof createModules>;
+  /** Active sub-tab in InvocationView; workspace-scoped, resets on workspace switch. */
+  invocationTab: InvocationTab;
   history: InvocationRecord[];
   historyError: string | null;
   historyRead: "idle" | "reading" | "queued";
@@ -288,6 +290,7 @@ function sessionView(state: SessionState) {
     targetPhase: target?.phase.state.value ?? null,
     targetPhaseError: readError(target?.phase.state),
     modules: ws?.modules.state ?? null,
+    invocationTab: ws?.invocationTab ?? "All",
     starting: state.startFeedback !== null,
     error: state.error,
     invocations: history,
@@ -723,6 +726,7 @@ export function createSession(
       targetTab: "definition",
       targetFlags: "",
       modules: createModules(path, transport, () => state.core?.bazel != null, publish),
+      invocationTab: "All",
       history: [],
       historyError: null,
       historyRead: "idle",
@@ -737,9 +741,14 @@ export function createSession(
     if (state.page === "workspace") loadWorkspaceInfo();
   }
 
+  function resetInvocationTab(id: string) {
+    if (state.selectedInvocationId !== id && state.workspace) state.workspace.invocationTab = "All";
+  }
+
   function openInvocation(id: string, lookup: boolean) {
     if (disposed) return;
     const previousId = selectedInvocationId(state);
+    resetInvocationTab(id);
     state.page = "history";
     state.selectedInvocationId = id;
     state.startFeedback = null;
@@ -775,6 +784,14 @@ export function createSession(
   function maybeLoadWorkspaceInfo() {
     const ws = state.workspace;
     if (ws?.info.state.phase === "empty") loadWorkspaceInfo();
+  }
+
+  function setInvocationTab(tab: InvocationTab) {
+    if (disposed) return;
+    const ws = state.workspace;
+    if (!ws || ws.invocationTab === tab) return;
+    ws.invocationTab = tab;
+    publish();
   }
 
   function showPage(page: Page) {
@@ -1045,6 +1062,7 @@ export function createSession(
     selectModule: (key: string | null) => state.workspace?.modules.select(key),
     explainModule: () => state.workspace?.modules.explain(),
     selectInvocation,
+    setInvocationTab,
     showPage,
     loadDetail: readSavedDetail,
     loadInvocations: requestHistory,

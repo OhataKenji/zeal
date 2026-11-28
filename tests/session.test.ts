@@ -2659,3 +2659,33 @@ test("auto-selection never fires off the history page or over a selection", asyn
   // The pinned live execution outranks the older history record.
   assert.equal(h.view.selectedInvocationId, "live-1");
 });
+
+test("Invocation active tab survives page navigation and resets on workspace switch", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  assert.equal(h.view.invocationTab, "All");
+
+  h.session.showPage("history");
+  h.session.selectInvocation("inv-1");
+  h.session.setInvocationTab("Timing");
+  assert.equal(h.view.invocationTab, "Timing");
+
+  h.session.showPage("analytics");
+  h.session.showPage("history");
+  assert.equal(h.view.invocationTab, "Timing");
+
+  // Switching to a different invocation resets the sub-tab to All (DiagnosticFlow.tla).
+  h.session.selectInvocation("inv-2");
+  assert.equal(h.view.invocationTab, "All");
+
+  h.session.setInvocationTab("Logs");
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 3, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await settle();
+  assert.equal(h.view.invocationTab, "All");
+});

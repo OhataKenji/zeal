@@ -23,6 +23,10 @@ export interface InvocationRow {
 
 export type HistoryFilter = "all" | "failed" | "running";
 
+export const INVOCATION_SECTIONS = ["Targets", "Details", "Logs", "Timing"] as const;
+export const INVOCATION_TABS = ["All", ...INVOCATION_SECTIONS, "Compare"] as const;
+export type InvocationTab = (typeof INVOCATION_TABS)[number];
+
 export function rowStatus({ record, execution, diagnostic }: InvocationRow): InvocationStatus {
   return invocationStatus(record, execution, diagnostic?.processExitCode);
 }

@@ -63,6 +63,10 @@ textarea {
   color: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 button {
   cursor: pointer;
 }

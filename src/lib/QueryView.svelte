@@ -37,10 +37,12 @@
     targetIndex,
     workspace,
     bazelAvailable,
+    onselecttarget,
   }: {
     targetIndex: SearchIndex | null;
     workspace: string;
     bazelAvailable: boolean;
+    onselecttarget?: (label: string) => void;
   } = $props();
 
   // Attribute names come from a static hint list: the label_kind snapshot
@@ -51,6 +53,7 @@
   const kindIndex = $derived(
     targetIndex ? createIndex(kindCandidates(targetIndex.targets)) : null,
   );
+  const knownTargets = $derived(new Set((targetIndex?.targets ?? []).map((t) => t.label)));
   let root = $state<Expr>(
     parseQuery(EXAMPLES.query.Dependencies[0].expr, "query"),
   );
@@ -90,6 +93,17 @@
     renderer.dispose();
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
+
+  function resolveTargetLink(raw: string): string | null {
+    if (!onselecttarget) return null;
+    const trimmed = raw.trim();
+    const key = trimmed.startsWith("@@//")
+      ? trimmed.slice(2)
+      : trimmed.startsWith("@//")
+        ? trimmed.slice(1)
+        : trimmed;
+    return knownTargets.has(key) ? key : null;
+  }
 
   function selectKind(next: QueryKind) {
     kind = next;
@@ -506,11 +520,15 @@
                 <p class="query-empty">{kind === "aquery" ? "No actions matched." : "No targets matched."}</p>
               {:else}
                 <div class="query-raw-wrap">
-                  <pre class="query-raw">{rawShown.join("\n")}</pre>
                   <CopyButton
                     text={stored.stdout}
                     label="Copy output"
                   />
+                  {#if kind === "query" && onselecttarget}
+                    <pre class="query-raw">{#each rawShown as line, i}{#if i > 0}{"\n"}{/if}{@const key = resolveTargetLink(line)}{#if key}<button type="button" class="table-link mono query-raw-link" onclick={() => onselecttarget?.(key)}>{line}</button>{:else}{line}{/if}{/each}</pre>
+                  {:else}
+                    <pre class="query-raw">{rawShown.join("\n")}</pre>
+                  {/if}
                 </div>
                 {#if rawMore > 0}
                   <p class="query-empty">
@@ -530,7 +548,16 @@
                   <thead><tr><th scope="col">Label</th><th scope="col">Configuration</th>{#if transitions}<th scope="col">Transitions</th>{/if}</tr></thead>
                   <tbody>
                     {#each rows.slice(0, RAW_LINE_CAP) as row}
-                      <tr><td><code>{row.label}</code></td><td><code>{row.config}</code></td>
+                      {@const key = resolveTargetLink(row.label)}
+                      <tr>
+                        <td>
+                          {#if key}
+                            <button type="button" class="table-link mono" onclick={() => onselecttarget?.(key)}>{row.label}</button>
+                          {:else}
+                            <code>{row.label}</code>
+                          {/if}
+                        </td>
+                        <td><code>{row.config}</code></td>
                         {#if transitions}<td><pre>{row.transitions.join("\n")}</pre></td>{/if}
                       </tr>
                     {/each}
