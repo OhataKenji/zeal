@@ -445,11 +445,14 @@ fn save_test_log(source: &bep::file::File, name: &str, dir: &Dir) -> io::Result<
     if dir.exists(name)? {
         return Ok(false);
     }
-    let limit = TEST_LOG_STORAGE_LIMIT as u64;
+    // Save up to TEST_LOG_STORAGE_LIMIT + 1 tail bytes so readers know when
+    // an oversized log was truncated and can report `Section::Incomplete`.
+    let cap = TEST_LOG_STORAGE_LIMIT + 1;
+    let limit = cap as u64;
     match source {
         bep::file::File::Contents(bytes) => {
-            let slice = if bytes.len() > TEST_LOG_STORAGE_LIMIT {
-                &bytes[bytes.len() - TEST_LOG_STORAGE_LIMIT..]
+            let slice = if bytes.len() > cap {
+                &bytes[bytes.len() - cap..]
             } else {
                 bytes.as_slice()
             };

@@ -38,7 +38,7 @@ pub enum Section<T> {
 #[tracing::instrument(target = "zelith::operations", name = "invocation.detail", skip_all)]
 pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<InvocationDetail> {
     let record = store::read_record(data, workspace, id)?;
-    let (log, bep) = match store::event_artifact(data, workspace, id).map_err(io::Error::from) {
+    let (log, mut bep) = match store::event_artifact(data, workspace, id).map_err(io::Error::from) {
         Err(error) => {
             if error.kind() == io::ErrorKind::NotFound {
                 (Section::Missing, Section::Missing)
@@ -48,6 +48,19 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
         }
         Ok((file, complete)) => event_sections(file, complete)?,
     };
+    if let Section::Ok { data: ref mut bep }
+    | Section::Incomplete {
+        data: ref mut bep, ..
+    } = bep
+    {
+        for test in &mut bep.tests {
+            if test.status != "PASSED" {
+                let name =
+                    store::test_log_artifact_name(&test.label, test.configuration.as_deref());
+                test.has_log = store::artifact(data, workspace, id, &name).is_ok();
+            }
+        }
+    }
     Ok(InvocationDetail { record, log, bep })
 }
 
@@ -157,14 +170,21 @@ pub fn invocation_test_log(
         });
     }
     let truncated = bytes.len() > bep::LOG_LIMIT;
+    let mut slice = if truncated {
+        &bytes[bytes.len() - bep::LOG_LIMIT..]
+    } else {
+        bytes.as_slice()
+    };
     if truncated {
-        bytes.truncate(bep::LOG_LIMIT);
+        while slice.first().is_some_and(|byte| byte & 0xc0 == 0x80) {
+            slice = &slice[1..];
+        }
     }
-    let data = String::from_utf8_lossy(&bytes).into_owned();
+    let data = String::from_utf8_lossy(slice).into_owned();
     Ok(if truncated {
         Section::Incomplete {
             data,
-            note: "Test log exceeded display limit".into(),
+            note: "Test log exceeded display limit; showing tail".into(),
         }
     } else {
         Section::Ok { data }

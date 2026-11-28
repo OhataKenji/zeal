@@ -13,7 +13,6 @@ use crate::protocol::generated::command_line::{
 };
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::io::{self, Read};
 
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
@@ -198,7 +197,6 @@ pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
     let mut parsed = Parsed::default();
     let mut status = ScanStatus::default();
     let mut display_size = json_size(&parsed.bep);
-    let mut result_logs: HashSet<(String, Option<String>)> = HashSet::new();
     while let Some(event) = next_event(&mut input, &mut remaining, &mut status) {
         parsed.events += 1;
         if let Some(Payload::Progress(progress)) = &event.payload {
@@ -206,7 +204,7 @@ pub fn parse_detail<R: Read>(mut input: R, mut remaining: u64) -> Parsed {
             append_tail(&mut parsed.log, &progress.stdout);
         }
         let mut delta = Bep::default();
-        project(event, &mut delta, &mut result_logs);
+        project(event, &mut delta);
         merge_bounded(&mut parsed.bep, delta, &mut display_size);
     }
     parsed
@@ -459,7 +457,7 @@ fn test_status_sort_rank(status: &str) -> u8 {
     }
 }
 
-fn project(event: BuildEvent, bep: &mut Bep, result_logs: &mut HashSet<(String, Option<String>)>) {
+fn project(event: BuildEvent, bep: &mut Bep) {
     if let Some(Payload::StructuredCommandLine(command_line)) = &event.payload {
         project_command_line(command_line, bep);
     }
@@ -512,26 +510,12 @@ fn project(event: BuildEvent, bep: &mut Bep, result_logs: &mut HashSet<(String, 
                 configuration: None,
             });
         }
-        (Id::TestResult(id), Some(Payload::TestResult(result))) => {
-            if result.status != 1
-                && result
-                    .test_action_output
-                    .iter()
-                    .any(|file| file.name == "test.log" && file.file.is_some())
-            {
-                result_logs.insert((id.label, config_id(id.configuration)));
-            }
-        }
         (Id::TestSummary(id), Some(Payload::TestSummary(summary))) => {
-            let configuration = config_id(id.configuration);
-            let has_log = summary.overall_status != 1
-                && (result_logs.remove(&(id.label.clone(), configuration.clone()))
-                    || summary.failed.iter().any(|f| f.file.is_some()));
             bep.tests.push(TestSummary {
                 label: id.label,
-                configuration,
+                configuration: config_id(id.configuration),
                 status: test_status(summary.overall_status).to_string(),
-                has_log,
+                has_log: false,
             });
         }
         _ => {}
@@ -1104,20 +1088,7 @@ mod tests {
         );
     }
 
-    fn bep_file(name: &str, file: crate::protocol::bep::file::File) -> crate::protocol::bep::File {
-        crate::protocol::bep::File {
-            name: name.into(),
-            file: Some(file),
-            ..Default::default()
-        }
-    }
-
-    fn test_summary_ev(
-        label: &str,
-        overall_status: i32,
-        failed: Vec<crate::protocol::bep::File>,
-        passed: Vec<crate::protocol::bep::File>,
-    ) -> Vec<u8> {
+    fn test_summary_ev(label: &str, overall_status: i32) -> Vec<u8> {
         event(BuildEvent {
             id: Some(BuildEventId {
                 id: Some(Id::TestSummary(TestSummaryId {
@@ -1127,80 +1098,23 @@ mod tests {
             }),
             payload: Some(Payload::TestSummary(ProtoTestSummary {
                 overall_status,
-                failed,
-                passed,
                 ..Default::default()
             })),
             ..Default::default()
         })
-    }
-
-    fn test_result_ev(
-        label: &str,
-        status: i32,
-        outputs: Vec<crate::protocol::bep::File>,
-    ) -> Vec<u8> {
-        use crate::protocol::bep::TestResult as ProtoTestResult;
-        use crate::protocol::bep::build_event_id::TestResultId;
-        event(BuildEvent {
-            id: Some(BuildEventId {
-                id: Some(Id::TestResult(TestResultId {
-                    label: label.into(),
-                    run: 1,
-                    shard: 1,
-                    attempt: 1,
-                    ..Default::default()
-                })),
-            }),
-            payload: Some(Payload::TestResult(ProtoTestResult {
-                status,
-                test_action_output: outputs,
-                ..Default::default()
-            })),
-            ..Default::default()
-        })
-    }
-
-    fn sample_test_stream() -> Vec<u8> {
-        use crate::protocol::bep::file::File as ProtoFile;
-        [
-            test_summary_ev("//pkg:a_pass", 1, vec![], vec![]),
-            test_result_ev(
-                "//pkg:from_result",
-                4,
-                vec![
-                    bep_file("test.xml", ProtoFile::Uri("file:///tmp/test.xml".into())),
-                    bep_file(
-                        "test.log",
-                        ProtoFile::Contents(b"assertion failed\n".into()),
-                    ),
-                ],
-            ),
-            test_summary_ev("//pkg:from_result", 4, vec![], vec![]),
-            test_summary_ev(
-                "//pkg:from_summary",
-                4,
-                vec![bep_file(
-                    "test.log",
-                    ProtoFile::Uri("file:///tmp/failed.log".into()),
-                )],
-                vec![bep_file(
-                    "test.log",
-                    ProtoFile::Uri("file:///tmp/passed.log".into()),
-                )],
-            ),
-        ]
-        .concat()
     }
 
     #[test]
-    fn test_summaries_track_has_log_and_sort_failures_first() {
-        let parsed = parse(sample_test_stream().as_slice());
-        assert_eq!(parsed.tests.len(), 3);
-        assert_eq!(parsed.tests[0].status, "FAILED");
-        assert!(parsed.tests[0].has_log);
-        assert_eq!(parsed.tests[2].label, "//pkg:a_pass");
-        assert!(!parsed.tests[2].has_log);
+    fn test_summaries_sort_failures_first() {
+        let stream: Vec<u8> = [
+            test_summary_ev("//pkg:a_pass", 1),
+            test_summary_ev("//pkg:b_flaky", 2),
+            test_summary_ev("//pkg:c_fail", 4),
+        ]
+        .concat();
+        let parsed = parse(stream.as_slice());
+        let labels: Vec<_> = parsed.tests.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(labels, ["//pkg:c_fail", "//pkg:b_flaky", "//pkg:a_pass"]);
     }
 }
 
