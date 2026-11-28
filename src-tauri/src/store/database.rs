@@ -327,6 +327,30 @@ pub(crate) fn event_artifact(
     attempt_artifact(data, ws, invocation_id, "bep.binpb.zst")
 }
 
+/// Deterministic artifact name for one test target's zstd-compressed `test.log`.
+pub fn test_log_artifact_name(label: &str, configuration: Option<&str>) -> String {
+    let mut hash: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    for byte in label
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(std::iter::once(0))
+        .chain(configuration.unwrap_or("").as_bytes().iter().copied())
+    {
+        hash ^= u128::from(byte);
+        hash = hash.wrapping_mul(0x0000_0000_0100_0000_0000_0000_0000_013b);
+    }
+    format!("testlog-{hash:032x}.zst")
+}
+
+fn is_test_log_artifact(name: &str) -> bool {
+    name.strip_prefix("testlog-")
+        .and_then(|s| s.strip_suffix(".zst"))
+        .is_some_and(|hex| {
+            hex.len() == 32 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+}
+
 /// Snapshot the current receipt and its checked FD before doing any parsing.
 fn attempt_artifact(
     data: &Path,
@@ -334,7 +358,7 @@ fn attempt_artifact(
     invocation_id: &str,
     name: &str,
 ) -> Result<(File, bool), StoreError> {
-    if !matches!(name, "bep.binpb.zst" | "profile.json.gz") {
+    if !matches!(name, "bep.binpb.zst" | "profile.json.gz") && !is_test_log_artifact(name) {
         return Err(fail(ErrorKind::Invalid));
     }
     let ws = workspace_path(ws)?;
@@ -345,7 +369,7 @@ fn attempt_artifact(
         params![ws.as_os_str().as_bytes(), &invocation_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    if attempt == 0 || (name == "profile.json.gz" && !complete) {
+    if attempt == 0 || ((name == "profile.json.gz" || is_test_log_artifact(name)) && !complete) {
         return Err(fail(ErrorKind::Missing));
     }
     let file = store

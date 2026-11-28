@@ -5,9 +5,16 @@
   import { logColumns, logLines, logWindow } from "../log";
   import { LOG_LINE_HEIGHT, TERMINAL_TEXT_STYLE } from "../terminal_style";
 
-  let { section, loading }: {
+  let {
+    section,
+    loading,
+    ariaLabel = "Invocation output",
+    onretry,
+  }: {
     section: Section<string> | undefined;
     loading: boolean;
+    ariaLabel?: string;
+    onretry?: () => void;
   } = $props();
   const log = $derived(sectionData(section));
   const lines = $derived(log === null ? [] : logLines(log));
@@ -23,14 +30,16 @@
 </script>
 
 {#if section && section.status !== "ok"}
-  <Notice tone={sectionNoticeTone(section)}>{sectionMessage(section)}</Notice>
+  <Notice tone={sectionNoticeTone(section)} onaction={section.status === "read_error" ? onretry : undefined}
+    >{sectionMessage(section)}</Notice
+  >
 {/if}
 {#if log !== null}
   <div class="log-panel">
     <div
       class="invocation-log"
       style={TERMINAL_TEXT_STYLE}
-      aria-label="Invocation output"
+      aria-label={ariaLabel}
       role="textbox"
       aria-readonly="true"
       aria-multiline="true"

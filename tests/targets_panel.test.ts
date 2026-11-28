@@ -7,12 +7,19 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
   const { load, render } = await createSvelteHarness(t);
   const { default: TargetsPanel } = await load("/src/lib/invocation/TargetsPanel.svelte");
 
-  function output(targets: Bep["targets"]): string {
+  function output(
+    targets: Bep["targets"],
+    tests: Bep["tests"] = [],
+    extra: Record<string, unknown> = {},
+  ): string {
     const section: Section<Bep> = {
       status: "ok",
-      data: { targets, tests: [], truncated: false },
+      data: { targets, tests, truncated: false },
     };
-    return render(TargetsPanel, { props: { section } }).body.replace(/<!--[\s\S]*?-->/g, "");
+    return render(TargetsPanel, { props: { section, ...extra } }).body.replace(
+      /<!--[\s\S]*?-->/g,
+      "",
+    );
   }
 
   function rows(html: string): string[] {
@@ -54,5 +61,28 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
     const html = output([{ label: "//pkg:x", ok: true, aspect: "<script>alert(1)</script>" }]);
     assert.doesNotMatch(html, /<script>alert/);
     assert.match(html, /&lt;script>alert\(1\)&lt;\/script>/);
+  });
+
+  await t.test("renders Tests above Build results and shows View log only when readable", () => {
+    const withContext = output(
+      [{ label: "//pkg:lib", ok: true }],
+      [
+        { label: "//pkg:fail_test", status: "FAILED", hasLog: true },
+        { label: "//pkg:pass_test", status: "PASSED", hasLog: false },
+      ],
+      { workspace: "/ws", invocationId: "inv-1" },
+    );
+    assert.ok(withContext.indexOf("Tests") < withContext.indexOf("Build results"));
+    assert.deepEqual(rows(withContext), [
+      "✗ //pkg:fail_test View log FAILED",
+      "✓ //pkg:pass_test PASSED",
+      "✓ //pkg:lib Completed",
+    ]);
+
+    const withoutContext = output(
+      [],
+      [{ label: "//pkg:fail_test", status: "FAILED", hasLog: true }],
+    );
+    assert.deepEqual(rows(withoutContext), ["✗ //pkg:fail_test FAILED"]);
   });
 });

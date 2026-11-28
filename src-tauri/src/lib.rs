@@ -523,6 +523,28 @@ async fn prepare_invocation_timing(
     ))
 }
 
+/// Return the test log referenced by BEP for one test label.
+#[tauri::command]
+#[tracing::instrument(
+    target = "zelith::operations",
+    name = "invocation.test_log.request",
+    skip_all
+)]
+async fn get_test_log(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    workspace: String,
+    id: String,
+    query: detail::TestLogQuery,
+) -> Result<detail::Section<String>, String> {
+    let (data, ws, id) = saved_invocation_scope(&app, core.inner(), &workspace, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        detail::invocation_test_log(&data, &ws, &id, &query).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "test log worker failed".to_string())?
+}
+
 /// `~/...` in a typed path expands to the user's home directory.
 fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/")
@@ -646,7 +668,8 @@ pub fn run() {
             list_invocations,
             get_analytics,
             get_invocation,
-            prepare_invocation_timing
+            prepare_invocation_timing,
+            get_test_log
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

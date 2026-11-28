@@ -1,12 +1,12 @@
 ---------------------------- MODULE DiagnosticFlow ----------------------------
 \* Explicit end-to-end state model for Zelith's build-diagnostic navigation
-\* across workspace pages, invocation selection, saved detail reader,
+\* across workspace pages, invocation selection, saved detail/testLog readers,
 \* and invocation comparison:
 \*   Analytics -> History (selected invocation) -> Targets / Timing / Compare
 \*
 \* Models a finite set of invocations `Inv` where each invocation may be
 \* running or settled, and verifies that:
-\*   - saved detail reads only exist for settled invocations,
+\*   - saved detail/testLog reads only exist for settled invocations,
 \*   - comparison only loads/displays when the left invocation is settled and
 \*     ready on the Compare tab,
 \*   - leaving History or the Compare tab tears down comparison state cleanly,
@@ -28,9 +28,10 @@ VARIABLES
   detail,
   compare,
   compareTarget,
+  testLog,
   running
 
-vars == <<page, selected, tab, detail, compare, compareTarget, running>>
+vars == <<page, selected, tab, detail, compare, compareTarget, testLog, running>>
 
 TypeOK ==
   /\ page \in Pages
@@ -39,6 +40,7 @@ TypeOK ==
   /\ detail \in ReaderPhases
   /\ compare \in ComparePhases
   /\ compareTarget \in Inv \cup {None}
+  /\ testLog \in ComparePhases
   /\ running \subseteq Inv
 
 Init ==
@@ -48,6 +50,7 @@ Init ==
   /\ detail = "empty"
   /\ compare = "idle"
   /\ compareTarget = None
+  /\ testLog = "idle"
   /\ running = {}
 
 ResetCompare ==
@@ -59,8 +62,9 @@ OpenPage(p) ==
   /\ p # page
   /\ page' = p
   /\ IF p # "history"
-     THEN ResetCompare
-     ELSE UNCHANGED <<compare, compareTarget>>
+     THEN /\ ResetCompare
+          /\ testLog' = "idle"
+     ELSE UNCHANGED <<compare, compareTarget, testLog>>
   /\ UNCHANGED <<selected, tab, detail, running>>
 
 SelectInvocation(i) ==
@@ -72,8 +76,12 @@ SelectInvocation(i) ==
      THEN /\ detail' = "empty"
           /\ tab' = "all"
           /\ ResetCompare
+          /\ testLog' = "idle"
      ELSE /\ UNCHANGED <<detail, tab>>
-          /\ IF page # "history" THEN ResetCompare ELSE UNCHANGED <<compare, compareTarget>>
+          /\ IF page # "history"
+             THEN /\ ResetCompare
+                  /\ testLog' = "idle"
+             ELSE UNCHANGED <<compare, compareTarget, testLog>>
   /\ UNCHANGED running
 
 SelectTab(t) ==
@@ -85,6 +93,9 @@ SelectTab(t) ==
   /\ IF t # "compare"
      THEN ResetCompare
      ELSE UNCHANGED <<compare, compareTarget>>
+  /\ IF t \notin {"all", "targets"}
+     THEN testLog' = "idle"
+     ELSE UNCHANGED testLog
   /\ UNCHANGED <<page, selected, detail, running>>
 
 StartDetail ==
@@ -93,12 +104,12 @@ StartDetail ==
   /\ selected \notin running
   /\ detail \in {"empty", "failed"}
   /\ detail' = "loading"
-  /\ UNCHANGED <<page, selected, tab, compare, compareTarget, running>>
+  /\ UNCHANGED <<page, selected, tab, compare, compareTarget, testLog, running>>
 
 FinishDetail(ok) ==
   /\ detail = "loading"
   /\ detail' = IF ok THEN "ready" ELSE "failed"
-  /\ UNCHANGED <<page, selected, tab, compare, compareTarget, running>>
+  /\ UNCHANGED <<page, selected, tab, compare, compareTarget, testLog, running>>
 
 StartCompare(other) ==
   /\ page = "history"
@@ -113,7 +124,7 @@ StartCompare(other) ==
           /\ compareTarget' = None
      ELSE /\ compare' = "loading"
           /\ compareTarget' = other
-  /\ UNCHANGED <<page, selected, tab, detail, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, testLog, running>>
 
 FinishCompare(ok) ==
   /\ compare = "loading"
@@ -122,7 +133,26 @@ FinishCompare(ok) ==
           /\ UNCHANGED compareTarget
      ELSE /\ compare' = "failed"
           /\ compareTarget' = None
-  /\ UNCHANGED <<page, selected, tab, detail, running>>
+  /\ UNCHANGED <<page, selected, tab, detail, testLog, running>>
+
+StartTestLog ==
+  /\ page = "history"
+  /\ tab \in {"all", "targets"}
+  /\ selected # None
+  /\ selected \notin running
+  /\ detail = "ready"
+  /\ testLog' = "loading"
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
+
+FinishTestLog(ok) ==
+  /\ testLog = "loading"
+  /\ testLog' = IF ok THEN "ready" ELSE "failed"
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
+
+CloseTestLog ==
+  /\ testLog # "idle"
+  /\ testLog' = "idle"
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, running>>
 
 StartRun(i) ==
   /\ i \in Inv
@@ -131,16 +161,17 @@ StartRun(i) ==
   /\ IF selected = i
      THEN /\ detail' = "empty"
           /\ ResetCompare
+          /\ testLog' = "idle"
      ELSE IF compareTarget = i
      THEN /\ ResetCompare
-          /\ UNCHANGED detail
-     ELSE UNCHANGED <<detail, compare, compareTarget>>
+          /\ UNCHANGED <<detail, testLog>>
+     ELSE UNCHANGED <<detail, compare, compareTarget, testLog>>
   /\ UNCHANGED <<page, selected, tab>>
 
 FinishRun(i) ==
   /\ i \in running
   /\ running' = running \ {i}
-  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget>>
+  /\ UNCHANGED <<page, selected, tab, detail, compare, compareTarget, testLog>>
 
 Next ==
   \/ \E p \in Pages : OpenPage(p)
@@ -152,6 +183,10 @@ Next ==
   \/ \E i \in Inv : StartCompare(i)
   \/ FinishCompare(TRUE)
   \/ FinishCompare(FALSE)
+  \/ StartTestLog
+  \/ FinishTestLog(TRUE)
+  \/ FinishTestLog(FALSE)
+  \/ CloseTestLog
   \/ \E i \in Inv : StartRun(i)
   \/ \E i \in Inv : FinishRun(i)
 
@@ -173,4 +208,8 @@ CompareTargetSettled ==
 ComparisonMountedOnlyOnCompareTab ==
   (page # "history" \/ tab # "compare") =>
     (compare = "idle" /\ compareTarget = None)
+
+TestLogOnlyWhenSettled ==
+  testLog # "idle" =>
+    (page = "history" /\ tab \in {"all", "targets"} /\ selected # None /\ selected \notin running /\ detail = "ready")
 =============================================================================

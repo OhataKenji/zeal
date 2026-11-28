@@ -7,9 +7,9 @@
 
 use crate::bep::{self, Bep};
 use crate::store::{self, InvocationRecord};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
@@ -114,6 +114,72 @@ fn observation<T>(data: T, incomplete: bool, note: &str) -> Section<T> {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestLogQuery {
+    pub label: String,
+    #[serde(default)]
+    pub configuration: Option<String>,
+}
+
+/// Read the zstd-compressed `test.log` saved for one failed test target.
+#[tracing::instrument(target = "zelith::operations", name = "invocation.test_log", skip_all)]
+pub fn invocation_test_log(
+    data: &Path,
+    workspace: &Path,
+    id: &str,
+    query: &TestLogQuery,
+) -> io::Result<Section<String>> {
+    store::read_record(data, workspace, id)?;
+    let name = store::test_log_artifact_name(&query.label, query.configuration.as_deref());
+    let file = match store::artifact(data, workspace, id, &name) {
+        Err(error) => return Ok(read_error(error)),
+        Ok(file) => file,
+    };
+    let decoder = match zstd::stream::read::Decoder::new(file).and_then(|mut d| {
+        d.window_log_max(bep::MAX_WINDOW_LOG)?;
+        Ok(d)
+    }) {
+        Ok(decoder) => decoder,
+        Err(error) => {
+            return Ok(Section::ParseError {
+                note: error.to_string(),
+            });
+        }
+    };
+    let mut bytes = Vec::new();
+    if let Err(error) = decoder
+        .take(bep::LOG_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+    {
+        return Ok(Section::ParseError {
+            note: error.to_string(),
+        });
+    }
+    let truncated = bytes.len() > bep::LOG_LIMIT;
+    if truncated {
+        bytes.truncate(bep::LOG_LIMIT);
+    }
+    let data = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(if truncated {
+        Section::Incomplete {
+            data,
+            note: "Test log exceeded display limit".into(),
+        }
+    } else {
+        Section::Ok { data }
+    })
+}
+
+fn read_error<T>(error: io::Error) -> Section<T> {
+    if error.kind() == io::ErrorKind::NotFound {
+        Section::Missing
+    } else {
+        Section::ReadError {
+            note: error.to_string(),
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +273,43 @@ mod tests {
         let other = f.root.join("other");
         fs::create_dir(&other).unwrap();
         assert!(invocation_detail(&f.data, &other, id).is_err());
+        assert!(
+            invocation_test_log(
+                &f.data,
+                &other,
+                id,
+                &TestLogQuery {
+                    label: "//pkg:t".into(),
+                    ..Default::default()
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invocation_test_log_reads_zstd_artifact_and_reports_missing() {
+        let f = Fixture::new();
+        f.complete();
+        let id = &f.stream.invocation_id;
+        let name = store::test_log_artifact_name("//pkg:fail_test", None);
+        fs::write(
+            f.dir().join("attempt/1").join(name),
+            zstd::stream::encode_all(b"FAIL: expected 2, got 3\n".as_slice(), 0).unwrap(),
+        )
+        .unwrap();
+
+        let q = |label: &str| TestLogQuery {
+            label: label.into(),
+            configuration: None,
+        };
+        assert!(matches!(
+            invocation_test_log(&f.data, &f.ws, id, &q("//pkg:fail_test")).unwrap(),
+            Section::Ok { ref data } if data == "FAIL: expected 2, got 3\n"
+        ));
+        assert!(matches!(
+            invocation_test_log(&f.data, &f.ws, id, &q("//pkg:missing")).unwrap(),
+            Section::Missing
+        ));
     }
 }

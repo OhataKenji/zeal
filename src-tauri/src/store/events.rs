@@ -12,7 +12,7 @@ use prost::Message;
 use rusqlite::params;
 use rustix::fs::{Mode, OFlags};
 use std::fs::File;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,8 @@ use zstd::stream::write::Encoder;
 
 pub const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 const PROFILE_STORAGE_LIMIT: usize = 512 * 1024 * 1024;
+const TEST_LOG_STORAGE_LIMIT: usize = 2 * 1024 * 1024;
+const MAX_SAVED_TEST_LOGS: usize = 64;
 
 #[derive(Default)]
 struct Facts {
@@ -104,6 +106,7 @@ enum ReceiptSink {
         attempt: i64,
         dir: Dir,
         writer: Option<Encoder<'static, BufWriter<File>>>,
+        saved_test_logs: usize,
     },
 }
 
@@ -145,6 +148,7 @@ impl Receipt {
                 attempt,
                 dir,
                 writer: Some(writer),
+                saved_test_logs: 0,
             }
         } else {
             ReceiptSink::Replay
@@ -204,7 +208,14 @@ impl Receipt {
             }),
             _ => None,
         };
-        if let ReceiptSink::Recording { dir, writer, .. } = &mut self.sink {
+        let test_log = failed_test_log(&event);
+        if let ReceiptSink::Recording {
+            dir,
+            writer,
+            saved_test_logs,
+            ..
+        } = &mut self.sink
+        {
             let writer = writer.as_mut().expect("only finalization takes the writer");
             // Keep the decoded BuildEvent, including Progress stdout/stderr.
             let mut bytes = Vec::with_capacity(10);
@@ -215,6 +226,7 @@ impl Receipt {
             profile_uri
                 .map_or(Ok(()), |uri| copy_profile(uri, dir))
                 .unwrap_or_else(|e| log::warn!("Could not copy invocation profile: {e}"));
+            save_failed_test_log(test_log, dir, saved_test_logs);
         }
         let changed = matches!(event.payload, Some(Payload::Started(_)))
             || (!had_workspace && self.facts.workspace.is_some());
@@ -380,6 +392,96 @@ impl Receipt {
                 .flush()?;
         }
         Ok(())
+    }
+}
+
+fn failed_test_log(event: &bep::BuildEvent) -> Option<(String, &bep::file::File)> {
+    let id = event.id.as_ref()?.id.as_ref()?;
+    match (id, event.payload.as_ref()?) {
+        (Id::TestResult(id), Payload::TestResult(result)) if result.status != 1 => {
+            let file = result
+                .test_action_output
+                .iter()
+                .find(|f| f.name == "test.log")
+                .and_then(|f| f.file.as_ref())?;
+            let config = id
+                .configuration
+                .as_ref()
+                .map(|c| c.id.as_str())
+                .filter(|s| !s.is_empty());
+            Some((database::test_log_artifact_name(&id.label, config), file))
+        }
+        (Id::TestSummary(id), Payload::TestSummary(summary)) if summary.overall_status != 1 => {
+            let file = summary.failed.iter().find_map(|f| f.file.as_ref())?;
+            let config = id
+                .configuration
+                .as_ref()
+                .map(|c| c.id.as_str())
+                .filter(|s| !s.is_empty());
+            Some((database::test_log_artifact_name(&id.label, config), file))
+        }
+        _ => None,
+    }
+}
+
+fn save_failed_test_log(
+    test_log: Option<(String, &bep::file::File)>,
+    dir: &Dir,
+    saved_count: &mut usize,
+) {
+    let Some((name, file)) = test_log.filter(|_| *saved_count < MAX_SAVED_TEST_LOGS) else {
+        return;
+    };
+    match save_test_log(file, &name, dir) {
+        Ok(true) => *saved_count += 1,
+        Ok(false) => {}
+        Err(e) => log::warn!("Could not save failed test log: {e}"),
+    }
+}
+
+/// Compress and store one failed test's `test.log` as zstd next to `bep.binpb.zst`.
+#[tracing::instrument(target = "zelith::operations", name = "bes.save.test_log", skip_all)]
+fn save_test_log(source: &bep::file::File, name: &str, dir: &Dir) -> io::Result<bool> {
+    if dir.exists(name)? {
+        return Ok(false);
+    }
+    let limit = TEST_LOG_STORAGE_LIMIT as u64;
+    match source {
+        bep::file::File::Contents(bytes) => {
+            let slice = if bytes.len() > TEST_LOG_STORAGE_LIMIT {
+                &bytes[bytes.len() - TEST_LOG_STORAGE_LIMIT..]
+            } else {
+                bytes.as_slice()
+            };
+            let mut encoder = Encoder::new(BufWriter::new(dir.file(name, true)?), 0)?;
+            encoder.write_all(slice)?;
+            encoder.finish()?.flush()?;
+            Ok(true)
+        }
+        bep::file::File::Uri(uri) => {
+            let path = Url::parse(uri)
+                .ok()
+                .filter(|url| url.scheme() == "file")
+                .and_then(|url| url.to_file_path().ok())
+                .ok_or_else(|| io::Error::other("test log must reference a local file"))?;
+            let mut file = File::from(rustix::fs::open(
+                &path,
+                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )?);
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.uid() != rustix::process::geteuid().as_raw() {
+                return Err(io::Error::other("test log must be an owned regular file"));
+            }
+            if metadata.len() > limit {
+                file.seek(SeekFrom::End(-(limit as i64)))?;
+            }
+            let mut encoder = Encoder::new(BufWriter::new(dir.file(name, true)?), 0)?;
+            io::copy(&mut file.take(limit), &mut encoder)?;
+            encoder.finish()?.flush()?;
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -1161,5 +1263,38 @@ mod tests {
         assert_eq!((ack.first, ack.last), (1, 2));
         assert!(read_record(&f.data, &f.ws, &f.stream.invocation_id).is_ok());
         assert_eq!(stored_repo_url(&f.data), None);
+    }
+
+    #[test]
+    fn failed_test_logs_are_saved_zstd_compressed_and_survive_source_deletion() {
+        let f = Fixture::new();
+        let src = f.root.join("test.log");
+        std::fs::write(&src, "FAIL: boom\n").unwrap();
+        let uri = Url::from_file_path(&src).unwrap().to_string();
+
+        let dir = Dir::root(&f.data).unwrap().child("tlogs", true).unwrap();
+        let file_name = database::test_log_artifact_name("//pkg:local_test", None);
+        assert!(save_test_log(&bep::file::File::Uri(uri), &file_name, &dir).unwrap());
+        std::fs::remove_file(&src).unwrap();
+        let saved = std::fs::read(f.data.join("tlogs").join(&file_name)).unwrap();
+        assert_eq!(
+            zstd::stream::decode_all(saved.as_slice()).unwrap(),
+            b"FAIL: boom\n"
+        );
+
+        let inline_name = database::test_log_artifact_name("//pkg:inline_test", Some("cfg"));
+        assert!(
+            save_test_log(
+                &bep::file::File::Contents(b"inline err\n".to_vec()),
+                &inline_name,
+                &dir
+            )
+            .unwrap()
+        );
+        let inline_saved = std::fs::read(f.data.join("tlogs").join(&inline_name)).unwrap();
+        assert_eq!(
+            zstd::stream::decode_all(inline_saved.as_slice()).unwrap(),
+            b"inline err\n"
+        );
     }
 }
