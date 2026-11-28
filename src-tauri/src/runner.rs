@@ -7,7 +7,7 @@
 //! Only the invocation's own entry may be signalled; descendants are not
 //! supervised.
 
-use crate::runargs::{argv, parse_arguments, validate_cmd, validate_pattern};
+use crate::runargs::{argv, parse_arguments, rerun_arguments, validate_cmd, validate_pattern};
 use crate::state::{
     ActiveInvocation, Core, CoreState, OwnedInvocation, ProcessDiagnostic, ProcessGroup, now_millis,
 };
@@ -178,13 +178,14 @@ pub fn start(
     validate_pattern(pattern)?;
     let mut args = vec!["--color=yes".into(), "--curses=no".into(), pattern.into()];
     args.extend(parse_arguments(arguments)?);
+    let launch_arguments = rerun_arguments(arguments)?;
     let log = crate::terminal::session_log().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     // Record trusted launch flags before spawning Bazel so BES events for this
     // invocation always find their launch record and forged BES streams cannot
     // forge re-run flags.
     if let Ok(data) = app.path().app_data_dir()
-        && let Err(error) = crate::store::record_launch(&data, &id, arguments)
+        && let Err(error) = crate::store::record_launch(&data, &id, &launch_arguments)
     {
         log::warn!("Failed to record launch arguments: {error}");
     }
@@ -194,7 +195,6 @@ pub fn start(
     let capture = capture.expect("terminal output capture");
     core.emit(&app);
     let result = id.clone();
-    let launch_arguments = arguments.to_string();
 
     thread::spawn(move || {
         let _guard = InvocationGuard {

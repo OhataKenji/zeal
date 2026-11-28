@@ -17,6 +17,38 @@ pub fn parse_arguments(input: &str) -> Result<Vec<String>, String> {
     shlex::split(input).ok_or_else(|| "Unclosed quote or trailing escape in arguments".to_string())
 }
 
+/// User arguments stored for History Re-run: identical to the launch input,
+/// except any Bazel `--invocation_id` override (before `--`) is removed so a
+/// re-run always uses its fresh invocation ID instead of colliding as a retry.
+pub fn rerun_arguments(input: &str) -> Result<String, String> {
+    let tokens = parse_arguments(input)?;
+    let mut kept = Vec::with_capacity(tokens.len());
+    let mut changed = false;
+    let mut iter = tokens.into_iter();
+    while let Some(token) = iter.next() {
+        if token == "--" {
+            kept.push(token);
+            kept.extend(iter);
+            break;
+        }
+        if token == "--invocation_id" {
+            let _ = iter.next();
+            changed = true;
+            continue;
+        }
+        if token.starts_with("--invocation_id=") {
+            changed = true;
+            continue;
+        }
+        kept.push(token);
+    }
+    if !changed {
+        return Ok(input.to_string());
+    }
+    shlex::try_join(kept.iter().map(String::as_str))
+        .map_err(|_| "Arguments must not contain NUL characters".to_string())
+}
+
 /// Ordinary Bazel defaults, not an invocation policy: caller arguments
 /// follow and may override them.
 pub fn argv(cmd: &str, arguments: &[String], endpoint: &str, id: &str) -> Vec<String> {
@@ -69,6 +101,7 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
 mod tests {
     use super::argv;
     use super::parse_arguments;
+    use super::rerun_arguments;
 
     #[test]
     fn shell_words_preserve_quotes_empty_values_and_escapes() {
@@ -152,5 +185,29 @@ mod tests {
     fn profiling_follows_bazel_configuration() {
         let args = argv("build", &[], "grpc://127.0.0.1:12345", "id");
         assert!(!args.iter().any(|arg| arg.contains("profile")));
+    }
+
+    #[test]
+    fn rerun_arguments_strip_bazel_invocation_id_only_before_double_dash() {
+        assert_eq!(
+            rerun_arguments("--define=qa_mode=enabled").unwrap(),
+            "--define=qa_mode=enabled"
+        );
+        assert_eq!(
+            parse_arguments(
+                &rerun_arguments("--invocation_id=custom --define=qa_mode=enabled").unwrap()
+            )
+            .unwrap(),
+            ["--define=qa_mode=enabled"]
+        );
+        assert_eq!(
+            parse_arguments(&rerun_arguments("--invocation_id custom --define='a b'").unwrap())
+                .unwrap(),
+            ["--define=a b"]
+        );
+        assert_eq!(
+            rerun_arguments("--define=a=1 -- --invocation_id=app-arg").unwrap(),
+            "--define=a=1 -- --invocation_id=app-arg"
+        );
     }
 }
