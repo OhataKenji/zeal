@@ -26,8 +26,8 @@ export interface DailyAnalytics {
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
-    cacheHits: number;
-    actionsTotal: number;
+    spawnCacheHits: number;
+    spawnTotal: number;
     phaseTimed: number;
     analysisMs: number;
     executionMs: number;
@@ -65,9 +65,9 @@ export function emptyAnalytics(): AnalyticsView {
   };
 }
 
-/** Returns integer cache hit percentage (0-100), or null when no action data exists. */
-export function cacheHitRate(cacheHits: number, actionsTotal: number): number | null {
-  return actionsTotal > 0 ? Math.round((cacheHits / actionsTotal) * 100) : null;
+/** Returns integer spawn cache hit percentage (0-100), or null when no spawn data exists. */
+export function cacheHitRate(spawnCacheHits: number, spawnTotal: number): number | null {
+  return spawnTotal > 0 ? Math.round((spawnCacheHits / spawnTotal) * 100) : null;
 }
 
 /** Explains reversed dates; missing dates still use the core's defaults. */

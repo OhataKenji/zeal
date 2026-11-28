@@ -37,10 +37,10 @@ pub struct Day {
     /// Nearest-rank percentiles over the day's recorded durations.
     pub p50_ms: i64,
     pub p95_ms: i64,
-    /// Action cache hits (local + remote/disk) across invocations with metrics.
-    pub cache_hits: i64,
-    /// Total actions across invocations with metrics; 0 when no cache metrics exist.
-    pub actions_total: i64,
+    /// Spawn cache hits across invocations with runner counts.
+    pub spawn_cache_hits: i64,
+    /// Total spawns across invocations with runner counts; 0 when none exist.
+    pub spawn_total: i64,
     /// Invocations carrying at least one recorded phase duration.
     pub phase_timed: i64,
     /// Average analysis phase duration (ms) across invocations with analysis metrics.
@@ -137,27 +137,10 @@ pub fn refresh_timezone() {
     }
 }
 
-fn validate_filter(filter: &Filter) -> Result<(), StoreError> {
-    if filter.cmd.as_deref().is_some_and(|s| {
-        s.is_empty()
-            || s.len() > 64
-            || !s
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-    }) || filter
-        .outcome
-        .as_deref()
-        .is_some_and(|s| !["ok", "failed", "interrupted", "unknown"].contains(&s))
-        // Matches the target-pattern fact limit in store::events.
-        || filter.pattern.as_deref().is_some_and(|s| s.len() > 64 * 1024)
-    {
-        return Err(super::fail(ErrorKind::Invalid));
-    }
-    Ok(())
-}
-
 #[tracing::instrument(target = "zelith::operations", name = "analytics.query", skip_all)]
 pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, StoreError> {
+    use rusqlite::OptionalExtension;
+
     let ws = super::database::workspace_path(ws)?;
     let mut store = Store::open(data)?;
     let tx = store.conn.transaction()?;
@@ -175,19 +158,27 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         |r| r.get(0),
     )?;
     // Reject oversized requests explicitly; never silently truncate their data.
-    if !(1.0..=366.0).contains(&span) {
+    if !(1.0..=366.0).contains(&span)
+        || filter
+            .cmd
+            .as_deref()
+            .is_some_and(|s| s.is_empty() || s.len() > 64 || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+        || filter
+            .outcome
+            .as_deref()
+            .is_some_and(|s| !["ok", "failed", "interrupted", "unknown"].contains(&s))
+        // Matches the target-pattern fact limit in store::events.
+        || filter.pattern.as_deref().is_some_and(|s| s.len() > 64 * 1024)
+    {
         return Err(super::fail(ErrorKind::Invalid));
     }
-    validate_filter(&filter)?;
-    let ws_id: Option<String> = {
-        use rusqlite::OptionalExtension;
-        tx.query_row(
+    let ws_id: Option<String> = tx
+        .query_row(
             "SELECT id FROM workspace WHERE canonical_path=?1",
             [ws.as_os_str().as_encoded_bytes()],
             |r| r.get(0),
         )
-        .optional()?
-    };
+        .optional()?;
     let workspaces = workspace_candidates(&tx, ws_id.as_ref())?;
     if let Some(selected) = &filter.workspace_id
         && !workspaces.iter().any(|workspace| &workspace.id == selected)
@@ -212,8 +203,8 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 total_ms: 0,
                 p50_ms: 0,
                 p95_ms: 0,
-                cache_hits: 0,
-                actions_total: 0,
+                spawn_cache_hits: 0,
+                spawn_total: 0,
                 phase_timed: 0,
                 analysis_ms: 0,
                 execution_ms: 0,
@@ -283,8 +274,8 @@ fn aggregate(
                 total_ms: r.get(7)?,
                 p50_ms: r.get(8)?,
                 p95_ms: r.get(9)?,
-                cache_hits: r.get(10)?,
-                actions_total: r.get(11)?,
+                spawn_cache_hits: r.get(10)?,
+                spawn_total: r.get(11)?,
                 phase_timed: r.get(12)?,
                 analysis_ms: r.get(13)?,
                 execution_ms: r.get(14)?,
@@ -369,7 +360,7 @@ fn days_sql() -> String {
         "WITH matched AS MATERIALIZED (
             SELECT date(started_at_ms / 1000,'unixepoch','localtime') AS day,exit_code,
                 MAX(finished_at_ms - started_at_ms,0) AS ms,
-                cache_hits,actions_total,analysis_ms,execution_ms
+                spawn_cache_hits,spawn_total,analysis_ms,execution_ms
             FROM invocation WHERE {SCOPE} AND {MATCH}
                 AND (:pattern IS NULL OR target_pattern=:pattern)
         ),
@@ -380,8 +371,8 @@ fn days_sql() -> String {
                 COUNT(*) FILTER (WHERE exit_code=8) AS interrupted,
                 COUNT(*) FILTER (WHERE exit_code IS NULL) AS unknown,
                 COUNT(ms) AS timed,COALESCE(SUM(ms),0) AS total_ms,
-                COALESCE(SUM(cache_hits),0) AS cache_hits,
-                COALESCE(SUM(actions_total),0) AS actions_total,
+                COALESCE(SUM(spawn_cache_hits),0) AS spawn_cache_hits,
+                COALESCE(SUM(spawn_total),0) AS spawn_total,
                 COUNT(COALESCE(analysis_ms,execution_ms)) AS phase_timed,
                 COALESCE(CAST(ROUND(AVG(analysis_ms)) AS INTEGER),0) AS analysis_ms,
                 COALESCE(CAST(ROUND(AVG(execution_ms)) AS INTEGER),0) AS execution_ms
@@ -401,7 +392,7 @@ fn days_sql() -> String {
         SELECT daily.day,daily.count,daily.ok,daily.failed,daily.interrupted,
             daily.unknown,daily.timed,daily.total_ms,
             COALESCE(ranked.p50,0),COALESCE(ranked.p95,0),
-            daily.cache_hits,daily.actions_total,
+            daily.spawn_cache_hits,daily.spawn_total,
             daily.phase_timed,daily.analysis_ms,daily.execution_ms
         FROM daily LEFT JOIN ranked USING(day)"
     )
@@ -1484,7 +1475,7 @@ mod tests {
             (&analysis_only, None, None, Some(500), None),
         ] {
             store.conn.execute(
-                "UPDATE invocation SET cache_hits=?1,actions_total=?2,analysis_ms=?3,execution_ms=?4 WHERE id=?5",
+                "UPDATE invocation SET spawn_cache_hits=?1,spawn_total=?2,analysis_ms=?3,execution_ms=?4 WHERE id=?5",
                 params![ch, at, an, ex, id],
             ).unwrap();
         }
@@ -1497,7 +1488,7 @@ mod tests {
             })
             .days[0];
         assert_eq!(
-            (day.cache_hits, day.actions_total, day.phase_timed),
+            (day.spawn_cache_hits, day.spawn_total, day.phase_timed),
             (100, 150, 3)
         );
         // avg analysis = (300 + 4000 + 500) / 3 = 1600; avg execution = (1200 + 10000) / 2 = 5600

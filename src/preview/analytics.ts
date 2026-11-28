@@ -6,8 +6,8 @@ type AnalyticsRecord = Pick<InvocationRecord, "exitCode" | "finishedAt"> & {
   pattern: string;
   startedAt: number;
   workspace?: string;
-  cacheHits?: number;
-  actionsTotal?: number;
+  spawnCacheHits?: number;
+  spawnTotal?: number;
   analysisMs?: number;
   executionMs?: number;
 };
@@ -21,8 +21,8 @@ interface DaySamples {
   unknown: number;
   workspaceCounts: Record<string, number>;
   durations: number[];
-  cacheHits: number;
-  actionsTotal: number;
+  spawnCacheHits: number;
+  spawnTotal: number;
   phaseTimed: number;
   analysisSum: number;
   analysisCount: number;
@@ -118,8 +118,8 @@ function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
       unknown: 0,
       workspaceCounts: {},
       durations: [],
-      cacheHits: 0,
-      actionsTotal: 0,
+      spawnCacheHits: 0,
+      spawnTotal: 0,
       phaseTimed: 0,
       analysisSum: 0,
       analysisCount: 0,
@@ -131,8 +131,8 @@ function emptyDays(first: number, spanDays: number): Map<string, DaySamples> {
 }
 
 function recordMetrics(slot: DaySamples, inv: AnalyticsRecord) {
-  if (inv.cacheHits !== undefined) slot.cacheHits += inv.cacheHits;
-  if (inv.actionsTotal !== undefined) slot.actionsTotal += inv.actionsTotal;
+  if (inv.spawnCacheHits !== undefined) slot.spawnCacheHits += inv.spawnCacheHits;
+  if (inv.spawnTotal !== undefined) slot.spawnTotal += inv.spawnTotal;
   if (inv.analysisMs === undefined && inv.executionMs === undefined) return;
   slot.phaseTimed += 1;
   if (inv.analysisMs !== undefined) {
@@ -182,8 +182,8 @@ function dailyAnalytics(
     interrupted: slot.interrupted,
     unknown: slot.unknown,
     workspaceCounts: slot.workspaceCounts,
-    cacheHits: slot.cacheHits,
-    actionsTotal: slot.actionsTotal,
+    spawnCacheHits: slot.spawnCacheHits,
+    spawnTotal: slot.spawnTotal,
     phaseTimed: slot.phaseTimed,
     analysisMs: slot.analysisCount > 0 ? Math.round(slot.analysisSum / slot.analysisCount) : 0,
     executionMs: slot.executionCount > 0 ? Math.round(slot.executionSum / slot.executionCount) : 0,

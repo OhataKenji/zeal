@@ -85,8 +85,8 @@ type AnalyticsSample = Pick<
   PreviewRecord,
   "cmd" | "pattern" | "workspace" | "startedAt" | "finishedAt" | "exitCode"
 > & {
-  cacheHits: number;
-  actionsTotal: number;
+  spawnCacheHits: number;
+  spawnTotal: number;
   analysisMs: number;
   executionMs: number;
 };
@@ -120,7 +120,7 @@ function sampleAnalyticsActivity(
       );
       const sequence = rows.length + 1;
       const exitCode = sampleExitCode(sequence);
-      const actionsTotal = 40 + ((ago * 7 + i * 13) % 80);
+      const spawnTotal = 40 + ((ago * 7 + i * 13) % 80);
       const cachePct = exitCode === 0 ? 55 + ((ago * 9 + i * 5) % 40) : 15 + ((ago * 7) % 35);
       const analysisMs = Math.max(50, Math.round(elapsed * (0.2 + ((ago + i) % 3) * 0.08)));
       rows.push({
@@ -130,8 +130,8 @@ function sampleAnalyticsActivity(
         startedAt,
         finishedAt: startedAt + elapsed,
         exitCode,
-        cacheHits: Math.round((actionsTotal * cachePct) / 100),
-        actionsTotal,
+        spawnCacheHits: Math.round((spawnTotal * cachePct) / 100),
+        spawnTotal,
         analysisMs,
         executionMs: Math.max(50, elapsed - analysisMs),
       });

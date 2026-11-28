@@ -50,7 +50,7 @@
     Math.max(1, ...(data?.days.map((d) => d.analysisMs + d.executionMs) ?? [])),
   );
   const hasPhaseData = $derived(data?.days.some((d) => d.phaseTimed > 0) ?? false);
-  const hasCacheData = $derived(data?.days.some((d) => d.actionsTotal > 0) ?? false);
+  const hasCacheData = $derived(data?.days.some((d) => d.spawnTotal > 0) ?? false);
   const width = $derived(
     Math.max(640, (data?.days.length ?? 0) * 24 + 60, chartWidth),
   );
@@ -124,9 +124,9 @@
           ? `avg analysis ${fmtMs(day.analysisMs)}, avg execution ${fmtMs(day.executionMs)}`
           : "no phase metrics",
       cache: () => {
-        const rate = cacheHitRate(day.cacheHits, day.actionsTotal);
+        const rate = cacheHitRate(day.spawnCacheHits, day.spawnTotal);
         return rate !== null
-          ? `${rate}% cache hits (${day.cacheHits}/${day.actionsTotal})`
+          ? `${rate}% spawn cache hits (${day.spawnCacheHits}/${day.spawnTotal})`
           : "no cache metrics";
       },
     };
@@ -405,7 +405,7 @@
     {#if hasCacheData}
       <section>
         <h2>Cache hit rate</h2>
-        <p class="dim">Daily action cache hit percentage (local + remote/disk)</p>
+        <p class="dim">Daily spawn cache hit percentage</p>
         {#snippet cacheChart()}
           <line
             class="grid-line"
@@ -416,14 +416,14 @@
           />
           <text x="44" y={PLOT.baseline - PLOT.height / 2 + 4} text-anchor="end">50%</text>
           {#each segments(
-            data.days.map((d) => cacheHitRate(d.cacheHits, d.actionsTotal)),
+            data.days.map((d) => cacheHitRate(d.spawnCacheHits, d.spawnTotal)),
             100,
             step,
           ) as points}
             <polyline class="line-cache" {points} />
           {/each}
           {#each data.days as day, index}
-            {@const rate = cacheHitRate(day.cacheHits, day.actionsTotal)}
+            {@const rate = cacheHitRate(day.spawnCacheHits, day.spawnTotal)}
             {#if rate !== null}
               <circle
                 class="dot-cache"

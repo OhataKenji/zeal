@@ -161,7 +161,7 @@ impl Store {
                 CREATE INDEX workspace_repo_url ON workspace(repo_url);
                 CREATE TABLE invocation(id TEXT NOT NULL PRIMARY KEY,workspace_id TEXT REFERENCES workspace(id),
                     cmd TEXT,target_pattern TEXT,started_at_ms INTEGER,finished_at_ms INTEGER,exit_code INTEGER,
-                    cache_hits INTEGER,actions_total INTEGER,analysis_ms INTEGER,execution_ms INTEGER,
+                    spawn_cache_hits INTEGER,spawn_total INTEGER,analysis_ms INTEGER,execution_ms INTEGER,
                     attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt>=0),
                     received_complete INTEGER NOT NULL DEFAULT 0 CHECK(received_complete IN (0,1)));
                 CREATE INDEX invocation_workspace_started ON invocation(workspace_id,started_at_ms DESC,id);
@@ -170,7 +170,7 @@ impl Store {
             db.sync_all()?;
             root.sync()?;
         }
-        conn.prepare("SELECT id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code,cache_hits,actions_total,analysis_ms,execution_ms,attempt,received_complete FROM invocation LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
+        conn.prepare("SELECT id,workspace_id,cmd,target_pattern,started_at_ms,finished_at_ms,exit_code,spawn_cache_hits,spawn_total,analysis_ms,execution_ms,attempt,received_complete FROM invocation LIMIT 0").map_err(|_| fail(ErrorKind::Corrupt))?;
         conn.prepare("SELECT id,canonical_path,repo_url FROM workspace LIMIT 0")
             .map_err(|_| fail(ErrorKind::Corrupt))?;
         Ok(Self {

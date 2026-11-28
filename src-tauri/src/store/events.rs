@@ -31,8 +31,8 @@ struct Facts {
     started: Option<i64>,
     finished: Option<i64>,
     exit: Option<i32>,
-    cache_hits: Option<i64>,
-    actions_total: Option<i64>,
+    spawn_cache_hits: Option<i64>,
+    spawn_total: Option<i64>,
     analysis_ms: Option<i64>,
     execution_ms: Option<i64>,
 }
@@ -263,52 +263,27 @@ impl Receipt {
         }
     }
 
+    /// Counts spawn cache hits and total spawns from `runner_count`, matching
+    /// `summarizeRunners` in `src/lib/invocation.ts`.
     fn observe_action_summary(&mut self, summary: &bep::build_metrics::ActionSummary) {
-        let local_hits = summary
-            .action_cache_statistics
-            .as_ref()
-            .map(|s| i64::from(s.hits).max(0));
-        let local_misses = summary
-            .action_cache_statistics
-            .as_ref()
-            .map(|s| i64::from(s.misses).max(0))
-            .unwrap_or(0);
-        let runner_cache_hits: i64 = summary
-            .runner_count
-            .iter()
-            .filter(|rc| rc.name.to_ascii_lowercase().contains("cache hit"))
-            .map(|rc| i64::from(rc.count).max(0))
-            .fold(0i64, i64::saturating_add);
-        let runner_total: i64 = summary
-            .runner_count
-            .iter()
-            .filter(|rc| {
-                !rc.name.eq_ignore_ascii_case("total") && !rc.name.eq_ignore_ascii_case("internal")
-            })
-            .map(|rc| i64::from(rc.count).max(0))
-            .fold(0i64, i64::saturating_add);
-        let executed = summary.actions_executed.max(0);
-        let executed_denom = if runner_cache_hits > 0 {
-            executed.max(runner_total)
-        } else if executed > 0 {
-            executed
-        } else {
-            runner_total
+        let spawns = |rc: &&bep::build_metrics::action_summary::RunnerCount| {
+            rc.name != "total" && rc.name != "internal" && rc.count > 0
         };
-        if local_hits.is_none()
-            && runner_cache_hits == 0
-            && executed_denom == 0
-            && local_misses == 0
-        {
-            return;
+        let total = summary
+            .runner_count
+            .iter()
+            .filter(spawns)
+            .fold(0i64, |sum, rc| sum.saturating_add(i64::from(rc.count)));
+        let cached = summary
+            .runner_count
+            .iter()
+            .filter(spawns)
+            .filter(|rc| rc.name.to_ascii_lowercase().contains("cache"))
+            .fold(0i64, |sum, rc| sum.saturating_add(i64::from(rc.count)));
+        if total > 0 {
+            self.facts.spawn_cache_hits = Some(cached);
+            self.facts.spawn_total = Some(total);
         }
-        let lh = local_hits.unwrap_or(0);
-        let hits = lh.saturating_add(runner_cache_hits);
-        let total = lh
-            .saturating_add(executed_denom.max(local_misses))
-            .max(hits);
-        self.facts.cache_hits = Some(hits);
-        self.facts.actions_total = Some(total);
     }
 
     fn observe_timing(&mut self, timing: &bep::build_metrics::TimingMetrics) {
@@ -355,8 +330,8 @@ impl Receipt {
             started: Option<i64>,
             finished: Option<i64>,
             exit: Option<i32>,
-            cache_hits: Option<i64>,
-            actions_total: Option<i64>,
+            spawn_cache_hits: Option<i64>,
+            spawn_total: Option<i64>,
             analysis_ms: Option<i64>,
             execution_ms: Option<i64>,
         }
@@ -367,7 +342,7 @@ impl Receipt {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let invocation_id = id(&self.stream.invocation_id)?;
         let existing = tx.query_row(
-            "SELECT w.canonical_path,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,r.cache_hits,r.actions_total,r.analysis_ms,r.execution_ms FROM invocation r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
+            "SELECT w.canonical_path,r.cmd,r.target_pattern,r.started_at_ms,r.finished_at_ms,r.exit_code,r.spawn_cache_hits,r.spawn_total,r.analysis_ms,r.execution_ms FROM invocation r LEFT JOIN workspace w ON w.id=r.workspace_id WHERE r.id=?1",
             [&invocation_id],
             |r| {
                 Ok(StoredFacts {
@@ -377,8 +352,8 @@ impl Receipt {
                     started: r.get(3)?,
                     finished: r.get(4)?,
                     exit: r.get(5)?,
-                    cache_hits: r.get(6)?,
-                    actions_total: r.get(7)?,
+                    spawn_cache_hits: r.get(6)?,
+                    spawn_total: r.get(7)?,
                     analysis_ms: r.get(8)?,
                     execution_ms: r.get(9)?,
                 })
@@ -399,10 +374,13 @@ impl Receipt {
             || conflicts(existing.started.as_ref(), self.facts.started.as_ref())
             || conflicts(existing.finished.as_ref(), self.facts.finished.as_ref())
             || conflicts(existing.exit.as_ref(), self.facts.exit.as_ref())
-            || conflicts(existing.cache_hits.as_ref(), self.facts.cache_hits.as_ref())
             || conflicts(
-                existing.actions_total.as_ref(),
-                self.facts.actions_total.as_ref(),
+                existing.spawn_cache_hits.as_ref(),
+                self.facts.spawn_cache_hits.as_ref(),
+            )
+            || conflicts(
+                existing.spawn_total.as_ref(),
+                self.facts.spawn_total.as_ref(),
             )
             || conflicts(
                 existing.analysis_ms.as_ref(),
@@ -444,8 +422,8 @@ impl Receipt {
         // Missing retry facts must not erase facts already reported for this
         // invocation.
         let updated = tx.execute(
-            "UPDATE invocation SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_pattern=coalesce(target_pattern,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=coalesce(finished_at_ms,?7),exit_code=coalesce(exit_code,?8),cache_hits=coalesce(cache_hits,?9),actions_total=coalesce(actions_total,?10),analysis_ms=coalesce(analysis_ms,?11),execution_ms=coalesce(execution_ms,?12),received_complete=?13 WHERE id=?1 AND attempt=?2 AND received_complete=0",
-            params![invocation_id,attempt,ws_id,self.facts.cmd,self.facts.pattern,self.facts.started,self.facts.finished,self.facts.exit,self.facts.cache_hits,self.facts.actions_total,self.facts.analysis_ms,self.facts.execution_ms,complete],
+            "UPDATE invocation SET workspace_id=coalesce(workspace_id,?3),cmd=coalesce(cmd,?4),target_pattern=coalesce(target_pattern,?5),started_at_ms=coalesce(started_at_ms,?6),finished_at_ms=coalesce(finished_at_ms,?7),exit_code=coalesce(exit_code,?8),spawn_cache_hits=coalesce(spawn_cache_hits,?9),spawn_total=coalesce(spawn_total,?10),analysis_ms=coalesce(analysis_ms,?11),execution_ms=coalesce(execution_ms,?12),received_complete=?13 WHERE id=?1 AND attempt=?2 AND received_complete=0",
+            params![invocation_id,attempt,ws_id,self.facts.cmd,self.facts.pattern,self.facts.started,self.facts.finished,self.facts.exit,self.facts.spawn_cache_hits,self.facts.spawn_total,self.facts.analysis_ms,self.facts.execution_ms,complete],
         )?;
         if updated != 1 {
             return Err(fail(ErrorKind::Conflict));
@@ -1277,7 +1255,7 @@ mod tests {
             .unwrap()
             .conn
             .query_row(
-                "SELECT cache_hits,actions_total,analysis_ms,execution_ms FROM invocation WHERE id=?1",
+                "SELECT spawn_cache_hits,spawn_total,analysis_ms,execution_ms FROM invocation WHERE id=?1",
                 [&f.stream.invocation_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
@@ -1285,30 +1263,29 @@ mod tests {
     }
 
     #[test]
-    fn build_metrics_cache_hits_and_phase_times_persist_to_sqlite() {
+    fn build_metrics_spawn_cache_and_phase_times_persist_to_sqlite() {
         use crate::protocol::bep::BuildMetrics;
         use crate::protocol::bep::build_metrics::action_summary::RunnerCount;
         use crate::protocol::bep::build_metrics::{ActionSummary, TimingMetrics};
-        use crate::protocol::generated::blaze::ActionCacheStatistics;
 
         let runner = |name: &str, count: i32| RunnerCount {
             name: name.into(),
             count,
             ..Default::default()
         };
-        let ingest = ingest_metrics;
 
-        // Local + remote cache hits and both phase durations persist.
+        // Runner cache hits exclude total/internal/non-positive rows; both phases persist.
         assert_eq!(
-            ingest(BuildMetrics {
+            ingest_metrics(BuildMetrics {
                 action_summary: Some(ActionSummary {
-                    actions_executed: 20,
-                    runner_count: vec![runner("remote cache hit", 15), runner("linux-sandbox", 5)],
-                    action_cache_statistics: Some(ActionCacheStatistics {
-                        hits: 80,
-                        misses: 20,
-                        ..Default::default()
-                    }),
+                    runner_count: vec![
+                        runner("total", 20),
+                        runner("internal", 5),
+                        runner("remote cache hit", 3),
+                        runner("disk cache hit", 4),
+                        runner("linux-sandbox", 3),
+                        runner("ignored", 0),
+                    ],
                     ..Default::default()
                 }),
                 timing_metrics: Some(TimingMetrics {
@@ -1318,52 +1295,13 @@ mod tests {
                 }),
                 ..Default::default()
             }),
-            (Some(95), Some(100), Some(420), Some(1580)),
+            (Some(7), Some(10), Some(420), Some(1580)),
         );
-        // Multi-spawn runner cache hits exclude synthetic total/internal rows.
+        // Zero phase durations and synthetic-only runner rows stay NULL.
         assert_eq!(
-            ingest(BuildMetrics {
+            ingest_metrics(BuildMetrics {
                 action_summary: Some(ActionSummary {
-                    actions_executed: 10,
-                    runner_count: vec![
-                        runner("total", 20),
-                        runner("internal", 5),
-                        runner("remote cache hit", 3),
-                        runner("disk cache hit", 4),
-                        runner("linux-sandbox", 3),
-                    ],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            (Some(7), Some(10), None, None),
-        );
-        // Local cache misses count when actions_executed is zero.
-        assert_eq!(
-            ingest(BuildMetrics {
-                action_summary: Some(ActionSummary {
-                    action_cache_statistics: Some(ActionCacheStatistics {
-                        hits: 80,
-                        misses: 20,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            (Some(80), Some(100), None, None),
-        );
-        // Uncached multi-spawn action uses actions_executed (not spawn count) as denominator.
-        assert_eq!(
-            ingest(BuildMetrics {
-                action_summary: Some(ActionSummary {
-                    actions_executed: 1,
-                    action_cache_statistics: Some(ActionCacheStatistics {
-                        hits: 10,
-                        misses: 1,
-                        ..Default::default()
-                    }),
-                    runner_count: vec![runner("linux-sandbox", 2), runner("total", 2)],
+                    runner_count: vec![runner("total", 2), runner("internal", 2)],
                     ..Default::default()
                 }),
                 timing_metrics: Some(TimingMetrics {
@@ -1373,7 +1311,7 @@ mod tests {
                 }),
                 ..Default::default()
             }),
-            (Some(10), Some(11), Some(420), None),
+            (None, None, Some(420), None),
         );
     }
 }
