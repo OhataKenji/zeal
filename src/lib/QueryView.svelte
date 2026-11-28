@@ -37,13 +37,11 @@
     targetIndex,
     workspace,
     bazelAvailable,
-    active = true,
     onselecttarget,
   }: {
     targetIndex: SearchIndex | null;
     workspace: string;
     bazelAvailable: boolean;
-    active?: boolean;
     onselecttarget?: (label: string) => void;
   } = $props();
 
@@ -82,9 +80,6 @@
   let graphError = $state<string | null>(null);
   let graphZoom = $state(1);
   let graphDialog = $state<HTMLDialogElement>();
-  $effect(() => {
-    if (!active && graphDialog?.open) graphDialog.close();
-  });
   let graphCanvas = $state<HTMLDivElement>();
   let viewEl = $state<HTMLElement>();
   let detailsEl = $state<HTMLDetailsElement>();

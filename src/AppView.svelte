@@ -133,19 +133,9 @@
   // A switch error belongs to the workspace it failed on: the next attempt or
   // an actual workspace change clears it — unrelated state publishes do not.
   const workspacePath = $derived(st?.workspace ?? null);
-  let mountedQuery = $state(false);
-  let mountedAnalytics = $state(false);
-  const showQuery = $derived(mountedQuery || view.page === "query");
-  const showAnalytics = $derived(mountedAnalytics || view.page === "analytics");
   $effect(() => {
     void workspacePath;
     switchError = null;
-    mountedQuery = false;
-    mountedAnalytics = false;
-  });
-  $effect(() => {
-    if (view.page === "query") mountedQuery = true;
-    if (view.page === "analytics") mountedAnalytics = true;
   });
 
   // ⌘K/Ctrl+K toggles only while the palette or nothing owns the keyboard.
@@ -305,24 +295,22 @@
 
   {#if core === null}
     <div class="content dim">loading…</div>
+  {:else if st === null || surface?.kind === "workspace"}
+    <div class="content">
+      {#key promptPath ?? "initial"}
+        <WorkspacePrompt
+          initial={promptInitial}
+          initialScope={{ include: ["//..."] }}
+          bazelAvailable={core.bazel !== null}
+          besEndpoint={core.besEndpoint}
+          bind:opening
+          onopen={session.openWorkspace}
+          onclose={st ? closeWorkspacePrompt : undefined}
+        />
+      {/key}
+    </div>
   {:else}
-    {#if st === null || surface?.kind === "workspace"}
-      <div class="content">
-        {#key promptPath ?? "initial"}
-          <WorkspacePrompt
-            initial={promptInitial}
-            initialScope={{ include: ["//..."] }}
-            bazelAvailable={core.bazel !== null}
-            besEndpoint={core.besEndpoint}
-            bind:opening
-            onopen={session.openWorkspace}
-            onclose={st ? closeWorkspacePrompt : undefined}
-          />
-        {/key}
-      </div>
-    {/if}
-    {#if st !== null}
-      <div class="lens-workspace" hidden={surface?.kind === "workspace"}>
+    <div class="lens-workspace">
       <nav class="rail" aria-label="Workspace domains">
         {#each pages as { id, label } (id)}
           {@const Icon = pageIcons[id]}
@@ -524,30 +512,21 @@
             <p class="workspace-empty dim">Select an invocation from the sidebar.</p>
           {/if}
         {/if}
-        {#if showQuery}
-          <div class="page-center" hidden={view.page !== "query"}>
-            {#key st.workspace}
-              <QueryView
-                {targetIndex}
-                workspace={st.workspace}
-                bazelAvailable={core !== null && core.bazel !== null}
-                active={view.page === "query" && surface === null}
-                onselecttarget={selectTarget}
-              />
-            {/key}
-          </div>
-        {/if}
-        {#if showAnalytics}
-          <div class="page-center" hidden={view.page !== "analytics"}>
-            {#key st.workspace}
-              <AnalyticsView
-                workspace={st.workspace}
-                invocations={view.invocations}
-                active={view.page === "analytics"}
-              />
-            {/key}
-          </div>
-        {/if}
+        <div class="page-center" hidden={view.page !== "query"}>
+          {#key st.workspace}
+            <QueryView
+              {targetIndex}
+              workspace={st.workspace}
+              bazelAvailable={core !== null && core.bazel !== null}
+              onselecttarget={selectTarget}
+            />
+          {/key}
+        </div>
+        <div class="page-center" hidden={view.page !== "analytics"}>
+          {#key st.workspace}
+            <AnalyticsView workspace={st.workspace} invocations={view.invocations} />
+          {/key}
+        </div>
       {/snippet}
 
       {#if view.page === "modules" && view.modules}
@@ -595,7 +574,6 @@
           if (surface?.kind === "run") surface = null;
         }}
       />
-    {/if}
     {/if}
   {/if}
 </div>

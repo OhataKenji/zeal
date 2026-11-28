@@ -16,35 +16,24 @@
     AnalyticsFilter["outcome"]
   >[];
 
-  let { workspace, invocations, active = true }: {
+  let { workspace, invocations }: {
     workspace: string;
     invocations: InvocationRecord[];
-    active?: boolean;
   } = $props();
   let view = $state.raw(emptyAnalytics());
   let controller = $state<ReturnType<typeof createAnalytics> | null>(null);
   let chartWidth = $state(0);
   let breakdown = $state<"result" | "workspace">("result");
-  let dirty = $state(true);
-  let customDates = false;
   $effect(() => {
     // A workspace change discards both the filters and pending responses.
     void workspace;
-    dirty = true;
-    customDates = false;
     const next = createAnalytics(workspace, { invoke }, (value) => (view = value));
     controller = next;
     return next.dispose;
   });
   $effect(() => {
     void invocations;
-    dirty = true;
-  });
-  $effect(() => {
-    if (active && dirty && controller) {
-      dirty = false;
-      reload();
-    }
+    if (controller) void controller.load();
   });
   const dateError = $derived(analyticsDateError(view.filter));
   const data = $derived(view.data);
@@ -101,13 +90,8 @@
       days[index] ? [{ index, day: days[index].day }] : [],
     );
   });
-  function reload() {
-    void controller?.load(customDates ? view.filter : { ...view.filter, start: null, end: null });
-  }
   function filter(patch: Partial<AnalyticsFilter>) {
-    if ("start" in patch || "end" in patch) customDates = true;
-    const base = customDates ? view.filter : { ...view.filter, start: null, end: null };
-    void controller?.load({ ...base, ...patch });
+    void controller?.load({ ...view.filter, ...patch });
   }
 </script>
 
@@ -196,7 +180,7 @@
           filter({ pattern: e.currentTarget.value || null })}
       /></label
     >
-    <button type="button" class="button" onclick={reload}
+    <button type="button" class="button" onclick={() => controller?.load()}
       >Refresh</button
     >
   </div>
