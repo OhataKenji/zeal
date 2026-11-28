@@ -63,11 +63,19 @@ test("rerunOptions strips two-token Zelith flags and preserves user overrides an
       "no",
       "--color=no",
       "--tool_tag=my-ci",
+      "--target_pattern_file=",
       "--config=opt",
       "--",
       "--invocation_id=app-arg",
     ]),
-    ["--color=no", "--tool_tag=my-ci", "--config=opt", "--", "--invocation_id=app-arg"],
+    [
+      "--color=no",
+      "--tool_tag=my-ci",
+      "--target_pattern_file=",
+      "--config=opt",
+      "--",
+      "--invocation_id=app-arg",
+    ],
   );
   assert.deepEqual(rerunOptions(undefined), []);
   assert.deepEqual(rerunOptions([]), []);

@@ -1,14 +1,13 @@
 const SAFE_SHELL_ARGUMENT = /^[A-Za-z0-9_:\-,.%@/=]+$/;
 const FLAG_ASSIGNMENT = /^--[A-Za-z0-9_:\-,.%@/]+=/;
 
-// Transport, identity, and target-selector flags that must not carry over to a
-// re-run (see `src-tauri/src/runargs.rs` and `src-tauri/src/runner.rs`).
+// Transport and identity flags injected by Zelith (see `src-tauri/src/runargs.rs`
+// and `src-tauri/src/runner.rs`) that must not carry over to a re-run.
 const STRIPPED_VALUE_FLAGS = new Set([
   "--invocation_id",
   "--bes_backend",
   "--bes_proxy",
   "--bes_upload_mode",
-  "--target_pattern_file",
 ]);
 
 const STRIPPED_EXACT_FLAGS = new Map<string, string>([
@@ -32,6 +31,7 @@ export function formatOptions(options: readonly string[]): string {
 }
 
 function isStrippedOption(name: string, value: string): boolean {
+  if (name === "--target_pattern_file") return value !== "";
   return STRIPPED_VALUE_FLAGS.has(name) || STRIPPED_EXACT_FLAGS.get(name) === value;
 }
 
