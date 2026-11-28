@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   invocationStatus,
+  localDay,
   matchesHistoryFilter,
   sectionData,
   sectionMessage,
@@ -178,4 +179,10 @@ test("icon status and description agree for live and finished invocations", () =
     kind: "failed",
     label: "✗ failed (exit 3)",
   });
+});
+
+test("localDay formats local YYYY-MM-DD calendar dates and rejects missing timestamps", () => {
+  assert.equal(localDay(undefined), null);
+  assert.equal(localDay(Number.NaN), null);
+  assert.equal(localDay(new Date(2026, 2, 5, 23, 59, 59).getTime()), "2026-03-05");
 });

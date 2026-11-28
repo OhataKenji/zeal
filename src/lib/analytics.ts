@@ -26,6 +26,11 @@ export interface DailyAnalytics {
     totalMs: number;
     p50Ms: number;
     p95Ms: number;
+    cacheHits: number;
+    actionsTotal: number;
+    phaseTimed: number;
+    analysisMs: number;
+    executionMs: number;
   }>;
   patterns: Array<{
     pattern: string;
@@ -58,6 +63,11 @@ export function emptyAnalytics(): AnalyticsView {
     loading: false,
     error: null,
   };
+}
+
+/** Returns integer cache hit percentage (0-100), or null when no action data exists. */
+export function cacheHitRate(cacheHits: number, actionsTotal: number): number | null {
+  return actionsTotal > 0 ? Math.round((cacheHits / actionsTotal) * 100) : null;
 }
 
 /** Explains reversed dates; missing dates still use the core's defaults. */

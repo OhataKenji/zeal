@@ -84,7 +84,12 @@ const captured = new Map(history.map((h) => [h.record.id, h]));
 type AnalyticsSample = Pick<
   PreviewRecord,
   "cmd" | "pattern" | "workspace" | "startedAt" | "finishedAt" | "exitCode"
->;
+> & {
+  cacheHits: number;
+  actionsTotal: number;
+  analysisMs: number;
+  executionMs: number;
+};
 
 function sampleDayCount(day: Date, ago: number): number {
   const weekend = day.getDay() === 0 || day.getDay() === 6;
@@ -109,17 +114,26 @@ function sampleAnalyticsActivity(
     for (let i = 0; i < count; i++) {
       const seed = seeds[(ago + i) % seeds.length];
       const startedAt = day.setHours(8, 35 * i + (ago % 23), 0, 0);
-      const elapsed = Math.round(
-        ((seed.finishedAt - seed.startedAt) * (65 + ((ago * 11 + i * 17) % 90))) / 100,
+      const elapsed = Math.max(
+        100,
+        Math.round(((seed.finishedAt - seed.startedAt) * (65 + ((ago * 11 + i * 17) % 90))) / 100),
       );
       const sequence = rows.length + 1;
+      const exitCode = sampleExitCode(sequence);
+      const actionsTotal = 40 + ((ago * 7 + i * 13) % 80);
+      const cachePct = exitCode === 0 ? 55 + ((ago * 9 + i * 5) % 40) : 15 + ((ago * 7) % 35);
+      const analysisMs = Math.max(50, Math.round(elapsed * (0.2 + ((ago + i) % 3) * 0.08)));
       rows.push({
         workspace,
         cmd: seed.cmd,
         pattern: seed.pattern,
         startedAt,
         finishedAt: startedAt + elapsed,
-        exitCode: sampleExitCode(sequence),
+        exitCode,
+        cacheHits: Math.round((actionsTotal * cachePct) / 100),
+        actionsTotal,
+        analysisMs,
+        executionMs: Math.max(50, elapsed - analysisMs),
       });
     }
   }

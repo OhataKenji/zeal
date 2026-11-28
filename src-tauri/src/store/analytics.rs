@@ -37,6 +37,16 @@ pub struct Day {
     /// Nearest-rank percentiles over the day's recorded durations.
     pub p50_ms: i64,
     pub p95_ms: i64,
+    /// Action cache hits (local + remote/disk) across invocations with metrics.
+    pub cache_hits: i64,
+    /// Total actions across invocations with metrics; 0 when no cache metrics exist.
+    pub actions_total: i64,
+    /// Invocations carrying at least one recorded phase duration.
+    pub phase_timed: i64,
+    /// Average analysis phase duration (ms) across invocations with analysis metrics.
+    pub analysis_ms: i64,
+    /// Average execution phase duration (ms) across invocations with execution metrics.
+    pub execution_ms: i64,
     pub workspace_counts: BTreeMap<String, i64>,
 }
 #[derive(Debug, Serialize)]
@@ -127,10 +137,27 @@ pub fn refresh_timezone() {
     }
 }
 
+fn validate_filter(filter: &Filter) -> Result<(), StoreError> {
+    if filter.cmd.as_deref().is_some_and(|s| {
+        s.is_empty()
+            || s.len() > 64
+            || !s
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }) || filter
+        .outcome
+        .as_deref()
+        .is_some_and(|s| !["ok", "failed", "interrupted", "unknown"].contains(&s))
+        // Matches the target-pattern fact limit in store::events.
+        || filter.pattern.as_deref().is_some_and(|s| s.len() > 64 * 1024)
+    {
+        return Err(super::fail(ErrorKind::Invalid));
+    }
+    Ok(())
+}
+
 #[tracing::instrument(target = "zelith::operations", name = "analytics.query", skip_all)]
 pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, StoreError> {
-    use rusqlite::OptionalExtension;
-
     let ws = super::database::workspace_path(ws)?;
     let mut store = Store::open(data)?;
     let tx = store.conn.transaction()?;
@@ -148,27 +175,19 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
         |r| r.get(0),
     )?;
     // Reject oversized requests explicitly; never silently truncate their data.
-    if !(1.0..=366.0).contains(&span)
-        || filter
-            .cmd
-            .as_deref()
-            .is_some_and(|s| s.is_empty() || s.len() > 64 || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
-        || filter
-            .outcome
-            .as_deref()
-            .is_some_and(|s| !["ok", "failed", "interrupted", "unknown"].contains(&s))
-        // Matches the target-pattern fact limit in store::events.
-        || filter.pattern.as_deref().is_some_and(|s| s.len() > 64 * 1024)
-    {
+    if !(1.0..=366.0).contains(&span) {
         return Err(super::fail(ErrorKind::Invalid));
     }
-    let ws_id: Option<String> = tx
-        .query_row(
+    validate_filter(&filter)?;
+    let ws_id: Option<String> = {
+        use rusqlite::OptionalExtension;
+        tx.query_row(
             "SELECT id FROM workspace WHERE canonical_path=?1",
             [ws.as_os_str().as_encoded_bytes()],
             |r| r.get(0),
         )
-        .optional()?;
+        .optional()?
+    };
     let workspaces = workspace_candidates(&tx, ws_id.as_ref())?;
     if let Some(selected) = &filter.workspace_id
         && !workspaces.iter().any(|workspace| &workspace.id == selected)
@@ -193,6 +212,11 @@ pub fn query(data: &Path, ws: &Path, mut filter: Filter) -> Result<Analytics, St
                 total_ms: 0,
                 p50_ms: 0,
                 p95_ms: 0,
+                cache_hits: 0,
+                actions_total: 0,
+                phase_timed: 0,
+                analysis_ms: 0,
+                execution_ms: 0,
                 workspace_counts: BTreeMap::new(),
             })
         })?
@@ -259,6 +283,11 @@ fn aggregate(
                 total_ms: r.get(7)?,
                 p50_ms: r.get(8)?,
                 p95_ms: r.get(9)?,
+                cache_hits: r.get(10)?,
+                actions_total: r.get(11)?,
+                phase_timed: r.get(12)?,
+                analysis_ms: r.get(13)?,
+                execution_ms: r.get(14)?,
                 workspace_counts: BTreeMap::new(),
             })
         },
@@ -339,7 +368,8 @@ fn days_sql() -> String {
     format!(
         "WITH matched AS MATERIALIZED (
             SELECT date(started_at_ms / 1000,'unixepoch','localtime') AS day,exit_code,
-                MAX(finished_at_ms - started_at_ms,0) AS ms
+                MAX(finished_at_ms - started_at_ms,0) AS ms,
+                cache_hits,actions_total,analysis_ms,execution_ms
             FROM invocation WHERE {SCOPE} AND {MATCH}
                 AND (:pattern IS NULL OR target_pattern=:pattern)
         ),
@@ -349,7 +379,12 @@ fn days_sql() -> String {
                 COUNT(*) FILTER (WHERE exit_code NOT IN (0,8)) AS failed,
                 COUNT(*) FILTER (WHERE exit_code=8) AS interrupted,
                 COUNT(*) FILTER (WHERE exit_code IS NULL) AS unknown,
-                COUNT(ms) AS timed,COALESCE(SUM(ms),0) AS total_ms
+                COUNT(ms) AS timed,COALESCE(SUM(ms),0) AS total_ms,
+                COALESCE(SUM(cache_hits),0) AS cache_hits,
+                COALESCE(SUM(actions_total),0) AS actions_total,
+                COUNT(COALESCE(analysis_ms,execution_ms)) AS phase_timed,
+                COALESCE(CAST(ROUND(AVG(analysis_ms)) AS INTEGER),0) AS analysis_ms,
+                COALESCE(CAST(ROUND(AVG(execution_ms)) AS INTEGER),0) AS execution_ms
             FROM matched GROUP BY day
         ),
         ranked AS (
@@ -365,7 +400,9 @@ fn days_sql() -> String {
         )
         SELECT daily.day,daily.count,daily.ok,daily.failed,daily.interrupted,
             daily.unknown,daily.timed,daily.total_ms,
-            COALESCE(ranked.p50,0),COALESCE(ranked.p95,0)
+            COALESCE(ranked.p50,0),COALESCE(ranked.p95,0),
+            daily.cache_hits,daily.actions_total,
+            daily.phase_timed,daily.analysis_ms,daily.execution_ms
         FROM daily LEFT JOIN ranked USING(day)"
     )
 }
@@ -1414,5 +1451,72 @@ mod tests {
                 result.days.len()
             );
         }
+    }
+
+    fn seed_metrics(
+        f: &Fixture,
+        id: &str,
+        cache_hits: i64,
+        actions_total: i64,
+        analysis_ms: i64,
+        execution_ms: i64,
+    ) {
+        let store = Store::open(&f.data).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE invocation SET cache_hits=?1,actions_total=?2,analysis_ms=?3,execution_ms=?4 WHERE id=?5",
+                params![cache_hits, actions_total, analysis_ms, execution_ms, id],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn daily_aggregates_include_cache_and_phase_metrics() {
+        let f = Fixture::new();
+        let fast = f.insert_at(
+            "2026-03-10 10:00:00",
+            "build",
+            Some(0),
+            "//app:fast",
+            Some("2026-03-10 10:00:02"),
+        );
+        let slow_failed = f.insert_at(
+            "2026-03-10 11:00:00",
+            "test",
+            Some(1),
+            "//app:slow",
+            Some("2026-03-10 11:00:15"),
+        );
+        seed_metrics(&f, &fast, 90, 100, 300, 1200);
+        seed_metrics(&f, &slow_failed, 10, 50, 4000, 10000);
+        // Analysis-only build (NULL execution_ms) must not dilute execution_ms average.
+        let analysis_only = f.insert_at(
+            "2026-03-10 12:00:00",
+            "build",
+            Some(1),
+            "//app:broken",
+            Some("2026-03-10 12:00:01"),
+        );
+        Store::open(&f.data)
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE invocation SET analysis_ms=?2 WHERE id=?1",
+                params![analysis_only, 500i64],
+            )
+            .unwrap();
+        let result = f.query(Filter {
+            start: Some("2026-03-10".into()),
+            end: Some("2026-03-10".into()),
+            ..Filter::default()
+        });
+        let day = &result.days[0];
+        assert_eq!(
+            (day.cache_hits, day.actions_total, day.phase_timed),
+            (100, 150, 3)
+        );
+        // avg analysis = (300 + 4000 + 500) / 3 = 1600; avg execution = (1200 + 10000) / 2 = 5600
+        assert_eq!((day.analysis_ms, day.execution_ms), (1600, 5600));
     }
 }

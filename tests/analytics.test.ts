@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   analyticsDateError,
+  cacheHitRate,
   createAnalytics,
   emptyAnalytics,
   fmtMs,
@@ -20,8 +21,8 @@ function harness() {
     "/workspace",
     {
       invoke: <T>(command: string, args?: Record<string, unknown>) => {
-        assert.equal(command, "get_analytics");
         assert.equal(args?.workspace, "/workspace");
+        assert.equal(command, "get_analytics");
         return new Promise<T>((resolve, reject) =>
           calls.push({ args, resolve: (v) => resolve(v as T), reject }),
         );
@@ -60,6 +61,11 @@ const RESULT: DailyAnalytics = {
       totalMs: 5000,
       p50Ms: 2000,
       p95Ms: 3000,
+      cacheHits: 90,
+      actionsTotal: 100,
+      phaseTimed: 2,
+      analysisMs: 800,
+      executionMs: 4200,
     },
   ],
   patterns: [],
@@ -78,6 +84,11 @@ function day(count: number, extra: Partial<DailyAnalytics["days"][number]> = {})
     totalMs: 0,
     p50Ms: 0,
     p95Ms: 0,
+    cacheHits: 0,
+    actionsTotal: 0,
+    phaseTimed: 0,
+    analysisMs: 0,
+    executionMs: 0,
     ...extra,
   };
 }
@@ -305,4 +316,10 @@ test("workspace selection is sent, retained on refresh, and candidates survive r
   });
   next.calls[0].resolve({ ...RESULT, workspaces });
   await fresh;
+});
+
+test("cacheHitRate returns null without actions and rounds percentages", () => {
+  assert.equal(cacheHitRate(0, 0), null);
+  assert.equal(cacheHitRate(95, 100), 95);
+  assert.equal(cacheHitRate(1, 3), 33);
 });

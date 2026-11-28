@@ -12,6 +12,7 @@
   import { canSend } from "./lib/session";
   import type { createSession, SessionView } from "./lib/session";
   import {
+    localDay,
     matchesHistoryFilter,
     rowStatus,
     type HistoryFilter,
@@ -62,6 +63,7 @@
   let opening = $state(false);
   let switchError = $state<string | null>(null);
   let historyFilter = $state<HistoryFilter>("all");
+  let historyDay = $state<string | null>(null);
 
   // One surface owns the overlay layer at a time: the workspace prompt, the
   // command palette, or the run dialog. `opening` stays independent.
@@ -91,9 +93,21 @@
     analytics: ChartBar,
   } satisfies Record<Page, typeof Folders>;
 
-  const filteredInvocations = $derived(
-    view.invocationRows.filter((row) => matchesHistoryFilter(row, historyFilter)),
-  );
+  function rowDuration(row: InvocationRow): number {
+    const { startedAt, finishedAt } = row.record;
+    return startedAt !== undefined && finishedAt !== undefined
+      ? Math.max(0, finishedAt - startedAt)
+      : -1;
+  }
+
+  const filteredInvocations = $derived.by(() => {
+    const rows = view.invocationRows.filter(
+      (row) =>
+        matchesHistoryFilter(row, historyFilter) &&
+        (historyDay === null || localDay(row.record.startedAt) === historyDay),
+    );
+    return historyDay === null ? rows : rows.toSorted((a, b) => rowDuration(b) - rowDuration(a));
+  });
 
   function openRunDialog(cmd: BazelCommand, pattern: string, flags = "") {
     surface = { kind: "run", cmd, pattern, flags };
@@ -136,6 +150,7 @@
   $effect(() => {
     void workspacePath;
     switchError = null;
+    historyDay = null;
   });
 
   // ⌘K/Ctrl+K toggles only while the palette or nothing owns the keyboard.
@@ -203,12 +218,23 @@
         selectTarget(action.label);
         break;
       case "invocation":
-        if (!filteredInvocations.some((row) => row.record.id === action.id)) {
-          historyFilter = "all";
-        }
-        session.selectInvocation(action.id);
+        selectInvocation(action.id);
         break;
     }
+  }
+
+  function selectInvocation(id: string) {
+    if (!filteredInvocations.some((row) => row.record.id === id)) {
+      historyFilter = "all";
+      historyDay = null;
+    }
+    session.selectInvocation(id);
+  }
+
+  function openHistoryDay(day: string) {
+    historyDay = day;
+    historyFilter = "all";
+    session.showPage("history");
   }
 
   function selectPage(page: Page) {
@@ -366,6 +392,15 @@
         <aside class="sidebar">
           <div class="sidebar-head">
             <span>Invocations</span>
+            {#if historyDay}
+              <button
+                type="button"
+                class="button button-ghost"
+                title="Clear day filter"
+                aria-label={`Clear day filter ${historyDay}`}
+                onclick={() => (historyDay = null)}>{historyDay} ×</button
+              >
+            {/if}
           </div>
           <div class="sidebar-filter">
             <span class="dim">Filter</span>
@@ -524,7 +559,11 @@
         </div>
         <div class="page-center" hidden={view.page !== "analytics"}>
           {#key st.workspace}
-            <AnalyticsView workspace={st.workspace} invocations={view.invocations} />
+            <AnalyticsView
+              workspace={st.workspace}
+              invocations={view.invocations}
+              onselectday={openHistoryDay}
+            />
           {/key}
         </div>
       {/snippet}
