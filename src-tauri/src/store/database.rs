@@ -351,6 +351,44 @@ fn is_test_log_artifact(name: &str) -> bool {
         })
 }
 
+/// Return the subset of candidate `testlog-*.zst` names that exist for one completed invocation.
+pub fn existing_test_logs<'a>(
+    data: &Path,
+    ws: &Path,
+    invocation_id: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    let Ok(dir) = completed_attempt_dir(data, ws, invocation_id) else {
+        return found;
+    };
+    for name in names {
+        if is_test_log_artifact(name) && dir.exists(name).unwrap_or(false) {
+            found.insert(name.to_string());
+        }
+    }
+    found
+}
+
+fn completed_attempt_dir(data: &Path, ws: &Path, invocation_id: &str) -> Result<Dir, StoreError> {
+    let ws = workspace_path(ws)?;
+    let invocation_id = id(invocation_id)?;
+    let store = Store::open(data)?;
+    let (attempt, complete): (i64, bool) = store.conn.query_row(
+        &format!("SELECT r.attempt,r.received_complete {WORKSPACE_SCOPE} AND r.id=?2"),
+        params![ws.as_os_str().as_bytes(), &invocation_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if attempt == 0 || !complete {
+        return Err(fail(ErrorKind::Missing));
+    }
+    store
+        .invocation_dir(&invocation_id, false)?
+        .child("attempt", false)?
+        .child(&attempt.to_string(), false)
+        .map_err(Into::into)
+}
+
 /// Snapshot the current receipt and its checked FD before doing any parsing.
 fn attempt_artifact(
     data: &Path,

@@ -53,15 +53,26 @@ pub fn invocation_detail(data: &Path, workspace: &Path, id: &str) -> io::Result<
         data: ref mut bep, ..
     } = bep
     {
-        for test in &mut bep.tests {
-            if test.status != "PASSED" {
-                let name =
-                    store::test_log_artifact_name(&test.label, test.configuration.as_deref());
-                test.has_log = store::artifact(data, workspace, id, &name).is_ok();
-            }
-        }
+        mark_saved_test_logs(data, workspace, id, &mut bep.tests);
     }
     Ok(InvocationDetail { record, log, bep })
+}
+
+fn mark_saved_test_logs(data: &Path, workspace: &Path, id: &str, tests: &mut [bep::TestSummary]) {
+    let candidates: Vec<_> = tests
+        .iter()
+        .filter(|t| t.status != "PASSED")
+        .map(|t| store::test_log_artifact_name(&t.label, t.configuration.as_deref()))
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let saved =
+        store::existing_test_logs(data, workspace, id, candidates.iter().map(String::as_str));
+    for test in tests.iter_mut().filter(|t| t.status != "PASSED") {
+        let name = store::test_log_artifact_name(&test.label, test.configuration.as_deref());
+        test.has_log = saved.contains(&name);
+    }
 }
 
 /// Log and build-result views of the open event artifact. A stream that fails
