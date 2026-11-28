@@ -185,6 +185,22 @@ test("duration and exit code rows format inline deltas", () => {
   );
   assert.equal(row(fixed, "Exit code").right, "0 (Fixed)");
 
+  const interrupted = comparisonRows(
+    invocation({ id: "base", exitCode: 0, startedAt: 1000, finishedAt: 2000 }),
+    invocation({ id: "cur", exitCode: 8, startedAt: 1000, finishedAt: 2500 }),
+  );
+  assert.equal(row(interrupted, "Exit code").right, "8 (Interrupted)");
+  assert.equal(
+    row(
+      comparisonRows(
+        invocation({ id: "base", exitCode: 8 }),
+        invocation({ id: "cur", exitCode: 0 }),
+      ),
+      "Exit code",
+    ).right,
+    "0",
+  );
+
   const same = row(
     comparisonRows(
       invocation({ id: "base", exitCode: 0, startedAt: 5000, finishedAt: 6000 }),

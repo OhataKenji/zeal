@@ -410,15 +410,8 @@ tr.compare-changed > * {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.compare-form {
-  display: inline-flex;
-  align-items: center;
-}
-
-.compare-id-input {
-  width: 240px;
-  font-family: var(--mono);
-  font-size: 12px;
+.compare-scroll > .notice {
+  margin-bottom: 12px;
 }
 
 .compare-status {

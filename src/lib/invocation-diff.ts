@@ -170,6 +170,7 @@ function spawnCacheRow(
   }
   const same =
     left.total === right.total && left.cached === right.cached && left.hitPct === right.hitPct;
+  if (same) return plainRow("Spawn cache hits", fmt(left), fmt(right), "same");
   const spawnDiff = right.total - left.total;
   const delta =
     left.hitPct === null || right.hitPct === null
@@ -179,12 +180,7 @@ function spawnCacheRow(
       : spawnDiff === 0
         ? ` (${signed(right.hitPct - left.hitPct)} pp)`
         : ` (${signed(right.hitPct - left.hitPct)} pp, ${signed(spawnDiff)} spawns)`;
-  return plainRow(
-    "Spawn cache hits",
-    fmt(left),
-    `${fmt(right)}${delta}`,
-    same ? "same" : "changed",
-  );
+  return plainRow("Spawn cache hits", fmt(left), `${fmt(right)}${delta}`, "changed");
 }
 
 function exitCodeRow(
@@ -197,7 +193,14 @@ function exitCodeRow(
   const rightBase = display(curCode);
   if (baseCode == null || curCode == null) return plainRow("Exit code", left, rightBase, "unknown");
   if (baseCode === curCode) return plainRow("Exit code", left, rightBase, "same");
-  const tag = baseCode === 0 ? " (Failed)" : curCode === 0 ? " (Fixed)" : "";
+  const tag =
+    curCode === 8
+      ? " (Interrupted)"
+      : baseCode === 0
+        ? " (Failed)"
+        : curCode === 0 && baseCode !== 8
+          ? " (Fixed)"
+          : "";
   return plainRow("Exit code", left, `${rightBase}${tag}`, "changed");
 }
 
