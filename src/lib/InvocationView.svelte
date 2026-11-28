@@ -107,11 +107,12 @@
       {#if active === "Compare"}
         {#key `${view.state?.workspace ?? ""}:${shown.id}`}
           <ComparisonPanel
-            left={view.detail?.record.id === shown.id ? view.detail : null}
-            leftLoading={view.detailLoading}
-            leftError={view.detailError}
+            current={view.detail?.record.id === shown.id ? view.detail : null}
+            currentLoading={view.detailLoading}
+            currentError={view.detailError}
             workspace={view.state?.workspace ?? ""}
             runningIds={view.core?.invocations.map((entry) => entry.id) ?? []}
+            history={view.invocations}
           />
         {/key}
       {:else if active === "All" && view.detail?.bep.status === "pending"}

@@ -8,22 +8,22 @@ function detail(
   bep: Section<Bep> = { status: "ok", data: { targets: [], tests: [], truncated: false } },
 ): InvocationDetail {
   return {
-    record: { id: "left-id", ...record },
+    record: { id: "current-id", ...record },
     log: { status: "missing" },
     bep,
   };
 }
 
-test("ComparisonPanel renders the comparison form for the selected invocation", async (t) => {
+test("ComparisonPanel renders the baseline toolbar and 3-column comparison table", async (t) => {
   const { load, render } = await createSvelteHarness(t);
   const { default: ComparisonPanel } = await load("/src/lib/invocation/ComparisonPanel.svelte");
 
   function output(overrides: Record<string, unknown> = {}): string {
     return render(ComparisonPanel, {
       props: {
-        left: detail(),
-        leftLoading: false,
-        leftError: null,
+        current: detail(),
+        currentLoading: false,
+        currentError: null,
         workspace: "/workspace",
         runningIds: [],
         ...overrides,
@@ -32,50 +32,62 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
   }
 
   function inputTag(html: string): string {
-    const input = html.match(/<input[^>]*id="compare-invocation-id"[^>]*>/)?.[0];
-    assert.ok(input, "comparison input is missing");
+    const input = html.match(/<input[^>]*id="compare-baseline-input"[^>]*>/)?.[0];
+    assert.ok(input, "baseline combobox input is missing");
     return input;
   }
 
-  await t.test("shows the selected ID with a labeled, enabled input", () => {
+  const sampleHistory: InvocationRecord[] = [
+    {
+      id: "prev-ok",
+      workspace: "/workspace",
+      cmd: "build",
+      pattern: "//app:all",
+      startedAt: 3000,
+      finishedAt: 4200,
+      exitCode: 0,
+    },
+  ];
+
+  await t.test("shows 3-column Baseline | Current table with baseline combobox", () => {
     const html = output();
-    assert.ok(html.includes("left-id"));
+    assert.ok(html.includes("current-id"));
     assert.match(html, /<table[^>]*aria-label="Invocation comparison"/);
-    assert.ok(!html.includes("<caption>"));
-    assert.match(
-      html,
-      /<label[^>]*for="compare-invocation-id"[^>]*>\s*Comparison invocation\s*<\/label>/,
-    );
-    assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
-    assert.match(inputTag(html), /placeholder="[^"]+"/);
+    assert.match(html, /<th[^>]*>\s*Baseline/);
+    assert.match(html, /<th[^>]*>\s*Current/);
+    assert.match(inputTag(html), /role="combobox"/);
+    assert.ok(html.includes("No previous successful build in recent history."));
   });
 
-  await t.test("disables the input while the left detail is loading", () => {
-    const html = output({ left: null, leftLoading: true });
+  await t.test("disables baseline combobox while current detail is loading", () => {
+    const html = output({ current: null, currentLoading: true, history: sampleHistory });
     assert.match(inputTag(html), /\bdisabled\b/);
     assert.match(html, /Loading…/);
   });
 
-  await t.test("disables the input when the left detail failed", () => {
-    const html = output({ leftError: "read failed" });
+  await t.test("disables baseline combobox when current detail failed", () => {
+    const html = output({ currentError: "read failed", history: sampleHistory });
     assert.match(inputTag(html), /\bdisabled\b/);
     assert.ok(html.includes("read failed"));
   });
 
-  await t.test("disables the input while the compared invocation is running", () => {
-    const html = output({ runningIds: ["left-id"] });
-    assert.match(inputTag(html), /\bdisabled\b/);
-    assert.ok(html.includes("Comparison is available"));
-  });
+  await t.test(
+    "shows a single message without empty table while current invocation is running",
+    () => {
+      const html = output({ runningIds: ["current-id"] });
+      assert.ok(html.includes("Comparison is available after the invocation finishes."));
+      assert.ok(!html.includes("<table"));
+    },
+  );
 
-  await t.test("keeps the input enabled when a different invocation is running", () => {
-    const html = output({ runningIds: ["other-id"] });
+  await t.test("keeps baseline combobox enabled when a different invocation is running", () => {
+    const html = output({ runningIds: ["other-id"], history: sampleHistory });
     assert.doesNotMatch(inputTag(html), /\bdisabled\b/);
   });
 
   await t.test("escapes option values in the rendered HTML", () => {
     const html = output({
-      left: detail(
+      current: detail(
         {},
         {
           status: "ok",
@@ -99,7 +111,7 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
 
   await t.test("surfaces a non-ok BEP section as a notice", () => {
     const html = output({
-      left: detail(
+      current: detail(
         {},
         {
           status: "incomplete",
@@ -111,13 +123,56 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
     assert.ok(html.includes("saved prefix missing"));
   });
 
+  await t.test("omits empty-history notice when a previous successful build exists", () => {
+    const html = output({
+      current: detail({
+        id: "cur",
+        workspace: "/workspace",
+        cmd: "build",
+        pattern: "//app:all",
+        startedAt: 5000,
+        exitCode: 1,
+      }),
+      history: [
+        {
+          id: "cur",
+          workspace: "/workspace",
+          cmd: "build",
+          pattern: "//app:all",
+          startedAt: 5000,
+          exitCode: 1,
+        },
+        {
+          id: "prev-ok",
+          workspace: "/workspace",
+          cmd: "build",
+          pattern: "//app:all",
+          startedAt: 3000,
+          finishedAt: 4200,
+          exitCode: 0,
+        },
+        {
+          id: "other-pat",
+          workspace: "/workspace",
+          cmd: "test",
+          pattern: "//lib:all",
+          startedAt: 2000,
+          finishedAt: 3000,
+          exitCode: 0,
+        },
+      ],
+    });
+    assert.match(inputTag(html), /role="combobox"/);
+    assert.ok(!html.includes("No previous successful build in recent history."));
+  });
+
   await t.test("InvocationView shows the Compare tab without the form on All", async () => {
     const { emptyView } = await load("/src/lib/session.ts");
     const { default: InvocationView } = await load("/src/lib/InvocationView.svelte");
     const left = detail();
     const view = {
       ...emptyView(),
-      content: { kind: "invocation" as const, id: "left-id", page: "targets" as const },
+      content: { kind: "invocation" as const, id: "current-id", page: "targets" as const },
       invocations: [left.record],
       invocation: { record: left.record },
       detail: left,

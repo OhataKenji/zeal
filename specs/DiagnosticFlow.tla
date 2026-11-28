@@ -100,6 +100,20 @@ FinishDetail(ok) ==
   /\ detail' = IF ok THEN "ready" ELSE "failed"
   /\ UNCHANGED <<page, selected, tab, compare, compareTarget, running>>
 
+AutoCompare(other) ==
+  /\ page = "history"
+  /\ tab = "compare"
+  /\ selected # None
+  /\ selected \notin running
+  /\ detail = "ready"
+  /\ compare = "idle"
+  /\ other \in Inv
+  /\ other # selected
+  /\ other \notin running
+  /\ compare' = "loading"
+  /\ compareTarget' = other
+  /\ UNCHANGED <<page, selected, tab, detail, running>>
+
 StartCompare(other) ==
   /\ page = "history"
   /\ tab = "compare"
@@ -149,6 +163,7 @@ Next ==
   \/ StartDetail
   \/ FinishDetail(TRUE)
   \/ FinishDetail(FALSE)
+  \/ \E i \in Inv : AutoCompare(i)
   \/ \E i \in Inv : StartCompare(i)
   \/ FinishCompare(TRUE)
   \/ FinishCompare(FALSE)

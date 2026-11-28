@@ -42,38 +42,41 @@ flowchart LR
 
 - `InvocationView` の表示ボタン行(All、Targets、Details、Logs、Timing)に `Compare` を足す独立した表示で、All section の描画には含めない。左には現在選択中の invocation の詳細をそのまま使い、比較のために左を再読込しない。
 
-### 右側の ID 入力と読込
+### Baseline の選択と読込
 
-- 「Comparison invocation」の入力欄に ID を指定し、Enter で確定する。操作説明は placeholder に表示する。keystroke ごとの fetch はしない。
-- submit で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず左の選択を維持し、workspace の一致は既存 backend が保証する。同一 ID の指定も許可する。
-- 入力は trim し、UUID 検証は既存に任せる。submit で旧右データを消し、loading の後に record と BEP を表示する(log は保持しない)。
-- 送信中は submit を無効にして in-flight を一件に絞り、左の detail 読込中も submit を待たせる。失敗(未知の ID、別 workspace、不正、busy)は右側に inline error として出し、利用者が修正して再 submit する。自動 retry、polling、queue、新しい backend は設けず、worker の busy が起きても error として表面化するだけとする。
+- 履歴 (`view.invocations`) から、現在の invocation より前に開始された同じ正規化 `pattern`（および `cmd`）の直前の成功ビルド (`exitCode === 0`、同一 `workspace` 優先) を特定し、Compare タブを開いて現在側が準備できた時点で `idle` から一度だけ自動的に読み込む。
+- テーブル上の 1 行ツールバーに Baseline コンボボックスを置き、1 つの入力欄で直近履歴の fuzzy find（`fuzzysort` による target / command / workspace / ID 検索、`Same target` / `Other recent` で分割・先頭に直前成功ビルド）と任意の invocation ID 直接入力（Enter / `Compare ID:`）の両方に対応する。
+- 選択で既存 transport から `get_invocation({ id })` を呼ぶ。`selectInvocation` は呼ばず現在の選択を維持し、workspace の一致は既存 backend が保証する。
+- 送信中は選択を無効にして in-flight を一件に絞り、現在側の detail 読込中も待たせる。失敗は inline error として出し、利用者が選び直して再試行する。自動 retry、polling、queue、新しい backend は設けない。
 
 ### 比較項目
 
-比較行は BuildBuddy の compare view の FACETS に合わせ、項目名と値の対応は次の通り。
+比較表は **Item | Baseline | Current** の 3 列で構成し、所要時間・spawn キャッシュヒット率・終了コード・テスト成否の差分は Current セル内にインライン表示する。
 
-| 項目                     | 値の由来                                                         |
-| ------------------------ | ---------------------------------------------------------------- |
-| Invocation ID            | `record.id`                                                      |
-| Command                  | `record.cmd`                                                     |
-| Pattern                  | `record.pattern`                                                 |
-| Exit code                | `record.exitCode`                                                |
-| Start date               | `record.startedAt`                                               |
-| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) |
-| Explicit command line    | `bep.options.explicitCmdLine`                                    |
-| Full command line        | `bep.options.cmdLine`                                            |
-| Explicit startup options | `bep.options.explicitStartupOptions`                             |
-| Full startup options     | `bep.options.startupOptions`                                     |
+| 項目                     | 値の由来                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Duration                 | `record.finishedAt − record.startedAt`(両端が記録され非負のとき) + インライン差分 (`current - baseline`)         |
+| Spawn cache hits         | `bep.runnerCounts` の spawn キャッシュヒット率 (`hitPct% (cached/total)` / 0 件時は `0 spawns`) + インライン差分 |
+| Exit code                | `record.exitCode` + インライン状態 (`Failed` / `Fixed`)                                                          |
+| Tests                    | `bep.tests` の合否集計 + 新規失敗・修正テストのインライン差分（どちらか一方にテストがあるときのみ表示）          |
+| Command                  | `record.cmd`                                                                                                     |
+| Pattern                  | `record.pattern`                                                                                                 |
+| Workspace                | `record.workspace`                                                                                               |
+| Explicit command line    | `bep.options.explicitCmdLine`                                                                                    |
+| Full command line        | `bep.options.cmdLine`                                                                                            |
+| Explicit startup options | `bep.options.explicitStartupOptions`                                                                             |
+| Full startup options     | `bep.options.startupOptions`                                                                                     |
+| Start date               | `record.startedAt`                                                                                               |
+| Invocation ID            | `record.id`                                                                                                      |
 
 `originalCommandLine` と `canonicalCommandLine` は explicit/full の options 配列とは別の文字列で、対応する facet がないため行に出さない。
-Host、Git、cache、remote execution、metrics など BuildBuddy にある項目は Zelith の現在の projection にないため対象外とし、target/test の件数も Non Goals のままとする。
+Host、Git、remote execution など Zelith の現在の projection にない項目は対象外とする。
 
 ### 表示と欠損
 
-- 表は項目名、左、右の三列で全行を表示し、値が変わった行全体を強調する。既知の値どうしには BuildBuddy と同じ diff-match-patch で項目内の文字列 diff を示し、正規化はしない。options は一引数一行で順序と重複を保つ。
-- 等価は raw な値で比較し、map 化や sort などの正規化はしない。delta や増減率は出さず、duration も左右に並べるだけとする。
-- 値がない項目は「Not recorded」と表示し、その行の比較は unknown とする。空の options 配列は既知の空として扱う。
+- 表は項目名、Baseline(左)、Current(右) の 3 列で全行を表示し、値が変わった行を薄く強調する。Command・Pattern・Workspace・options の既知の値どうしには diff-match-patch で項目内の文字列 diff を示し(左=削除赤、右=追加緑)、数値・ID・日時行には文字 diff を当てない。
+- 等価は raw な値で比較し、map 化や sort などの正規化はしない。
+- 値がない項目は「Not recorded」と表示し、その行の比較は unknown とする。空の options 配列は既知の空として扱う。`bep.status === "ok"` で `runnerCounts` が明示的に空のときは `0 spawns` として既知扱いし、`runnerCounts` が未記録のときは unknown (`Not recorded`) とする。
 - BEP section が ok 以外のときは options 由来の行を比較不可とし、section の状態を併記する(record 由来の行は独立して比較する)。右側の request 全体の失敗は右側の error であり、欠損項目を捏造しない。
 
 ### 状態と寿命

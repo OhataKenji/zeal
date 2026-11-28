@@ -336,7 +336,72 @@
 }
 
 .compare-scroll {
+  padding-top: 16px;
   overflow-x: auto;
+}
+
+.compare-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.compare-toolbar-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.compare-picker {
+  position: relative;
+  flex: 0 1 380px;
+  min-width: 240px;
+}
+
+.compare-select {
+  width: 100%;
+  font-size: 12px;
+}
+
+.compare-listbox {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 260px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+.compare-listbox-group {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.compare-listbox-option {
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compare-listbox-option.is-active {
+  background: var(--accent);
 }
 
 .compare-table {
@@ -349,7 +414,7 @@
 .compare-table th,
 .compare-table td {
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   vertical-align: top;
   text-align: left;
 }
@@ -359,11 +424,11 @@
 }
 
 .compare-item-head {
-  width: 20%;
+  width: 18%;
 }
 
 .compare-side-head {
-  width: 40%;
+  width: 41%;
 }
 
 .compare-item {
@@ -388,25 +453,19 @@
 .compare-value code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 
 tr.compare-changed > * {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.compare-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.compare-id-input {
-  font-family: var(--mono);
-  font-size: 12px;
+.compare-toolbar + .notice {
+  margin-bottom: 12px;
 }
 
 .compare-status {
-  margin: 8px 0 0;
+  margin: 0;
   color: var(--muted-foreground);
   font-size: 11px;
 }
