@@ -8,21 +8,31 @@
     record,
     status,
     execution,
+    rerunFlags = "",
     canRerun = false,
     onstop,
     onrerun,
+    onopenflags,
     children,
   }: {
     record: InvocationRecord;
     status: Status;
     execution?: OwnedInvocation;
+    rerunFlags?: string;
     canRerun?: boolean;
     onstop: (id: string) => void;
-    onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
+    onopenflags?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     children?: Snippet;
   } = $props();
 
   const rerun = $derived(rerunArgs(record));
+  const rerunDisabled = $derived(!rerun || !canRerun);
+  const rerunTitle = $derived(
+    rerun && !rerunDisabled
+      ? `Re-run: bazel ${rerun.cmd} ${rerun.pattern}${rerunFlags ? ` ${rerunFlags}` : ""}`
+      : undefined,
+  );
   const titleText = $derived(`${record.cmd ? `${record.cmd} ` : ""}${record.pattern ?? record.id}`);
 </script>
 
@@ -46,14 +56,26 @@
           </svg>
         </button>
       {:else if !execution && onrerun}
-        <button
-          type="button"
-          class="button button-primary"
-          disabled={!rerun || !canRerun}
-          onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern)}
-        >
-          Re-run
-        </button>
+        <div class="action-pair">
+          <button
+            type="button"
+            class="button button-primary"
+            disabled={rerunDisabled}
+            title={rerunTitle}
+            onclick={() => rerun && onrerun(rerun.cmd, rerun.pattern, rerunFlags)}
+          >
+            Re-run
+          </button>
+          {#if onopenflags && !rerunDisabled}
+            <button
+              type="button"
+              class="button"
+              onclick={() => rerun && onopenflags(rerun.cmd, rerun.pattern, rerunFlags)}
+            >
+              Edit flags…
+            </button>
+          {/if}
+        </div>
       {/if}
     </div>
   </div>

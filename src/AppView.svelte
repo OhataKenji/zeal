@@ -503,7 +503,8 @@
                 {view}
                 reload={session.loadDetail}
                 onstop={session.stop}
-                onrerun={(cmd, pattern) => session.start(cmd, pattern)}
+                onrerun={(cmd, pattern, flags) => session.start(cmd, pattern, flags)}
+                onopenflags={openRunDialog}
                 onselecttarget={selectTarget}
                 ontab={session.setInvocationTab}
               />

@@ -21,11 +21,12 @@
   import { formatOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
-  let { view, reload, onstop, onrerun, onselecttarget, ontab }: {
+  let { view, reload, onstop, onrerun, onopenflags, onselecttarget, ontab }: {
     view: SessionView;
     reload: () => void;
     onstop: (id: string) => void;
-    onrerun?: (cmd: BazelCommand, pattern: string) => void;
+    onrerun?: (cmd: BazelCommand, pattern: string, flags: string) => void;
+    onopenflags?: (cmd: BazelCommand, pattern: string, flags: string) => void;
     onselecttarget?: (label: string) => void;
     ontab?: (tab: InvocationTab) => void;
   } = $props();
@@ -33,20 +34,23 @@
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
   const execution = $derived(selected?.execution);
   const diagnostic = $derived(selected?.diagnostic ?? null);
-  const bep = $derived(sectionData(view.detail?.bep));
+  const detail = $derived(view.detail?.record.id === shown?.id ? view.detail : undefined);
+  const bep = $derived(sectionData(detail?.bep));
+  const rerunFlags = $derived(formatOptions(bep?.options?.explicitCmdLine ?? []));
   // Target links navigate only when the shown record belongs to the
   // workspace whose snapshot is loaded.
-  const targetIndex = $derived(
-    shown?.workspace && shown.workspace === view.state?.workspace && view.core?.bazel
-      ? view.snapshot
-      : null,
-  );
+  const sameWorkspace = $derived(Boolean(shown?.workspace && shown.workspace === view.state?.workspace));
+  const targetIndex = $derived(sameWorkspace && view.core?.bazel ? view.snapshot : null);
   const runnerSummary = $derived(summarizeRunners(bep?.runnerCounts));
   const rerunCandidate = $derived(rerunArgs(shown));
   const canRerun = $derived(
     rerunCandidate !== null &&
-      shown?.workspace === view.state?.workspace &&
+      sameWorkspace &&
+      (diagnostic !== null || !view.detailLoading) &&
       canSend(view, rerunCandidate.pattern),
+  );
+  const canRerunTest = $derived(
+    (pattern: string) => !execution && sameWorkspace && !view.detailLoading && canSend(view, pattern),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
   const sections = INVOCATION_SECTIONS;
@@ -62,7 +66,7 @@
 
 {#if diagnostic && shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {canRerun} {onstop} {onrerun} />
+    <InvocationHeader record={shown} {status} {canRerun} {onstop} {onrerun} {onopenflags} />
     <Notice tone="neutral">
       No build event record. Bazel process exit code: {diagnostic.processExitCode ??
         "unknown"}.
@@ -71,7 +75,16 @@
   </div>
 {:else if shown}
   <div class="invocation-page">
-    <InvocationHeader record={shown} {status} {execution} {canRerun} {onstop} {onrerun}>
+    <InvocationHeader
+      record={shown}
+      {status}
+      {execution}
+      {rerunFlags}
+      {canRerun}
+      {onstop}
+      {onrerun}
+      {onopenflags}
+    >
       <div class="tabs" role="tablist" aria-label="Invocation views">
         {#each tabs as tab}
           <button
@@ -122,7 +135,16 @@
             <section class="invocation-section" aria-labelledby={active === "All" ? `invocation-heading-${section}` : `invocation-tab-${section}`}>
               {#if active === "All"}<h2 class="panel-heading" id="invocation-heading-{section}">{section}</h2>{/if}
               {#if section === "Targets"}
-                <TargetsPanel section={view.detail?.bep} index={targetIndex} {onselecttarget} />
+                <TargetsPanel
+                  section={view.detail?.bep}
+                  index={targetIndex}
+                  {rerunFlags}
+                  {canRerunTest}
+                  {onselecttarget}
+                  onreruntest={!execution && sameWorkspace && shown?.cmd === "test" && onrerun
+                    ? (pattern, flags) => onrerun("test", pattern, flags)
+                    : undefined}
+                />
               {:else if section === "Logs"}
                 <LogPanel section={view.detail?.log} loading={view.detailLoading} />
               {:else if section === "Details"}

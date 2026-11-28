@@ -169,5 +169,36 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
 
     assert.equal(h1Text(header({ id: "run-id", pattern: "//app:server" })), "//app:server");
     assert.equal(h1Text(header({ id: "run-id", cmd: "build" })), "build run-id");
+
+    const record: InvocationRecord = { id: "run-id", cmd: "test", pattern: "//pkg:all" };
+    const enabled = render(InvocationHeader, {
+      props: {
+        record,
+        status: invocationStatus(record, null),
+        rerunFlags: "--config=asan --test_env='FOO=bar baz'",
+        canRerun: true,
+        onstop: () => {},
+        onrerun: () => {},
+        onopenflags: () => {},
+      },
+    }).body;
+    assert.match(
+      enabled,
+      /title="Re-run: bazel test \/\/pkg:all --config=asan --test_env='FOO=bar baz'"/,
+    );
+    assert.match(enabled, /Edit flags…/);
+
+    const disabled = render(InvocationHeader, {
+      props: {
+        record,
+        status: invocationStatus(record, null),
+        canRerun: false,
+        onstop: () => {},
+        onrerun: () => {},
+        onopenflags: () => {},
+      },
+    }).body;
+    assert.doesNotMatch(disabled, /Edit flags…/);
+    assert.doesNotMatch(disabled, /title="Re-run:/);
   });
 });

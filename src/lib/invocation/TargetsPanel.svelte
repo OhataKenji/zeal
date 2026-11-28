@@ -6,18 +6,25 @@
   let {
     section,
     index = null,
+    rerunFlags = "",
+    canRerunTest,
     onselecttarget,
+    onreruntest,
   }: {
     section: Section<Bep> | undefined;
     index?: TargetIndex | null;
+    rerunFlags?: string;
+    canRerunTest?: (pattern: string) => boolean;
     onselecttarget?: (label: string) => void;
+    onreruntest?: (pattern: string, flags: string) => void;
   } = $props();
   const bep = $derived(sectionData(section));
   const labels = $derived(new Set((index?.targets ?? []).map((t) => t.label)));
+  const stripMainRepo = (label: string) => (label.startsWith("@@//") ? label.slice(2) : label);
 </script>
 
 {#snippet targetLabel(label: string)}
-  {@const key = label.startsWith("@@//") ? label.slice(2) : label}
+  {@const key = stripMainRepo(label)}
   {#if onselecttarget && labels.has(key)}
     <button type="button" class="table-link mono" onclick={() => onselecttarget?.(key)}
       >{label}</button
@@ -54,8 +61,36 @@
 <h3 class="panel-subheading">Tests {#if bep}<span>{bep.tests.length}</span>{/if}</h3>
 {#if bep}
   {#if bep.tests.length}
+    {@const hasFailedRerun = Boolean(
+      onreruntest && bep.tests.some((test) => test.status !== "PASSED"),
+    )}
     <ul class="result-list">
-      {#each bep.tests as test}<li>{@render targetLabel(test.label)}<span>{test.status}</span></li>{/each}
+      {#each bep.tests as test}
+        {@const pattern = stripMainRepo(test.label)}
+        {@const disabled = canRerunTest ? !canRerunTest(pattern) : false}
+        <li>
+          <div class="result-identity">{@render targetLabel(test.label)}</div>
+          <span class="result-status">{test.status}</span>
+          {#if hasFailedRerun}
+            <span class="result-action-slot">
+              {#if onreruntest && test.status !== "PASSED"}
+                <button
+                  type="button"
+                  class="button result-action"
+                  {disabled}
+                  aria-label={`Re-run ${test.label}`}
+                  title={disabled
+                    ? undefined
+                    : `Re-run: bazel test ${pattern}${rerunFlags ? ` ${rerunFlags}` : ""}`}
+                  onclick={() => onreruntest(pattern, rerunFlags)}
+                >
+                  Re-run
+                </button>
+              {/if}
+            </span>
+          {/if}
+        </li>
+      {/each}
     </ul>
   {:else}
     <p class="panel-empty">No results recorded.</p>

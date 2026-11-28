@@ -55,4 +55,37 @@ test("TargetsPanel distinguishes same-label results by aspect and configuration"
     assert.doesNotMatch(html, /<script>alert/);
     assert.match(html, /&lt;script>alert\(1\)&lt;\/script>/);
   });
+
+  await t.test("failed test rows render a Re-run button inheriting explicit flags", () => {
+    const section: Section<Bep> = {
+      status: "ok",
+      data: {
+        targets: [],
+        tests: [
+          { label: "//pkg:pass_test", status: "PASSED" },
+          { label: "@@//pkg:fail_test", status: "FAILED" },
+          { label: "//pkg:slow_test", status: "TIMEOUT" },
+        ],
+        truncated: false,
+      },
+    };
+    const html = render(TargetsPanel, {
+      props: {
+        section,
+        rerunFlags: "--config=asan --test_env=FOO=1",
+        canRerunTest: (pattern: string) => pattern !== "//pkg:slow_test",
+        onreruntest: () => {},
+      },
+    }).body.replace(/<!--[\s\S]*?-->/g, "");
+
+    assert.doesNotMatch(html, /aria-label="Re-run \/\/pkg:pass_test"/);
+    assert.match(
+      html,
+      /<button(?=[^>]*aria-label="Re-run @@\/\/pkg:fail_test")(?=[^>]*title="Re-run: bazel test \/\/pkg:fail_test --config=asan --test_env=FOO=1")(?![^>]*disabled)[^>]*>\s*Re-run\s*<\/button>/,
+    );
+    assert.match(
+      html,
+      /<button(?=[^>]*aria-label="Re-run \/\/pkg:slow_test")(?=[^>]*disabled)(?![^>]*title=)[^>]*>\s*Re-run\s*<\/button>/,
+    );
+  });
 });
