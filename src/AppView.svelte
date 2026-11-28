@@ -505,28 +505,28 @@
                 onstop={session.stop}
                 onrerun={(cmd, pattern) => session.start(cmd, pattern)}
                 onselecttarget={selectTarget}
+                ontab={session.setInvocationTab}
               />
             {/key}
           {:else}
             <p class="workspace-empty dim">Select an invocation from the sidebar.</p>
           {/if}
-        {:else if view.page === "query"}
-          <div class="page-center">
-            {#key st.workspace}
-              <QueryView
-                {targetIndex}
-                workspace={st.workspace}
-                bazelAvailable={core !== null && core.bazel !== null}
-              />
-            {/key}
-          </div>
-        {:else if view.page === "analytics"}
-          <div class="page-center">
-            {#key st.workspace}
-              <AnalyticsView workspace={st.workspace} invocations={view.invocations} />
-            {/key}
-          </div>
         {/if}
+        <div class="page-center" hidden={view.page !== "query"}>
+          {#key st.workspace}
+            <QueryView
+              {targetIndex}
+              workspace={st.workspace}
+              bazelAvailable={core !== null && core.bazel !== null}
+              onselecttarget={selectTarget}
+            />
+          {/key}
+        </div>
+        <div class="page-center" hidden={view.page !== "analytics"}>
+          {#key st.workspace}
+            <AnalyticsView workspace={st.workspace} invocations={view.invocations} />
+          {/key}
+        </div>
       {/snippet}
 
       {#if view.page === "modules" && view.modules}
@@ -539,11 +539,14 @@
             onexplain={session.explainModule}
           />
         {/key}
-      {:else}
-        <main class="content" class:invocation-content={view.page === "history"}>
-          {@render pageContent()}
-        </main>
       {/if}
+      <main
+        class="content"
+        class:invocation-content={view.page === "history"}
+        hidden={view.page === "modules" && Boolean(view.modules)}
+      >
+        {@render pageContent()}
+      </main>
 
     </div>
 

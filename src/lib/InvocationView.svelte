@@ -2,12 +2,15 @@
   import InvocationHeader from "./InvocationHeader.svelte";
   import { canSend, type SessionView } from "./session";
   import {
+    INVOCATION_SECTIONS,
+    INVOCATION_TABS,
     invocationStatus,
     rerunArgs,
     sectionData,
     sectionMessage,
     sectionNoticeTone,
     summarizeRunners,
+    type InvocationTab,
   } from "./invocation";
   import ComparisonPanel from "./invocation/ComparisonPanel.svelte";
   import LogPanel from "./invocation/LogPanel.svelte";
@@ -18,12 +21,13 @@
   import { formatOptions } from "./invocation/options";
   import type { BazelCommand } from "./types";
 
-  let { view, reload, onstop, onrerun, onselecttarget }: {
+  let { view, reload, onstop, onrerun, onselecttarget, ontab }: {
     view: SessionView;
     reload: () => void;
     onstop: (id: string) => void;
     onrerun?: (cmd: BazelCommand, pattern: string) => void;
     onselecttarget?: (label: string) => void;
+    ontab?: (tab: InvocationTab) => void;
   } = $props();
   const selected = $derived(view.invocation);
   const shown = $derived(selected ? (view.detail?.record ?? selected.record) : undefined);
@@ -45,9 +49,9 @@
       canSend(view, rerunCandidate.pattern),
   );
   const status = $derived(invocationStatus(shown, execution, diagnostic?.processExitCode));
-  const sections = ["Targets", "Details", "Logs", "Timing"] as const;
-  const tabs = ["All", ...sections, "Compare"] as const;
-  let active = $state<(typeof tabs)[number]>("All");
+  const sections = INVOCATION_SECTIONS;
+  const tabs = INVOCATION_TABS;
+  const active = $derived(view.invocationTab);
   let panel = $state<HTMLDivElement>();
 
   $effect(() => {
@@ -77,7 +81,7 @@
             aria-selected={active === tab}
             aria-controls={active === tab ? `invocation-panel-${tab}` : undefined}
             tabindex={active === tab ? 0 : -1}
-            onclick={() => (active = tab)}
+            onclick={() => ontab?.(tab)}
             onkeydown={tabKeydown}
           >{tab}</button>
         {/each}
@@ -230,7 +234,7 @@
                     <button
                       type="button"
                       class="timing-open"
-                      onclick={() => (active = "Timing")}>Open Timing</button
+                      onclick={() => ontab?.("Timing")}>Open Timing</button
                     >
                   </p>
                 {/if}

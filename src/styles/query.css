@@ -485,6 +485,13 @@
   overflow-x: auto;
 }
 
+.query-raw-link {
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  user-select: text;
+}
+
 /* Copy buttons overlay the command and output blocks. */
 .query-command > .icon-button,
 .query-raw-wrap > .icon-button {
