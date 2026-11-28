@@ -1,7 +1,9 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
+import type { DailyAnalytics } from "../src/lib/analytics.ts";
 import { canSend, createSession, emptyView, type Transport } from "../src/lib/session.ts";
+import { defaultQueryDraft, queryInputs, type QueryOutput } from "../src/lib/query.ts";
 import type { Page } from "../src/lib/pages.ts";
 import type {
   AppState,
@@ -2720,4 +2722,164 @@ test("auto-selection never fires off the history page or over a selection", asyn
   await settle();
   // The pinned live execution outranks the older history record.
   assert.equal(h.view.selectedInvocationId, "live-1");
+});
+
+const ANALYTICS_RESULT: DailyAnalytics = {
+  filter: {
+    start: "2026-03-01",
+    end: "2026-03-30",
+    cmd: null,
+    outcome: null,
+    pattern: null,
+    workspaceId: null,
+  },
+  today: "2026-03-30",
+  days: [],
+  patterns: [],
+  workspaces: [],
+};
+
+const QUERY_OUTPUT: QueryOutput = {
+  exitCode: 0,
+  stdout: "//app:server\n//app:lib\n",
+  stdoutTruncated: false,
+  truncated: false,
+  stderrTail: "",
+  actions: null,
+};
+
+test("Query draft and results survive target inspection and reset on workspace switch", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  await loadSnapshot(h);
+
+  h.session.showPage("query");
+  const customDraft = {
+    ...defaultQueryDraft(),
+    mode: "code" as const,
+    draft: "rdeps(//..., //app:lib)",
+  };
+  const req = queryInputs("query", customDraft.draft, "label", {
+    noImplicit: false,
+    noTool: false,
+    flags: "",
+  });
+  h.session.saveQueryDraft(customDraft);
+  h.session.selectQuery(req);
+  h.session.runQuery(req);
+  const run = pendingRequest(h, "run_query");
+  run.reply.resolve(QUERY_OUTPUT);
+  await settle();
+  assert.deepEqual(h.view.query.result, QUERY_OUTPUT);
+
+  // Clicking a result target switches to Targets and returns without losing Query state.
+  h.session.select({ kind: "target", label: "//app:server" });
+  assert.equal(h.view.page, "targets");
+  h.session.showPage("query");
+  assert.equal(h.view.queryDraft.mode, "code");
+  assert.equal(h.view.queryDraft.draft, "rdeps(//..., //app:lib)");
+  assert.deepEqual(h.view.query.result, QUERY_OUTPUT);
+  // Remounting QueryView calls selectQuery with the same inputs; it must keep the result.
+  h.session.selectQuery(req);
+  assert.deepEqual(h.view.query.result, QUERY_OUTPUT);
+
+  // Switching workspaces resets both draft and result.
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 3, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await settle();
+  assert.equal(h.view.queryDraft.mode, "builder");
+  assert.equal(h.view.queryDraft.draft, "");
+  assert.equal(h.view.query.result, null);
+});
+
+test("Analytics filters, breakdown, and data survive page switches and refresh when history changes", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  await loadHistory(h, [RECORD]);
+  assert.equal(requestCount(h, "get_analytics"), 0);
+
+  h.session.showPage("analytics");
+  await settle();
+  assert.equal(requestCount(h, "get_analytics"), 1);
+  pendingRequest(h, "get_analytics").reply.resolve(ANALYTICS_RESULT);
+  await settle();
+
+  const filtered = { ...ANALYTICS_RESULT.filter, cmd: "test", outcome: "failed" as const };
+  h.session.loadAnalytics(filtered);
+  h.session.setAnalyticsBreakdown("workspace");
+  lastPendingRequest(h, "get_analytics").reply.resolve({ ...ANALYTICS_RESULT, filter: filtered });
+  await settle();
+  assert.deepEqual(h.view.analytics.filter, filtered);
+  assert.equal(h.view.analytics.breakdown, "workspace");
+
+  // Leaving Analytics and returning without history changes does not refetch or reset state.
+  h.session.showPage("history");
+  h.session.showPage("analytics");
+  await settle();
+  assert.equal(requestCount(h, "get_analytics"), 2);
+  assert.deepEqual(h.view.analytics.filter, filtered);
+  assert.equal(h.view.analytics.breakdown, "workspace");
+
+  // A new invocation arriving while away marks analytics stale; returning refreshes with filters kept.
+  h.session.showPage("history");
+  const nextRecord: InvocationRecord = { ...RECORD, id: "inv-2", startedAt: 2_000 };
+  h.emit("invocations-changed", undefined);
+  await settle();
+  lastPendingRequest(h, "list_invocations").reply.resolve({
+    saved: { Ok: [nextRecord, RECORD] },
+    diagnostics: [],
+  });
+  await settle();
+  assert.equal(requestCount(h, "get_analytics"), 2);
+
+  h.session.showPage("analytics");
+  await settle();
+  assert.equal(requestCount(h, "get_analytics"), 3);
+  assert.deepEqual(lastPendingRequest(h, "get_analytics").args, {
+    workspace: WS,
+    filter: filtered,
+  });
+  assert.equal(h.view.analytics.breakdown, "workspace");
+
+  // Switching workspaces discards analytics state and triggers a fresh load on the analytics page.
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 3, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await settle();
+  assert.equal(h.view.analytics.breakdown, "result");
+  assert.equal(h.view.analytics.filter.cmd, null);
+  assert.equal(lastPendingRequest(h, "get_analytics").args?.workspace, OTHER);
+});
+
+test("Invocation active tab survives page navigation and resets on workspace switch", async () => {
+  const h = harness(
+    Promise.resolve(coreState({ revision: 2, workspaces: [wsEntry(WS), wsEntry(OTHER)] })),
+  );
+  await initReady(h);
+  assert.equal(h.view.invocationTab, "All");
+
+  h.session.showPage("history");
+  h.session.setInvocationTab("Timing");
+  assert.equal(h.view.invocationTab, "Timing");
+
+  h.session.showPage("analytics");
+  h.session.showPage("history");
+  assert.equal(h.view.invocationTab, "Timing");
+
+  void h.session.openWorkspace(OTHER, { include: ["//..."] });
+  pendingRequest(h, "open_workspace").reply.resolve({
+    workspace: OTHER,
+    state: coreState({ revision: 3, workspaces: [wsEntry(WS), wsEntry(OTHER)] }),
+  });
+  await settle();
+  assert.equal(h.view.invocationTab, "All");
 });

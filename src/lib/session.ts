@@ -1,7 +1,20 @@
+import {
+  createAnalytics,
+  emptyAnalytics,
+  type AnalyticsBreakdown,
+  type AnalyticsFilter,
+} from "./analytics.ts";
 import { COMMANDS } from "./commands.ts";
-import type { InvocationRow } from "./invocation.ts";
+import type { InvocationRow, InvocationTab } from "./invocation.ts";
 import { createModules } from "./modules.ts";
 import type { Page } from "./pages.ts";
+import {
+  createQuery,
+  defaultQueryDraft,
+  emptyQueryState,
+  type QueryDraft,
+  type QueryInputs,
+} from "./query.ts";
 import { targetError } from "./target.ts";
 import type {
   AppState,
@@ -69,6 +82,14 @@ interface Workspace {
   /** Applied build flags for the configured/actions reads; "" is default. */
   targetFlags: string;
   modules: ReturnType<typeof createModules>;
+  /** Active sub-tab in InvocationView; workspace-scoped so it survives
+   * page switches and invocation reselection, and resets on workspace switch. */
+  invocationTab: InvocationTab;
+  query: ReturnType<typeof createQuery>;
+  queryDraft: QueryDraft;
+  analytics: ReturnType<typeof createAnalytics>;
+  /** Set when analytics has not loaded yet or history changed while away. */
+  analyticsStale: boolean;
   history: InvocationRecord[];
   historyError: string | null;
   historyRead: "idle" | "reading" | "queued";
@@ -127,6 +148,10 @@ function targetSelection(selection: ExplorerSelection = null): TargetSelection {
 function savedReaders(): Saved {
   return { detail: reader(), profile: reader() };
 }
+
+const EMPTY_ANALYTICS = emptyAnalytics();
+const EMPTY_QUERY_STATE = emptyQueryState();
+const EMPTY_QUERY_DRAFT = defaultQueryDraft();
 
 function initialState(page: Page): SessionState {
   return {
@@ -293,6 +318,10 @@ function sessionView(state: SessionState) {
     targetPhase: target?.phase.state.value ?? null,
     targetPhaseError: readError(target?.phase.state),
     modules: ws?.modules.state ?? null,
+    invocationTab: ws?.invocationTab ?? "All",
+    query: ws?.query.state ?? EMPTY_QUERY_STATE,
+    queryDraft: ws?.queryDraft ?? EMPTY_QUERY_DRAFT,
+    analytics: ws?.analytics.state ?? EMPTY_ANALYTICS,
     starting: state.startFeedback !== null,
     error: state.error,
     invocations: history,
@@ -565,6 +594,12 @@ export function createSession(
     state.selectedInvocationId = invocationRows(state)[0]?.record.id ?? null;
   }
 
+  function syncAnalyticsAfterHistory(ws: Workspace, historyChanged: boolean) {
+    if (!historyChanged || ws.analyticsStale) return;
+    if (state.page === "analytics") void ws.analytics.load();
+    else ws.analyticsStale = true;
+  }
+
   function acceptHistory(ws: Workspace, result: InvocationHistory, selectedId: string | null) {
     const wasEligible = savedEligible(state);
     if ("Err" in result.saved) {
@@ -598,9 +633,11 @@ export function createSession(
       detail.value?.log.status === "pending" ||
       detail.value?.log.status === "incomplete" ||
       (detail.phase === "loading" && detail.value === null);
+    const historyChanged = JSON.stringify(ws.history) !== JSON.stringify(records);
     ws.diagnostics = result.diagnostics;
     ws.history = records;
     ws.historyError = null;
+    syncAnalyticsAfterHistory(ws, historyChanged);
     // An unselected history page claims its first row; reconcileSaved below
     // starts the saved readers exactly once for the new selection.
     claimFirstInvocation();
@@ -739,6 +776,8 @@ export function createSession(
   function selectWorkspace(path: string) {
     if (disposed || state.workspace?.path === path) return;
     state.workspace?.modules.dispose();
+    state.workspace?.query.dispose();
+    state.workspace?.analytics.dispose();
     state.workspace = {
       path,
       info: reader(),
@@ -750,6 +789,11 @@ export function createSession(
       targetTab: "definition",
       targetFlags: "",
       modules: createModules(path, transport, () => state.core?.bazel != null, publish),
+      invocationTab: "All",
+      query: createQuery(path, transport, publish),
+      queryDraft: defaultQueryDraft(),
+      analytics: createAnalytics(path, transport, publish),
+      analyticsStale: true,
       history: [],
       historyError: null,
       historyRead: "idle",
@@ -762,6 +806,7 @@ export function createSession(
     requestHistory();
     refreshSnapshot();
     if (state.page === "workspace") loadWorkspaceInfo();
+    if (state.page === "analytics") maybeLoadAnalytics();
   }
 
   function openInvocation(id: string, lookup: boolean) {
@@ -805,6 +850,38 @@ export function createSession(
     if (ws?.info.state.phase === "empty") loadWorkspaceInfo();
   }
 
+  function maybeLoadAnalytics() {
+    const ws = state.workspace;
+    if (disposed || !ws || !ws.analyticsStale) return;
+    ws.analyticsStale = false;
+    void ws.analytics.load();
+  }
+
+  function loadAnalytics(filter?: AnalyticsFilter) {
+    const ws = state.workspace;
+    if (disposed || !ws) return;
+    ws.analyticsStale = false;
+    void ws.analytics.load(filter);
+  }
+
+  function setAnalyticsBreakdown(breakdown: AnalyticsBreakdown) {
+    if (disposed) return;
+    state.workspace?.analytics.setBreakdown(breakdown);
+  }
+
+  function setInvocationTab(tab: InvocationTab) {
+    if (disposed) return;
+    const ws = state.workspace;
+    if (!ws || ws.invocationTab === tab) return;
+    ws.invocationTab = tab;
+    publish();
+  }
+
+  function saveQueryDraft(draft: QueryDraft) {
+    if (disposed || !state.workspace) return;
+    state.workspace.queryDraft = draft;
+  }
+
   function showPage(page: Page) {
     if (disposed) return;
     const changed = state.page !== page || state.startFeedback !== null;
@@ -817,6 +894,7 @@ export function createSession(
       if (page === "history") ensureSaved();
     }
     if (page === "workspace") maybeLoadWorkspaceInfo();
+    if (page === "analytics") maybeLoadAnalytics();
     // Returning to Targets kicks any phase read deferred while away.
     if (page === "targets") loadTarget();
   }
@@ -1057,6 +1135,8 @@ export function createSession(
     if (disposed) return;
     disposed = true;
     state.workspace?.modules.dispose();
+    state.workspace?.query.dispose();
+    state.workspace?.analytics.dispose();
     initialization.unlistens.splice(0).forEach((remove) => remove());
   }
 
@@ -1073,6 +1153,12 @@ export function createSession(
     selectModule: (key: string | null) => state.workspace?.modules.select(key),
     explainModule: () => state.workspace?.modules.explain(),
     selectInvocation,
+    setInvocationTab,
+    saveQueryDraft,
+    selectQuery: (args: QueryInputs) => state.workspace?.query.select(args),
+    runQuery: (args: QueryInputs) => void state.workspace?.query.run(args),
+    loadAnalytics,
+    setAnalyticsBreakdown,
     showPage,
     loadDetail: readSavedDetail,
     loadProfile: readSavedProfile,

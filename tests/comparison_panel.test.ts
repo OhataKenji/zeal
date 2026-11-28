@@ -143,6 +143,20 @@ test("ComparisonPanel renders the comparison form for the selected invocation", 
       html,
       /<div(?=[^>]*id="invocation-panel-All")(?=[^>]*aria-labelledby="invocation-tab-All")[^>]*>/,
     );
+
+    const compareHtml = render(InvocationView, {
+      props: {
+        view: { ...view, invocationTab: "Compare" as const },
+        reload: () => {},
+        reloadProfile: () => {},
+        onstop: () => {},
+      },
+    }).body.replace(/<!--[\s\S]*?-->/g, "");
+    assert.match(
+      compareHtml,
+      /<div(?=[^>]*id="invocation-panel-Compare")(?=[^>]*aria-labelledby="invocation-tab-Compare")[^>]*>/,
+    );
+    assert.ok(compareHtml.includes("compare-invocation-id"));
   });
 
   await t.test("InvocationHeader leads the h1 with the command", async () => {

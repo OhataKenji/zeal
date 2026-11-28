@@ -2,7 +2,6 @@
   import VizWorker from "./viz-worker?worker";
   import { createGraphRenderer } from "./graph-renderer";
   import Notice from "./Notice.svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import { Bookmarks, CaretDown } from "phosphor-svelte";
   import { onDestroy, untrack } from "svelte";
   import { createIndex, type SearchIndex } from "./search";
@@ -13,9 +12,7 @@
     attrCandidates,
     codeDiverged,
     commandLine,
-    createQuery,
     DEFAULT_FLAGS,
-    emptyQueryState,
     EXAMPLES,
     kindCandidates,
     parse,
@@ -28,6 +25,8 @@
     validate,
     type CommandFlags,
     type Expr,
+    type QueryDraft,
+    type QueryInputs,
     type QueryState,
     type QueryKind,
     type ResultView,
@@ -35,12 +34,22 @@
 
   let {
     targetIndex,
-    workspace,
     bazelAvailable,
+    query: qstate,
+    initialDraft,
+    ondraftchange,
+    onselectquery,
+    onrunquery,
+    onselecttarget,
   }: {
     targetIndex: SearchIndex | null;
-    workspace: string;
     bazelAvailable: boolean;
+    query: QueryState;
+    initialDraft: QueryDraft;
+    ondraftchange?: (draft: QueryDraft) => void;
+    onselectquery?: (request: QueryInputs) => void;
+    onrunquery?: (request: QueryInputs) => void;
+    onselecttarget?: (label: string) => void;
   } = $props();
 
   // Attribute names come from a static hint list: the label_kind snapshot
@@ -51,18 +60,18 @@
   const kindIndex = $derived(
     targetIndex ? createIndex(kindCandidates(targetIndex.targets)) : null,
   );
-  let root = $state<Expr>(
-    parseQuery(EXAMPLES.query.Dependencies[0].expr, "query"),
-  );
-  let mode = $state<"builder" | "code">("builder");
-  let draft = $state("");
-  let codeError = $state<string | null>(null);
-  let noImplicit = $state(DEFAULT_FLAGS.noImplicit);
-  let noTool = $state(DEFAULT_FLAGS.noTool);
-  let kind = $state<QueryKind>("query");
-  let buildFlags = $state("");
-  let transitions = $state(false);
-  let resultView = $state<ResultView>("raw");
+  const knownTargets = $derived(new Set((targetIndex?.targets ?? []).map((t) => t.label)));
+  const initial = untrack(() => initialDraft);
+  let root = $state<Expr>(structuredClone(initial.root));
+  let mode = $state<"builder" | "code">(initial.mode);
+  let draft = $state(initial.draft);
+  let codeError = $state<string | null>(initial.codeError);
+  let noImplicit = $state(initial.noImplicit);
+  let noTool = $state(initial.noTool);
+  let kind = $state<QueryKind>(initial.kind);
+  let buildFlags = $state(initial.buildFlags);
+  let transitions = $state(initial.transitions);
+  let resultView = $state<ResultView>(initial.resultView);
   const outputFormat = $derived(outputFormatFor(kind, resultView, transitions));
   const phases = {
     query: "Loading — explore target dependencies before configuration.",
@@ -72,7 +81,6 @@
   const kinds: QueryKind[] = ["query", "cquery", "aquery"];
   let feedback = $state("");
   let fbTimer: ReturnType<typeof setTimeout> | undefined;
-  let qstate = $state<QueryState>(emptyQueryState());
   let graphUrl = $state<string | null>(null);
   let graphError = $state<string | null>(null);
   let graphZoom = $state(1);
@@ -83,13 +91,22 @@
 
   // Each mounted view owns its lazy Graphviz worker and reuses it between layouts.
   const renderer = createGraphRenderer(() => new VizWorker());
-  const controller = createQuery(untrack(() => workspace), { invoke }, (s) => (qstate = s));
   onDestroy(() => {
-    controller.dispose();
     clearTimeout(fbTimer);
     renderer.dispose();
     if (graphUrl) URL.revokeObjectURL(graphUrl);
   });
+
+  function resolveTargetLink(raw: string): string | null {
+    if (!onselecttarget) return null;
+    const trimmed = raw.trim();
+    const key = trimmed.startsWith("@@//")
+      ? trimmed.slice(2)
+      : trimmed.startsWith("@//")
+        ? trimmed.slice(1)
+        : trimmed;
+    return knownTargets.has(key) ? key : null;
+  }
 
   function selectKind(next: QueryKind) {
     kind = next;
@@ -120,9 +137,25 @@
   );
 
   $effect.pre(() => {
-    // Table and Raw share an execution for cquery and aquery.
+    // Persist workspace-scoped editor state and notify the controller when
+    // inputs change. Table and Raw share an execution for cquery and aquery.
+    const nextDraft: QueryDraft = {
+      kind,
+      root: $state.snapshot(root),
+      mode,
+      draft,
+      codeError,
+      noImplicit,
+      noTool,
+      buildFlags,
+      transitions,
+      resultView,
+    };
     const next = request;
-    untrack(() => controller.select(next));
+    untrack(() => {
+      ondraftchange?.(nextDraft);
+      onselectquery?.(next);
+    });
   });
 
   // Each editor owns one in-flight query for its workspace; other workspaces
@@ -253,7 +286,7 @@
 
   function run() {
     if (!canRun) return;
-    void controller.run(request);
+    onrunquery?.(request);
   }
 
   function traceArtifactProducer(path: string, owner: string) {
@@ -506,7 +539,11 @@
                 <p class="query-empty">{kind === "aquery" ? "No actions matched." : "No targets matched."}</p>
               {:else}
                 <div class="query-raw-wrap">
-                  <pre class="query-raw">{rawShown.join("\n")}</pre>
+                  {#if kind === "query" && onselecttarget}
+                    <pre class="query-raw">{#each rawShown as line, i}{#if i > 0}{"\n"}{/if}{@const key = resolveTargetLink(line)}{#if key}<button type="button" class="table-link mono query-raw-link" onclick={() => onselecttarget?.(key)}>{line}</button>{:else}{line}{/if}{/each}</pre>
+                  {:else}
+                    <pre class="query-raw">{rawShown.join("\n")}</pre>
+                  {/if}
                   <CopyButton
                     text={stored.stdout}
                     label="Copy output"
@@ -530,7 +567,8 @@
                   <thead><tr><th scope="col">Label</th><th scope="col">Configuration</th>{#if transitions}<th scope="col">Transitions</th>{/if}</tr></thead>
                   <tbody>
                     {#each rows.slice(0, RAW_LINE_CAP) as row}
-                      <tr><td><code>{row.label}</code></td><td><code>{row.config}</code></td>
+                      {@const key = resolveTargetLink(row.label)}
+                      <tr><td>{#if key}<button type="button" class="table-link mono" onclick={() => onselecttarget?.(key)}>{row.label}</button>{:else}<code>{row.label}</code>{/if}</td><td><code>{row.config}</code></td>
                         {#if transitions}<td><pre>{row.transitions.join("\n")}</pre></td>{/if}
                       </tr>
                     {/each}

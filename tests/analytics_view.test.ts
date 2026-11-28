@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { emptyAnalytics, type AnalyticsView as AnalyticsState } from "../src/lib/analytics.ts";
 
 test("AnalyticsView offers a workspace selector defaulting to all workspaces", async (t) => {
   const cacheDir = await mkdtemp(join(tmpdir(), "zelith-analytics-view-"));
@@ -25,9 +26,9 @@ test("AnalyticsView offers a workspace selector defaulting to all workspaces", a
     const { default: AnalyticsView } = await server.ssrLoadModule("/src/lib/AnalyticsView.svelte");
     const { render } = await server.ssrLoadModule("svelte/server");
 
-    function output(): string {
+    function output(view: AnalyticsState = emptyAnalytics()): string {
       return render(AnalyticsView, {
-        props: { workspace: "/workspace", invocations: [] },
+        props: { view, onload: () => {}, onbreakdown: () => {} },
       }).body.replace(/<!--[\s\S]*?-->/g, "");
     }
 
@@ -45,6 +46,25 @@ test("AnalyticsView offers a workspace selector defaulting to all workspaces", a
       assert.match(option, /value=""/);
       assert.match(option, /selected=""/);
       assert.equal(select.match(/<option/g)?.length, 1);
+    });
+
+    await t.test("renders persisted filter and breakdown state from session view", () => {
+      const html = output({
+        ...emptyAnalytics(),
+        filter: {
+          start: "2026-03-01",
+          end: "2026-03-15",
+          cmd: "test",
+          outcome: "failed",
+          pattern: "//app:server",
+          workspaceId: null,
+        },
+        breakdown: "workspace",
+      });
+      assert.match(html, /aria-label="Start date"[^>]*value="2026-03-01"/);
+      assert.match(html, /aria-label="End date"[^>]*value="2026-03-15"/);
+      assert.match(html, /aria-label="Command"[^>]*value="test"/);
+      assert.match(html, /aria-label="Target patterns"[^>]*value="\/\/app:server"/);
     });
   } finally {
     await server?.close();

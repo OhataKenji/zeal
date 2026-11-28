@@ -506,6 +506,7 @@
                 onstop={session.stop}
                 onrerun={(cmd, pattern) => session.start(cmd, pattern)}
                 onselecttarget={selectTarget}
+                ontab={session.setInvocationTab}
               />
             {/key}
           {:else}
@@ -516,15 +517,24 @@
             {#key st.workspace}
               <QueryView
                 {targetIndex}
-                workspace={st.workspace}
                 bazelAvailable={core !== null && core.bazel !== null}
+                query={view.query}
+                initialDraft={view.queryDraft}
+                ondraftchange={session.saveQueryDraft}
+                onselectquery={session.selectQuery}
+                onrunquery={session.runQuery}
+                onselecttarget={selectTarget}
               />
             {/key}
           </div>
         {:else if view.page === "analytics"}
           <div class="page-center">
             {#key st.workspace}
-              <AnalyticsView workspace={st.workspace} invocations={view.invocations} />
+              <AnalyticsView
+                view={view.analytics}
+                onload={session.loadAnalytics}
+                onbreakdown={session.setAnalyticsBreakdown}
+              />
             {/key}
           </div>
         {/if}
